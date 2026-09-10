@@ -15,12 +15,14 @@ import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { openTaskDetailId } from "./components/chat-detail-slot.ts";
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type {
   SidebarPanelDefinition,
   SidebarPanelTemplates,
 } from "./components/chat-sidebar-region-types.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
+import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
@@ -89,6 +91,10 @@ export function sidebarPanelDefinitions(
   params?: SidebarPanelDefinitionParams,
 ): SidebarPanelDefinition[] {
   const state = params?.state;
+  // Review owns task history; rendering Files must not retire that selection.
+  if (state && openTaskDetailId(state.sidebarContent, state.sidebarLayout) === undefined) {
+    resetTaskDetail(state);
+  }
   // Metadata-only definitions have no pane context, so they describe types without offering tabs.
   const panelContext = params && {
     ...params,

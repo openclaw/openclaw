@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render, type LitElement } from "lit";
 import "./components/chat-detail-panel.ts";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../api/types.ts";
 import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
@@ -22,6 +22,7 @@ import {
   createInitializationContext,
   createSessionCapabilityFixture,
 } from "./chat-pane.test-support.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
@@ -37,12 +38,18 @@ import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
   renderSessionWorkspaceRail,
+  retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
+import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import "./components/chat-sidebar-region.runtime.ts";
-import { threadProps } from "./components/chat-transcript.test-support.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+  threadProps,
+} from "./components/chat-transcript.test-support.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import {
   closeSlot,
@@ -102,7 +109,7 @@ async function renderPanelFixture(
   await mount.querySelector("openclaw-panel-loading-skeleton")?.updateComplete;
 }
 
-function createReviewFixture() {
+function createReviewFixture(taskFields: Partial<TaskSummary> = {}) {
   const file = createDeferred<SessionWorkspaceGetResult | null>();
   const list = createDeferred<SessionWorkspaceListResult | null>();
   const sessions = createSessionCapabilityFixture({
@@ -116,8 +123,16 @@ function createReviewFixture() {
     { invalidate: vi.fn(), afterCommit: () => () => {} },
     mount,
   );
+  const history = vi.fn().mockResolvedValue({
+    messages: [{ role: "assistant", content: "The selected task transcript." }],
+  });
   state.client = createGatewayBrowserClientFixture({
-    request: (method) => (method === "tasks.list" ? { tasks: [] } : { artifacts: [] }),
+    request: (method, params) =>
+      method === "tasks.history"
+        ? history(params)
+        : method === "tasks.list"
+          ? { tasks: [] }
+          : { artifacts: [] },
   });
   state.connected = true;
   state.connectionEpoch = 1;
@@ -135,6 +150,7 @@ function createReviewFixture() {
     agentId: "main",
     createdAt: 1,
     updatedAt: 2,
+    ...taskFields,
   } satisfies TaskSummary;
   const backgroundTasks = {
     ...createBackgroundTasksProps(state, { presented: false }),
@@ -166,28 +182,128 @@ function createReviewFixture() {
       setObserverVisibility: vi.fn(),
       updateSidebarLayout: state.updateSidebarLayout,
     });
+  const transcript = createTestTranscript();
+  transcript.hostConnected();
+  onTestFinished(async () => {
+    file.resolve(null);
+    list.resolve(null);
+    await Promise.allSettled([file.promise, list.promise]);
+    resetTaskDetail(state);
+    transcript.hostDisconnected();
+  });
   const renderPanels = async () => {
     const definitions = sidebarPanelDefinitions({
       state,
       renderDetail: (content) =>
         renderChatDetailSlot({
           backgroundTasks,
-          chat: { paneId: "review-intent", sessionKey: state.sessionKey } as ChatProps,
+          chat: threadProps("review-intent", state.sessionKey) as ChatProps,
           content,
           host: state,
           layout: state.sidebarLayout,
-          transcript: {} as ChatTranscriptController,
+          transcript,
         }),
       workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
         embedded: true,
       }),
     } as Parameters<typeof sidebarPanelDefinitions>[0]);
     await renderPanelFixture(mount, state.sidebarLayout, definitions, rails().closePanelSlot);
+    transcript.hostUpdated();
   };
-  return { file, list, mount, preview, rails, renderPanels, sessions, state, task };
+  return { file, history, list, mount, preview, rails, renderPanels, sessions, state, task };
 }
 
 describe("chat pane embedded panels", () => {
+  describe("Review task selection lifetime", () => {
+    beforeEach(installTranscriptDomMocks);
+    afterEach(resetTranscriptTestDom);
+    it.each(["pending", "unavailable", "checkout retired", "file closed", "task closed"] as const)(
+      "stops the previous task's transcript reads when Review is %s",
+      async (selection) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(10_000);
+        onTestFinished(() => {
+          vi.useRealTimers();
+        });
+        const { file, history, mount, preview, rails, renderPanels, state, task } =
+          createReviewFixture({ childSessionKey: "agent:main:subagent:review-child" });
+        rails().backgroundTasks.onOpenTaskDetail?.(task);
+        await renderPanels();
+        await renderPanels();
+        expect(mount.textContent).toContain("The selected task transcript.");
+        expect(history).toHaveBeenCalledExactlyOnceWith({ taskId: task.id, limit: 100 });
+
+        if (selection !== "task closed") {
+          openSessionWorkspaceFile(state, { path: preview.file.path });
+          await renderPanels();
+          expect(mount.querySelector('[data-panel-skeleton="review"]')).not.toBeNull();
+        }
+        if (selection === "unavailable") {
+          file.reject(new Error("Preview unavailable"));
+          await expect(file.promise).rejects.toThrow("Preview unavailable");
+        } else if (selection === "checkout retired") {
+          retireSessionWorkspaceCheckout(state);
+        } else if (selection === "file closed" || selection === "task closed") {
+          mount.querySelector<HTMLButtonElement>('button[aria-label="Close Review"]')!.click();
+        }
+        await renderPanels();
+        if (selection === "unavailable") {
+          expect(mount.querySelector('[role="alert"]')?.textContent).toContain(
+            "Preview unavailable",
+          );
+        } else if (selection === "file closed" || selection === "task closed") {
+          expect(mount.querySelector('[data-panel-slot="detail"]')).toBeNull();
+        } else if (selection === "checkout retired") {
+          expect(mount.querySelector('[data-panel-skeleton="review"]')).toBeNull();
+        }
+        vi.setSystemTime(12_000);
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "task",
+          payload: { action: "upserted", task: { ...task, updatedAt: 3 } },
+        });
+        expect(history).toHaveBeenCalledOnce();
+        expect(mount.querySelector("[data-task-detail-panel]")).toBeNull();
+      },
+    );
+
+    it.each(["Files", "minimized"] as const)(
+      "retains the selected Review transcript while %s is presented",
+      async (presentation) => {
+        const { history, mount, rails, renderPanels, state, task } = createReviewFixture({
+          childSessionKey: "agent:main:subagent:review-child",
+        });
+        rails().backgroundTasks.onOpenTaskDetail?.(task);
+        await renderPanels();
+        await renderPanels();
+        expect(mount.textContent).toContain("The selected task transcript.");
+
+        if (presentation === "Files") {
+          state.handleOpenSidebar({
+            kind: "attachment",
+            attachmentKind: "image",
+            title: "Attachment in Files",
+            src: "/synthetic/attachment.png",
+          });
+        } else {
+          state.updateSidebarLayout(setSidebarOpen(state.sidebarLayout, false));
+        }
+        await renderPanels();
+        expect.soft(history).toHaveBeenCalledOnce();
+        expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(false);
+        if (presentation === "Files") {
+          expect(
+            mount.querySelector<HTMLImageElement>(".sidebar-attachment-preview__image")?.alt,
+          ).toBe("Attachment in Files");
+        }
+        state.updateSidebarLayout(openSlot(state.sidebarLayout, "detail"));
+        await renderPanels();
+        expect(mount.textContent).toContain("The selected task transcript.");
+        expect(history).toHaveBeenCalledExactlyOnceWith({ taskId: task.id, limit: 100 });
+      },
+    );
+  });
+
   it.each(["ready", "unavailable", "error"] as const)(
     "keeps Files pending during renewed source resolution, then shows %s",
     async (outcome) => {
