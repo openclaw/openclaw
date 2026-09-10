@@ -35,6 +35,7 @@ export {
   dropMemoryPathFtsTriggers,
   ensureMemoryPathFtsTriggers,
   ftsTableMatchesSchema,
+  memoryPathFtsTriggersMatchSchema,
   MEMORY_INDEX_FTS_COLUMNS,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_FTS_TABLE,

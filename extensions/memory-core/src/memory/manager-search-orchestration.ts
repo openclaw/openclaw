@@ -38,9 +38,25 @@ type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["sear
 
 export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
   protected abstract sessionWarm: Set<string>;
+  protected searchReaderKeywordOnly = false;
 
   protected async prepareSearchReader(): Promise<void> {
     readMemoryDatabaseRevision(this.db);
+    this.searchReaderKeywordOnly = false;
+    const publishedMeta = this.readMeta();
+    if (
+      this.purpose === "search" &&
+      this.providerRequirement.mode === "optional" &&
+      publishedMeta?.provider === "none" &&
+      publishedMeta.model === "fts-only" &&
+      this.refreshKeywordFallbackIndexIdentity().status === "valid"
+    ) {
+      this.searchReaderKeywordOnly = true;
+      if (this.hasPendingSourceRepair()) {
+        throw new Error("Memory search index requires source provenance repair");
+      }
+      return;
+    }
     let keywordOnly = false;
     const adoptedPublishedFallback = await this.adoptPublishedFallbackProviderIfMatched();
     if (!adoptedPublishedFallback) {
@@ -209,9 +225,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         return [];
       }
       const cleaned = preflight.normalizedQuery;
-      const embeddingBootstrapKeywordOnly = await this.ensureEmbeddingProviderForSearch(
-        opts?.onDebug,
-      );
+      const embeddingBootstrapKeywordOnly =
+        this.purpose === "search" && this.searchReaderKeywordOnly
+          ? true
+          : await this.ensureEmbeddingProviderForSearch(opts?.onDebug);
       const sessionStartSync = this.claimSessionWarmSync(opts?.sessionKey);
       const searchSyncEnabled =
         (this.settings.sync.onSearch || sessionStartSync) &&

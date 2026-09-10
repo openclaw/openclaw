@@ -319,7 +319,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       // call through the queue even while idle so it adopts that retained work.
       return await this.enqueueTargetedSessionSync(params);
     }
-    return await this.syncAdmitted(params);
+    return await this.syncAdmitted(
+      params,
+      params?.reason === "search" ? { allowEmbeddingBootstrapFallback: true } : undefined,
+    );
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
@@ -510,7 +513,15 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   private publishedStatus(): MemoryProviderStatus {
-    if (this.embeddingBootstrapFailure) {
+    const publishedMeta = this.readMeta();
+    const keywordOnly =
+      this.embeddingBootstrapFailure !== undefined ||
+      this.searchReaderKeywordOnly ||
+      (this.providerRequirement.mode === "optional" &&
+        publishedMeta?.provider === "none" &&
+        publishedMeta.model === "fts-only" &&
+        this.refreshKeywordFallbackIndexIdentity().status === "valid");
+    if (keywordOnly) {
       this.refreshKeywordFallbackIndexIdentity();
     } else {
       this.refreshIndexIdentityDirty({
@@ -529,10 +540,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
 
     // Status projects the effective keyword-only search mode while degraded.
     // Sync generations still snapshot this.provider so recovery can rebuild vectors.
-    const statusProvider = this.embeddingBootstrapFailure ? null : this.provider;
+    const statusProvider = keywordOnly ? null : this.provider;
     const providerInfo = resolveStatusProviderInfo({
       provider: statusProvider,
-      providerInitialized: this.embeddingBootstrapFailure ? true : this.providerInitialized,
+      providerInitialized: keywordOnly ? true : this.providerInitialized,
       requestedProvider: this.requestedProvider,
       configuredModel: this.settings.model || undefined,
     });

@@ -71,6 +71,9 @@ type ProviderControls = {
   providerRuntimeBatchFailuresRemaining: number;
   providerRuntimeActiveBatchCalls: number;
   providerRuntimeMaxActiveBatchCalls: number;
+  providerEmbeddingCalls: number;
+  providerEmbeddingFailuresRemaining: number;
+  providerEmbeddingFailure: unknown;
   providerCloseCalls: number;
   providerCloseFailuresRemaining: number;
   providerCloseFailure: unknown;
@@ -137,6 +140,9 @@ const providerState = vi.hoisted(() => ({
   providerRuntimeBatchFailuresRemaining: 0,
   providerRuntimeActiveBatchCalls: 0,
   providerRuntimeMaxActiveBatchCalls: 0,
+  providerEmbeddingCalls: 0,
+  providerEmbeddingFailuresRemaining: 0,
+  providerEmbeddingFailure: new Error("embedding request failed during bootstrap") as unknown,
   providerCloseCalls: 0,
   providerCloseFailuresRemaining: 0,
   providerCloseFailure: new Error("provider close failed") as unknown,
@@ -270,12 +276,22 @@ vi.mock("./embeddings.js", async (importOriginal) => {
           },
           embed: async (input: EmbeddingInput, callOptions?: EmbeddingProviderCallOptions) => {
             await providerState.beforeEmbedQuery?.(callOptions);
+            providerState.providerEmbeddingCalls += 1;
+            if (providerState.providerEmbeddingFailuresRemaining > 0) {
+              providerState.providerEmbeddingFailuresRemaining -= 1;
+              throw providerState.providerEmbeddingFailure;
+            }
             const text = typeof input === "string" ? input : input.text;
             providerState.embedQueryCalls += 1;
             providerState.embeddedQueryTexts.push(text);
             return embedText(text);
           },
           embedBatch: async (inputs: EmbeddingInput[]) => {
+            providerState.providerEmbeddingCalls += 1;
+            if (providerState.providerEmbeddingFailuresRemaining > 0) {
+              providerState.providerEmbeddingFailuresRemaining -= 1;
+              throw providerState.providerEmbeddingFailure;
+            }
             if (providerId === "gemini" || providerId === "fallback-provider") {
               const structuredInputs = inputs.filter(
                 (input): input is Exclude<EmbeddingInput, string> =>
@@ -580,6 +596,9 @@ export function createManagerIndexFixture(deps: {
     providerState.providerRuntimeBatchFailuresRemaining = 0;
     providerState.providerRuntimeActiveBatchCalls = 0;
     providerState.providerRuntimeMaxActiveBatchCalls = 0;
+    providerState.providerEmbeddingCalls = 0;
+    providerState.providerEmbeddingFailuresRemaining = 0;
+    providerState.providerEmbeddingFailure = new Error("embedding request failed during bootstrap");
     providerState.providerCloseCalls = 0;
     providerState.providerCloseFailuresRemaining = 0;
     providerState.providerCloseFailure = new Error("provider close failed");

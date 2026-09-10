@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  dropMemoryPathFtsTriggers,
   ftsTableMatchesSchema,
+  memoryPathFtsTriggersMatchSchema,
   MEMORY_CHUNKING_VERSION,
   MEMORY_INDEX_FTS_COLUMNS,
   MEMORY_INDEX_FTS_TABLE,
@@ -92,6 +94,45 @@ describe("read-only memory search manager", () => {
     }
   });
 
+  it("keeps keyword fallback when fresh reader preparation hits the first embedding failure", async () => {
+    const cfg = createConfig({ vectorEnabled: true });
+    provider.providerEmbeddingFailuresRemaining = 1;
+
+    const reader = await getReader(cfg);
+    trackManager(reader);
+
+    await expect(reader.search("alpha", { minScore: 0 })).resolves.toEqual([
+      expect.objectContaining({ path: "memory/2026-01-12.md", source: "memory" }),
+    ]);
+    expect(provider.providerCalls).toHaveLength(2);
+    expect(provider.providerEmbeddingCalls).toBe(1);
+    expect(provider.providerEmbeddingFailuresRemaining).toBe(0);
+    expect(reader.status()).toMatchObject({
+      provider: "none",
+      custom: { indexIdentity: { status: "valid" } },
+    });
+
+    await closeAllMemorySearchManagers();
+    closeOpenClawAgentDatabasesForTest();
+    const statusManager = requireManager(
+      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+    );
+    trackManager(statusManager);
+    expect(statusManager.status()).toMatchObject({
+      provider: "none",
+      custom: { indexIdentity: { status: "valid" } },
+    });
+  });
+
+  it("keeps explicit providers fail-closed during fresh reader preparation", async () => {
+    const cfg = createConfig({ provider: "openai", vectorEnabled: true });
+    provider.providerEmbeddingFailuresRemaining = 1;
+
+    await expect(getReader(cfg)).rejects.toThrow("embedding request failed during bootstrap");
+    expect(provider.providerEmbeddingCalls).toBe(1);
+    expect(provider.providerEmbeddingFailuresRemaining).toBe(0);
+  });
+
   it("recovers a reset index through the existing writer before returning the reader", async () => {
     const cfg = createConfig({ provider: "none", vectorEnabled: false });
     const writer = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
@@ -171,6 +212,54 @@ describe("read-only memory search manager", () => {
         tokenizeClause: "",
       }),
     ).toBe("matching");
+  });
+
+  it("repairs missing path FTS triggers before returning a reader", async () => {
+    const cfg = createConfig({ provider: "none", vectorEnabled: false });
+    const writer = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    await writer.sync({ reason: "test", force: true });
+    const dbPath = writer.status().dbPath;
+    if (!dbPath) {
+      throw new Error("fixture database path is missing");
+    }
+    await closeAllMemorySearchManagers();
+    closeOpenClawAgentDatabasesForTest();
+    const corrupt = new DatabaseSync(dbPath);
+    dropMemoryPathFtsTriggers(corrupt);
+    expect(memoryPathFtsTriggersMatchSchema(corrupt)).toBe(false);
+    corrupt.close();
+
+    const reader = await getReader(cfg);
+    trackManager(reader);
+    expect(memoryPathFtsTriggersMatchSchema(managerDb(reader))).toBe(true);
+    expect(await reader.search("alpha", { minScore: 0 })).not.toEqual([]);
+  });
+
+  it("rejects a drifted path FTS trigger before returning a reader", async () => {
+    const cfg = createConfig({ provider: "none", vectorEnabled: false });
+    const writer = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    await writer.sync({ reason: "test", force: true });
+    const dbPath = writer.status().dbPath;
+    if (!dbPath) {
+      throw new Error("fixture database path is missing");
+    }
+    await closeAllMemorySearchManagers();
+    closeOpenClawAgentDatabasesForTest();
+    const corrupt = new DatabaseSync(dbPath);
+    corrupt.exec(`
+      DROP TRIGGER memory_index_paths_fts_after_insert;
+      CREATE TRIGGER memory_index_paths_fts_after_insert
+      AFTER INSERT ON memory_index_sources BEGIN SELECT 1; END;
+    `);
+    expect(memoryPathFtsTriggersMatchSchema(corrupt)).toBe(false);
+    corrupt.close();
+
+    await expect(
+      getMemorySearchManager({ cfg, agentId: "main", purpose: "search" }),
+    ).resolves.toMatchObject({
+      manager: null,
+      error: expect.stringMatching(/path FTS triggers|missing or drifted trigger/iu),
+    });
   });
 
   it("adopts a configured fallback index before validating reader identity", async () => {

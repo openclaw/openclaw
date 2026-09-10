@@ -30,6 +30,7 @@ export {
   listMemoryFiles,
   loadSqliteVecExtension,
   matchesExtraMemoryPathEntry,
+  memoryPathFtsTriggersMatchSchema,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   MEMORY_CHUNKING_VERSION,
   MEMORY_EMBEDDING_CACHE_TABLE,

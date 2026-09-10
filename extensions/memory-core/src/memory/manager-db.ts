@@ -11,6 +11,7 @@ import {
   ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
   ftsTableMatchesSchema,
+  memoryPathFtsTriggersMatchSchema,
   loadSqliteVecExtension,
   MEMORY_INDEX_FTS_COLUMNS,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
@@ -460,6 +461,9 @@ export function assertMemorySearchFtsSchema(params: {
     if (status !== "matching") {
       throw new Error(`Memory search FTS schema for ${tableName} is ${status}`);
     }
+  }
+  if (!memoryPathFtsTriggersMatchSchema(params.db)) {
+    throw new Error("Memory search path FTS triggers are mismatched");
   }
 }
 

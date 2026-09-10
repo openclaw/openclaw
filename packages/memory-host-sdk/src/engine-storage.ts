@@ -78,6 +78,7 @@ export {
   ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
   ftsTableMatchesSchema,
+  memoryPathFtsTriggersMatchSchema,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_FTS_COLUMNS,
