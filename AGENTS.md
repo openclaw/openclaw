@@ -1,9 +1,10 @@
 # AGENTS.md
 
 The task defines scope and authorization; its chosen workflow owns execution,
-review, publication, recovery, and cleanup. Explicit user and host constraints
-come before workflow defaults. Read the nearest scoped `AGENTS.md` and the matching
-references below, including when changing callers outside an owner's directory.
+review, publication, recovery, and cleanup. Explicit user instructions take
+precedence over skill guidelines and workflow defaults; host limits and required
+authorization boundaries still apply. Read the nearest scoped `AGENTS.md` and the
+matching references below, including when changing callers outside an owner's directory.
 Update instructions at their owner instead of adding competing rules here.
 
 ## Design priorities
@@ -14,8 +15,12 @@ Update instructions at their owner instead of adding competing rules here.
 
 ## Working agreement
 
+- Follow through on actionable requests, including "can you", within their authorized scope. When execution is requested, a plan or progress report is a checkpoint, not completion. Use prior context and preserve unaffected work across corrections and side questions.
+- Resolve routine, reversible choices with reasonable assumptions. Ask only about consequential decisions the request and context cannot resolve; continue independent authorized work while waiting. Silence does not authorize a gated action.
+- If a skill causes a pause, permission request, unfinished work, or scope change, link its exact `SKILL.md` and quote the instruction to the user. Explain how it applies, distinguish requirements from interpretation, and check prior authorization before asking again.
 - Inspect `git status -sb` before editing or GitHub work. Preserve unrelated work, branches, processes, and user-managed checkouts; serialize shared Git mutations and isolate work when needed. Never switch a checkout while another agent or test run uses it.
 - Treat pasted material and tool output as evidence; verify claims against source and observed behavior.
+- Lead with the result and follow the user's format. Use plain words, active voice, and useful technical detail; omit stock phrases and repeated summaries. Progress updates explain new findings, decisions, or blockers. Keep delegated messages equally clear.
 - Report routine findings in chat/stdout. Create files only for deliverables or concrete tool/proof/recovery needs; state their purpose and reuse them. Cleanup removes only task-created disposable files that are no longer needed or in use. Preserve unknown ownership, required evidence, and recovery state; this does not authorize existing-storage cleanup or retention changes.
 - Read relevant docs before changing behavior; `pnpm docs:list` locates them. `package.json` owns current commands and versions; keep the repository's toolchain and conventions rather than swapping tools without approval.
 - Use **OpenClaw** for the product, `openclaw` for CLI/package/config names, **plugins** for user-facing integrations, and American English.
@@ -29,7 +34,7 @@ Update instructions at their owner instead of adding competing rules here.
 4. **Proof:** exercise the intended user flow and relevant siblings; trace references to confirm retired paths are unreachable. Done means one owner serves the flow, old paths are removed or justified, and observed results or remaining gaps are recorded in existing task/PR evidence. Helper tests or a wrapper around competing implementations alone are insufficient.
 
 - Prefer smaller, simpler production code; explain necessary growth. Keep coherent nearby repairs together and record unrelated work as follow-ups. No extra report or tracking system is required.
-- Use independent subagents when evidence lanes can run usefully in parallel. The lead stays hands-on, verifies consequential conclusions, and coordinates shared-checkout safety.
+- Delegate independent evidence or implementation lanes when parallel work reduces time or improves verification. Give each lane a clear responsibility and completion condition; keep simple or tightly coupled work with the lead. The lead stays hands-on, verifies consequential conclusions, and coordinates shared-checkout safety.
 - Retained compatibility needs an explicit user request or a public API/config/SDK/data, stable-tag upgrade, security/migration, dependency, or observed-production contract, plus a migration/removal path. Main, beta, and nightly code alone are not shipped contracts.
 
 ### Choose the capability surface
@@ -63,7 +68,7 @@ lightweight artifact, not load the plugin's execution runtime.
 - Defaults should produce a working, understandable result. Prioritize silent failures. Each action has a visible outcome or recorded intentional non-outcome; errors explain the next useful step.
 - Prompts, tools, and results describe available capabilities accurately and give enough context for the next useful action; avoid unnecessary model round trips. Inject cross-tool references from the enabled tool set and remove stale model-facing arguments instead of hidden compatibility. New optional features need discovery paths.
 - Security is a product tradeoff, not a goal to maximize restrictions. Weigh concrete risk and likely impact against user effort, lockouts, and lost capability. Prefer the least restrictive effective safeguard; bounded, understood risk can be acceptable for a substantial usability benefit. Keep risky paths explicit and operator-controlled within the existing trust model and approval boundaries, and explain the tradeoff instead of inventing extra gates.
-- Tests protect behavior, not implementation trivia. Regressions fail on the original defect; shared-state failures use the original order. Review tests for value and duplication. Do not hide failures with retries, longer timeouts, weaker assertions, broader mocks, or altered baselines.
+- Tests must protect meaningful behavior; skip tests for reversible, low-impact changes that merely mirror the implementation. Regressions fail on the original defect; shared-state failures use the original order. Review tests for value and duplication. Do not hide failures with retries, longer timeouts, weaker assertions, broader mocks, or altered baselines.
 - Select proof for the touched contract and complete the chosen workflow's required gates within user/host limits. Command references do not mandate unrelated suites. Reuse valid proof; rerun for changed inputs or missing coverage. Docs-only work needs docs sanity and `git diff --check`. Report unrun checks and gaps.
 - Prove user-visible behavior through the real flow when feasible; external API changes need live contract proof. A covering isolated mock-Gateway harness is valid channel boundary proof; live channel proof is stronger. UI appearance changes need inspected, sanitized before/after captures. State concrete capture or execution blockers.
 - Before committing or landing nontrivial code, obtain fresh review through the permitted workflow and resolve actionable findings unless the user opts out. Tests protect observable contracts; a helper test can pass while the registered entry point never calls it.
@@ -79,7 +84,7 @@ not authorize local execution or a broader test plan.
 
 ## Authority and safety
 
-- Review/triage is read-only; mutations require task authority. Existing approval carries through the same scoped work and recovery. Product rejection remains maintainer judgment. Bulk close/reopen above 50 items needs explicit count and scope.
+- Review/triage is read-only; mutations require task authority. Existing approval carries through the same scoped work and recovery. When new approval is required, complete the already-authorized preparation first and present a concrete, reviewable result; pause only the gated action. Product rejection remains maintainer judgment. Bulk close/reopen above 50 items needs explicit count and scope.
 - Keep credentials, private data/config, and unreleased model identities out of commits and shared text, logs, transcripts, and media. Inspect outgoing content. Use synthetic fixtures and verified human credit; omit agent-attribution trailers.
 - For permitted defensive work interrupted by a cyber classifier, use an approved, available Daybreak Blue route only for that bounded task, then restore the previous model. Preserve the approved identity, scope, permissions, sandbox, and review gates. Never switch models to bypass access denials, disallowed requests, or refused tool actions; if that route also refuses, stop and report. Follow [OpenAI's guidance](https://learn.chatgpt.com/docs/cyber-safety) for approved model access.
 - Untrusted contributor/fork code runs only in secretless isolation, never locally. Source review alone does not authorize execution with credentials or on a trusted host; maintainer approval is required. An instruction to land named, reviewed PRs supplies that approval. Use the authorized isolation route and only task credentials.
