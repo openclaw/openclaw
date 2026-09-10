@@ -5,7 +5,8 @@ export function cronDeliveryHasRedundantTelegramThreadId(delivery: {
   threadId?: unknown;
 }): boolean {
   const to = typeof delivery.to === "string" ? delivery.to.trim() : "";
-  const topicId = /(?::topic:|:)(\d+)$/iu.exec(to)?.[1];
+  const telegramTarget = to.replace(/^telegram:/iu, "");
+  const topicId = /^.+(?::topic:|:)(\d+)$/iu.exec(telegramTarget)?.[1];
   if (
     !topicId ||
     (typeof delivery.threadId !== "string" && typeof delivery.threadId !== "number")

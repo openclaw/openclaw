@@ -2,6 +2,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import { normalizeCronJobPatch } from "../normalize.js";
 import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { applyJobPatch, createJob } from "./jobs.js";
@@ -142,6 +143,32 @@ describe("schedule activation ownership", () => {
 });
 
 describe("applyJobPatch delivery merge", () => {
+  it("applies a redundant thread setter before deduplicating the merged delivery", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:99",
+        threadId: "42",
+      },
+    });
+    const patch = normalizeCronJobPatch({
+      delivery: {
+        to: "telegram:-1001234567890:topic:99",
+        threadId: "99",
+      },
+    });
+
+    expect(patch).not.toBeNull();
+    applyJobPatch(job, patch!);
+
+    expect(job.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:-1001234567890:topic:99",
+    });
+  });
+
   it("threads explicit delivery threadId patches into delivery", () => {
     const job = makeJob();
     const patch = { delivery: { threadId: "99" } } as Parameters<typeof applyJobPatch>[1];

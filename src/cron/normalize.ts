@@ -190,7 +190,10 @@ function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
   };
 }
 
-function coerceDelivery(delivery: UnknownRecord) {
+function coerceDelivery(
+  delivery: UnknownRecord,
+  options?: { preserveRedundantThreadId?: boolean },
+) {
   const next = snapshotOwnCronRecord(delivery);
   const parsed = parseDeliveryInput(next);
   if (parsed.mode !== undefined) {
@@ -219,7 +222,7 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if ("threadId" in next) {
     delete next.threadId;
   }
-  if (cronDeliveryHasRedundantTelegramThreadId(next)) {
+  if (!options?.preserveRedundantThreadId && cronDeliveryHasRedundantTelegramThreadId(next)) {
     delete next.threadId;
   }
   if ("accountId" in next && next.accountId === null) {
@@ -534,7 +537,9 @@ export function normalizeCronJobInput(
   }
 
   if (isRecord(base.delivery)) {
-    next.delivery = coerceDelivery(base.delivery);
+    next.delivery = coerceDelivery(base.delivery, {
+      preserveRedundantThreadId: !options.applyDefaults,
+    });
   }
 
   if (options.applyDefaults) {
