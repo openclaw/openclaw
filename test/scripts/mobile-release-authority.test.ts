@@ -2615,7 +2615,8 @@ fi
       .flatMap((job) => job.steps ?? [])
       .find((step) => step.name === "Prepare trusted Linux Android tooling")?.run;
 
-    expect(tooling).toContain("'gradient:rgba(24,120,200,0.5)-rgba(200,40,120,0.9)'");
+    expect(tooling).toContain("'gradient:#1878c8-#c82878'");
+    expect(tooling).toContain("-alpha set -channel A -evaluate set 60% +channel");
     expect(tooling).not.toContain("'xc:");
   });
 
@@ -2637,6 +2638,12 @@ fi
       }
       return matches[0].run;
     };
+
+    const diagnosticTooling = readToolingBody(".github/workflows/android-emulator-diagnostic.yml");
+    expect(diagnosticTooling).toMatch(
+      /\/usr\/bin\/convert -size "\$dimensions" 'gradient:#1878c8-#c82878' \\\n\s+-alpha set -channel A -evaluate set 60% \+channel \\\n\s+"\$smoke_dir\/input-\$\{dimensions\}\.png"/u,
+    );
+    expect(diagnosticTooling).not.toContain("gradient:rgba(");
 
     const pathExists = (target: string): boolean => {
       try {
