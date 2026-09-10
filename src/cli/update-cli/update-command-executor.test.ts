@@ -544,7 +544,10 @@ describe("candidate executor delegation", () => {
       );
     } finally {
       process.kill(pid, "SIGTERM");
-      await waitForPidToExit(pid);
+      await vi.waitFor(() => expect(isChildProcessTreeAlive({ pid })).toBe(false), {
+        timeout: 2_000,
+        interval: 25,
+      });
     }
     const store = createManagedHandoffLeaseStore();
     const acquired = store.acquire(root, "new", { kind: "update" });
