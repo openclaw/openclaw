@@ -142,7 +142,9 @@ runtime accepts steering and otherwise becomes a followup; `followup` and
 before starting the newest message. The explicit `/steer <message>` command is
 not a local-mode command.
 
-## Scope and guarantees
+<a id="scope-and-guarantees" />
+
+## Input durability
 
 Ordinary Control UI input sent to an existing session is stored in the per-agent database
 before the Gateway acknowledges it. In `collect` mode, appending the combined
@@ -159,6 +161,8 @@ attempt is abandoned before agent-turn adoption. Abandonment releases that
 attempt's inbound and queue dedupe entries before ingress retries it. Messages
 already adopted or consumed keep duplicate suppression, so transport redelivery
 does not repeat their effects.
+
+## Lanes and scope
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
 - Default lane (`main`) is process-wide for inbound turns; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.

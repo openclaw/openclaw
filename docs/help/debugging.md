@@ -11,89 +11,6 @@ doc-schema-version: 1
 
 Debugging helpers for streaming output, gateway iteration, and startup profiling.
 
-## Runtime debug overrides
-
-`/debug` sets **runtime-only** config overrides (memory, not disk). Disabled by default; enable with `commands.debug: true`.
-
-```text
-/debug show
-/debug set channels.whatsapp.responsePrefix="[openclaw]"
-/debug unset channels.whatsapp.responsePrefix
-/debug reset
-```
-
-`/debug reset` clears all overrides and returns to the on-disk config.
-
-## Session trace output
-
-`/trace` shows plugin-owned trace/debug lines for one session without enabling full verbose mode. Use it for plugin diagnostics such as Active Memory debug summaries; use `/verbose` for normal status/tool output.
-
-```text
-/trace
-/trace on
-/trace off
-```
-
-## Plugin lifecycle trace
-
-Set `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1` for a phase-by-phase breakdown of plugin metadata, discovery, registry, runtime mirror, config mutation, and refresh work. Writes to stderr, so JSON command output stays parseable.
-Plugin load failures include their stack trace while this trace is enabled.
-
-```bash
-OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1 openclaw plugins install tokenjuice --force
-```
-
-```text
-[plugins:lifecycle] phase="config read" ms=6.83 status=ok command="install"
-[plugins:lifecycle] phase="slot selection" ms=94.31 status=ok command="install" pluginId="tokenjuice"
-[plugins:lifecycle] phase="registry refresh" ms=51.56 status=ok command="install" reason="source-changed"
-```
-
-Use this before reaching for a CPU profiler. From a source checkout, measure the built runtime with `node dist/entry.js ...` after `pnpm build`; `pnpm openclaw ...` also measures source-runner overhead.
-
-For synchronous module-load timings, use the shared diagnostics surface instead of a separate plugin-only environment switch:
-
-```bash
-OPENCLAW_DIAGNOSTICS=plugin.load-profile openclaw plugins list
-```
-
-## CLI startup and command profiling
-
-Checked-in startup benchmarks:
-
-```bash
-pnpm test:startup:bench:smoke
-pnpm tsx scripts/bench-cli-startup.ts --preset real --case status --runs 3
-pnpm tsx scripts/bench-cli-startup.ts --preset real --cpu-prof-dir .artifacts/cli-cpu
-```
-
-For one-off profiling through the normal source runner, set `OPENCLAW_RUN_NODE_CPU_PROF_DIR`:
-
-```bash
-OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/cli-cpu pnpm openclaw status
-```
-
-The source runner adds Node CPU profile flags and writes a `.cpuprofile` for the command. Use this before adding temporary instrumentation to command code.
-
-For startup stalls that look like synchronous filesystem or module-loader work, add Node's sync I/O trace flag through the source runner:
-
-```bash
-OPENCLAW_TRACE_SYNC_IO=1 pnpm openclaw gateway --force
-```
-
-`pnpm gateway:watch` leaves this flag disabled by default for the watched Gateway child; set `OPENCLAW_TRACE_SYNC_IO=1` when you want sync I/O trace output in watch mode too.
-
-## Node and tsx startup errors
-
-If a source-run command fails with `TypeError: __name is not a function`, capture
-`node --version`, `pnpm list tsx --depth 0`, the exact command, and the full stack.
-Confirm that Node is a [supported version](/install/node).
-
-From a trusted source checkout, run `pnpm build` before comparing the failure with
-the built runtime through `pnpm openclaw <command>`. The repository's typecheck
-does not emit build output. Keep the failing command and version evidence in a
-bug report rather than applying a workaround from an old investigation.
-
 ## Gateway watch mode
 
 ```bash
@@ -284,11 +201,71 @@ OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-stream.jsonl
 
 Default file: `~/.openclaw/logs/raw-stream.jsonl`
 
-## Safety notes
+### Safety notes
 
 - Raw stream logs can include full prompts, tool output, and user data.
 - Keep logs local and delete them after debugging.
 - If you share logs, scrub secrets and PII first.
+
+## CLI startup and command profiling
+
+Checked-in startup benchmarks:
+
+```bash
+pnpm test:startup:bench:smoke
+pnpm tsx scripts/bench-cli-startup.ts --preset real --case status --runs 3
+pnpm tsx scripts/bench-cli-startup.ts --preset real --cpu-prof-dir .artifacts/cli-cpu
+```
+
+For one-off profiling through the normal source runner, set `OPENCLAW_RUN_NODE_CPU_PROF_DIR`:
+
+```bash
+OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/cli-cpu pnpm openclaw status
+```
+
+The source runner adds Node CPU profile flags and writes a `.cpuprofile` for the command. Use this before adding temporary instrumentation to command code.
+
+For startup stalls that look like synchronous filesystem or module-loader work, add Node's sync I/O trace flag through the source runner:
+
+```bash
+OPENCLAW_TRACE_SYNC_IO=1 pnpm openclaw gateway --force
+```
+
+`pnpm gateway:watch` leaves this flag disabled by default for the watched Gateway child; set `OPENCLAW_TRACE_SYNC_IO=1` when you want sync I/O trace output in watch mode too.
+
+## Plugin lifecycle trace
+
+Set `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1` for a phase-by-phase breakdown of plugin metadata, discovery, registry, runtime mirror, config mutation, and refresh work. Writes to stderr, so JSON command output stays parseable.
+Plugin load failures include their stack trace while this trace is enabled.
+
+```bash
+OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1 openclaw plugins install tokenjuice --force
+```
+
+```text
+[plugins:lifecycle] phase="config read" ms=6.83 status=ok command="install"
+[plugins:lifecycle] phase="slot selection" ms=94.31 status=ok command="install" pluginId="tokenjuice"
+[plugins:lifecycle] phase="registry refresh" ms=51.56 status=ok command="install" reason="source-changed"
+```
+
+Use this before reaching for a CPU profiler. From a source checkout, measure the built runtime with `node dist/entry.js ...` after `pnpm build`; `pnpm openclaw ...` also measures source-runner overhead.
+
+For synchronous module-load timings, use the shared diagnostics surface instead of a separate plugin-only environment switch:
+
+```bash
+OPENCLAW_DIAGNOSTICS=plugin.load-profile openclaw plugins list
+```
+
+## Node and tsx startup errors
+
+If a source-run command fails with `TypeError: __name is not a function`, capture
+`node --version`, `pnpm list tsx --depth 0`, the exact command, and the full stack.
+Confirm that Node is a [supported version](/install/node).
+
+From a trusted source checkout, run `pnpm build` before comparing the failure with
+the built runtime through `pnpm openclaw <command>`. The repository's typecheck
+does not emit build output. Keep the failing command and version evidence in a
+bug report rather than applying a workaround from an old investigation.
 
 ## Debugging in VSCode
 
@@ -319,6 +296,29 @@ Set breakpoints in `src/` TypeScript files; the debugger maps them to compiled J
 - **Debug Gateway** can start/stop without affecting `/dist`, but you manage the build cycle in a separate terminal.
 - Edit `launch.json` `args` to debug other CLI subcommands.
 - To use the built CLI for other tasks (for example `dashboard --no-open` if your debug session spawns a new auth token), run it from another terminal: `node ./openclaw.mjs` or an alias like `alias openclaw-build="node $(pwd)/openclaw.mjs"`.
+
+## Runtime debug overrides
+
+`/debug` sets **runtime-only** config overrides (memory, not disk). Disabled by default; enable with `commands.debug: true`.
+
+```text
+/debug show
+/debug set channels.whatsapp.responsePrefix="[openclaw]"
+/debug unset channels.whatsapp.responsePrefix
+/debug reset
+```
+
+`/debug reset` clears all overrides and returns to the on-disk config.
+
+## Session trace output
+
+`/trace` shows plugin-owned trace/debug lines for one session without enabling full verbose mode. Use it for plugin diagnostics such as Active Memory debug summaries; use `/verbose` for normal status/tool output.
+
+```text
+/trace
+/trace on
+/trace off
+```
 
 ## Related
 

@@ -65,6 +65,8 @@ Each person can sign in to a model account for their Gateway profile. New sessio
 
 There are two sign-ins: the Gateway identifies **you**, then the provider authorizes **your model account**. CLI and web UI use the same personal account store on the selected Gateway. A shared server does not turn personal sign-in into shared credentials. System/agent credentials are a separate scope, managed through `models auth` on the machine running that OpenClaw installation.
 
+### Account concepts
+
 There are four separate pieces:
 
 | Piece            | What it means                                                                                         |
@@ -73,6 +75,8 @@ There are four separate pieces:
 | New-chat default | The saved account your new chats prefer for that provider. Changing it does not repin existing chats. |
 | Chat selection   | The account already selected for one chat. Other people and forks keep that selection.                |
 | Sign-in attempt  | A temporary, cancellable operation. No account is saved until sign-in succeeds.                       |
+
+### Adding an account
 
 Open **Settings → Profile → Connected accounts**, select **Add account**, then choose a provider and sign-in method. Adding an account needs an identified connection with `operator.write`.
 
@@ -88,19 +92,27 @@ The page lists saved accounts with friendly labels and marks the new-chat defaul
 
 The page reports the exact sign-in operation as pending, connected, cancelled, expired, or failed. **Cancel** asks the Gateway to retire that operation, including an exchange already in flight. Disconnecting, losing permission, or restarting the Gateway prevents an unfinished sign-in from starting another provider request or saving credentials. Start a new sign-in after reconnecting. Refreshing profile identity does not interrupt account controls.
 
+### Choosing an account for a chat
+
 Open the model menu in **New session** or an existing chat. Use **Account for this chat** to choose one of your saved accounts for the selected provider. The account picker remains available when **Automatic** has no eligible models. In New session, choosing an account previews eligible models before your first message. The selection applies to the session you create and can also be used for [draft-title preparation](/web/control-ui/sessions-and-sidebar#new-session-names) before you press Start. It does not change your new-chat default or saved model preference. Changing accounts discards the old title suggestion. In an existing chat, it changes that chat's selection.
 
 The account control shows a person a person-level label for someone else's personal account, not its private email, provider account label, or account id. The label describes the selection, not a billing receipt: configured shared failover accounts can still be used.
 
 Chat status and model listings identify a selected personal credential as **personal account**, without exposing its private label, email, or account id.
 
+### CLI and Custodian
+
 The CLI uses the same Gateway operations through [`openclaw models accounts`](/cli/models#personal-model-accounts). Run `openclaw models accounts login` to choose a provider and method, or supply `login <provider> --method <id>` directly. Use `list` to inspect saved accounts. Each command shows the selected Gateway, verified person, and Personal scope. It targets that person, not `--agent` or the operating-system username.
 
 Ask OpenClaw (Custodian) requires administrator access and a working configured inference route. Ask it to manage your personal model accounts, or enter `model accounts`. In the Control UI it opens **Settings → Profile → Connected accounts**. In a terminal it gives the CLI commands. If Custodian is unavailable, open **Connected accounts** or use the CLI directly. The handoff makes no change by itself. Complete sign-in in the protected controls or hidden terminal prompt, never in the conversation. Delegated agent requests cannot open or complete the human sign-in flow.
 
+### Where credentials are stored
+
 Credentials and the selected link are saved together in private, identity-scoped records in the shared state database (`state/openclaw.sqlite` under the Gateway state directory). There is no second account database or JSON sidecar. Pending sign-in operations live only in Gateway memory. Credentials are not added to the shared or agent-local auth stores, copied into global runtime snapshots, or included in automatic account rotation. Reconnecting replaces only a credential owned by that person. For ChatGPT, matching a workspace alone is not enough: the provider must also identify the same user. An administrator-linked shared account is never overwritten by a personal reconnect.
 
 Administrators can still create shared profiles through the CLI (`openclaw models auth login --provider openai --profile-id openai:alice`, see [OAuth](/concepts/oauth)) and link them with `users.linkAuthProfile`. Attaching an existing shared credential is an admin decision. `users.unlinkAuthProfile` remains self-or-admin, and `users.listAuthLinks` returns link metadata without secrets. A personal credential cannot be linked to another person's profile.
+
+### Pin and default rules
 
 When a linked person creates a session, OpenClaw captures their default as that session's auth selection. The selection has the same strength as a `/model ...@profile` pin. This happens before an initial message is dispatched, including when creation and the first message are separate requests. Sessions first created by turn admission capture the default at that admission. The pin is **session-sticky**: other people steering into that session use its selected account, and forks inherit it. An explicit `/model ...@profile -s` pin outranks the link. A fresh personal selection must belong to the authenticated human making it. Knowing another person's account id is not permission to select it. Agent- and channel-originated turns do not create personal links. For runtimes using OpenClaw's auth fallback planner, the ordered shared profiles for the same provider remain failover candidates if the pinned account fails. This matches the behavior of an explicit pin. Claude CLI requires its selected account and does not substitute shared profiles or its native login when that account cannot be used.
 

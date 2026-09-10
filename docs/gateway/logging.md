@@ -6,7 +6,7 @@ read_when:
 title: "Gateway logging"
 ---
 
-# Logging
+<a id="logging" />
 
 For a user-facing overview (CLI + Control UI + config), see [/logging](/logging).
 

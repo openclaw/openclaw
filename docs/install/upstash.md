@@ -96,6 +96,13 @@ ssh -F /dev/null -o ControlMaster=no -o ServerAliveInterval=15 -o ServerAliveCou
 This bypasses stale local `~/.ssh/config` settings and keeps the tunnel active
 through idle network periods.
 
+## Next steps
+
+- Set up messaging channels: [Channels](/channels)
+- Configure the Gateway: [Gateway configuration](/gateway/configuration)
+- Keep OpenClaw up to date: [Updating](/install/updating)
+- Compare hosting options: [Linux server](/vps)
+
 ## Related
 
 - [Remote access](/gateway/remote)
