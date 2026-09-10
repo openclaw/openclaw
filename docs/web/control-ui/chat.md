@@ -315,8 +315,11 @@ Codex harness. Select a task to read its messages, thinking, and tool calls;
 select **Show earlier** to load older history. Task activity refreshes the view
 while the subagent runs. The generic fallback label is **Subagent**.
 
-The viewer reads history from the runtime that owns it. If that runtime or its
-parent binding is unavailable, the panel shows an error with a retry action.
+The viewer reads history from the runtime that owns it. New native subagent
+tasks retain their original history source when later turns replace the parent's
+native thread. Changing the parent session or account can make that history
+unavailable. If the runtime or its parent binding is unavailable, the panel shows
+an error with a retry action.
 Tasks without readable history retain their prompt and output inspector.
 
 ## Chat message width

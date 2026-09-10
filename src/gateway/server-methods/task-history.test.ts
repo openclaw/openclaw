@@ -209,7 +209,7 @@ describe("tasks.history", () => {
     },
   );
 
-  it.each(["task identity", "requester access", "harness registration"] as const)(
+  it.each(["task identity", "history owner", "requester access", "harness registration"] as const)(
     "revalidates %s after an asynchronous history read",
     async (change) => {
       await withHistoryState(async () => {
@@ -241,6 +241,13 @@ describe("tasks.history", () => {
             status: "succeeded",
             endedAt: Date.now(),
             childSessionKey: "agent:main:subagent:new-child",
+          });
+        } else if (change === "history owner") {
+          markTaskTerminalById({
+            taskId: task.taskId,
+            status: "succeeded",
+            endedAt: Date.now(),
+            detail: { nativeHistory: { parentThreadId: "different-owner" } },
           });
         } else if (change === "requester access") {
           config = readerConfig;

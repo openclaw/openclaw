@@ -12,6 +12,7 @@ function createRuntime() {
     tryCreateRunningTaskRun: vi.fn((params) => ({ taskId: "task-native-subagent", ...params })),
     recordTaskRunProgressByRunId: vi.fn(() => []),
     finalizeTaskRunByRunId: vi.fn(() => []),
+    listTaskRecords: vi.fn(() => []),
   } as unknown as TaskLifecycleRuntime;
 }
 
@@ -72,6 +73,64 @@ describe("CodexNativeSubagentTaskMirror", () => {
       progressSummary: "Subagent is active.",
     });
   });
+
+  it.each([true, false])(
+    "preserves creation-time history ownership through progress, completion and recovery (stamped=%s)",
+    (stamped) => {
+      const runtime = createRuntime();
+      const historyOwner = {
+        parentThreadId: "parent-thread",
+        sessionId: "original-session",
+        connectionFingerprint: "original-connection",
+      };
+      const initial = new CodexNativeSubagentTaskMirror(
+        { parentThreadId: "parent-thread", ...(stamped ? { historyOwner } : {}) },
+        runtime,
+      );
+      const notify = (mirror: CodexNativeSubagentTaskMirror, status: string) =>
+        mirror.handleNotification({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            item: {
+              type: "collabAgentToolCall",
+              tool: "spawn_agent",
+              prompt: "Inspect one item",
+              agentsStates: { "child-thread": { status, message: "Lifecycle update" } },
+            },
+          },
+        });
+      notify(initial, "running");
+      const originalTask = vi.mocked(runtime.tryCreateRunningTaskRun).mock.results[0]!.value;
+      expect(originalTask.detail).toEqual(stamped ? { nativeHistory: historyOwner } : undefined);
+      vi.mocked(runtime.listTaskRecords).mockReturnValue([originalTask]);
+      const recovered = new CodexNativeSubagentTaskMirror(
+        {
+          parentThreadId: "parent-thread",
+          historyOwner: {
+            ...historyOwner,
+            sessionId: "replacement-session",
+            connectionFingerprint: "replacement-connection",
+          },
+        },
+        runtime,
+      );
+      notify(recovered, "running");
+      notify(recovered, "completed");
+      expect(vi.mocked(runtime.tryCreateRunningTaskRun).mock.calls[1]![0]).not.toHaveProperty(
+        "detail",
+      );
+      expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalled();
+      expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalled();
+      for (const [update] of [
+        ...vi.mocked(runtime.recordTaskRunProgressByRunId).mock.calls,
+        ...vi.mocked(runtime.finalizeTaskRunByRunId).mock.calls,
+      ]) {
+        expect(update).not.toHaveProperty("detail");
+      }
+      expect(originalTask.detail).toEqual(stamped ? { nativeHistory: historyOwner } : undefined);
+    },
+  );
 
   it("ignores subagent threads spawned by a different parent thread", () => {
     const runtime = createRuntime();
