@@ -54,5 +54,5 @@ cleanup budget expires, retry to finish the remaining registrations.
 
 This recovery requires a spawn-time registration. It does not discover
 unregistered children left by an older OpenClaw version or scan command names
-to infer ownership. Windows does not yet have equivalent orphan registration
-and recovery.
+to infer ownership. Windows has no equivalent orphan registration or
+recovery.

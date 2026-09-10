@@ -55,13 +55,6 @@ Backend plugin APIs and ordinary plugin loading do not require that setting.
 The `register(api)` callback receives an `OpenClawPluginApi` object with these
 methods:
 
-Plugins that provide an external team-chat surface for a session can register
-the single process-wide provider exported by
-`openclaw/plugin-sdk/session-discussion`. Its `info({ sessionKey })` method
-reports whether a discussion is unavailable, ready to open, or already open;
-`open({ sessionKey })` creates or resolves the discussion and returns its embed
-and external URLs. Registering another provider replaces the current provider.
-
 Each group of registration methods has its own page:
 
 | Group                                                                                       | What it registers                                                     |
@@ -73,6 +66,15 @@ Each group of registration methods has its own page:
 | [CLI and discovery](/plugins/sdk-overview/cli-and-discovery#gateway-discovery-registration) | Gateway discovery advertisers, CLI registrars, CLI backends           |
 | [Exclusive slots](/plugins/sdk-overview/memory-and-context#exclusive-slots)                 | Context engine and memory capability, one active at a time            |
 | [Events and lifecycle](/plugins/sdk-overview/events-and-hooks#events-and-lifecycle)         | Typed lifecycle hooks and conversation binding callbacks              |
+
+### Session discussion provider
+
+Plugins that provide an external team-chat surface for a session can register
+the single process-wide provider exported by
+`openclaw/plugin-sdk/session-discussion`. Its `info({ sessionKey })` method
+reports whether a discussion is unavailable, ready to open, or already open;
+`open({ sessionKey })` creates or resolves the discussion and returns its embed
+and external URLs. Registering another provider replaces the current provider.
 
 ### API object fields
 

@@ -88,6 +88,33 @@ update those settings to their new locations before restarting. See
 [Restore a full archive](/install/backups#restore-a-full-archive) for the full
 disaster-recovery sequence.
 
+## Private update captures
+
+The managed `<stateDir>.update-captures/` root is excluded from ordinary archives,
+SQLite snapshots, Git backups, and support exports. Selecting a containing or
+nested workspace does not override this rule. Selecting a capture file as config
+or as a database backup source refuses the backup. Other states' captures are
+recognized by the exact sibling layout: `<owner>/` beside
+`<owner>.update-captures/`, with an existing owner directory. Canonical path
+aliases receive the same protection. Unrelated similarly named workspace
+directories remain included; a suffix alone does not establish ownership.
+
+Marked private directories remain excluded after their owner is removed or
+renamed, or the marked directory is moved or copied. Keep the marker with the
+whole directory. Files copied out without it are not recognized by this rule.
+The fixed `.openclaw-private-update-capture` file contains exactly
+`openclaw-private-update-capture-v1` followed by a newline. Export checks inspect
+only selected paths and their ancestors, including canonical aliases. They do
+not parse workspace manifests or scan for other state roots. A malformed or
+unreadable marker refuses export of that selection; a support bundle reports
+the refusal without including that input.
+
+The marker is an exclusion instruction, not proof of artifact ownership or
+permission to reopen, adopt, or delete it. Producers must durably write it before
+raw data, including in each independently movable staging or capture directory.
+Cleanup must preserve it until private contents are gone. This exclusion does
+not create captures, change retention, or change ordinary backup sanitization.
+
 ## SQLite snapshots
 
 Use `openclaw backup sqlite` when you need a portable artifact for one OpenClaw-owned SQLite database instead of a broad state archive.

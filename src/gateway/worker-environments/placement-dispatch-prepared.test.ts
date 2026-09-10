@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -12,6 +14,11 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
 import {
+  getSessionRepositoryWorkspaceStore,
+  type SessionRepositoryWorkspaceRecord,
+} from "../../state/session-repository-workspaces.js";
+import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
+import {
   createNodeRegistryRuntime,
   updateNodeRunnerInventory,
   type NodeWorkerSupervisorNodeProof,
@@ -25,6 +32,16 @@ import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import * as support from "./service.test-support.js";
+import {
+  readSessionRepositoryCheckpoint,
+  stageSessionRepositoryCheckpoint,
+} from "./session-repository-checkpoints.js";
+import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
+import { requireWorkspaceResultGit } from "./workspace-result-git.js";
+
+vi.mock("./worker-github-binding.js", () => ({ prepareWorkerGitHubBinding: vi.fn() }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
@@ -41,6 +58,11 @@ function preparedHarness(
     reserve?: boolean;
     executionMode?: WorkerPlacementExecutionMode;
     liveBindingFails?: boolean;
+    repository?: SessionRepositoryWorkspaceRecord;
+    boundWorkspace?: Pick<
+      NodeWorkerPreparedWorkspaceResult,
+      "workspaceDir" | "sourceManifestRef" | "preparedManifestRef"
+    >;
   } = {},
 ) {
   const executionMode = options.executionMode ?? "worker-turn";
@@ -51,6 +73,12 @@ function preparedHarness(
     now: () => support.testState.nowMs,
   });
   const harness = createHarness(support.testState.stateDb, placements, {
+    ...(options.repository
+      ? {
+          requiresNodeEnrollment: true,
+          resolveWorkspace: async () => ({ kind: "repository", repository: options.repository! }),
+        }
+      : {}),
     isCurrentNodePlacement: (proof, requirement) =>
       nodeCurrent &&
       transport.isCurrent(proof, requirement.consumesWorkerSlot, requirement.requiredNodeCommands),
@@ -64,8 +92,20 @@ function preparedHarness(
       executionMode,
       project: {
         key: "d".repeat(64),
-        baseCommit: "e".repeat(40),
-        root: "/gateway/workspace",
+        baseCommit: options.repository?.baseCommit ?? "e".repeat(40),
+        ...(options.repository
+          ? {
+              source: {
+                kind: "repository",
+                url: options.repository.url,
+                repositoryId: "R_dispatch_fixture",
+                owner: {
+                  agent: { agentId: REQUEST.agentId, provenance: null },
+                  identity: { source: "anonymous" },
+                },
+              },
+            }
+          : { root: "/gateway/workspace" }),
         preparation: {
           key: PREPARATION_KEY,
           cacheKey: "a".repeat(64),
@@ -91,7 +131,14 @@ function preparedHarness(
     profileSnapshot: intent.profileSnapshot,
     provisionOperationId: `provision:${environmentId}`,
     ...(reserve
-      ? { preparation: { key: PREPARATION_KEY, demandAtMs: 900, expiresAtMs: 10_000 } }
+      ? {
+          preparation: {
+            purpose: "reserve",
+            key: PREPARATION_KEY,
+            demandAtMs: 900,
+            expiresAtMs: 10_000,
+          },
+        }
       : {}),
   });
   store.transition({ environmentId, from: "requested", to: "provisioning" });
@@ -147,7 +194,7 @@ function preparedHarness(
   bindPreparedWorkspace.mockImplementation(async (request) => {
     request.assertCurrent();
     harness.log.push("workspace:bind-prepared");
-    return await ordinaryBind(request);
+    return { ...(await ordinaryBind(request)), ...options.boundWorkspace };
   });
   if (!reserve) {
     vi.mocked(harness.environments.create).mockResolvedValue(projected);
@@ -506,4 +553,148 @@ describe("prepared worker dispatch", () => {
     expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
     expect(harness.environments.schedulePreparedRefill).not.toHaveBeenCalled();
   });
+  it.each([true, false])(
+    "claims a repository-only reserve with setup %s and overlays its accepted checkpoint on the bound source",
+    async (runSetupScript) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", support.testState.root);
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      vi.mocked(prepareWorkerGitHubBinding).mockResolvedValue(undefined);
+      const stagingRoot = path.join(support.testState.root, "checkpoint-source");
+      await fs.mkdir(stagingRoot);
+      await fs.writeFile(path.join(stagingRoot, "tracked.txt"), "pinned source\n");
+      await requireWorkspaceResultGit(stagingRoot, ["init", "--quiet"]);
+      await requireWorkspaceResultGit(stagingRoot, ["add", "."]);
+      await requireWorkspaceResultGit(stagingRoot, [
+        "-c",
+        "user.name=Dispatch Fixture",
+        "-c",
+        "user.email=dispatch@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "source",
+      ]);
+      const baseCommit = await requireWorkspaceResultGit(stagingRoot, ["rev-parse", "HEAD"]);
+      const base = await readActualWorkspaceManifest({ root: stagingRoot, baseCommit });
+      await fs.writeFile(path.join(stagingRoot, "session.txt"), "accepted session change\n");
+      const current = await readActualWorkspaceManifest({ root: stagingRoot, baseCommit });
+      const repositoryStore = getSessionRepositoryWorkspaceStore();
+      expect(repositoryStore.path).toBe(support.testState.stateDb.path);
+      const created = repositoryStore.create({
+        agentId: REQUEST.agentId,
+        sessionKey: REQUEST.sessionKey,
+        url: "https://github.com/example/project.git",
+        requestedRef: "refs/heads/main",
+        runSetupScript: true,
+        assertCurrent: () => {},
+      });
+      const pinned = repositoryStore.bindBase({
+        workspaceId: created.workspaceId,
+        expectedRevision: created.revision,
+        baseCommit,
+        baseManifestHash: base.manifestRef,
+        assertCurrent: () => {},
+      });
+      const staged = await stageSessionRepositoryCheckpoint({
+        workspaceId: pinned.workspaceId,
+        expectedRevision: pinned.revision,
+        stagingRoot,
+        baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+        currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+        baseManifestRef: base.manifestRef,
+        currentManifestRef: current.manifestRef,
+        assertCurrent: () => {},
+      });
+      try {
+        await staged.publish();
+      } finally {
+        await staged.discard();
+      }
+      const accepted = repositoryStore.get(created.workspaceId)!;
+      const boundWorkspace = {
+        workspaceDir: "/worker/prepared/project",
+        sourceManifestRef: base.manifestRef,
+        preparedManifestRef: base.manifestRef,
+      };
+      const { harness, store, ready, request } = preparedHarness({
+        repository: accepted,
+        boundWorkspace,
+      });
+      const startTunnel = vi.mocked(harness.environments.startTunnel);
+      const ordinaryTunnel = startTunnel.getMockImplementation()!;
+      startTunnel.mockImplementation(async (params) => {
+        const tunnel = await ordinaryTunnel(params);
+        vi.spyOn(tunnel, "syncWorkspace").mockImplementation(async ({ source }) => {
+          harness.log.push("sync");
+          expect(source).toMatchObject({
+            kind: "repository",
+            url: accepted.url,
+            ref: accepted.requestedRef,
+            branch: accepted.branch,
+            baseCommit,
+            runSetupScript: false,
+            prepared: { ...boundWorkspace, baseCommit },
+          });
+          if (source.kind !== "repository" || !source.checkpoint) {
+            throw new Error("Prepared dispatch lost its accepted repository checkpoint");
+          }
+          expect(
+            await fs.readFile(path.join(source.checkpoint.stagingRoot, "session.txt"), "utf8"),
+          ).toBe("accepted session change\n");
+          return {
+            mode: "repository",
+            remoteWorkspaceDir: boundWorkspace.workspaceDir,
+            baseCommit,
+            baseManifestRef: base.manifestRef,
+            manifestRef: current.manifestRef,
+          };
+        });
+        return tunnel;
+      });
+
+      const active = await harness.service.dispatch({ ...request, runSetupScript });
+
+      expect(harness.environments.prepareProjectIntent).toHaveBeenCalledWith(request.profileId, {
+        machineClass: undefined,
+        os: undefined,
+        executionMode: request.executionMode,
+        projectPath: undefined,
+        repository: {
+          agentId: request.agentId,
+          url: accepted.url,
+          ref: accepted.requestedRef,
+          baseCommit,
+        },
+        runSetupScript,
+        inherited: undefined,
+        signal: undefined,
+        setupAuthorized: true,
+      });
+      expect(active).toMatchObject({
+        state: "active",
+        environmentId: ready.environmentId,
+        remoteWorkspaceDir: boundWorkspace.workspaceDir,
+        workspaceBaseManifestRef: current.manifestRef,
+      });
+      expect(harness.environments.create).not.toHaveBeenCalled();
+      expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+      expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
+      expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
+        harness.log.indexOf("sync"),
+      );
+      expect(repositoryStore.get(accepted.workspaceId)).toEqual(accepted);
+      const checkpoint = await readSessionRepositoryCheckpoint({
+        workspaceId: accepted.workspaceId,
+      });
+      expect(checkpoint.currentManifestRef).toBe(current.manifestRef);
+      expect(harness.environments.schedulePreparedRefill).toHaveBeenCalledWith(ready.environmentId);
+      const tunnel = await startTunnel.mock.results[0]!.value;
+      expect(tunnel.quiesceWorkspace).not.toHaveBeenCalled();
+      expect(tunnel.reconcileWorkspace).not.toHaveBeenCalled();
+    },
+  );
 });

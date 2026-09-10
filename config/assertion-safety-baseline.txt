@@ -612,7 +612,7 @@ extensions/logbook/src/config.ts	1
 extensions/logbook/src/node-host.ts	1
 extensions/logbook/src/service.ts	6
 extensions/logbook/src/store.ts	4
-extensions/matrix/src/actions.ts	3
+extensions/matrix/src/actions.ts	2
 extensions/matrix/src/approval-auth.ts	1
 extensions/matrix/src/approval-handler.runtime.ts	8
 extensions/matrix/src/approval-native.ts	6
@@ -695,7 +695,7 @@ extensions/matrix/src/setup-contract.ts	1
 extensions/matrix/src/setup-core.ts	5
 extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	10
-extensions/matrix/src/tool-actions.ts	2
+extensions/matrix/src/tool-actions.ts	1
 extensions/mattermost/src/channel.ts	8
 extensions/mattermost/src/gateway-auth-bypass.ts	3
 extensions/mattermost/src/mattermost/client.ts	9
@@ -1526,7 +1526,6 @@ packages/memory-host-sdk/src/host/memory-schema-migration.ts	1
 packages/memory-host-sdk/src/host/memory-schema-recall.ts	1
 packages/memory-host-sdk/src/host/memory-schema.ts	7
 packages/memory-host-sdk/src/host/multimodal.ts	1
-packages/memory-host-sdk/src/host/post-json.ts	1
 packages/memory-host-sdk/src/host/read-file.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	4
 packages/memory-host-sdk/src/host/session-files.ts	9
@@ -1678,9 +1677,7 @@ src/agents/config.ts	1
 src/agents/content-blocks.ts	1
 src/agents/context-cache-projection.ts	1
 src/agents/context-cache.ts	1
-src/agents/context-resolution.ts	1
 src/agents/context-runtime-state.ts	4
-src/agents/context-window-guard.ts	1
 src/agents/context.ts	2
 src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	2
@@ -1713,7 +1710,6 @@ src/agents/embedded-agent-runner/model-context-tokens.ts	1
 src/agents/embedded-agent-runner/model.compat.ts	1
 src/agents/embedded-agent-runner/model.configured-fallback.ts	1
 src/agents/embedded-agent-runner/model.configured-overrides.ts	2
-src/agents/embedded-agent-runner/model.inline-provider.ts	2
 src/agents/embedded-agent-runner/model.provider-hooks.ts	10
 src/agents/embedded-agent-runner/model.registry-resolution.ts	6
 src/agents/embedded-agent-runner/model.ts	5
@@ -1854,9 +1850,8 @@ src/agents/model-selection-shared.ts	1
 src/agents/model-tool-support.ts	1
 src/agents/models-config-state.ts	1
 src/agents/models-config.merge.ts	2
-src/agents/models-config.plan.ts	4
+src/agents/models-config.plan.ts	3
 src/agents/models-config.providers.policy.lookup.ts	1
-src/agents/models-config.ts	1
 src/agents/modes/interactive/theme/theme.ts	11
 src/agents/node-plugin-tools.ts	1
 src/agents/openai-model-routes.ts	2
@@ -2232,7 +2227,7 @@ src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	3
-src/cli/capability-cli/image.ts	12
+src/cli/capability-cli/image.ts	10
 src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/shared.ts	4
 src/cli/capability-cli/tts.ts	6
@@ -2895,7 +2890,6 @@ src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/placement-state.ts	3
 src/gateway/worker-environments/placement-store.ts	1
-src/gateway/worker-environments/provider-lifecycle.ts	1
 src/gateway/worker-environments/service-validation.ts	3
 src/gateway/worker-environments/service.ts	1
 src/gateway/worker-environments/state.ts	1

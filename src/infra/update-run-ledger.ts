@@ -7,18 +7,22 @@ import {
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+} from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import {
-  inspectUpdateRunAbandonment,
+  isAbandonedUpdateRun,
   isStaleIdentitylessUpdateRun,
   recordedUpdateRunDrivers,
 } from "./update-run-activity.js";
@@ -34,7 +38,15 @@ import {
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
-import { listUpdateRuns, readUpdateRunRecord as readRun } from "./update-run-reader.js";
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
+import {
+  inspectUpdateRunReconciliation,
+  listUpdateRuns,
+  readUpdateRunReconciliationCandidates,
+  readUpdateRunRecord as readRun,
+  type UpdateRunReconciliationCandidate,
+  type UpdateRunReconciliationInput,
+} from "./update-run-reader.js";
 import {
   finishUpdateRunRecord,
   type FinishUpdateRunResult,
@@ -44,7 +56,6 @@ import {
 } from "./update-run-record.js";
 import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { hasStoredUpdateRecovery, readRecoveries } from "./update-run-recovery-store.js";
-import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
 export {
   getLatestUpdateFetchFailure,
@@ -331,8 +342,7 @@ export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOpti
     runId,
     (record) => {
       if (
-        record.status === "failed" &&
-        record.reason === "abandoned" &&
+        isAbandonedUpdateRun(record) &&
         !record.steps.some((step) => step.step === "reconcile:acknowledged")
       ) {
         upsertStep(record, {
@@ -346,84 +356,128 @@ export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOpti
   );
 }
 
-/** The writer rechecks activity and process identity in the same transaction as terminalization. */
+function canReconcileCandidates(
+  candidates: UpdateRunReconciliationCandidate[],
+  input: UpdateRunReconciliationInput,
+): boolean {
+  return (
+    candidates.some(
+      ({ rule }) => rule && (!input.legacyOnly || rule === LEGACY_UPDATE_RUN_EXPIRED_REASON),
+    ) &&
+    !(input.explicit && candidates.some(({ record, rule }) => record.status === "running" && !rule))
+  );
+}
+
+/** Prepare eligibility without write access, then revalidate under the writer's transaction. */
 export function reconcileAbandonedUpdateRuns(
-  input: { explicit?: boolean; runIds?: readonly string[]; requireAllActive?: boolean } = {},
+  input: UpdateRunReconciliationInput = {},
   options: LedgerOptions = {},
 ): UpdateRunRecord[] {
   if (input.runIds?.length === 0) {
     return [];
   }
   const candidates =
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
-      if (!tableExists(db, "update_runs")) {
-        return [];
-      }
-      let query = getNodeSqliteKysely<LedgerDatabase>(db)
-        .selectFrom("update_runs")
-        .select("run_id")
-        .where("status", "=", "running");
-      if (!input.explicit) {
-        query = query.where("updated_at_ms", "<", Date.now() - ABANDONED_UPDATE_RUN_MS);
-      }
-      if (input.runIds) {
-        query = query.where("run_id", "in", [...input.runIds]);
-      }
-      return executeSqliteQuerySync(db, query.orderBy("run_id")).rows;
-    }, options) ?? [];
-  if (!candidates.length) {
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+      ({ db }) => readUpdateRunReconciliationCandidates(db, input),
+      options,
+    ) ?? [];
+  return reconcileCandidates(candidates, input, options).reconciled;
+}
+
+export async function reconcileAbandonedUpdateRunsAsync(
+  input: UpdateRunReconciliationInput = {},
+  options: LedgerOptions = {},
+): Promise<UpdateRunRecord[]> {
+  if (input.runIds?.length === 0) {
     return [];
+  }
+  const candidates =
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      ({ db }) => readUpdateRunReconciliationCandidates(db, input),
+      options,
+    )) ?? [];
+  return reconcileCandidates(candidates, input, options).reconciled;
+}
+
+/** History remains readable when best-effort reconciliation cannot obtain write access. */
+export async function getUpdateRunWithReconciliationAsync(
+  runId: string,
+  options: LedgerOptions = {},
+): Promise<{ run: UpdateRunRecord | undefined; reconciliationError?: string }> {
+  const candidate = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+    ({ db }) => {
+      const run = tableExists(db, "update_runs") ? readRun(db, runId) : undefined;
+      return run ? inspectUpdateRunReconciliation(db, run, {}) : undefined;
+    },
+    options,
+  );
+  if (!candidate) {
+    return { run: undefined };
+  }
+  try {
+    const { current } = reconcileCandidates([candidate], {}, options);
+    return { run: current[0] };
+  } catch (error) {
+    return { run: candidate.record, reconciliationError: formatErrorMessage(error) };
+  }
+}
+
+function reconcileCandidates(
+  candidates: UpdateRunReconciliationCandidate[],
+  input: UpdateRunReconciliationInput,
+  options: LedgerOptions,
+): { current: UpdateRunRecord[]; reconciled: UpdateRunRecord[] } {
+  if (!canReconcileCandidates(candidates, input)) {
+    return { current: candidates.map(({ record }) => record), reconciled: [] };
   }
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
+      const selected = candidates.flatMap(({ record }) => {
+        const current = readRun(db, record.runId);
+        return current ? [inspectUpdateRunReconciliation(db, current, input)] : [];
+      });
+      const current = selected.map(({ record }) => record);
       if (
-        input.requireAllActive &&
-        executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<LedgerDatabase>(db)
-            .selectFrom("update_runs")
-            .select("run_id")
-            .where("status", "=", "running")
-            .where(
-              "run_id",
-              "not in",
-              candidates.map((candidate) => candidate.run_id),
-            )
-            .limit(1),
-        )
+        !canReconcileCandidates(selected, input) ||
+        (input.requireAllActive &&
+          executeSqliteQueryTakeFirstSync(
+            db,
+            getNodeSqliteKysely<LedgerDatabase>(db)
+              .selectFrom("update_runs")
+              .select("run_id")
+              .where("status", "=", "running")
+              .where(
+                "run_id",
+                "not in",
+                candidates.map(({ record }) => record.runId),
+              )
+              .limit(1),
+          ))
       ) {
-        return [];
+        return { current, reconciled: [] };
       }
-      const selected = candidates.flatMap((candidate) => {
-        const record = readRun(db, candidate.run_id);
-        return record?.status === "running"
-          ? [
-              {
-                record,
-                rule: hasStoredUpdateRecovery(db, record.runId)
-                  ? undefined
-                  : inspectUpdateRunAbandonment(record, input),
-              },
-            ]
-          : [];
-      });
-      // Operator recovery is one selection: renewed activity preserves every selected row.
-      if (input.explicit && selected.some(({ rule }) => !rule)) {
-        return [];
-      }
-      return selected.flatMap(({ record, rule }) => {
-        if (!rule) {
-          return [];
-        }
-        upsertStep(record, {
-          step: "reconcile:abandoned",
-          status: "failed",
-          endedAtMs: Date.now(),
-          detail: rule,
-        });
-        finishUpdateRunRecord(record, { status: "failed", reason: "abandoned" });
-        return [persistRun(db, record, options)];
-      });
+      const reconciled: UpdateRunRecord[] = [];
+      return {
+        current: selected.map(({ record, rule }) => {
+          if (!rule || (input.legacyOnly && rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON)) {
+            return record;
+          }
+          upsertStep(record, {
+            step: "reconcile:abandoned",
+            status: "failed",
+            endedAtMs: Date.now(),
+            detail: rule,
+          });
+          finishUpdateRunRecord(record, {
+            status: "failed",
+            reason: rule === LEGACY_UPDATE_RUN_EXPIRED_REASON ? rule : "abandoned",
+          });
+          const saved = persistRun(db, record, options);
+          reconciled.push(saved);
+          return saved;
+        }),
+        reconciled,
+      };
     },
     options,
     { schemaSql: schema, operationLabel: "update.run" },

@@ -15088,12 +15088,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   it("provisions ripgrep for real filesystem contract selections", () => {
     const contract = "src/agents/filesystem-tools-output-contract.test.ts";
     const nativeTools = "src/agents/sessions/tools/index.test.ts";
+    const bytePaths = "src/agents/sessions/tools/grep.byte-path.test.ts";
     const unrelated = "src/agents/run-wait.test.ts";
     const selections = [
       { targets: [contract] },
       { includePatterns: [contract] },
       { includePatterns: ["src/agents/filesystem-*.test.ts"] },
       { targets: [nativeTools] },
+      { targets: [bytePaths] },
+      { includePatterns: [bytePaths] },
+      { groups: [{ shard_name: "agentic-agents-support", targets: [bytePaths] }] },
+      { groups: [{ shard_name: "agentic-agents-support", includePatterns: [bytePaths] }] },
       { includePatterns: [unrelated] },
       { shardName: "agentic-agents-core-runtime" },
       { shardName: "agentic-agents-support" },
@@ -15123,6 +15128,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expectDefined(result.outputs.checks_node_core_nondist_matrix, "non-dist Node matrix"),
     ) as { include: { requires_ripgrep?: boolean }[] };
     expect(matrix.include.map((row) => Boolean(row.requires_ripgrep))).toEqual([
+      true,
+      true,
+      true,
+      true,
       true,
       true,
       true,

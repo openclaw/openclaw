@@ -179,8 +179,10 @@ transcript, and compaction boundaries also differ. See
 
 ## Upcoming deprecations
 
-A few hook-adjacent surfaces are deprecated but still supported. Migrate
-before the next major release:
+A few hook-adjacent surfaces are deprecated but still supported. Removal
+eligibility is tracked per surface in the plugin compatibility registry, as a
+`removeAfter` date or an explicit removal gate, not at a major-version
+boundary. Migrate now:
 
 - **Plaintext channel envelopes** in `inbound_claim` and `message_received`
   handlers. Prefer typed fields instead of parsing flat envelope text:

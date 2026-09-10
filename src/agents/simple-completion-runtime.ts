@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 /**
  * Simple completion runtime preparation.
@@ -17,12 +16,7 @@ import {
 } from "../plugins/provider-hook-runtime.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import {
-  AsyncWorkScope,
-  captureAsyncWorkTracker,
-  getAsyncWorkSignal,
-} from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
@@ -636,11 +630,6 @@ async function acquirePreparedSimpleCompletionModel(
     context: PreparedSimpleCompletionResolverContext,
   ) => Promise<PreparedSimpleCompletionModel>,
 ): Promise<AcquiredSimpleCompletionModel> {
-  const result = createDeferredCore<AcquiredSimpleCompletionModel>();
-  const trackOwner = captureAsyncWorkTracker();
-  const parentSignal = getAsyncWorkSignal();
-  const work = new AsyncWorkScope();
-  let runInContext = work.run(() => AsyncLocalStorage.snapshot());
   let releaseRuntime: (() => void) | undefined;
   let setupSettled = false;
   let callerReleased = true;
@@ -651,7 +640,14 @@ async function acquirePreparedSimpleCompletionModel(
       release?.();
     }
   };
-  const prepare = async () => {
+  return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
+    // Host work includes setup only; host close releases adopted model claims after drainage.
+    onAcquired({
+      release: () => {
+        setupSettled = true;
+        releaseWhenUnused();
+      },
+    });
     const context = await acquirePreparedSimpleCompletionRuntime(
       params,
       runtimePluginSelections,
@@ -660,7 +656,7 @@ async function acquirePreparedSimpleCompletionModel(
       },
     );
     const prepared = await withPluginRuntimeGenerationScope(context.preparedModelRuntime, () => {
-      runInContext = AsyncLocalStorage.snapshot();
+      captureWorkContext();
       return prepareModel(context);
     });
     if ("error" in prepared) {
@@ -674,32 +670,7 @@ async function acquirePreparedSimpleCompletionModel(
         releaseWhenUnused();
       },
     };
-  };
-  // Host work includes setup only; host close releases adopted model claims after drainage.
-  void trackOwner(async () => {
-    const closeFromParent = () => runInContext(() => work.beginClose(parentSignal?.reason));
-    parentSignal?.addEventListener("abort", closeFromParent, { once: true });
-    if (parentSignal?.aborted) {
-      closeFromParent();
-    }
-    try {
-      result.resolve(await work.track(prepare));
-    } catch (error) {
-      result.reject(error);
-    } finally {
-      try {
-        await AsyncWorkScope.runWhenAllIdle(
-          () => [work],
-          () => runInContext(() => work.drain()),
-        );
-      } finally {
-        parentSignal?.removeEventListener("abort", closeFromParent);
-        setupSettled = true;
-        releaseWhenUnused();
-      }
-    }
-  }).catch(result.reject);
-  return await result.promise;
+  });
 }
 
 export { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";

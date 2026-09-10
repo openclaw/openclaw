@@ -638,7 +638,7 @@ describe("failed package update recovery safety", () => {
       if (!retained) {
         throw new Error("The package owner did not retain its recovery transaction.");
       }
-      expect((await retained.rollback()).exitCode).toBe(1);
+      expect((await retained.rollback(() => {})).exitCode).toBe(1);
       expect(renameSpy).toHaveBeenCalledWith(retained.backupRoot, packageRoot);
     } finally {
       renameSpy.mockRestore();
@@ -811,7 +811,8 @@ describe("failed package update recovery safety", () => {
       });
       expect(rollback).toHaveBeenCalledOnce();
       expect(complete).toHaveBeenCalledOnce();
-      expect(cleanupStatus).toBe("rolled-back");
+      // Cleanup is pre-terminal; rollback is recorded only after completion settles.
+      expect(cleanupStatus).toBe("running");
       expect(recorded.status).toBe("rolled-back");
       expect(renderUpdateRunReport(recorded).headline).toContain("↩️ OpenClaw update rolled back");
       expect(await fs.readFile(configPath, "utf8")).toBe(original);

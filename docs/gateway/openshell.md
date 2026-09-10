@@ -25,8 +25,8 @@ workspace sync mode.
   `plugins.entries.openshell.config.command`)
 - OpenSSH client available on the Gateway host
 - OpenShell `v0.0.88` or newer when configuring an OpenShell workspace
-- An active, reachable OpenShell gateway with permission to create sandboxes;
-  local gateways do not require a cloud account
+- An active, reachable OpenShell gateway with permission to create sandboxes.
+  Local gateways do not require a cloud account
 - A supported compute runtime on the OpenShell gateway host when using local
   sandboxes
 - OpenClaw Gateway running on the host
@@ -44,8 +44,8 @@ openshell sandbox list
 
 `gateway list` marks the active gateway with `*`. If no gateway is selected,
 run `openshell gateway select <gateway-name>`. To register an existing local
-gateway endpoint, run `openshell gateway add http://127.0.0.1:8080 --local`;
-replace the endpoint with the address of your running gateway. For an
+gateway endpoint, run `openshell gateway add http://127.0.0.1:8080 --local`.
+Replace the endpoint with the address of your running gateway. For an
 authenticated remote gateway, follow its login flow with
 `openshell gateway login <gateway-name>`.
 
@@ -129,12 +129,12 @@ canonical**:
 - Within one OpenClaw Gateway process, commands and file-tool operations sharing
   a workspace wait for the current operation to finish. The lock covers the
   complete upload, command, and download, or the complete file read/mutation and
-  its synchronization; separate backend handles share the same lock.
+  its synchronization. Separate backend handles share the same lock.
 - File tools go through the sandbox bridge, but local stays source of truth
   between turns.
 - Working-directory checks inspect the host directories that will be uploaded
   and release their lock before returning. Execution owns its own complete
-  upload-to-download operation; an abandoned check cannot block later tools.
+  upload-to-download operation. An abandoned check cannot block later tools.
   Remote permissions and image-specific restrictions are checked when execution
   starts.
 
@@ -153,7 +153,7 @@ its download can replace those external edits.
 
 - On first use after sandbox creation, OpenClaw seeds the remote workspace
   from local once. If the Gateway restarts before that first use, the next use
-  detects the still-empty remote workspace and seeds it; a workspace that
+  detects the still-empty remote workspace and seeds it. A workspace that
   already holds content is never re-seeded.
 - After that, `exec`, `read`, `write`, `edit`, and `apply_patch` operate
   directly on the remote workspace. OpenClaw does **not** sync remote changes
@@ -198,7 +198,7 @@ All OpenShell config lives under `plugins.entries.openshell.config`:
 | `from`                    | `string`                 | `"openclaw"`  | Sandbox source for first-time create                                                   |
 | `gateway`                 | `string`                 | unset         | OpenShell gateway name (top-level `--gateway`)                                         |
 | `gatewayEndpoint`         | `string`                 | unset         | OpenShell gateway endpoint (top-level `--gateway-endpoint`)                            |
-| `workspace`               | `string`                 | unset         | Existing OpenShell control-plane workspace used for every CLI operation                |
+| `workspace`               | `string`                 | unset         | Existing OpenShell workspace used for every CLI operation                              |
 | `policy`                  | `string`                 | unset         | Path to a sandbox policy YAML file on the OpenClaw Gateway host                        |
 | `providers`               | `string[]`               | `[]`          | Provider names attached at sandbox creation (deduped, one `--provider` flag per entry) |
 | `gpu`                     | `boolean`                | `false`       | Request GPU resources (`--gpu`)                                                        |
@@ -208,9 +208,9 @@ All OpenShell config lives under `plugins.entries.openshell.config`:
 | `timeoutSeconds`          | `number`                 | `120`         | Timeout for `openshell` CLI operations                                                 |
 
 `remoteWorkspaceDir` and `remoteAgentWorkspaceDir` must be absolute paths and
-stay under the managed roots `/sandbox` or `/agent`; other absolute paths are
+stay under the managed roots `/sandbox` or `/agent`. Other absolute paths are
 rejected. Choose distinct, non-overlapping directories because OpenClaw manages
-their contents independently; previously configured overlapping roots remain
+their contents independently. Previously configured overlapping roots remain
 accepted for upgrade compatibility.
 
 `timeoutSeconds` applies to ordinary OpenShell CLI operations. Sandbox creation
@@ -218,7 +218,7 @@ always receives at least 300 seconds so image builds and first-time provisioning
 are not cut short by the default 120-second command timeout.
 
 `policy` is a file path, not a policy name or ID. Prefer an absolute path such
-as `/etc/openclaw/openshell-policy.yaml`; relative paths are resolved from the
+as `/etc/openclaw/openshell-policy.yaml`. Relative paths are resolved from the
 agent's local workspace during sandbox creation. An explicit policy overrides
 the OpenShell CLI's `OPENSHELL_SANDBOX_POLICY` environment variable. When
 neither is set, OpenShell uses its normal policy selection and defaults.
@@ -237,8 +237,8 @@ trailing, or consecutive hyphen. Create it first with
 operations when the selected workspace does not exist or is being deleted.
 Set it to `"default"` to override an ambient non-default Workspace explicitly.
 
-The setting applies to every OpenShell sandbox managed by this plugin instance;
-it cannot select different OpenShell workspaces per OpenClaw agent or session.
+The setting applies to every OpenShell sandbox managed by this plugin instance.
+It cannot select different OpenShell workspaces per OpenClaw agent or session.
 Changing it does not migrate existing sandboxes. Delete OpenClaw's OpenShell
 sandboxes while the old workspace is still configured, then change the setting
 and restart the Gateway.
@@ -248,7 +248,7 @@ Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) live under
 [Sandboxing](/gateway/sandboxing) for the full matrix.
 
 To pass non-secret environment values into sandboxed commands, use the existing
-`agents.defaults.sandbox.docker.env` setting; the OpenShell backend also
+`agents.defaults.sandbox.docker.env` setting. The OpenShell backend also
 applies those values during command execution. OpenShell does not currently
 inject them into sandbox creation or background services. Keep credentials in
 OpenShell providers or another dedicated secret-delivery mechanism.
@@ -379,7 +379,7 @@ commands remain independent of the OpenShell backend.
 
 OpenClaw keeps a registered sandbox's shipped legacy runtime name after an
 upgrade so its remote workspace remains addressable. Recreating that scope
-deletes the legacy runtime; the next use creates the current 19-character
+deletes the legacy runtime. The next use creates the current 19-character
 runtime name.
 
 OpenShell v0.0.92 can still locate a sandbox record created by v0.0.68, but a
@@ -399,9 +399,9 @@ Recreate after changing any of:
 - `plugins.entries.openshell.config.remoteWorkspaceDir` or
   `remoteAgentWorkspaceDir`
 
-When changing the OpenShell gateway or control-plane workspace, recreate the
-affected sandboxes while the old gateway and workspace are still selected;
-otherwise cleanup targets the new location instead of the existing sandbox.
+When changing the OpenShell gateway or OpenShell workspace, recreate the
+affected sandboxes while the old gateway and workspace are still selected.
+Otherwise cleanup targets the new location instead of the existing sandbox.
 
 If OpenShell cannot delete a sandbox, OpenClaw reports the failure and keeps the
 runtime registry entry so recreation or pruning can be retried safely. Restore
@@ -425,8 +425,8 @@ Mirror synchronization never copies entries it cannot represent, such as
 symlinks, FIFOs, or Unix sockets, into either workspace. Existing host entries
 of those types remain intact at every depth, along with their parent directories,
 even if the sandbox deletes those directories or replaces them with files.
-Remote replacements that conflict with these preserved host paths are ignored;
-ordinary files and directories still receive remote changes and deletions.
+Remote replacements that conflict with these preserved host paths are ignored.
+Ordinary files and directories still receive remote changes and deletions.
 
 ## Custom image contract
 
@@ -474,9 +474,9 @@ filesystem must permit the writes. `sandbox.docker.network`,
 ## Current limitations
 
 - Sandbox browser is not supported on the OpenShell backend.
-- One plugin instance uses one OpenShell workspace; per-agent or per-session
+- One plugin instance uses one OpenShell workspace. Per-agent or per-session
   OpenShell workspace selection is not supported.
-- `sandbox.docker.binds` does not apply to OpenShell; sandbox creation fails
+- `sandbox.docker.binds` does not apply to OpenShell. Sandbox creation fails
   if binds are configured.
 - Docker-specific runtime knobs under `sandbox.docker.*` (other than `env`)
   apply only to the Docker backend.
@@ -514,7 +514,7 @@ openclaw logs --follow
   Set `plugins.entries.openshell.config.gateway` explicitly when the service
   should not depend on the interactive CLI's active selection.
 - **Workspace missing or the wrong sandbox list:** Verify the selected
-  control-plane workspace with `openshell workspace list`, then run
+  OpenShell workspace with `openshell workspace list`, then run
   `openshell --workspace <workspace-name> sandbox list`. Create missing
   workspaces with `openshell workspace create --name <workspace-name>` before
   enabling them in OpenClaw. Remember that the Gateway service may not inherit
@@ -529,8 +529,8 @@ openclaw logs --follow
   `openshell provider list`, then create or refresh the required provider using
   OpenShell's documented credential flow. If `autoProviders` is disabled,
   required providers must already exist.
-- **Remote files are missing locally:** This is expected in `remote` mode;
-  remote files are canonical and are not synchronized back to the host. Use
+- **Remote files are missing locally:** This is expected in `remote` mode.
+  Remote files are canonical and are not synchronized back to the host. Use
   `mirror` mode when host-visible changes are required. Recreating a remote
   sandbox destroys its remote-only files.
 - **An image or attachment cannot be sent:** Use a path under the configured
@@ -540,7 +540,7 @@ openclaw logs --follow
   outside the workspace because its move or restoration could not finish. The
   error identifies the preserved path and the workspace path and retains the
   original failure. Compare both paths and recover the needed files before
-  deleting either copy. A partial move can leave different files in each path;
+  deleting either copy. A partial move can leave different files in each path.
   OpenClaw preserves remaining workspace entries instead of overwriting them
   with an incomplete or unverified backup. If restoration completed and only
   cleanup of the preservation directory failed, the error confirms the restored
@@ -554,7 +554,7 @@ openclaw logs --follow
 ## How it works
 
 1. OpenClaw runs `sandbox get` for the sandbox name (with the selected
-   OpenShell workspace and any configured `--gateway`/`--gateway-endpoint`); if
+   OpenShell workspace and any configured `--gateway`/`--gateway-endpoint`). If
    that fails it creates one in the same OpenShell workspace with
    `sandbox create`, passing `--name`, `--from`, `--policy` when set, `--gpu`
    when enabled, `--auto-providers`/`--no-auto-providers`, and one
@@ -571,5 +571,5 @@ openclaw logs --follow
 
 - [Sandboxing](/gateway/sandboxing) - modes, scopes, and backend comparison
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) - debugging blocked tools
-- [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) - per-agent overrides
+- [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) - per-agent overrides
 - [Sandbox CLI](/cli/sandbox) - `openclaw sandbox` commands

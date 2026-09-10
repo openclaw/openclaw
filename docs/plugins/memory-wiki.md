@@ -392,22 +392,22 @@ Put config under `plugins.entries.memory-wiki.config`:
 
 Key toggles:
 
-| Key                                        | Values / default                               | Notes                                                                         |
-| ------------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------- |
-| `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local` | chooses input and integration behavior                                        |
-| `vault.scope`                              | `global` (default), `agent`                    | one shared vault or one child vault per agent                                 |
-| `vault.path`                               | global default `<state-dir>/wiki/main`         | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`       |
-| `vault.renderMode`                         | `native` (default), `obsidian`                 |                                                                               |
-| `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                  |
-| `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                             |
-| `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                                        |
-| `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode                         |
-| `ingest.autoCompile`                       | default `true`                                 | rebuild compiled output after imported sources change                         |
-| `search.backend`                           | `shared` (default), `local`                    |                                                                               |
-| `search.corpus`                            | `wiki` (default), `memory`, `all`              |                                                                               |
-| `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections |
-| `render.createBacklinks`                   | default `true`                                 | generate deterministic related blocks                                         |
-| `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                                      |
+| Key                                        | Values / default                               | Notes                                                                                      |
+| ------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local` | chooses input and integration behavior                                                     |
+| `vault.scope`                              | `global` (default), `agent`                    | one shared vault or one child vault per agent                                              |
+| `vault.path`                               | global default `<state-dir>/wiki/main`         | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`                    |
+| `vault.renderMode`                         | `native` (default), `obsidian`                 | `obsidian` writes Obsidian-friendly pages instead of native output                         |
+| `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                               |
+| `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                                          |
+| `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                                                     |
+| `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode                                      |
+| `ingest.autoCompile`                       | default `true`                                 | rebuild compiled output after imported sources change                                      |
+| `search.backend`                           | `shared` (default), `local`                    | `shared` uses the shared memory search flow when available; `local` searches the wiki only |
+| `search.corpus`                            | `wiki` (default), `memory`, `all`              | which corpus wiki search covers                                                            |
+| `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections              |
+| `render.createBacklinks`                   | default `true`                                 | generate deterministic related blocks                                                      |
+| `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                                                   |
 
 The state directory is `~/.openclaw` by default. When `OPENCLAW_STATE_DIR` is
 set, default wiki vaults use that directory instead. Explicit `vault.path`
@@ -551,7 +551,7 @@ Obsidian.
 
 Agent-scoped vaults can still use Obsidian-friendly Markdown, but configuration
 validation rejects `obsidian.useOfficialCli: true` with `vault.scope: "agent"`.
-The current `obsidian.vaultName` setting is global and cannot select a distinct
+The `obsidian.vaultName` setting is global and cannot select a distinct
 Obsidian vault for each agent. Use the wiki tools and CLI operations instead,
 or keep an Obsidian-operated wiki in global scope.
 

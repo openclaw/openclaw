@@ -7,7 +7,7 @@ read_when:
 title: "Backups"
 ---
 
-# Backups
+<a id="backups" />
 
 OpenClaw keeps its authoritative state in SQLite: one global control-plane
 database under the state directory (usually `~/.openclaw`), plus one database

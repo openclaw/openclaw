@@ -2153,7 +2153,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessionUrl=https://gateway.example/control/chat/main");
   });
 
-  it("renders exact session Git co-author trailers once immediately after the Runtime line", () => {
+  it("renders exact session Git co-author trailers once outside relocatable Runtime facts", () => {
     const params = { workspaceDir: "/tmp/openclaw", runtimeInfo: { agentId: "work" } };
     const baseline = buildAgentSystemPrompt(params);
     const prompt = buildAgentSystemPrompt({
@@ -2170,8 +2170,8 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toBe(
       baseline.replace(
-        "Runtime: agent=work\n",
-        "Runtime: agent=work\n" +
+        "## Runtime\n",
+        "## Runtime\n" +
           "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
           "Co-authored-by: ada <20+ada@users.noreply.github.com>\n" +
           "Co-authored-by: grace <10+grace@users.noreply.github.com>\n",

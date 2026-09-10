@@ -1199,14 +1199,17 @@ function runConcurrentSchemaProbe(params: {
     const readyPath = process.env.OPENCLAW_SCHEMA_TEST_READY_PATH;
     const startPath = process.env.OPENCLAW_SCHEMA_TEST_START_PATH;
     const workerIndex = process.env.OPENCLAW_SCHEMA_TEST_WORKER_INDEX;
-    fs.writeFileSync(readyPath, "ready");
-    const deadline = Date.now() + 15_000;
-    while (!fs.existsSync(startPath)) {
-      if (Date.now() >= deadline) {
-        throw new Error("timed out waiting for concurrent schema upgrade start");
+    async function waitForMarker(markerPath, label) {
+      const deadline = Date.now() + 15_000;
+      while (!fs.existsSync(markerPath)) {
+        if (Date.now() >= deadline) {
+          throw new Error(\`timed out waiting for \${label}\`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2));
       }
-      await new Promise((resolve) => setTimeout(resolve, 2));
     }
+    fs.writeFileSync(readyPath, "ready");
+    await waitForMarker(startPath, "concurrent schema upgrade start");
     fs.writeFileSync(enteringPath, \`entering-\${workerIndex}\`);
     try {
       const database = openOpenClawStateDatabase({ path: databasePath });
@@ -1214,9 +1217,17 @@ function runConcurrentSchemaProbe(params: {
       if (integrity?.integrity_check !== "ok") {
         throw new Error("state database integrity check failed");
       }
-    } finally {
-      closeOpenClawStateDatabaseForTest();
+      fs.writeFileSync(readyPath + ".opened", "opened");
+      await waitForMarker(readyPath + ".retire", "schema probe retirement permission");
+    } catch (error) {
+      try {
+        closeOpenClawStateDatabaseForTest();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "schema probe and worker cleanup failed");
+      }
+      throw error;
     }
+    closeOpenClawStateDatabaseForTest();
   `;
   const orchestratorSource = `
     import assert from "node:assert/strict";
@@ -1492,6 +1503,21 @@ function runConcurrentSchemaProbe(params: {
       }
       let results;
       try {
+        if (!roundError) {
+          const openedPaths = readyPaths.map((readyPath) => readyPath + ".opened");
+          await waitForMarkers(workers, openedPaths, "successful open markers", round);
+          // Opens contend together; explicit WAL-capable retirement intentionally fails
+          // on contention, so each worker stays live until granted its own close phase.
+          for (const [index, worker] of workers.entries()) {
+            assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited before retirement\`);
+            assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled before retirement\`);
+            fs.writeFileSync(readyPaths[index] + ".retire", "retire");
+            const [result] = await waitForOutcomes([outcomes[index]], round);
+            if (result.error || result.code !== 0) {
+              throw new Error(\`round \${round} worker \${index} retirement failed: \${JSON.stringify(result)}\`);
+            }
+          }
+        }
         results = await waitForOutcomes(outcomes, round);
       } catch (error) {
         roundError = roundError

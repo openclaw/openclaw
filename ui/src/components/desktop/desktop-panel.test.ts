@@ -2,89 +2,18 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayEventListener,
-} from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DesktopClient, DesktopConnectionHandle } from "./desktop-client.ts";
-import "./desktop-panel.ts";
-
-type DesktopPanelElement = HTMLElementTagNameMap["openclaw-desktop-panel"];
-
-const desktopEnvironment = {
-  id: "worker-desktop-1",
-  type: "worker",
-  status: "available",
-  desktop: true,
-  worker: {
-    providerId: "crabbox",
-    state: "attached",
-    ageMs: 1_000,
-    attachedSessionIds: ["main"],
-    tunnelStatus: "connected",
-    desktopApps: [],
-  },
-} as const;
-
-function createPanel() {
-  return document.createElement("openclaw-desktop-panel");
-}
-
-function createConnectionHandle(overrides: Partial<DesktopConnectionHandle> = {}) {
-  return {
-    disconnect: vi.fn(),
-    disableInput: vi.fn(),
-    sendBackspace: vi.fn(),
-    sendKeyboardEvent: vi.fn(),
-    sendText: vi.fn(),
-    setScaleViewport: vi.fn(),
-    ...overrides,
-  } satisfies DesktopConnectionHandle;
-}
-
-function clickPanelButton(
-  panel: DesktopPanelElement,
-  selector = ".desktop-environment button",
-): void {
-  const button = panel.renderRoot.querySelector<HTMLButtonElement>(selector);
-  if (!button) {
-    throw new Error(`expected Desktop button: ${selector}`);
-  }
-  button.click();
-}
-
-async function settleTasks(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    window.setTimeout(resolve, 0);
-  });
-  await Promise.resolve();
-}
-
-function createGatewayClient(request: unknown) {
-  const listeners = new Set<GatewayEventListener>();
-  const unsubscribe = vi.fn((listener: GatewayEventListener) => listeners.delete(listener));
-  return {
-    client: {
-      gatewayUrl: "ws://gateway.test",
-      request,
-      addEventListener(listener: GatewayEventListener) {
-        listeners.add(listener);
-        return () => unsubscribe(listener);
-      },
-    } as unknown as GatewayBrowserClient,
-    emit(event: string, payload: unknown) {
-      for (const listener of Array.from(listeners)) {
-        if (listeners.has(listener)) {
-          listener({ type: "event", event, payload });
-        }
-      }
-    },
-    unsubscribe,
-  };
-}
+import {
+  clickPanelButton,
+  createConnectionHandle,
+  createGatewayClient,
+  createPanel,
+  desktopEnvironment,
+  settleTasks,
+} from "./desktop-panel.test-support.ts";
 
 describe("embedded desktop panel presentation", () => {
   beforeEach(() => {
@@ -139,10 +68,10 @@ describe("embedded desktop panel presentation", () => {
   it("follows the session desktop and retires its connection before resolving a new placement", async () => {
     const replacement = { ...desktopEnvironment, id: "worker-desktop-2" };
     let refresh: Promise<void> | undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "environments.list") {
+    const request = vi.fn(async (method: string, params?: { environmentId?: string }) => {
+      if (method === "environments.status") {
         await refresh;
-        return { environments: [desktopEnvironment, replacement] };
+        return params?.environmentId === replacement.id ? replacement : desktopEnvironment;
       }
       return {
         transport: "rfb",
@@ -167,6 +96,9 @@ describe("embedded desktop panel presentation", () => {
     document.body.append(panel);
 
     await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("environments.status", {
+      environmentId: desktopEnvironment.id,
+    });
     expect(request).toHaveBeenCalledWith("desktop.observe", {
       source: { kind: "environment", environmentId: desktopEnvironment.id },
       control: false,
@@ -192,6 +124,9 @@ describe("embedded desktop panel presentation", () => {
     expect(disconnect).toHaveBeenCalledTimes(2);
     expect(connect).toHaveBeenCalledTimes(2);
     expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(false);
+    expect(request.mock.calls.some(([method]) => method === "environments.list")).toBe(false);
+    expect(panel.renderRoot.querySelector(".desktop-picker")).toBeNull();
+    expect(panel.renderRoot.textContent).toContain("The requested desktop is unavailable");
   });
 
   it.each(
@@ -494,7 +429,7 @@ describe("embedded desktop panel presentation", () => {
     },
   );
 
-  it("keeps an explicit picker selection and control across presence and placement updates", async () => {
+  it("keeps a standalone picker selection and control across presence updates", async () => {
     const selected = { ...desktopEnvironment, id: "worker-manual" };
     let environments = [desktopEnvironment, selected];
     const request = vi.fn(async (method: string, params?: { control?: boolean }) =>
@@ -517,7 +452,6 @@ describe("embedded desktop panel presentation", () => {
     panel.available = true;
     panel.embedded = true;
     panel.presented = true;
-    panel.sessionKey = "agent:main:desktop";
     panel.requestedSource = desktopEnvironment.id;
     const onFocusTargetChange = vi.fn();
     panel.onFocusTargetChange = onFocusTargetChange;
@@ -528,7 +462,6 @@ describe("embedded desktop panel presentation", () => {
     await panel.updateComplete;
     environments = [];
     gateway.emit("presence", { presence: [] });
-    gateway.emit("sessions.changed", { sessionKey: panel.sessionKey });
     await waitForFast(() =>
       expect(panel.renderRoot.querySelectorAll(".desktop-environment")).toHaveLength(0),
     );
@@ -556,12 +489,9 @@ describe("embedded desktop panel presentation", () => {
     const selectedFocus = { kind: "desktop", source: selected.id, control: true };
     expect(onFocusTargetChange).toHaveBeenLastCalledWith(selectedFocus);
 
-    // The chat owner reports a stopped placement, then a ready placement, in the same session.
-    for (const target of [null, desktopEnvironment.id]) {
-      panel.requestedSource = target;
-      await panel.updateComplete;
-      await settleTasks();
-    }
+    environments = [desktopEnvironment];
+    gateway.emit("presence", { presence: [] });
+    await settleTasks();
     expect({
       connected: selectedConnection?.isCurrent(),
       connections: connect.mock.calls.length,

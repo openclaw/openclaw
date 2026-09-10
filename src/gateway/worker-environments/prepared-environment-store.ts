@@ -22,6 +22,7 @@ import { find as findPlacement } from "./placement-row-codec.js";
 type PreparationRow = Pick<
   Selectable<WorkerEnvironments>,
   | "preparation_key"
+  | "preparation_purpose"
   | "preparation_demand_at_ms"
   | "preparation_expires_at_ms"
   | "preparation_consumed_at_ms"
@@ -34,14 +35,22 @@ export function readWorkerEnvironmentPreparation(
 ): WorkerEnvironmentPreparation | null {
   const {
     preparation_key: key,
+    preparation_purpose: storedPurpose,
     preparation_demand_at_ms: demandAtMs,
     preparation_expires_at_ms: expiresAtMs,
     preparation_consumed_at_ms: consumedAtMs,
   } = row;
-  if (key === null && demandAtMs === null && expiresAtMs === null && consumedAtMs === null) {
+  if (
+    key === null &&
+    storedPurpose === null &&
+    demandAtMs === null &&
+    expiresAtMs === null &&
+    consumedAtMs === null
+  ) {
     return null;
   }
   if (
+    (storedPurpose !== null && storedPurpose !== "reserve" && storedPurpose !== "build") ||
     typeof key !== "string" ||
     !/^[a-f0-9]{64}$/u.test(key) ||
     demandAtMs === null ||
@@ -57,7 +66,7 @@ export function readWorkerEnvironmentPreparation(
   ) {
     throw new Error("Worker environment preparation metadata is invalid");
   }
-  return { key, demandAtMs, expiresAtMs, consumedAtMs };
+  return { purpose: storedPurpose ?? "reserve", key, demandAtMs, expiresAtMs, consumedAtMs };
 }
 
 export function workerEnvironmentPreparationColumns(
@@ -65,6 +74,7 @@ export function workerEnvironmentPreparationColumns(
 ): PreparationRow {
   const columns = {
     preparation_key: preparation?.key ?? null,
+    preparation_purpose: preparation?.purpose ?? null,
     preparation_demand_at_ms: preparation?.demandAtMs ?? null,
     preparation_expires_at_ms: preparation?.expiresAtMs ?? null,
     preparation_consumed_at_ms: null,
@@ -108,6 +118,8 @@ function readPreparedReservations(db: DatabaseSync) {
         "profile_id as profileId",
         "profile_snapshot_json as profileSnapshot",
         "lease_id as leaseId",
+        "state",
+        "preparation_purpose as purpose",
       ])
       .where("preparation_key", "is not", null)
       .where("state", "not in", ["failed", "destroyed"])
@@ -134,13 +146,17 @@ function readPreparedReservations(db: DatabaseSync) {
       .orderBy("cleanupOrder")
       .orderBy("created_at_ms")
       .orderBy("environment_id"),
-  ).rows.map(({ environmentId, profileId, leaseId, cleanupOrder, profileSnapshot }) => ({
-    environmentId,
-    profileId,
-    leaseId,
-    cleanupOrder,
-    projectKey: snapshotProjectKey(JSON.parse(profileSnapshot)),
-  }));
+  ).rows.map(
+    ({ environmentId, profileId, leaseId, cleanupOrder, profileSnapshot, state, purpose }) => ({
+      environmentId,
+      profileId,
+      leaseId,
+      cleanupOrder,
+      state,
+      purpose,
+      projectKey: snapshotProjectKey(JSON.parse(profileSnapshot)),
+    }),
+  );
 }
 
 function preparedCapacity(
@@ -197,6 +213,7 @@ export function createPreparedEnvironmentStoreOps(options: {
             existing.provisionOperationId !== input.intent.provisionOperationId ||
             !isDeepStrictEqual(existing.profileSnapshot, input.intent.profileSnapshot) ||
             existing.preparation?.key !== input.intent.preparation.key ||
+            existing.preparation.purpose !== input.intent.preparation.purpose ||
             existing.preparation.demandAtMs !== input.intent.preparation.demandAtMs ||
             existing.preparation.expiresAtMs !== input.intent.preparation.expiresAtMs
           ) {
@@ -205,15 +222,60 @@ export function createPreparedEnvironmentStoreOps(options: {
           return existing;
         }
         const nowMs = options.now();
+        const build = input.intent.preparation.purpose === "build";
+        if (build && input.maxTotal === 0) {
+          return undefined;
+        }
+        if (build) {
+          const reusable = executeSqliteQueryTakeFirstSync(
+            db,
+            query(db)
+              .selectFrom("worker_environments")
+              .select("environment_id")
+              .where("profile_id", "=", input.intent.profileId)
+              .where("provider_id", "=", input.intent.providerId)
+              .where("preparation_key", "=", input.intent.preparation.key)
+              .where("preparation_consumed_at_ms", "is", null)
+              .where("destroy_requested_at_ms", "is", null)
+              .where("state", "not in", ["failed", "destroyed", "orphaned"])
+              .where("preparation_expires_at_ms", ">", nowMs)
+              .orderBy("created_at_ms")
+              .orderBy("environment_id")
+              .limit(1),
+          );
+          if (reusable) {
+            // Explicit build demand must survive a disabled reserve target while
+            // this allocation finishes. Reuse never renews its expiry window.
+            executeSqliteQuerySync(
+              db,
+              query(db)
+                .updateTable("worker_environments")
+                .set({ preparation_purpose: "build", updated_at_ms: nowMs })
+                .where("environment_id", "=", reusable.environment_id)
+                .where("state", "!=", "ready")
+                .where((eb) =>
+                  eb.or([
+                    eb("preparation_purpose", "is", null),
+                    eb("preparation_purpose", "=", "reserve"),
+                  ]),
+                ),
+            );
+            return options.get(db, reusable.environment_id);
+          }
+        }
         if (
-          input.target === 0 ||
+          (!build && input.target === 0) ||
           input.maxTotal === 0 ||
           input.intent.preparation.demandAtMs > nowMs ||
           input.intent.preparation.expiresAtMs <= nowMs
         ) {
           return undefined;
         }
-        if (preparedCapacity(db, { ...input, profileId: input.intent.profileId }) === 0) {
+        if (
+          build
+            ? readPreparedReservations(db).length >= input.maxTotal
+            : preparedCapacity(db, { ...input, profileId: input.intent.profileId }) === 0
+        ) {
           return undefined;
         }
         if (snapshotProjectKey(input.intent.profileSnapshot) !== input.projectKey) {
@@ -242,6 +304,9 @@ export function createPreparedEnvironmentStoreOps(options: {
       const index = reserved.findIndex((row) => row.environmentId === input.environmentId);
       if (index < 0 || index >= input.maxTotal) {
         return false;
+      }
+      if (owned.purpose === "build" && owned.state !== "ready") {
+        return true;
       }
       return (
         reserved

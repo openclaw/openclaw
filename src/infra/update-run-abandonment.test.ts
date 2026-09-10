@@ -57,6 +57,134 @@ afterEach(() => {
 });
 
 describe("abandoned update runs", () => {
+  it.each(["young", "recovery", "live-driver", "legacy-only"] as const)(
+    "does not request write access for protected %s history",
+    (shape) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun(
+        {
+          trigger: "cli",
+          ...(shape === "legacy-only" ? { origin: { driver: exitedDriver() } } : {}),
+        },
+        options,
+      );
+      if (shape === "recovery") {
+        const from = {
+          root: options.env.OPENCLAW_STATE_DIR,
+          nodePath: process.execPath,
+          version: "2026.9.2",
+          buildId: null,
+        };
+        createRetainedUpdateRecovery(
+          { runId: run.runId, from, to: { ...from, version: "2026.9.3" } },
+          options,
+        );
+      } else if (shape === "live-driver") {
+        adoptUpdateRun(run.runId, options);
+      }
+      const before = getUpdateRun(run.runId, options);
+      vi.advanceTimersByTime((shape === "young" ? 1 : 25) * 60 * 60_000);
+      expect(
+        reconcileAbandonedUpdateRuns(
+          { legacyOnly: shape === "legacy-only" },
+          { ...options, readOnly: true },
+        ),
+      ).toEqual([]);
+      expect(getUpdateRun(run.runId, options)).toEqual(before);
+    },
+  );
+
+  it.each([60_000, 24 * 60 * 60_000 - 60_000, 24 * 60 * 60_000, 24 * 60 * 60_000 + 1])(
+    "expires only untouched legacy admissions older than 24 hours (age=%s)",
+    (age) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
+      vi.advanceTimersByTime(age);
+      const reconciled = reconcileAbandonedUpdateRuns({}, options);
+      if (age <= 24 * 60 * 60_000) {
+        expect(reconciled).toEqual([]);
+        expect(getUpdateRun(run.runId, options)).toEqual(run);
+      } else {
+        expect(reconciled).toMatchObject([
+          {
+            runId: run.runId,
+            phase: "finished",
+            status: "failed",
+            reason: "legacy-driver-expired",
+          },
+        ]);
+        expect(getUpdateRun(run.runId, options)?.steps).toContainEqual(
+          expect.objectContaining({ step: "reconcile:abandoned", detail: "legacy-driver-expired" }),
+        );
+      }
+    },
+  );
+
+  it.each(["progress", "identity-unavailable", "recovery", "live-driver"] as const)(
+    "preserves a day-old admission with %s evidence",
+    (evidence) => {
+      const options = isolatedOptions();
+      const created = createUpdateRun({ trigger: "cli" }, options);
+      if (evidence === "progress") {
+        recordUpdateRunPhase(created.runId, "staging", {}, options);
+      } else if (evidence === "identity-unavailable") {
+        recordUpdateRunStep(
+          created.runId,
+          { step: "driver:identity-unavailable", status: "completed" },
+          options,
+        );
+      } else if (evidence === "live-driver") {
+        adoptUpdateRun(created.runId, options);
+      } else {
+        const from = {
+          root: options.env.OPENCLAW_STATE_DIR,
+          nodePath: process.execPath,
+          version: "2026.9.2",
+          buildId: null,
+        };
+        createRetainedUpdateRecovery(
+          { runId: created.runId, from, to: { ...from, version: "2026.9.3" } },
+          options,
+        );
+      }
+      const before = getUpdateRun(created.runId, options);
+      vi.advanceTimersByTime(25 * 60 * 60_000);
+      expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+      expect(getUpdateRun(created.runId, options)).toEqual(before);
+    },
+  );
+
+  it.each([
+    { first: "startup reconciliation", reason: "legacy-driver-expired" },
+    { first: "new update admission", reason: "superseded" },
+  ])(
+    "preserves the terminal reason when $first handles a legacy admission first",
+    ({ first, reason }) => {
+      const options = isolatedOptions();
+      const old = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
+      vi.advanceTimersByTime(25 * 60 * 60_000);
+
+      if (first === "startup reconciliation") {
+        expect(reconcileAbandonedUpdateRuns({}, options)).toMatchObject([
+          { runId: old.runId, status: "failed", reason },
+        ]);
+      }
+      createUpdateRun(
+        { trigger: "cli", origin: { driver: currentDriver() }, supersedeStaleIdentityless: true },
+        options,
+      );
+      const terminal = getUpdateRun(old.runId, options);
+      expect(terminal).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason,
+        finishedAtMs: Date.now(),
+      });
+      expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+      expect(getUpdateRun(old.runId, options)).toEqual(terminal);
+    },
+  );
+
   it.each(["automatic", "explicit", "supersede"] as const)(
     "preserves a durable run and its descriptor during %s stale-run cleanup",
     (mode) => {

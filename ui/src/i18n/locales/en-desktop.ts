@@ -21,7 +21,7 @@ const enDesktop = {
     refreshing: "Refreshing…",
     loading: "Loading desktop sources…",
     empty: "No desktop-capable sources are available.",
-    sourceUnavailable: "The requested desktop source is unavailable. Choose another source.",
+    sourceUnavailable: "The requested desktop is unavailable. Retry when the machine is ready.",
     connect: "Connect",
     connecting: "Connecting to desktop…",
     takeControl: "Take control",

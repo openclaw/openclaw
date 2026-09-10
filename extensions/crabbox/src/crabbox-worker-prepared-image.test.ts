@@ -12,62 +12,95 @@ import {
   commandResult,
   createProjectOptions as projectOptions,
   createWarmProvider,
+  openWarmImageStore,
 } from "./crabbox-worker-warm-image.test-support.js";
 
 describe("Crabbox prepared image demand and custody", () => {
-  it("keeps an older borrower's demand off a replacement generation", async () => {
-    const now = Date.now();
-    const preparation = {
-      key: "c".repeat(64),
-      cacheKey: "d".repeat(64),
-      purpose: "reserve" as const,
-      demandAtMs: now,
-    };
-    let captures = 0;
-    const { provider, calls } = createWarmProvider(({ argv }) =>
-      argv[2] === "create"
-        ? checkpointResult(`chk_demand_${++captures}`, argv[argv.indexOf("--id") + 1]!, "available")
-        : undefined,
-    );
-    const seed = await provider.provision(
-      PROFILE,
-      "generation-seed",
-      projectOptions([], new AbortController(), preparation).options,
-    );
-    const borrower = await provider.provision(
-      PROFILE,
-      "generation-borrower",
-      projectOptions([], new AbortController(), { ...preparation, purpose: "session" }).options,
-    );
-    const next = projectOptions([], new AbortController(), preparation);
-    next.options.project.prepare.mockResolvedValueOnce({
-      seedKey: PROJECT_KEY,
-      cacheHit: false,
-      captureRequired: true,
-    });
-    const replacement = await provider.provision(PROFILE, "generation-replacement", next.options);
-    expect(captures).toBe(2);
-    await provider.notePreparedDemand!(
-      { leaseId: borrower.leaseId, profile: PROFILE },
-      { preparationKey: preparation.key, demandAtMs: now + 60_000 },
-    );
-    expect(listCrabboxWarmImages()[0]).toMatchObject({
-      checkpointId: "chk_demand_2",
-      lastDemandAtMs: now,
-    });
-    await provider.notePreparedDemand!(
-      { leaseId: replacement.leaseId, profile: PROFILE },
-      { preparationKey: preparation.key, demandAtMs: now + 60_000 },
-    );
-    expect(listCrabboxWarmImages()[0]?.lastDemandAtMs).toBe(now + 60_000);
-    await provider.destroy({ leaseId: borrower.leaseId, profile: PROFILE });
-    await provider.destroy({ leaseId: replacement.leaseId, profile: PROFILE });
-    expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
-    await provider.destroy({ leaseId: seed.leaseId, profile: PROFILE });
-    expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv[3])).toEqual([
-      "chk_demand_1",
-    ]);
-  });
+  it.each([0, 1] as const)(
+    "keeps demand on its own generation with keepPrevious=%s",
+    async (keepPrevious) => {
+      const now = Date.now();
+      const preparation = {
+        key: "c".repeat(64),
+        cacheKey: "d".repeat(64),
+        purpose: "reserve" as const,
+        demandAtMs: now,
+      };
+      let captures = 0;
+      const { provider, calls } = createWarmProvider(
+        ({ argv }) =>
+          argv[2] === "create"
+            ? checkpointResult(
+                `chk_demand_${++captures}`,
+                argv[argv.indexOf("--id") + 1]!,
+                "available",
+              )
+            : undefined,
+        undefined,
+        {
+          warmImagePolicy: {
+            refreshAfterMs: 86_400_000,
+            retainUnusedMs: 14 * 86_400_000,
+            keepPrevious,
+          },
+        },
+      );
+      const seed = await provider.provision(
+        PROFILE,
+        "generation-seed",
+        projectOptions([], new AbortController(), preparation).options,
+      );
+      const borrower = await provider.provision(
+        PROFILE,
+        "generation-borrower",
+        projectOptions([], new AbortController(), { ...preparation, purpose: "session" }).options,
+      );
+      const next = projectOptions([], new AbortController(), preparation);
+      next.options.project.prepare.mockResolvedValueOnce({
+        seedKey: PROJECT_KEY,
+        cacheHit: false,
+        captureRequired: true,
+      });
+      const replacement = await provider.provision(PROFILE, "generation-replacement", next.options);
+      expect(captures).toBe(2);
+      await provider.notePreparedDemand!(
+        { leaseId: borrower.leaseId, profile: PROFILE },
+        { preparationKey: preparation.key, demandAtMs: now + 60_000 },
+      );
+      expect(listCrabboxWarmImages()[0]).toMatchObject({
+        checkpointId: "chk_demand_2",
+        lastDemandAtMs: now,
+      });
+      expect(openWarmImageStore().entries()[0]?.value.previous?.lastDemandAtMs).toBe(
+        keepPrevious ? now + 60_000 : undefined,
+      );
+      await provider.notePreparedDemand!(
+        { leaseId: replacement.leaseId, profile: PROFILE },
+        { preparationKey: preparation.key, demandAtMs: now + 60_000 },
+      );
+      expect(listCrabboxWarmImages()[0]?.lastDemandAtMs).toBe(now + 60_000);
+      await provider.destroy({ leaseId: borrower.leaseId, profile: PROFILE });
+      await provider.destroy({ leaseId: replacement.leaseId, profile: PROFILE });
+      expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
+      await provider.destroy({ leaseId: seed.leaseId, profile: PROFILE });
+      expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv[3])).toEqual(
+        keepPrevious ? [] : ["chk_demand_1"],
+      );
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 14 * 86_400_000);
+      const maintenance = {
+        profiles: [PROFILE],
+        signal: new AbortController().signal,
+        assertCurrent() {},
+      };
+      await provider.maintain!(maintenance);
+      expect(listCrabboxWarmImages()[0]?.previous?.checkpointId).toBe(
+        keepPrevious ? "chk_demand_1" : undefined,
+      );
+      clock.mockReturnValue(now + 60_000 + 14 * 86_400_000);
+      await provider.maintain!(maintenance);
+      expect(listCrabboxWarmImages()).toEqual([]);
+    },
+  );
 
   it.each(["session", "reserve"] as const)(
     "refreshes changed project setup once for %s and reuses the completed image",

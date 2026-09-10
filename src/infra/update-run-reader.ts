@@ -12,8 +12,11 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
+import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import { decodeRun } from "./update-run-codec.js";
 import type { UpdateFetchFailure, UpdateRunRecord } from "./update-run-record.js";
+import { hasStoredUpdateRecovery } from "./update-run-recovery-store.js";
+import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
 export function readUpdateRunRecord(db: DatabaseSync, runId: string): UpdateRunRecord | undefined {
   const query = getNodeSqliteKysely<Pick<DB, "update_runs">>(db)
@@ -34,7 +37,7 @@ export async function getUpdateRunAsync(
   );
 }
 
-type ListInput = { limit?: number; active?: boolean };
+type ListInput = { limit?: number; active?: boolean; reason?: string };
 
 function readRuns(db: DatabaseSync, input: ListInput): UpdateRunRecord[] {
   if (!tableExists(db, "update_runs")) {
@@ -45,6 +48,9 @@ function readRuns(db: DatabaseSync, input: ListInput): UpdateRunRecord[] {
     .selectAll();
   if (input.active) {
     query = query.where("status", "=", "running");
+  }
+  if (input.reason) {
+    query = query.where("reason", "=", input.reason);
   }
   return executeSqliteQuerySync(
     db,
@@ -143,4 +149,50 @@ export function getLatestUpdateFetchFailure(
     }
     return latestFailure;
   }, options);
+}
+
+export type UpdateRunReconciliationInput = {
+  explicit?: boolean;
+  runIds?: readonly string[];
+  requireAllActive?: boolean;
+  legacyOnly?: boolean;
+};
+export type UpdateRunReconciliationCandidate = {
+  record: UpdateRunRecord;
+  rule: string | undefined;
+};
+
+export function inspectUpdateRunReconciliation(
+  db: DatabaseSync,
+  record: UpdateRunRecord,
+  input: UpdateRunReconciliationInput,
+): UpdateRunReconciliationCandidate {
+  return {
+    record,
+    rule: hasStoredUpdateRecovery(db, record.runId)
+      ? undefined
+      : inspectUpdateRunAbandonment(record, input),
+  };
+}
+
+export function readUpdateRunReconciliationCandidates(
+  db: DatabaseSync,
+  input: UpdateRunReconciliationInput,
+): UpdateRunReconciliationCandidate[] {
+  if (!tableExists(db, "update_runs")) {
+    return [];
+  }
+  let query = getNodeSqliteKysely<Pick<DB, "update_runs">>(db)
+    .selectFrom("update_runs")
+    .selectAll()
+    .where("status", "=", "running");
+  if (!input.explicit) {
+    query = query.where("updated_at_ms", "<", Date.now() - ABANDONED_UPDATE_RUN_MS);
+  }
+  if (input.runIds) {
+    query = query.where("run_id", "in", [...input.runIds]);
+  }
+  return executeSqliteQuerySync(db, query.orderBy("run_id")).rows.map((row) =>
+    inspectUpdateRunReconciliation(db, decodeRun(row), input),
+  );
 }

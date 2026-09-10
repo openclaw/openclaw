@@ -78,6 +78,15 @@ It accepts a task ID, an optional opaque cursor, and a limit from 1 to 200
 bound connection, and call `assertCurrent()` after awaited work. The Gateway
 rechecks access before returning a page and caps the response at 4 MiB.
 
+Record immutable native history routing facts in task detail when creating the
+task. A later parent turn can replace its current native thread without changing
+the child's source. Preserve the original parent and connection identity across
+progress, completion, and recovery; never reconstruct them from a replacement
+binding. Preserve authorized compaction transfers within the same session
+lifecycle, while rejecting resets and account or connection changes.
+Runtime task detail participates in the Gateway's cursor and
+after-await identity checks.
+
 Keep `childSessionKey` absent for native children: it describes an OpenClaw
 session and also determines lifecycle ownership. Reading history must not adopt
 the child, create another transcript store, or change cancellation and recovery.

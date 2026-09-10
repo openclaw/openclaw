@@ -72,7 +72,7 @@ When block streaming is enabled, media must ride on structured payload fields. I
 
 Rules:
 
-- `[view ...]` is no longer valid for new output.
+- `[view ...]` is not valid for new output. `[embed ...]` replaced it in 2026.4.11 ([#64104](https://github.com/openclaw/openclaw/pull/64104)).
 - Embed shortcodes render only in the assistant message surface.
 - Only URL-backed embeds render; use `ref="..."` or `url="..."`.
 - Block-form inline HTML embed shortcodes do not render.

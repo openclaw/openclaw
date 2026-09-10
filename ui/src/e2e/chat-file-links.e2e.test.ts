@@ -205,7 +205,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     },
   );
 
-  it("opens the selected file from chat and the workspace root", async () => {
+  it("reveals the selected file from chat in the workspace root after filtering", async () => {
     const context = await browser.newContext({
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
       viewport: { height: 900, width: 1280 },
@@ -257,7 +257,14 @@ describeControlUiE2e("Control UI chat file links", () => {
           "sessions.files.list": {
             root: "/workspace",
             sessionKey: "agent:main:main",
-            files: [],
+            files: [
+              {
+                kind: "read",
+                name: "README.md",
+                path: "README.md",
+                workspacePath: "packages/app/README.md",
+              },
+            ],
             browser: {
               entries: [
                 {
@@ -274,6 +281,8 @@ describeControlUiE2e("Control UI chat file links", () => {
       });
 
       await page.goto(`${server.baseUrl}chat`);
+      await openChatSidePanelType(page, "Files");
+      await page.getByRole("button", { name: "1 read", exact: true }).click();
       const chatLink = page.locator('a.markdown-file-link[data-file-path="README.md"]');
       await chatLink.waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(artifactDir, "01-chat-file-link.png") });
@@ -291,10 +300,15 @@ describeControlUiE2e("Control UI chat file links", () => {
 
       await fileView.getByRole("button", { name: "Show in Files" }).click();
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list"))[0]?.params)
+        .poll(async () => (await gateway.getRequests("sessions.files.list")).at(-1)?.params)
         .toMatchObject({ path: "packages/app" });
+      await expect
+        .poll(() =>
+          page.getByRole("button", { name: "All", exact: true }).getAttribute("aria-pressed"),
+        )
+        .toBe("true");
       const browserRow = page
-        .locator(".chat-workspace-rail__browser .chat-workspace-rail__file")
+        .locator(".chat-workspace-rail__list--browser .chat-workspace-rail__file")
         .filter({ hasText: "README.md" });
       await browserRow.locator(".chat-workspace-rail__file-open").click();
       await expect
@@ -390,7 +404,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       });
       const openPreview = async (filePath: string) => {
         const fileRow = page
-          .locator(".chat-workspace-rail__browser .chat-workspace-rail__file")
+          .locator(".chat-workspace-rail__list--browser .chat-workspace-rail__file")
           .filter({ hasText: filePath });
         await fileRow.locator(".chat-workspace-rail__file-open").click();
       };

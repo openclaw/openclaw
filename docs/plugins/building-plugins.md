@@ -20,8 +20,8 @@ the package to [ClawHub](/clawhub) and users install it with:
 openclaw plugins install clawhub:<package-name>
 ```
 
-Bare package specs still install from npm during the launch cutover. Use the
-`clawhub:` prefix when you want ClawHub resolution.
+Bare package specs install from npm. Use the `clawhub:` prefix when you want
+ClawHub resolution.
 
 ## Requirements
 
@@ -219,9 +219,12 @@ local proof.
   </Step>
 
   <Step title="Publish">
-    Validate the package before publishing:
+    Publishing uses the separate `clawhub` CLI. Install and sign in first, then
+    validate the package before publishing:
 
     ```bash
+    npm i -g clawhub
+    clawhub login
     clawhub package publish your-org/your-plugin --dry-run
     clawhub package publish your-org/your-plugin
     ```
@@ -379,7 +382,7 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 <Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
 <Check>Internal imports use local modules, not SDK self-imports</Check>
-<Check>Tests pass (`pnpm test <bundled-plugin-root>/my-plugin/`)</Check>
+<Check>Tests pass (`pnpm test extensions/my-plugin/`)</Check>
 <Check>`pnpm check` passes (in-repo plugins)</Check>
 
 ## Test against beta releases

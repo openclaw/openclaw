@@ -12,7 +12,7 @@ read_when:
 title: "iOS app"
 ---
 
-Availability: iPhone app builds are distributed through Apple channels when enabled for a release. Local development builds can also run from source.
+Availability: The official iPhone app is available on the [App Store](https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132). Local development builds can also run from source.
 
 ## What it does
 
@@ -238,11 +238,11 @@ Watch call.
 The iPhone must remain available to relay messages. If its Gateway connection
 is asleep, Watch messages use the same bounded background reconnect as Watch
 quick replies, respecting the iPhone's auto-connect setting. Update OpenClaw on
-both devices: older companion chat payloads cannot establish the ownership
-needed for safe delivery and are rejected with an update-required error.
-An older Watch app may still label a background transfer as queued; that label
-does not mean the updated phone accepted it. Check the phone's delivery warning
-and update both apps before sending again.
+both devices. A companion chat payload without ownership information cannot
+prove safe delivery, so the phone rejects it with an update-required error.
+A Watch app that predates that ownership check can still label a background
+transfer as queued. That label does not mean the phone accepted it. Check the
+phone's delivery warning and update both apps before sending again.
 
 Both apps save delivery state before acknowledging it. The Watch retains the
 original command while waiting for the phone to accept it, and the phone saves
@@ -259,9 +259,9 @@ also retries saved result delivery without submitting another chat.
 If delivery stalls, open **Settings -> This iPhone -> Apple Watch -> Message Delivery** on
 iPhone. **Delivery uncertain** means the phone cannot prove whether a send
 reached the Gateway; check the original conversation before resending. It does
-not automatically repeat that send. Messages saved by an older app that lack
-the new delivery context appear as **Needs review**. Copy their text to Chat
-if you still want to send it, or use **Discard** to delete that text. Completed
+not automatically repeat that send. Saved messages that lack delivery context
+appear as **Needs review**. Copy their text to Chat if you still want to send
+it, or use **Discard** to delete that text. Completed
 cards offer **Dismiss**, which hides the card while preserving its original
 receipt for the Watch. Active deliveries offer neither action. Dismiss does
 not cancel a Gateway run or extend the reply's expiry.

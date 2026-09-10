@@ -1,14 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
+import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import * as service from "./update-command-service.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -17,6 +20,121 @@ async function readPreviousConfig(env: NodeJS.ProcessEnv) {
 }
 
 describe("package rollback executor ownership", () => {
+  it("preserves the real package and recovery material when its executor is lost during observation", async () => {
+    const base = dirs.make("rollback-real-executor-");
+    const { packageRoot, transaction } = await createRetainedPackageSwap(base);
+    const worker = path.join(packageRoot, "dist/infra/update-candidate-state.worker.js");
+    await fs.mkdir(path.dirname(worker), { recursive: true });
+    await fs.writeFile(
+      worker,
+      `
+        const { tsImport } = await import(${JSON.stringify(import.meta.resolve("tsx/esm/api"))});
+        await tsImport(${JSON.stringify(new URL("../../infra/update-candidate-state.worker.ts", import.meta.url).href)}, {
+          parentURL: import.meta.url,
+          tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))},
+        });
+      `,
+    );
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      '{"name":"openclaw","version":"2.0.0","type":"module"}',
+    );
+    const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-real-state-") };
+    const configSnapshot = await readPreviousConfig(env);
+    const config = configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig;
+    let current = true;
+    const run = {
+      runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+      env,
+      executorFence: {
+        assertCurrent() {
+          if (!current) {
+            throw new Error("original executor lost");
+          }
+        },
+      },
+    };
+    const schemaVersions = await readUpdateStateSchemaVersions({
+      stateDir: env.OPENCLAW_STATE_DIR,
+      config,
+      env,
+    });
+    const snapshot = async () => {
+      const root = path.join(base, "live");
+      const entries = (await fs.readdir(root, { recursive: true })).toSorted();
+      return await Promise.all(
+        entries.map(async (entry) => {
+          const file = path.join(root, entry);
+          const stat = await fs.lstat(file);
+          return {
+            entry,
+            ino: stat.ino,
+            mode: stat.mode,
+            content: stat.isFile() ? await fs.readFile(file) : null,
+          };
+        }),
+      );
+    };
+    const before = await snapshot();
+    const history = getUpdateRun(run.runId, { env });
+    const observed = createDeferred();
+    const resume = createDeferred();
+    const lstat = fs.lstat.bind(fs);
+    const observation = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stat = await lstat(...args);
+      if (String(args[0]) === packageRoot && args[1] === undefined) {
+        observed.resolve();
+        await resume.promise;
+      }
+      return stat;
+    });
+    const restart = vi.spyOn(service, "maybeRestartService").mockResolvedValue("ok");
+    const pending = rollbackFailedUpdate({
+      result: {
+        status: "error",
+        mode: "npm",
+        root: packageRoot,
+        reason: "readyz-unhealthy",
+        steps: [],
+        durationMs: 1,
+      },
+      previousRoot: packageRoot,
+      schemaVersions,
+      configSnapshot,
+      opts: { json: true, run },
+      timeoutMs: 1000,
+      packageTransaction: transaction,
+    });
+    try {
+      await Promise.race([
+        observed.promise,
+        pending.then(() => {
+          throw new Error("Rollback finished before the package observation");
+        }),
+      ]);
+      current = false;
+      resume.resolve();
+      const outcome = await pending;
+      expect(outcome).toMatchObject({
+        rolledBack: false,
+        pendingRecoveryReason: "original executor lost",
+        result: { recovery: { serviceRestartSafe: false } },
+      });
+      expect(await snapshot()).toEqual(before);
+      expect(getUpdateRun(run.runId, { env })).toEqual(history);
+      expect(restart).not.toHaveBeenCalled();
+      await expect(transaction.complete({ activationVerified: true }, () => {})).rejects.toThrow(
+        "original executor lost",
+      );
+      expect(await snapshot()).toEqual(before);
+    } finally {
+      resume.resolve();
+      await pending;
+      observation.mockRestore();
+      restart.mockRestore();
+    }
+  });
+
   it.each([
     {
       boundary: "preflight",

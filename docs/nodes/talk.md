@@ -70,16 +70,19 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 
 ## Config (`~/.openclaw/openclaw.json`)
 
+Angle-bracket values such as `<elevenlabs-api-key>` are placeholders; replace them
+with your own values.
+
 ```json5
 {
   talk: {
     provider: "elevenlabs",
     providers: {
       elevenlabs: {
-        voiceId: "elevenlabs_voice_id",
+        voiceId: "<elevenlabs-voice-id>",
         modelId: "eleven_v3",
         outputFormat: "mp3_44100_128",
-        apiKey: "elevenlabs_api_key",
+        apiKey: "<elevenlabs-api-key>",
       },
       mlx: {
         modelId: "mlx-community/Soprano-80M-bf16",
@@ -96,7 +99,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
       provider: "openai",
       providers: {
         openai: {
-          apiKey: "openai_api_key",
+          apiKey: "<openai-api-key>",
           model: "gpt-realtime-2.1",
           speakerVoice: "cedar",
         },

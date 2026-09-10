@@ -86,10 +86,10 @@ export class AsyncWorkScope {
     run: () => T | Promise<T>,
   ): Promise<T> {
     let scopes = selectScopes();
-    do {
-      await Promise.allSettled(scopes.flatMap((scope) => [...scope.pending]));
+    while (scopes.some((scope) => scope.pending.size > 0)) {
+      await Promise.allSettled(scopes.flatMap((scope) => Array.from(scope.pending)));
       scopes = selectScopes();
-    } while (scopes.some((scope) => scope.pending.size > 0));
+    }
     return run();
   }
 

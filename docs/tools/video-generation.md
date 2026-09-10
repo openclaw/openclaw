@@ -556,6 +556,7 @@ openclaw config set agents.defaults.mediaModels.video.primary "qwen/wan2.6-t2v"
 - [MiniMax](/providers/minimax)
 - [Models](/concepts/models)
 - [OpenAI](/providers/openai)
+- [OpenRouter](/providers/openrouter)
 - [Qwen](/providers/qwen)
 - [Runway](/providers/runway)
 - [Together AI](/providers/together)

@@ -18,6 +18,7 @@ import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
 } from "./update-candidate-rehearsal.js";
+import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
@@ -466,8 +467,16 @@ export async function validateUpdateCandidateCanary(params: {
       steps,
     };
   } finally {
-    if (!params.rehearsal) {
-      await rehearsal?.cleanup();
+    if (!params.rehearsal && rehearsal) {
+      await cleanupUpdateTemporaryDirectory({
+        directory: rehearsal.stateDir,
+        root: params.root,
+        name: "candidate rehearsal cleanup",
+        onWarning: (step) => {
+          steps.push(step);
+          params.onStep?.(step);
+        },
+      });
     }
   }
 }

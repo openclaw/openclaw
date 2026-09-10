@@ -32,6 +32,7 @@
     "node-sqlite.mjs",
     "node-version.mjs",
     "node-runtime-update.mjs",
+    "node-runtime-recovery.mjs",
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",

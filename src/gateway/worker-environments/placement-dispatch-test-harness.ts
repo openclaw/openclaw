@@ -387,8 +387,12 @@ export function createHarness(
     expiresAtMs: 10_000,
   };
   const environments: WorkerDispatchEnvironmentService &
-    Pick<WorkerEnvironmentService, "recordError" | "requestDestroy" | "requiresNodeEnrollment"> = {
+    Pick<
+      WorkerEnvironmentService,
+      "recordError" | "requestDestroy" | "requiresNodeEnrollment" | "readMachineShape"
+    > = {
     requiresNodeEnrollment: vi.fn(() => options.requiresNodeEnrollment === true),
+    readMachineShape: () => undefined,
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     assertPreparedIntentCurrent: vi.fn(),

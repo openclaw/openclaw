@@ -30,6 +30,7 @@ import {
 import type { CodexAppServerClient } from "./client.js";
 import { projectNormalizedToolItem } from "./event-projector-events.js";
 import { readItem } from "./event-projector-values.js";
+import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import {
   codexNativeSubagentNotifications as nativeSubagentNotifications,
   type CodexNativeSubagentCompletion,
@@ -74,6 +75,7 @@ type ParentState = {
   nativeCompletionReceipts: Set<string>;
   requesterSessionKey?: string;
   taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+  historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   taskRuntime?: AgentHarnessTaskRuntime;
   mirror?: CodexNativeSubagentTaskMirror;
@@ -198,6 +200,7 @@ function registerMonitor(params: {
   parentThreadId: string;
   requesterSessionKey?: string;
   taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+  historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   runtime?: NativeSubagentMonitorRuntime;
   retainClient?: () => (() => void) | undefined;
@@ -267,6 +270,7 @@ function registerMonitor(params: {
     parentThreadId: params.parentThreadId,
     requesterSessionKey: params.requesterSessionKey,
     taskRuntimeScope: params.taskRuntimeScope,
+    historyOwner: params.historyOwner,
     agentId: params.agentId,
     claimDirectChild: params.claimDirectChild,
     rejectPendingDirectChild: params.rejectPendingDirectChild,
@@ -372,6 +376,7 @@ class Monitor {
     parentThreadId: string;
     requesterSessionKey?: string;
     taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+    historyOwner?: CodexNativeSubagentHistoryOwner;
     agentId?: string;
     claimDirectChild?: (threadId: string) => (() => void) | undefined;
     rejectPendingDirectChild?: (threadId: string, reason: string) => void;
@@ -403,6 +408,7 @@ class Monitor {
     }
     state.requesterSessionKey ??= params.requesterSessionKey;
     state.taskRuntimeScope ??= params.taskRuntimeScope;
+    state.historyOwner ??= params.historyOwner;
     state.agentId ??= params.agentId;
     const owner = Symbol("codex-native-subagent-owner");
     state.owners.set(owner, {
@@ -507,6 +513,7 @@ class Monitor {
       {
         parentThreadId: state.parentThreadId,
         requesterSessionKey: state.requesterSessionKey,
+        historyOwner: state.historyOwner,
         agentId: state.agentId,
       },
       state.taskRuntime,

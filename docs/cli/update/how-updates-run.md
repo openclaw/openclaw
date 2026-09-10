@@ -37,6 +37,13 @@ Explicit package artifacts, such as tarball paths and URLs, still pass through
 validation and installation when their version matches the installed version.
 A matching version alone does not establish artifact equality.
 
+Updates continue with recorded warnings when disposable validation-copy cleanup,
+retired derived-cache cleanup, or Git upstream tracking setup fails. Resolve the
+reported cause, then run the warning's exact cleanup command or
+`openclaw doctor --fix`. Invalid ownership, unsafe state migrations, and a Gateway
+that cannot boot or pass readiness still block completion. See
+[Status and history](/cli/update/status-and-history) to inspect recorded warnings.
+
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.
 An interrupted update is not a successful update or a verified rollback.
@@ -194,6 +201,11 @@ Post-core steps follow the verified replacement package, including pnpm updates
 that change the target of the global package link. The helper retains the
 original installation identity for recovery; a child running from a different
 installation is still rejected.
+
+Updates from stable 2026.9.2 and 2026.9.3 retain support for their service handoff
+records, which predate the recorded Linux service-manager UID. The candidate
+still revalidates service ownership, profile, unit, and protected launcher data.
+When the handoff records a manager UID, a different UID blocks service mutation.
 
 The Gateway core auto-updater requires a managed service restart path. It hands
 the CLI update to a detached helper before activation. A foreground

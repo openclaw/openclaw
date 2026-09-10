@@ -31,6 +31,7 @@ managed-worktree session with an authorized operator connection:
 
 ```bash
 openclaw gateway call sessions.dispatch \
+  --timeout 1500000 \
   --params '{"key":"agent:main:device-work","deviceId":"<paired-device-id>"}'
 ```
 
@@ -68,9 +69,13 @@ Omit `ref` to use the repository's remote default branch. A branch, tag, or comm
 
 To keep the existing Gateway-source flow, create with `{"worktree":true,"cwd":"/path/to/repo","worktreeName":"big-refactor"}` instead. `projectGitUrl` still means a Gateway-managed project clone.
 
+Public repository preparation pins immutable source metadata before eligible cloud allocation without creating a Gateway checkout. Selecting prepared capacity and binding it to a session verify current access and public visibility, including when interrupted provisioning resumes after a Gateway restart. An already-active session keeps its checkout and saved changes across restart; this does not re-admit prepared capacity or revoke downloaded files when GitHub access changes. Initially verified private repositories keep ordinary cold checkout after enrollment; this is not an anonymous fallback for a failed credential. Public sources can use anonymous access only when no shared or native GitHub identity is configured; an unavailable configured identity remains an error.
+
+Public source preparation and prepared checkout adoption do not transfer GitHub credentials. Subsequent OpenClaw worker turns use the effective shared or native GitHub identity through the existing [per-turn credential binding](/gateway/config-tools/github-identity), when one is available.
+
 Private repository fetches use the effective shared [`tools.github`](/gateway/config-tools#tools-github) identity. Access through the Control UI repository picker does not by itself authorize that worker identity, and personal publication credentials are never used for the checkout.
 
-Repository setup uses the existing executable `.openclaw/worktree-setup.sh` contract on the node. It runs only when creation requested setup as an administrator and the current dispatch caller is also an administrator. An interrupted initial setup requires an administrator to retry dispatch; checkpoint restoration does not rerun setup. There is no local source from which to copy `.worktreeinclude` files.
+Repository setup uses the existing executable `.openclaw/worktree-setup.sh` contract on the node. It runs only when creation requested setup as an administrator and the current dispatch caller is also an administrator. An interrupted initial setup requires an administrator to retry dispatch unless the node attests that the admitted setup already completed. Prepared adoption and checkpoint restoration do not rerun setup. There is no local source from which to copy `.worktreeinclude` files.
 
 <a id="choose-a-machine-class-per-session" />
 
@@ -86,7 +91,7 @@ openclaw gateway call sessions.dispatch \
   --params '{"key":"agent:main:big-refactor","profileId":"aws","os":"linux","machineClass":"tiny"}'
 ```
 
-The bundled Crabbox provider supports Linux on every supported Crabbox version. It also advertises Windows (WSL2), Windows, and macOS when the selected backend reports `windows/wsl2`, `windows/normal`, or `macos`, respectively, and the resolved Crabbox binary reports Crabbox 0.53.1 or newer. This gate compares the numeric major, minor, and patch components, ignoring prerelease and build metadata suffixes. For example, `0.53.1-dev`, `0.53.1`, and `0.54.0` qualify; `0.53.0` and unversioned `dev` builds do not. With older or unrecognized binaries, the picker keeps backend-advertised non-Linux choices visible but disabled with an upgrade or version-check hint. Only Linux machine classes remain selectable. Non-Linux profile defaults, dispatches, and moves still fail before allocation with an upgrade message. Restart the Gateway after upgrading the binary to refresh cached metadata. Desktop and warm images remain Linux only. The **Operating system** section appears when a provider advertises more than one target; `environments.list` omits `operatingSystems` for a single target, and each Crabbox machine option identifies its `os`.
+The bundled Crabbox provider advertises Linux, Windows (WSL2), native Windows, and macOS when the selected backend reports the matching target. Before reading the catalog or starting a worker, the plugin resolves a supported Crabbox binary, automatically installing its managed copy when the selected binary is outdated or missing. Every target uses the same supported version; an old local CLI no longer hides non-Linux targets. See [Crabbox configuration](/gateway/config-cloud-workers#crabbox-profile) for the managed installation policy. Desktop and warm images remain Linux only. The **Operating system** section appears when a provider advertises more than one target; `environments.list` omits `operatingSystems` for a single target, and each Crabbox machine option identifies its `os`.
 
 Select `windows/normal` for native Windows and `windows/wsl2` for the Linux environment inside Windows. Native Windows runs `settings.setup` as PowerShell and requires supported Node.js, npm, and Crabbox's detached-process launcher on the guest. A Bash setup recipe cannot be reused unchanged for that target; see [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites).
 

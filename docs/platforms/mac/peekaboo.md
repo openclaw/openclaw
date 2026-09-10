@@ -35,7 +35,7 @@ When enabled (and Computer Control is on), OpenClaw starts a local UNIX socket s
 
 For a one-off unattended run, `--attach-only --background-only` suppresses automatic windows and GUI-owned Keychain
 loading. The persistent elevation host is a managed-deployment path for OpenClaw Foundation release operators. Its
-`package` command requires the Foundation signing identity and notarization credentials; OpenClaw does not currently
+`package` command requires the Foundation signing identity and notarization credentials. OpenClaw does not
 publish a general-download elevation archive. Install only a certified, source-addressed archive supplied by an
 authorized release operator:
 

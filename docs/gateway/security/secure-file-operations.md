@@ -13,7 +13,7 @@ It is a **library guardrail** for trusted OpenClaw code that receives untrusted 
 
 OpenClaw sets fs-safe's optional native helper to **off** by default:
 
-- the guarded JavaScript paths support OpenClaw's normal filesystem operations;
+- the guarded JavaScript paths support OpenClaw's normal filesystem operations.
 - disabling native loading keeps runtime behavior deterministic across desktop, Docker, CI, and bundled-app environments.
 
 fs-safe publishes prebuilt native helpers as optional platform packages for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. A normal package install selects the matching package without a compiler. OpenClaw loads it through fs-safe's own dependency scope, including nested pnpm installs. Installs that omit optional dependencies retain the guarded JavaScript path; `require` mode fails when the binding is unavailable.
@@ -41,12 +41,12 @@ Use `require` (not `auto`) when native primitives are part of your security post
 
 With the helper off, OpenClaw still gets fs-safe's Node-only guardrails:
 
-- rejects relative-path escapes (`..`), absolute paths, and path separators where only bare names are allowed;
-- resolves operations through a trusted root handle instead of ad-hoc `path.resolve(...).startsWith(...)` checks;
-- refuses symlink and hardlink patterns on APIs that require that policy;
-- opens files with identity checks where the API returns or consumes file contents;
-- writes state/config files via atomic sibling-temp + rename;
-- enforces byte limits for reads and archive extraction;
+- rejects relative-path escapes (`..`), absolute paths, and path separators where only bare names are allowed.
+- resolves operations through a trusted root handle instead of ad-hoc `path.resolve(...).startsWith(...)` checks.
+- refuses symlink and hardlink patterns on APIs that require that policy.
+- opens files with identity checks where the API returns or consumes file contents.
+- writes state/config files via atomic sibling-temp + rename.
+- enforces byte limits for reads and archive extraction.
 - applies private file modes for secrets and state files where the API requires them.
 
 This covers OpenClaw's normal threat model: trusted gateway code handling untrusted model/plugin/channel path input inside a single trusted operator boundary.

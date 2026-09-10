@@ -147,7 +147,7 @@ function heartbeatIntervalMs(idleTimeoutMs: number): number {
   return Math.min(referenceIntervalMs, Math.max(1, Math.floor(idleTimeoutMs / 2)));
 }
 
-export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
+export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>): CrabboxProfile {
   for (const key of Object.keys(profile)) {
     if (!PROFILE_KEYS.has(key)) {
       throw new WorkerProviderError(`unknown Crabbox profile setting: ${key}`);

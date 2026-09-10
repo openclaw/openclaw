@@ -8,6 +8,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { resolveCodexBindingAppServerConnection } from "./src/app-server/binding-connection.js";
+import { createCodexNativeSubagentHistoryOwner } from "./src/app-server/native-subagent-history-owner.js";
 import {
   buildCodexAppServerConnectionFingerprint,
   buildCodexAppServerRuntimeFingerprint,
@@ -85,7 +86,7 @@ async function fixture(supervised = false) {
     agentId: session.agentId,
     sessionKey: session.sessionKey,
     storePath,
-    entry: { sessionId: session.sessionId, updatedAt: 1 },
+    entry: { sessionId: session.sessionId, lifecycleRevision: "parent-lifecycle", updatedAt: 1 },
   });
   const bindingStore = createCodexTestBindingStore();
   const pluginConfig = supervised ? { supervision: { enabled: true } } : undefined;
@@ -290,6 +291,114 @@ describe("native subagent history through the harness", () => {
     },
   );
 
+  it("keeps completed child history and pagination when the parent starts a replacement thread", async () => {
+    const f = await fixture();
+    f.threads.set("parent-thread", { id: "parent-thread", projectId: null, parentThreadId: null });
+    f.params.task = {
+      ...f.params.task,
+      detail: {
+        nativeHistory: createCodexNativeSubagentHistoryOwner({
+          parentThreadId: f.binding.threadId,
+          sessionId: f.identity.sessionId,
+          binding: f.binding,
+        })!,
+      },
+    };
+    f.items.push(
+      ...Array.from({ length: 5 }, (_, index) =>
+        item(`item-${index}`, { text: `message ${index}` }),
+      ),
+    );
+    const first = await f.read({ limit: 4 });
+    await f.bindingStore.mutate(f.identity, {
+      kind: "set",
+      binding: { ...f.binding, threadId: "replacement-parent" },
+    });
+    const second = await f.read({ cursor: first.nextCursor });
+    expect([...second.messages, ...first.messages]).toMatchObject(
+      Array.from({ length: 5 }, (_, index) => ({ content: [{ text: `message ${index}` }] })),
+    );
+    expect((await f.read()).messages).toEqual([...second.messages, ...first.messages]);
+  });
+
+  it.each(["session", "lifecycle", "account", "connection", "malformed owner"] as const)(
+    "rejects a changed %s before opening the native history store",
+    async (change) => {
+      const f = await fixture();
+      const owner = createCodexNativeSubagentHistoryOwner({
+        parentThreadId: f.binding.threadId,
+        sessionId: f.identity.sessionId,
+        lifecycleRevision: "parent-lifecycle",
+        binding: f.binding,
+      })!;
+      f.params.task = { ...f.params.task, detail: { nativeHistory: owner } };
+      if (change === "session" || change === "lifecycle") {
+        await upsertSessionEntry({
+          agentId: "main",
+          sessionKey: f.params.task.requesterSessionKey,
+          storePath: f.storePath,
+          entry: {
+            sessionId: change === "session" ? "replacement-session" : f.identity.sessionId,
+            lifecycleRevision: "replacement-lifecycle",
+            updatedAt: 2,
+          },
+        });
+      } else if (change === "malformed owner") {
+        f.params.task = {
+          ...f.params.task,
+          detail: { nativeHistory: { ...owner, connectionFingerprint: "invalid" } },
+        };
+      } else {
+        await f.bindingStore.mutate(f.identity, {
+          kind: "set",
+          binding: {
+            ...f.binding,
+            ...(change === "account"
+              ? { authProfileId: "another-account" }
+              : { appServerRuntimeFingerprint: "another-native-store" }),
+          },
+        });
+      }
+      await expect(f.read()).rejects.toThrow(
+        change === "malformed owner" ? "owner is invalid" : "history owner changed",
+      );
+      expect(native.acquire).not.toHaveBeenCalled();
+      expect(native.request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves history through repeated compaction transfers in the same session lifecycle", async () => {
+    const f = await fixture();
+    const owner = createCodexNativeSubagentHistoryOwner({
+      parentThreadId: f.binding.threadId,
+      sessionId: f.identity.sessionId,
+      lifecycleRevision: "parent-lifecycle",
+      binding: f.binding,
+    })!;
+    f.params.task = { ...f.params.task, detail: { nativeHistory: owner } };
+    f.items.push(item("answer", { text: "Original child result" }));
+    const before = await f.read();
+    let previousSessionId = f.identity.sessionId;
+    for (const sessionId of ["compacted-once", "compacted-twice"]) {
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey: f.params.task.requesterSessionKey,
+        storePath: f.storePath,
+        entry: {
+          sessionId,
+          previousSessionId,
+          lifecycleRevision: "parent-lifecycle",
+          updatedAt: 2,
+        },
+      });
+      await expect(
+        f.bindingStore.adoptSessionGeneration({ ...f.identity, sessionId }, previousSessionId),
+      ).resolves.toBe("adopted");
+      expect(await f.read()).toEqual(before);
+      previousSessionId = sessionId;
+    }
+  });
+
   it("reads nested subagents only after metadata verifies every ancestor back to the bound parent", async () => {
     const f = await fixture();
     f.thread.parentThreadId = "worker-2";
@@ -400,22 +509,29 @@ describe("native subagent history through the harness", () => {
     expect(native.release).toHaveBeenCalledOnce();
   });
 
-  it("rechecks the physical parent session after awaited history reads", async () => {
-    const f = await fixture();
-    const request = native.request.getMockImplementation()!;
-    native.request.mockImplementation(async (method, params) => {
-      const result = await request(method, params);
-      if (method === "thread/items/list") {
-        await upsertSessionEntry({
-          agentId: "main",
-          sessionKey: f.params.task.requesterSessionKey,
-          storePath: f.storePath,
-          entry: { sessionId: "replacement-session", updatedAt: 2 },
-        });
-      }
-      return result;
-    });
-    await expect(f.read()).rejects.toThrow("parent changed");
-    expect(native.release).toHaveBeenCalledOnce();
-  });
+  it.each(["session", "lifecycle"] as const)(
+    "rechecks the parent %s after awaited history reads",
+    async (change) => {
+      const f = await fixture();
+      const request = native.request.getMockImplementation()!;
+      native.request.mockImplementation(async (method, params) => {
+        const result = await request(method, params);
+        if (method === "thread/items/list") {
+          await upsertSessionEntry({
+            agentId: "main",
+            sessionKey: f.params.task.requesterSessionKey,
+            storePath: f.storePath,
+            entry: {
+              sessionId: change === "session" ? "replacement-session" : f.identity.sessionId,
+              lifecycleRevision: "replacement-lifecycle",
+              updatedAt: 2,
+            },
+          });
+        }
+        return result;
+      });
+      await expect(f.read()).rejects.toThrow("parent changed");
+      expect(native.release).toHaveBeenCalledOnce();
+    },
+  );
 });

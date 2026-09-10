@@ -32,6 +32,9 @@ describe("worker environment service", () => {
     });
     const liveEvents = support.createLiveEvents();
     const placementStore = {
+      assertWorkerRuntimeRefresh: vi.fn(() => {
+        throw new Error("Runtime refresh is outside this credential fixture");
+      }),
       readWorkerTurnClaim: vi.fn(),
       readWorkerTurnLiveAckCursor: vi.fn(() => 0),
       validateWorkerTurn: vi.fn(() => true),

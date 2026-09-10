@@ -9,7 +9,7 @@ title: "Workboard plugin"
 
 The Workboard plugin adds an optional Kanban-style board to the
 [Control UI](/web/control-ui): agent-sized work cards, assignment to agents,
-and a link back to the card's task, run, and dashboard session.
+and a link back to the card's task, run, and Control UI session.
 
 Workboard is intentionally small: it tracks local operating work for one
 OpenClaw Gateway. It is not a replacement for GitHub Issues, Linear, Jira, or
@@ -27,7 +27,7 @@ Workboard is bundled but disabled by default:
    **Install** action.
 3. If the UI reports that a restart is required, restart the Gateway.
 
-The Workboard tab appears in the dashboard nav after the plugin runtime loads.
+The Workboard tab appears in the Control UI nav after the plugin runtime loads.
 While it is disabled, the tab stays hidden from navigation. Opening the
 `/workboard` route directly while the plugin is disabled or blocked by
 `plugins.allow`/`plugins.deny` shows a plugin-unavailable state instead of card
@@ -75,28 +75,26 @@ openclaw gateway restart
 | linked refs | optional task, run, session, or source URL                                                                    |
 | `execution` | optional metadata for a Codex/Claude run started from the card (engine, mode, model, session, run id, status) |
 
-Cards also carry compact metadata for attempts, comments, links, proof,
-artifacts, automation settings, attachments, worker logs, worker protocol
-state, claims, diagnostics, notifications, template id, archive state, and
-stale-session detection, plus a recent-events list (`created`, `edited`,
-`moved`, `linked`, `specified`, `decomposed`, `claimed`, `heartbeat`,
-`execution_updated`, `attempt_started`, `attempt_updated`, `comment_added`,
-`link_added`, `proof_added`, `artifact_added`, `attachment_added`,
-`diagnostic`, `notification`, `dispatch`, `orchestration`,
-`protocol_violation`, `archived`, `unarchived`, `stale`). This metadata lets an
-operator see how a card moved through the board without opening the linked
-session; it is local operating context, not a replacement for session
+Cards also carry compact metadata:
+
+| Metadata      | Values                                                                                                                                                                                                                                                                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| card state    | attempts, comments, links, proof, artifacts, automation settings, attachments, worker logs, worker protocol state, claims, diagnostics, notifications, template id, archive state, stale-session detection                                                                                                                                                   |
+| recent events | `created`, `edited`, `moved`, `linked`, `specified`, `decomposed`, `claimed`, `heartbeat`, `execution_updated`, `attempt_started`, `attempt_updated`, `comment_added`, `link_added`, `proof_added`, `artifact_added`, `attachment_added`, `diagnostic`, `notification`, `dispatch`, `orchestration`, `protocol_violation`, `archived`, `unarchived`, `stale` |
+
+This metadata lets an operator see how a card moved through the board without
+opening the linked session. It is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
-The plugin and Control UI use one Workboard card contract. Dashboard refreshes
+The plugin and Control UI use one Workboard card contract. Control UI refreshes
 therefore preserve workspace provenance and authority, claim state, diagnostic
 actions, and notification sequence numbers instead of projecting a smaller
 UI-only copy of the card. Unknown diagnostic kinds, diagnostic severities, and
-notification kinds are ignored until both surfaces support them; they are never
+notification kinds are ignored until both surfaces support them. They are never
 rewritten into another valid state.
 
-The open dashboard updates from `plugin.workboard.changed` invalidations. Each
-event contains only a store epoch and revision; the UI then rereads canonical
+The open Workboard tab updates from `plugin.workboard.changed` invalidations. Each
+event contains only a store epoch and revision. The UI then rereads canonical
 cards through the normal `operator.read` RPC. Multiple revisions coalesce into
 one follow-up read. Workboard defers that read while a card is being dragged,
 edited, or written, then resumes after the local interaction finishes. A
@@ -130,19 +128,19 @@ Unlinked cards without an active or unresolved task association can start work d
 
 - **Run Claude** / **Run OpenAI** starts a task-tracked agent run with an
   explicit engine, sends the card prompt, and marks the card `running`. Claude
-  runs use `anthropic/claude-sonnet-4-6`; OpenAI runs use `openai/gpt-5.6-sol`.
-- **Open Claude** / **Open OpenAI** creates a linked dashboard session without
+  runs use `anthropic/claude-sonnet-4-6`. OpenAI runs use `openai/gpt-5.6-sol`.
+- **Open Claude** / **Open OpenAI** creates a linked Control UI session without
   sending the card prompt, for manual work that stays attached to the board.
-  Opening it clears any schedule and moves a `scheduled` card to `todo`;
-  other cards keep their status.
+  Opening it clears any schedule and moves a `scheduled` card to `todo`.
+  Other cards keep their status.
 
 Autonomous starts use the Gateway's task-tracked agent run path (default agent
-and model unless Claude/OpenAI is chosen explicitly); Workboard then links the
+and model unless Claude/OpenAI is chosen explicitly). Workboard then links the
 resulting task, run id, and session key back onto the card. Each linked
 execution also records an attempt summary (engine, mode, model, run id,
 timestamps, status, rolling failure count) so repeated failures stay visible.
 
-The dashboard refreshes task status from the Gateway task ledger for its
+The Control UI refreshes task status from the Gateway task ledger for its
 lifecycle display, matching tasks to cards by task id, run id, or an exact
 linked session. Card status changes are persisted by the Gateway-side Workboard
 plugin using the linked run and session lifecycle (see
@@ -175,7 +173,7 @@ plugin using the linked run and session lifecycle (see
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
 
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
-entry means the worker reports that its command or check succeeded; consumers that need
+entry means the worker reports that its command or check succeeded. Consumers that need
 an independent quality gate should inspect the attached command, URL, or artifact and
 run their own verifier. `workboard_proof` returns the new record's `proofId`. When
 `workboard_complete` reports that same proof's terminal status, pass `proofId` so the
@@ -188,7 +186,7 @@ Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
 agent tool or Gateway RPC call redacts `metadata.claim.token` to `[redacted]`
 (the token itself is returned once, top-level, only from `workboard_claim`),
-so dashboard operators and other agents can inspect claim state without ever
+so Control UI operators and other agents can inspect claim state without ever
 seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
@@ -208,15 +206,18 @@ OpenClaw subagent sessions still own execution. One dispatch pass:
 Workers get bounded card context plus the claim token needed to heartbeat,
 complete, or block the card through the Workboard tools.
 
-Workspace paths follow the caller's existing filesystem authority. Gateway
-clients with `operator.write` can use configured agent workspaces;
-`operator.admin` clients can use other host checkouts. Sandboxed agent tools use
-their sandbox workspace access, while unsandboxed workspace-only tools use their
-configured workspace root. Workboard records that authority when a workspace is
+Workspace paths follow the caller's existing filesystem authority:
+
+- Gateway clients with `operator.write` can use configured agent workspaces.
+- `operator.admin` clients can use other host checkouts.
+- Sandboxed agent tools use their sandbox workspace access.
+- Unsandboxed workspace-only tools use their configured workspace root.
+
+Workboard records that authority when a workspace is
 assigned and intersects it with the current caller's authority again at dispatch,
 so a persisted card cannot widen a later caller's access. Older cards with an
 explicit host workspace but no recorded authority must have that workspace
-re-saved before a full-host dispatch; cards without a host path adopt the
+re-saved before a full-host dispatch. Cards without a host path adopt the
 current caller's authority when first dispatched.
 
 Workspace-bound dispatch accepts a directory or Git checkout only when its
@@ -234,7 +235,7 @@ worktree setup.
 
 Workspace authority does not create a second card-lifecycle permission model.
 Callers that may mutate Workboard cards can manually move them through the same
-statuses on every surface; read-only workspace access only prevents worker
+statuses on every surface. Read-only workspace access only prevents worker
 dispatch that needs writes.
 
 ### Worker selection
@@ -256,12 +257,12 @@ back to the same worker lane instead of creating unrelated sessions:
 
 If a worker cannot be started after a card is claimed, Workboard blocks the
 card, clears the claim, records the run-start failure, and appends a worker
-log line - visible in the dashboard, CLI JSON, agent tools, and card
+log line - visible in the Control UI, CLI JSON, agent tools, and card
 diagnostics.
 
 ### Entry points
 
-- Dashboard dispatch action
+- Control UI dispatch action
 - `openclaw workboard dispatch`
 - `/workboard dispatch` on a command-capable channel
 
@@ -273,12 +274,12 @@ Gateway (`OPENCLAW_GATEWAY_URL` or `gateway.mode: remote`) apply, the CLI runs
 data-only dispatch against local SQLite state - it can promote dependencies,
 clean stale claims, and block timed-out runs, but cannot start workers. Auth,
 permission, and validation failures from a reachable Gateway are not treated
-as unavailable; they surface as command errors, and so does any Gateway
+as unavailable. They surface as command errors, and so does any Gateway
 failure when an explicit `--url`/`--token` target was given.
 
 Board metadata can set `autoDecompose`, `autoDecomposePerDispatch`,
 `defaultAssignee`, and `orchestratorProfile`. OpenClaw records this intent and
-exposes it in worker context; actual specification/decomposition still runs
+exposes it in worker context. Actual specification/decomposition still runs
 through the normal Workboard tools.
 
 ## CLI and slash command
@@ -292,7 +293,7 @@ openclaw workboard dispatch [--board <id>] [--json]
 ```
 
 `list` text output hides archived cards by default (`--include-archived`
-overrides); `--json` always includes archived cards, matching the full-card
+overrides). `--json` always includes archived cards, matching the full-card
 contract used by existing scripts. `show` and `move` accept an unambiguous id
 prefix. `list`, `create`, `show`, and `move` always read/write local plugin
 state directly. Only `dispatch` calls the running Gateway, with the fallback
@@ -307,15 +308,15 @@ troubleshooting.
 the CLI. List and show are read operations for any authorized command sender.
 Create, move, and dispatch require owner status on chat surfaces, or a Gateway
 client with `operator.write`/`operator.admin`. Manual operator moves use the
-same claim-override behavior as dashboard drag-and-drop. Their worktree access
+same claim-override behavior as Control UI drag-and-drop. Their worktree access
 still follows the same workspace boundary described above.
 
 ## Session lifecycle sync
 
-Cards can link to an existing dashboard session, or one created when you
+Cards can link to an existing Control UI session, or one created when you
 start work from the card. Linked cards show the session lifecycle inline:
 running, stale, linked idle, done, or failed. You can also capture an
-existing session from its header or the Sessions tab with **Add to Workboard**; the card
+existing session from its header or the Sessions tab with **Add to Workboard**. The card
 links to that session, uses the session label or recent user prompt as title,
 and seeds notes from the recent user prompt plus the latest assistant response
 when available.
@@ -332,8 +333,8 @@ the selected chat agent.
 Opening a card loads its linked session details independently of the sidebar's
 agent filter and pagination. While details are loading or unavailable, the
 card keeps its link and shows **Session state unknown** or **Session
-unavailable**. An ambiguous provisional link shows **Session link ambiguous**;
-edit the card to select an exact session. Use **Refresh** to retry. To continue
+unavailable**. An ambiguous provisional link shows **Session link ambiguous**.
+Edit the card to select an exact session. Use **Refresh** to retry. To continue
 an existing session, select its exact link in **Edit card** and choose **Open
 session**. To start fresh, clear the link in **Edit card**. Clearing the link
 retains its task association, so **Start** remains unavailable while that task
@@ -341,7 +342,7 @@ is active or unresolved. Changing a card's assignee does not change the owner
 of its existing session.
 
 Bare `global` and `unknown` links do not identify a session owner. They show
-**Session link ambiguous** when opened; use **Edit card** to select an explicit
+**Session link ambiguous** when opened. Use **Edit card** to select an explicit
 session. Workboard does not offer these bare links for new captures or links.
 
 If an active linked session stops reporting recent activity, Workboard marks the card
@@ -351,7 +352,7 @@ Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
 not depend on an open browser tab. Agent and subagent completion hooks persist
 terminal outcomes immediately. A bounded session sweep runs once per minute to
 reconcile active, idle, missing, and stale session state. Each store mutation
-emits the normal `plugin.workboard.changed` invalidation, so an open dashboard
+emits the normal `plugin.workboard.changed` invalidation, so an open Workboard tab
 reloads the canonical card instead of writing its own lifecycle projection.
 
 While a card is in an active work state, Workboard follows the linked session:
@@ -365,17 +366,19 @@ While a card is in an active work state, Workboard follows the linked session:
 **Manual review states win.** Moving a card to `review`, `blocked`, or `done`
 stops auto-sync for that card until you move it back to `todo` or `running`.
 
-Starting a card uses normal Gateway sessions; Workboard only stores card
+Starting a card uses normal Gateway sessions. Workboard only stores card
 metadata and links. Conversation transcript, model selection, and run
 lifecycle stay owned by the regular session system. Use **Stop** on a live
 linked card to abort the active run - Workboard marks that card `blocked` so
 it stays visible for follow-up.
 
 New cards can start from Workboard templates (`bugfix`, `docs`, `release`,
-`pr_review`, `plugin`). Templates prefill title, notes, labels, and priority;
-the template id is stored as card metadata.
+`pr_review`, `plugin`). Templates prefill title, notes, labels, and priority.
+The template id is stored as card metadata.
 
-## Dashboard workflow
+<a id="dashboard-workflow" />
+
+## Control UI workflow
 
 1. Open the Workboard tab in the Control UI.
 2. Create a card with a title, notes, priority, labels, optional agent, and
@@ -400,10 +403,10 @@ first-party UI with live data — no sandbox frame or capability grant:
   control, priority, and assigned agent.
 - `workboard:board` with optional `props: { boardId }` shows the full Kanban
   board with draggable cards and status controls. Without `boardId` it shows
-  every board; with `boardId` it shows only that board.
+  every board. With `boardId` it shows only that board.
 - `workboard:mini` with optional `props: { boardId, limit }` shows per-status
   counts plus the top ready/running cards, and links to the full board page.
-  Without `boardId` it aggregates every board; with `boardId` it scopes to that
+  Without `boardId` it aggregates every board. With `boardId` it scopes to that
   board (cards created without an explicit board id live on `default`).
 
 ## Diagnostics
@@ -431,7 +434,7 @@ Gateway RPC methods live under `workboard.*`:
 
 No RPC method requires `operator.admin`. Browsers connected with read-only
 operator access can inspect the board but cannot mutate cards. An admin scope
-widens accepted Workboard host paths; it does not change the methods available.
+widens accepted Workboard host paths. It does not change the methods available.
 
 ## Storage
 
@@ -480,7 +483,7 @@ openclaw workboard list --status ready
 If the CLI reports data-only dispatch, start or restart the Gateway and
 retry - data-only dispatch updates local board state but cannot start
 subagent worker runs. Cards can also be skipped when another card for the
-same owner or agent is already running or waiting for review; complete,
+same owner or agent is already running or waiting for review. Complete,
 block, or release that active work before dispatching more for the same
 owner.
 

@@ -797,9 +797,10 @@ describe("Control UI Vite config", () => {
   });
 
   it.each([
-    { name: "resolved", outcome: "resolve" as const },
-    { name: "rejected", outcome: "reject" as const },
-  ])("discards a stale $name source-catalog generation", async ({ outcome }) => {
+    { name: "stale resolved", outcome: "resolve" as const, invalidate: true },
+    { name: "stale rejected", outcome: "reject" as const, invalidate: true },
+    { name: "current rejected", outcome: "reject" as const, invalidate: false },
+  ])("recovers a $name source-catalog generation", async ({ outcome, invalidate }) => {
     const staleImport = deferred<{
       loadControlUiSourceCatalog: () => ReturnType<typeof loadControlUiSourceCatalog>;
     }>();
@@ -826,12 +827,14 @@ describe("Control UI Vite config", () => {
           () => (registrations++ === 0 ? staleLoader : currentLoader) as never,
           async () => {
             const { load, watchChange } = controlUiLocaleModuleHooks();
-            const baseSourcePromise = loadControlUiLocaleModuleSource(
+            let baseSourcePromise = loadControlUiLocaleModuleSource(
               load,
               "\0virtual:openclaw-control-ui-locale/fr",
             );
             await vi.waitFor(() => expect(staleLoader.import).toHaveBeenCalledOnce());
-            await watchChange.call({} as never, "src/config/schema.hints.ts", {} as never);
+            if (invalidate) {
+              await watchChange.call({} as never, "src/config/schema.hints.ts", {} as never);
+            }
             if (outcome === "resolve") {
               staleImport.resolve({
                 loadControlUiSourceCatalog: () => ({
@@ -840,7 +843,15 @@ describe("Control UI Vite config", () => {
                 }),
               });
             } else {
-              staleImport.reject(new Error("stale source failure"));
+              const error = new Error("source import failed");
+              staleImport.reject(error);
+              if (!invalidate) {
+                await expect(baseSourcePromise).rejects.toBe(error);
+                baseSourcePromise = loadControlUiLocaleModuleSource(
+                  load,
+                  "\0virtual:openclaw-control-ui-locale/fr",
+                );
+              }
             }
             const baseSource = await baseSourcePromise;
             const configHintsSource = await loadControlUiLocaleModuleSource(

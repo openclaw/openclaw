@@ -28,17 +28,17 @@ openclaw nodes list
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
-`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (e.g. `24h`, `7d`; only nodes that connected within the duration). Both use the Gateway's recorded last connection time, including recent reconnects and disconnected nodes with known connection history. `list` shows pending and paired nodes in separate tables, with paired rows including the most recent connect age (Last Connect); `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports last input only after the user enables **Active computer detection** and grants Accessibility; the freshest row is marked `active`. See [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
+`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (for example `24h` or `7d`, matching only nodes that connected within the duration). Both use the Gateway's recorded last connection time, including recent reconnects and disconnected nodes with known connection history. `list` shows pending and paired nodes in separate tables. Paired rows carry the most recent connect age (Last Connect). `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports last input only after the user enables **Active computer detection** and grants Accessibility. The freshest row is marked `active`. See [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
 
 When host stats are available, `status` includes a detail fragment such as
-`load 3.2/24 · mem 151/192 GB · disk 1.2 TB free`; `describe` shows the same
+`load 3.2/24 · mem 151/192 GB · disk 1.2 TB free`. `describe` shows the same
 summary in its `Stats` row. Load is the 1-minute average followed by CPU count,
 memory is used/total, and byte values use binary scaling with GB/TB labels.
 Unavailable load or disk readings are omitted. Offline nodes show the saved
 snapshot with an age such as `(last known 27d ago)`, measured from the snapshot's
 original timestamp. See [Node host stats](/gateway/protocol/presence#node-host-stats).
 
-`--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If current clients share a name, use an exact ID to disambiguate; client type does not choose the target. The legacy migration exception prefers a unique OpenClaw client only when every other tied entry is a known Clawdbot or Moldbot client.
+`--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If current clients share a name, use an exact ID to disambiguate. Client type does not choose the target. The legacy migration exception prefers a unique OpenClaw client only when every other tied entry is a known Clawdbot or Moldbot client.
 
 ## Pairing
 
@@ -58,17 +58,17 @@ shown by `nodes pending`. Approve that node request, whose ID differs from the
 device request ID. See [Node pairing and status](/nodes/pairing-and-status#pairing-+-status)
 for the complete sequence.
 
-- `remove` revokes the device's `node` role and clears its approved and pending command/capability surfaces. It disconnects the device's node-role sessions. A mixed-role device keeps its record and other roles; a node-only device record is deleted.
+- `remove` revokes the device's `node` role and clears its approved and pending command/capability surfaces. It disconnects the device's node-role sessions. A mixed-role device keeps its record and other roles. A node-only device record is deleted.
 - Removal stays effective even if worker cleanup reports an error: revoked node connections still close.
 - `pending` only needs `operator.pairing` scope.
-- `gateway.nodes.pairing.autoApproveCidrs` can approve explicitly trusted, first-time `role: node` device pairing. It is off by default and does not approve role upgrades or the separate command surface; that request still appears in `nodes pending`.
-- `gateway.nodes.pairing.sshVerify` (on by default) auto-approves first-time `role: node` device pairing when the gateway can verify the device key over SSH to the node host; the first capability surface is approved in the same step. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
+- `gateway.nodes.pairing.autoApproveCidrs` can approve explicitly trusted, first-time `role: node` device pairing. It is off by default and does not approve role upgrades or the separate command surface. That request still appears in `nodes pending`.
+- `gateway.nodes.pairing.sshVerify` is on by default. It auto-approves first-time `role: node` device pairing when the gateway can verify the device key over SSH to the node host. The first capability surface is approved in the same step. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
 - `approve` scope requirements follow the pending request's declared commands:
   - commandless request: `operator.pairing`
   - ordinary node commands: `operator.pairing` + `operator.write`
   - admin-sensitive commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, and `system.execApprovals.get/set`): `operator.pairing` + `operator.admin`
 - These requirements classify node commands relayed through `node.invoke`. The top-level Gateway `fs.listDir` RPC needs `operator.write` for workspace-contained host browsing and `operator.admin` when `nodeId` is present.
-- `remove` scope: `operator.pairing` can remove non-operator node rows; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
+- `remove` scope: `operator.pairing` can remove non-operator node rows. A device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 
 ## Invoke
 
@@ -86,7 +86,7 @@ Flags:
 
 The invocation timeout covers Gateway checks, node wake-up, readiness retries, and the node response. Clock adjustments do not reset or extend this elapsed-time budget.
 
-`system.run` and `system.run.prepare` are blocked here; use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`.
+`system.run` and `system.run.prepare` are blocked here. Use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`.
 
 ## Notify, push, location, screen
 
@@ -98,10 +98,10 @@ openclaw nodes screen record --node <id> --duration 10s --fps 10 --out ./clip.mp
 ```
 
 - `notify` sends a local notification on a node that declares `system.notify`, including macOS, iOS, Android, and direct watchOS nodes. Direct watchOS delivery requires OpenClaw to be active. Requires `--title` or `--body`. Options: `--sound <name>`, `--priority <passive|active|timeSensitive>`, `--delivery <system|overlay|auto>` (default `system`), `--invoke-timeout <ms>` (default `15000`).
-- `push` sends an APNs test push to an iOS node. Options: `--title <text>` (default `OpenClaw`), `--body <text>`, `--environment <sandbox|production>` to override the detected APNs environment. Accepted delivery exits `0`; a typed APNs rejection preserves the complete text or JSON diagnostic and exits non-zero.
+- `push` sends an APNs test push to an iOS node. Options: `--title <text>` (default `OpenClaw`), `--body <text>`, `--environment <sandbox|production>` to override the detected APNs environment. Accepted delivery exits `0`. A typed APNs rejection preserves the complete text or JSON diagnostic and exits non-zero.
 - `location get` fetches the node's current location. Options: `--max-age <ms>` (reuse a cached fix), `--accuracy <coarse|balanced|precise>`, `--location-timeout <ms>` (default `10000`), `--invoke-timeout <ms>` (default `20000`).
 - `screen record` captures a short clip and prints the saved path (or writes JSON with `--json`). Options: `--screen <index>` (default `0`), `--duration <ms|10s>` (default `10000`), `--fps <fps>` (default `10`), `--no-audio`, `--out <path>`, `--invoke-timeout <ms>` (default `120000`).
-- Explicit screen output paths are staged beside the destination and replace it only after a complete write; a failed write leaves an existing file unchanged.
+- Explicit screen output paths are staged beside the destination. They replace it only after a complete write. A failed write leaves an existing file unchanged.
 
 Camera and macOS widget-panel commands have their own docs: [Camera nodes](/nodes/camera), [Widget panel](/platforms/mac/canvas). The bundled experimental Canvas plugin registers `openclaw nodes canvas` with the surviving `present`, `hide`, and `navigate` subcommands.
 

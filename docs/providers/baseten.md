@@ -142,7 +142,7 @@ Most setups only need the API key. To pin the provider explicitly:
 ```
 
 <Note>
-If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `BASETEN_API_KEY` is available to that process. A key exported only in an interactive shell is not visible to an already-running managed service.
+If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `BASETEN_API_KEY` is available to that process (for example, in `~/.openclaw/.env` or via `env.shellEnv`). A key exported only in an interactive shell is not visible to an already-running managed service.
 </Note>
 
 ## Related

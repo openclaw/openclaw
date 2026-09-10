@@ -126,7 +126,7 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
   }
 }
 
-/** Reporting-only marker: the durable finalizer already committed and printed the outcome. */
+/** Reporting-only marker: the outcome was recorded and printed; no follow-up triage. */
 export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure {
   constructor(result: UpdateRunResult) {
     super(result, 1);

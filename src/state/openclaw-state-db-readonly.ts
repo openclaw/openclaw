@@ -121,8 +121,8 @@ function withOpenClawStateReadOnlyLocation<T>(
     const db = openNodeSqliteDatabase(location, { readOnly: true });
     let closeSchemaReadAdmission: (() => void) | undefined;
     try {
-      closeSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(db);
       db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+      closeSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(db);
       assertSupportedStateSchemaVersion(db, pathname);
       return operation({ db, path: pathname });
     } finally {

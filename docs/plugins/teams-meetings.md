@@ -29,10 +29,10 @@ a browser device-permission decision. The plugin reports these as
 `manualAction`. Complete the requested step in the same OpenClaw Chrome profile,
 then retry status or speech. It does not bypass tenant policy.
 
-The consumer web client has been live-validated through the interstitial,
-guest-name entry, microphone/camera toggles, lobby admission, media permissions,
-in-call detection, live captions, BlackHole routing, leave, and post-call
-detection. Work tenants can impose additional admission or leave-confirmation
+The consumer web client was live-validated in 2026.8.1 through the
+interstitial, guest-name entry, microphone/camera toggles, lobby admission,
+media permissions, in-call detection, live captions, BlackHole routing, leave,
+and post-call detection. Work tenants can impose additional admission or leave-confirmation
 policy.
 
 ## Tool and Gateway surface

@@ -102,6 +102,54 @@ afterEach(async () => {
 });
 
 describe("update candidate canary", () => {
+  it("keeps verified readiness and records a warning when rehearsal cleanup fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    const remove = fs.rm.bind(fs);
+    let retained: string | undefined;
+    const denial = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (
+        typeof target === "string" &&
+        path.basename(target).startsWith("openclaw-update-canary-")
+      ) {
+        retained = target;
+        throw new Error("synthetic cleanup permission denied");
+      }
+      return remove(target, options);
+    });
+    const onStep = vi.fn();
+    try {
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 3000,
+        onStep,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({ name: "candidate gateway canary", exitCode: 0 }),
+      );
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "candidate rehearsal cleanup",
+          advisory: expect.objectContaining({
+            message: expect.stringContaining("synthetic cleanup permission denied"),
+          }),
+        }),
+      );
+      expect(onStep).toHaveBeenCalledWith(result.steps.at(-1));
+      expect(result.steps.at(-1)?.advisory?.message).toContain(retained);
+    } finally {
+      denial.mockRestore();
+      if (retained) {
+        await remove(retained, { recursive: true, force: true });
+      }
+    }
+  });
   it.each([undefined, "unknown-owned-v2"])(
     "keeps unsupported checkpoint capability out of admission (%s)",
     async (candidateMutation) => {

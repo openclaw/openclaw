@@ -5,6 +5,7 @@ import {
   ErrorCodes,
   type TerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -44,14 +45,6 @@ const sessionMocks = vi.hoisted(() => ({
     }),
   ),
 }));
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 vi.mock("../node-command-policy.js", () => ({
   resolveNodeCommandAllowlist: policyMocks.resolveNodeCommandAllowlist,
@@ -487,7 +480,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("does not create a terminal after the owning connection closes during catalog lookup", async () => {
-    const plan = deferred<{ kind: "local"; argv: string[] }>();
+    const plan = createDeferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);
     installCatalog({
       id: "codex",
@@ -520,7 +513,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("closes a terminal whose owning connection disappears during PTY creation", async () => {
-    const created = deferred<{
+    const created = createDeferred<{
       ok: true;
       sessionId: string;
       agentId: string;
@@ -556,7 +549,7 @@ describe("terminal gateway policy", () => {
   it("times out one terminal open with request-scoped cancellation", async () => {
     vi.useFakeTimers();
     try {
-      const created = deferred<{
+      const created = createDeferred<{
         ok: true;
         sessionId: string;
         agentId: string;
@@ -597,7 +590,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("does not create a terminal when disabled during catalog lookup", async () => {
-    const plan = deferred<{ kind: "local"; argv: string[] }>();
+    const plan = createDeferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);
     installCatalog({
       id: "codex",
@@ -630,7 +623,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("uses the refreshed launch plan after catalog lookup", async () => {
-    const plan = deferred<{ kind: "local"; argv: string[] }>();
+    const plan = createDeferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);
     installCatalog({
       id: "codex",
@@ -806,7 +799,7 @@ describe("terminal gateway policy", () => {
     "rejects a changed node admission: %s",
     async (change) => {
       const command = "anthropic.claude.terminal.resume.v1";
-      const policy = deferred<null>();
+      const policy = createDeferred<null>();
       policyMocks.applyPluginNodeInvokePolicy.mockImplementationOnce(() => policy.promise);
       installCatalog({
         id: "claude",

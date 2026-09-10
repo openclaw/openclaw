@@ -13,10 +13,10 @@ For the usual OpenClaw iMessage deployment, run the Gateway and `imsg` on the sa
 </Note>
 
 <Warning>
-BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only. Start with [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short announcement, or [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full migration table.
+BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`. OpenClaw supports iMessage through `imsg` only. Start with [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short announcement, or [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full migration table.
 </Warning>
 
-Status: native external CLI integration. The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio — no separate daemon or port. Private API mode is strongly encouraged for a complete iMessage channel; replies, tapbacks, effects, polls, attachment replies, and group actions require `imsg launch` and a successful private API probe.
+Status: native external CLI integration. The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio — no separate daemon or port. Private API mode is strongly encouraged for a complete iMessage channel. Replies, tapbacks, effects, polls, attachment replies, and group actions require `imsg launch` and a successful private API probe.
 
 For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew install or update for `imsg` on the signed-in Messages Mac. Manual setup and SSH-wrapper topologies remain operator-managed: install or update `imsg` in the same user context that will run the Gateway or wrapper.
 
@@ -116,7 +116,7 @@ Every section heading from the previous single-page version keeps its anchor her
   <Card title="Groups" icon="users" href="/channels/groups">
     Group chat behavior and mention gating.
   </Card>
-  <Card title="Channel Routing" icon="route" href="/channels/channel-routing">
+  <Card title="Channel routing" icon="route" href="/channels/channel-routing">
     Session routing for messages.
   </Card>
   <Card title="Configuration reference" icon="sliders" href="/gateway/config-channels#imessage">

@@ -45,7 +45,7 @@ https://gateway-host/line/webhook
 The Gateway answers LINE's signed webhook verification request: a `POST` with an
 empty `events` list. Signed events in LINE's `standby` mode are acknowledged without
 queueing or replying, because another channel holds chat control. Other signed
-inbound events enter the durable ingress queue before `200`; agent processing
+inbound events enter the durable ingress queue before `200`. Agent processing
 continues asynchronously.
 Failed delivery is retried from the queue, including after a Gateway restart, and
 poison events become failed queue records after bounded retries. If durable
@@ -53,7 +53,7 @@ persistence fails, the request returns
 `500` instead of acknowledging an event that could be lost.
 Delivery is at least once across the queue-to-agent boundary: a Gateway shutdown or
 crash during an active delivery can replay the turn. Message events deduplicate by
-LINE message ID; other event types use `webhookEventId`. Retained completion records
+LINE message ID. Other event types use `webhookEventId`. Retained completion records
 suppress ordinary duplicate webhooks, but handlers that perform external side effects
 should still be idempotent.
 If you need a custom path, set `channels.line.webhookPath` or
@@ -67,7 +67,7 @@ Security notes:
 ## Inbound durability
 
 The [Setup](#setup) webhook contract acknowledges an event only after it is durably
-queued. The durable `200` carries `x-openclaw-delivery-accepted: durable`; signed
+queued. The durable `200` carries `x-openclaw-delivery-accepted: durable`. Signed
 verification pings (empty event lists), standby-only batches, and error responses
 omit the marker, so
 reverse proxies can require it to distinguish durable acceptance from a generic
@@ -75,7 +75,7 @@ reverse proxies can require it to distinguish durable acceptance from a generic
 LINE-specific settings:
 
 - **Per-conversation ordering.** Events are serialized by source lane —
-  `group:<groupId>`, `room:<roomId>`, or `user:<userId>`; events without a
+  `group:<groupId>`, `room:<roomId>`, or `user:<userId>`. Events without a
   conversation source use their own event-scoped lane. Within a lane, events
   dispatch in received order, so a retrying event delays later events in the same
   chat. One chat's backlog never blocks another chat's lane, but all lanes share
@@ -97,7 +97,7 @@ LINE-specific settings:
   back to its lane through the same retry policy as any other failure: the event
   returns to pending with its attempt count incremented and `handler-timeout`
   recorded as its last error, and it keeps its place at the head of its lane. A
-  stall is not itself a dead letter — only the retry limit above ends the event,
+  stall is not itself a dead-letter — only the retry limit above ends the event,
   as `retry-limit-exceeded`. The watchdog only covers the window between claim
   and adoption: deferred progress re-arms it and adoption clears it, so a long
   agent turn is never interrupted by it. Adoption that arrives after the
@@ -117,7 +117,7 @@ LINE-specific settings:
   new event is queued rather than on a timer, records can remain past 30 days on
   an idle account, and a newly completed record can put the count above 4096 until
   the next admission. While a record exists, a redelivered webhook for the same
-  event is acknowledged without a second dispatch; once it is gone — by age or by
+  event is acknowledged without a second dispatch. Once it is gone — by age or by
   cap — a redelivery is admitted and dispatched again, so handlers with external
   side effects should not treat this window as a substitute for their own
   idempotency.
@@ -133,7 +133,7 @@ more than once (the duplicate suppression window above absorbs the repeats). See
 [Redeliver a webhook that failed to be received](https://developers.line.biz/en/docs/messaging-api/receiving-messages/#webhook-redelivery).
 
 Dead-lettered events stay inspectable and, depending on the failure reason,
-recoverable; see [Inbound dead letters](/cli/channels#inbound-dead-letters) and
+recoverable. See [Inbound dead letters](/cli/channels#inbound-dead-letters) and
 [Troubleshooting](#troubleshooting) below.
 
 ## Configure
@@ -188,7 +188,7 @@ Token/secret files:
 ```
 
 `tokenFile` and `secretFile` must point to regular files. Symlinks are rejected.
-Inline config values win over files; env vars are the last fallback for the default account.
+Inline config values win over files. Env vars are the last fallback for the default account.
 
 Multiple accounts:
 
@@ -221,15 +221,15 @@ openclaw pairing approve line <CODE>
 Allowlists and policies:
 
 - `channels.line.dmPolicy`: `pairing | allowlist | open | disabled` (default `pairing`)
-- `channels.line.allowFrom`: allowlisted LINE user IDs for DMs; `dmPolicy: "open"` requires `["*"]`
+- `channels.line.allowFrom`: allowlisted LINE user IDs for DMs. `dmPolicy: "open"` requires `["*"]`
 - `channels.line.groupPolicy`: `allowlist | open | disabled` (default `allowlist`)
-- `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups; DM `allowFrom` entries do not admit group senders
+- `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups. DM `allowFrom` entries do not admit group senders
 - Per-group overrides: `channels.line.groups.<groupId>.allowFrom` (plus `enabled`, `requireMention`, `systemPrompt`, `skills`). With
-  `groupPolicy: "allowlist"`, set `groupAllowFrom` or the per-group `allowFrom`; an empty group allowlist blocks group messages even when DMs are open.
-- `channels.line.groups."*"` is the defaults entry for every group and room, not a fallback that a named entry replaces. A named entry overrides `"*"` field by field, so each field the named entry omits is taken from `"*"`. This matches how `requireMention` already resolves through the shared group scope tree; see [Groups](/channels/groups).
+  `groupPolicy: "allowlist"`, set `groupAllowFrom` or the per-group `allowFrom`. An empty group allowlist blocks group messages even when DMs are open.
+- `channels.line.groups."*"` is the defaults entry for every group and room, not a fallback that a named entry replaces. A named entry overrides `"*"` field by field, so each field the named entry omits is taken from `"*"`. This matches how `requireMention` already resolves through the shared group scope tree. See [Groups](/channels/groups).
 - Upgrade check: if you set `enabled` or `allowFrom` only on `channels.line.groups."*"` while also listing a named group or room, those wildcard values now apply to that named entry as well. Earlier releases returned the named entry alone, so wildcard-only fields never reached it. Before upgrading, review any `"*"` entry that sets `enabled: false` or narrows `allowFrom`, and repeat the value on a named entry that should keep its current access.
-- Quoting one of the bot's own messages counts as addressing it, so a group reply made with LINE's quote gesture reaches the agent without an explicit mention. Set `channels.defaults.implicitMentions.quotedBot: false` to stop it from bypassing the mention requirement; LINE reads that shared default and has no channel-scoped `implicitMentions` block of its own. See [Groups](/channels/groups). The bot recognizes a quote of its own message from the most recent ones it remembers sending (a few hundred per account), so quoting an older message, or one sent before the last Gateway restart, still needs a mention.
-- Static sender access groups can be referenced from `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` with `accessGroup:<name>`; see [Access groups](/channels/access-groups).
+- Quoting one of the bot's own messages counts as addressing it, so a group reply made with LINE's quote gesture reaches the agent without an explicit mention. Set `channels.defaults.implicitMentions.quotedBot: false` to stop it from bypassing the mention requirement. LINE reads that shared default and has no channel-scoped `implicitMentions` block of its own. See [Groups](/channels/groups). The bot recognizes a quote of its own message from the most recent ones it remembers sending (a few hundred per account), so quoting an older message, or one sent before the last Gateway restart, still needs a mention.
+- Static sender access groups can be referenced from `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` with `accessGroup:<name>`. See [Access groups](/channels/access-groups).
 - Runtime note: if `channels.line` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 LINE IDs are case-sensitive. Valid IDs look like:
@@ -247,7 +247,7 @@ IDs. Prefixes normalize to sendable IDs, duplicates appear once, and `*` and
 `accessGroup:<name>` entries are omitted. Use `--account`, `--query`, `--limit`,
 and `--json` as described in [Directory](/cli/directory).
 
-These lists read configuration; they do not fetch a live LINE contact roster or
+These lists read configuration. They do not fetch a live LINE contact roster or
 include approvals stored through pairing.
 
 ## Group join introductions
@@ -268,9 +268,9 @@ as untrusted.
 ## Message behavior
 
 - Text is chunked at 5000 characters.
-- Markdown formatting is stripped; code blocks and tables are converted into Flex
+- Markdown formatting is stripped. Code blocks and tables are converted into Flex
   cards when possible.
-- Streaming responses are buffered; LINE receives full chunks. The loading
+- Streaming responses are buffered. LINE receives full chunks. The loading
   animation runs only in one-to-one chats — LINE's loading API accepts a user id
   and rejects group and room ids — so a group reply arrives without one. Heartbeat
   turns also show the loading animation while the reply is generated.
@@ -284,7 +284,7 @@ as untrusted.
   id is used and the message is still delivered. Multi-person rooms have no name
   API, so they keep their room id.
 - LINE describes inline emoji with metadata and alternative text. Empty `()`
-  alternatives reach the agent as `[emoji]`; meaningful alternatives such as
+  alternatives reach the agent as `[emoji]`. Meaningful alternatives such as
   `(hello)` and parentheses typed by the sender are preserved.
 
 ## Structured rich messages
@@ -295,11 +295,11 @@ block is the portable confirm-style form.
 
 A `buttons` block renders a Flex card that carries the presentation's title and
 text. A presentation whose only control is a `select` renders no card, because
-quick replies attach to the reply's own text message; its title and text blocks
+quick replies attach to the reply's own text message. Its title and text blocks
 are appended to that text instead. LINE draws at most 13 quick replies on one
 message, counted across every `select` block in the reply rather than per block.
 Each select keeps its prompt and any overflow options together in that text.
-Prompts and overflow option names remain complete; only native quick-reply button
+Prompts and overflow option names remain complete. Only native quick-reply button
 labels are shortened to LINE's 20-character limit.
 
 ```json5
@@ -381,7 +381,7 @@ non-HTTPS URLs and adds an "Image unavailable" note when it fits within LINE's
 30 KB bubble and 50 KB carousel limits. Video
 heroes keep their required alternative content: an unusable video or preview URL
 falls back to that content, and an unusable alternative image becomes a text box.
-Invalid template thumbnails are removed; carousel thumbnails are removed together
+Invalid template thumbnails are removed. Carousel thumbnails are removed together
 so every column keeps the same image layout. Text and action buttons stay intact.
 
 ## ACP support
@@ -397,12 +397,12 @@ See [ACP agents](/tools/acp-agents) for details.
 
 The LINE plugin sends images, videos, and audio through the agent message tool:
 
-- **Images**: sent as LINE image messages; the preview image defaults to the media URL.
-- **Videos**: require a preview image; set `channelData.line.previewImageUrl` to an image URL.
-- **Audio**: sent as LINE audio messages; duration defaults to 60 seconds unless `channelData.line.durationMs` is set.
+- **Images**: sent as LINE image messages. The preview image defaults to the media URL.
+- **Videos**: require a preview image. Set `channelData.line.previewImageUrl` to an image URL.
+- **Audio**: sent as LINE audio messages. Duration defaults to 60 seconds unless `channelData.line.durationMs` is set.
 
 When `mediaKind` is omitted, LINE infers it from LINE-specific options or the URL
-suffix. Native suffix inference supports JPEG/PNG, MP4, and MP3/M4A; suffixless URLs
+suffix. Native suffix inference supports JPEG/PNG, MP4, and MP3/M4A. Suffixless URLs
 retain the image fallback. Other suffixed URLs and inferred MP4 without a preview
 become text links. Explicit video still requires `previewImageUrl`.
 
@@ -422,7 +422,7 @@ link-local, and private-network targets.
   `openclaw channels status --channel line --probe --json`. For a limited allowance,
   the account’s `quota` contains `used` and `limit`. Missing quota is unknown, not unlimited.
   A healthy bot identity can coexist with an exhausted push allowance. Check the
-  account allowance or plan in LINE Official Account Manager before retrying;
+  account allowance or plan in LINE Official Account Manager before retrying.
   429 can also reflect rate limits or temporary message reservations. Ordinary
   reply-token messages do not consume this monthly allowance, unlike pushes.
   See [LINE message pricing](https://developers.line.biz/en/docs/messaging-api/pricing/).
@@ -446,7 +446,7 @@ link-local, and private-network targets.
   cause and is never cut off by it. Look at the dispatch path instead: the
   delivery preparation that runs between claim and adoption, such as inbound
   media download or a Gateway that is not accepting new work. This does not
-  dead-letter the event; `openclaw logs` shows
+  dead-letter the event. `openclaw logs` shows
   `applying retry policy (handler-timeout)` and the event waits out its backoff
   with `handler-timeout` as its last error. A stall that keeps repeating is what
   eventually exhausts the retry limit, so an event that stalls its way to a dead
@@ -458,5 +458,5 @@ link-local, and private-network targets.
 - [Channels Overview](/channels) — all supported channels
 - [Pairing](/channels/pairing) — DM authentication and pairing flow
 - [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
 - [Security](/gateway/security) — access model and hardening

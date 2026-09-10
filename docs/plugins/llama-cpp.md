@@ -310,3 +310,4 @@ OpenClaw does not auto-select ROCm, SYCL, OpenVINO, or Vulkan archives.
 - [Local model services](/gateway/local-model-services)
 - [Model providers](/concepts/model-providers)
 - [LM Studio](/providers/lmstudio)
+- [Llama Cpp plugin reference](/plugins/reference/llama-cpp) — manifest and config reference for the managed and external llama.cpp servers

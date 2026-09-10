@@ -42,6 +42,7 @@ export type WorkerProviderLifecycleInputOptions = {
     installation: WorkerInstallationArtifact;
     resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
     signal: AbortSignal;
+    assertCurrent?: () => void;
   }) => Promise<WorkerAdmissionHandshake>;
   resolveSshIdentity?: (params: {
     provider: WorkerProvider;
@@ -54,6 +55,7 @@ export type WorkerProviderLifecycleInputOptions = {
     artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
     prewarm: boolean;
     signal?: AbortSignal;
+    assertCurrent?: () => void;
   }) => Promise<WorkerAdmissionHandshake>;
   prepareNodeBootstrap?: (record: WorkerEnvironmentRecord, signal?: AbortSignal) => Promise<string>;
   prepareNodeRuntime?: (
@@ -113,6 +115,7 @@ export type WorkerProviderLifecycleOptions = Omit<
     ): Promise<void>;
   };
   credentialBroker: WorkerCredentialBroker;
+  warn: (message: string) => void;
   callBootstrap: <T>(
     installation: WorkerInstallationArtifact,
     run: (signal: AbortSignal) => Promise<T>,

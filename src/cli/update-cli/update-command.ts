@@ -73,6 +73,7 @@ import {
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
@@ -105,13 +106,6 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     invocationCwd,
     timeoutMs: prepared.timeoutMs,
   };
-  const resumed = await withUpdateAdmissionReporting(inputOpts, async () => {
-    const { resumePendingUpdateCommand } = await import("./update-command-pending-replay.js");
-    return await resumePendingUpdateCommand(admission);
-  });
-  if (resumed) {
-    return;
-  }
   const run = await withUpdateAdmissionReporting(inputOpts, () => admitUpdateCommandRun(admission));
   const opts = { ...inputOpts, run };
   prepared.controlPlaneUpdateSentinelMeta = {
@@ -128,15 +122,17 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
       withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, async () => {
         await withUpdateInProgressEnv(invocationCwd, async () => {
           executionStarted = true;
-          await withUpdateCommandExecutor(run.runId, (executor) =>
-            withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
-              updateCommandInternal(
-                opts,
-                recoveryState,
-                invocationCwd,
-                prepared,
-                presentation,
-                executor,
+          await withUpdateCommandTerminalResult(run, () =>
+            withUpdateCommandExecutor(run.runId, (executor) =>
+              withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
+                updateCommandInternal(
+                  opts,
+                  recoveryState,
+                  invocationCwd,
+                  prepared,
+                  presentation,
+                  executor,
+                ),
               ),
             ),
           );

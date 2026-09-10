@@ -73,7 +73,9 @@ move regular aliases. Run focused checks.
 
 Freeze the full branch-tip SHA and record the exact trusted-main Tooling SHA.
 Before tagging, run Full Release Validation through its immutable workflow
-transport; it also prepares and qualifies the exact npm and Docker bytes:
+transport; it also prepares and qualifies the exact npm and Docker bytes.
+`pnpm ci:full-release` runs `scripts/full-release-validation-at-sha.mjs`; this
+page uses the `pnpm` form throughout.
 
 ```bash
 VALIDATION_SHA="<exact-candidate-sha>"
@@ -257,7 +259,7 @@ For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm pu
 
 1. Start from current `main`: pull latest, confirm the target commit is pushed, and confirm `main` CI is green enough to branch from.
 2. Create `release/YYYY.M.PATCH` from that commit. Backports are optional; apply only the operator-selected set. Bump every required version location, run `pnpm release:prep`, finish release fixes and required forward-ports, and review `src/plugins/compat/registry.ts` plus `src/commands/doctor/shared/deprecation-compat.ts`.
-3. Prepare the complete history manifest and release notes, then freeze the product-complete commit and target context as the **Code SHA/ref**, and record the trusted **Tooling SHA/ref**. Run the deterministic source preflight, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`. Reuse those exact identities for later release validation; never refresh the tooling from moving `main`. Beta-publish uses `release_profile=beta` without soak; postpublish-confidence owns broad live, QA-live, mobile, and Parallels work.
+3. Prepare the complete history manifest and release notes, then freeze the product-complete commit and target context as the **Code SHA/ref**, and record the trusted **Tooling SHA/ref**. Run the deterministic source preflight, then use `pnpm ci:full-release --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`. Reuse those exact identities for later release validation; never refresh the tooling from moving `main`. Beta-publish uses `release_profile=beta` without soak; postpublish-confidence owns broad live, QA-live, mobile, and Parallels work.
 4. Classify failures before editing as product, harness/tooling/provenance, infrastructure/credential, or wrapper. Only confirmed product failure creates a new Code SHA. Use one diagnosis, one fix when needed, and one narrow retry, then reassess.
 5. Keep the top `CHANGELOG.md` section complete, user-facing and deduplicated, covering merged PRs and direct commits since the last reachable shipped tag. The full manifest and editorial pass may overlap Code validation. When a divergent shipped tag or later forward-port re-associates already-released PRs, pass it explicitly as `--shipped-ref`. A contribution-record target may be an ancestor of the final target; include later fixes honestly rather than inventing a self-referential SHA.
 6. If the qualified Code SHA already contains fully final notes, use that same commit as **Release SHA**. One successful fresh full qualification can supply both lifecycle roles and their exact publication bytes; do not create another commit or run solely to separate the labels. If notes change after qualification, commit only `CHANGELOG.md` as a new Release SHA. Any other changed path returns the release to step 2.
@@ -418,7 +420,7 @@ design approval and package-manager integration proof before implementation.
 
   ```bash
   TOOLING_SHA="<recorded-full-main-ancestor-sha>"
-  node scripts/full-release-validation-at-sha.mjs \
+  pnpm ci:full-release \
     --sha <code-sha> \
     --target-ref release/YYYY.M.PATCH \
     --workflow-sha "$TOOLING_SHA"

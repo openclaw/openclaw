@@ -56,8 +56,8 @@ Use the phase-specific hooks for new plugins:
 On the embedded and CLI prompt-preparation paths, ordering is: drain queued
 injections → `agent_turn_prepare` → heartbeat contribution (if applicable) →
 ordinary `before_prompt_build` → finalized tool policy → authorized prompt
-enrichment. `agent_turn_prepare` and queued-injection draining are not currently
-wired into the Codex or Copilot prompt paths.
+enrichment. `agent_turn_prepare` and queued-injection draining are not wired
+into the Codex or Copilot prompt paths.
 
 For multiple registrations, the first defined provider/model override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
@@ -217,7 +217,7 @@ context-window metadata, the hook event and context also include
 fixed model contracts, and runtime discovery, plus `contextWindowSource` and
 `contextWindowReferenceTokens` when a lower cap was applied.
 
-These provider-call hooks are currently emitted by the embedded model-call
+These provider-call hooks are emitted only by the embedded model-call
 path. A harness exposing `llm_input` / `llm_output` does not automatically
 expose the same provider-call telemetry. In external harnesses, LLM events
 describe adapter-visible input and output, not necessarily the raw provider
@@ -233,7 +233,7 @@ keeps decisions from other handlers. With no revision decision, normal
 finalization continues. Multiple `revise` reasons are combined; any `finalize`
 decision overrides revision requests. This hook requires a finalization
 integration: the embedded runner and native hook relay provide it, but the
-Copilot harness does not currently dispatch it.
+Copilot harness does not dispatch it.
 Codex native `Stop` hooks are relayed into this hook as OpenClaw
 `before_agent_finalize` decisions.
 

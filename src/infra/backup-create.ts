@@ -55,6 +55,7 @@ import {
   type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
+import { isUpdateCapturePath } from "./update-capture-paths.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
@@ -568,6 +569,7 @@ export async function createBackupArchive(
     // collect violations there and reject only after tar settles.
     const unexpectedSqliteSourcePaths: string[] = [];
     let archiveSymlinkViolation: Error | undefined;
+    let archivePrivacyViolation: Error | undefined;
     const tarFilter = (
       entryPath: string,
       entryStat: import("node:fs").Stats | import("tar").ReadEntry,
@@ -577,6 +579,14 @@ export async function createBackupArchive(
       const resolvedEntryPath = path.resolve(entryPath);
       if (resolvedEntryPath === manifestPath) {
         return true;
+      }
+      if (
+        isUpdateCapturePath(
+          sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath,
+          plan.stateDir,
+        )
+      ) {
+        return false;
       }
       const isDirectory =
         "isDirectory" in entryStat ? entryStat.isDirectory() : entryStat.type === "Directory";
@@ -632,6 +642,7 @@ export async function createBackupArchive(
         skippedVolatileCount = 0;
         unexpectedSqliteSourcePaths.length = 0;
         archiveSymlinkViolation = undefined;
+        archivePrivacyViolation = undefined;
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
           createArchiveStream: (reportProgress) =>
@@ -661,7 +672,15 @@ export async function createBackupArchive(
                 ),
                 filter: (entryPath, entryStat) => {
                   reportProgress({ phase: "traversal", entryPath });
-                  return tarFilter(entryPath, entryStat);
+                  try {
+                    return tarFilter(entryPath, entryStat);
+                  } catch (error) {
+                    // A malformed marker must reject publication after tar settles,
+                    // not throw out of its asynchronous traversal callback.
+                    archivePrivacyViolation =
+                      error instanceof Error ? error : new Error(String(error));
+                    return false;
+                  }
                 },
                 onWriteEntry: (entry) => {
                   const sourceEntryPath = entry.path;
@@ -716,7 +735,7 @@ export async function createBackupArchive(
           ? new Error(
               `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
             )
-          : archiveSymlinkViolation;
+          : (archivePrivacyViolation ?? archiveSymlinkViolation);
         if (!archiveValidationError) {
           try {
             await plan.configCapture?.assertRootAlias?.();

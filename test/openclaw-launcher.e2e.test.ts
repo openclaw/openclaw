@@ -25,6 +25,10 @@ async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
     path.join(fixtureRoot, "node-runtime-update.mjs"),
   );
   await fs.copyFile(
+    path.resolve(process.cwd(), "node-runtime-recovery.mjs"),
+    path.join(fixtureRoot, "node-runtime-recovery.mjs"),
+  );
+  await fs.copyFile(
     path.resolve(process.cwd(), "node-sqlite.mjs"),
     path.join(fixtureRoot, "node-sqlite.mjs"),
   );
@@ -172,7 +176,7 @@ describe("openclaw launcher", () => {
       } = {},
     ) {
       const root = await makeLauncherFixture(fixtureRoots);
-      const home = path.join(root, "home with spaces");
+      const home = makeTempDir(fixtureRoots, "openclaw-launcher-home with spaces-");
       const nodePath = path.join(
         home,
         ".openclaw",
@@ -183,7 +187,6 @@ describe("openclaw launcher", () => {
         "bin",
         "node",
       );
-      await fs.mkdir(home);
       if (params.cached) {
         await fs.mkdir(path.dirname(nodePath), { recursive: true });
         await fs.symlink(process.execPath, nodePath);
@@ -205,6 +208,14 @@ describe("openclaw launcher", () => {
           }
           Object.defineProperty(process.stdin, "isTTY", { value: ${params.tty ?? true} });
           Object.defineProperty(process.stderr, "isTTY", { value: ${params.tty ?? true} });
+          const realpath = fs.realpathSync;
+          fs.realpathSync = (filename, ...options) => {
+            const file = String(filename);
+            if (path.basename(file) === "node" && file !== process.execPath && file !== ${JSON.stringify(nodePath)} && !fs.statSync(file).isDirectory()) {
+              throw Object.assign(new Error("runtime absent from fixture"), { code: "ENOENT" });
+            }
+            return realpath(filename, ...options);
+          };
           const original = childProcess.spawnSync;
           childProcess.spawnSync = (command, args, options) => {
             if (command !== ${JSON.stringify(process.platform === "darwin" ? "/bin/bash" : "bash")}) return original(command, args, options);
@@ -224,7 +235,7 @@ describe("openclaw launcher", () => {
         path.join(root, "dist", "entry.js"),
         `
         if (!process.getBuiltinModule?.("node:sqlite")) throw new Error("native diagnostic reader loaded without node:sqlite");
-        process.stdout.write(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), path: process.env.PATH }));
+        process.stdout.write(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), path: process.env.PATH, recovered: process.env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" }));
         process.exitCode = 17;
       `,
       );
@@ -236,12 +247,12 @@ describe("openclaw launcher", () => {
           'if (process.env.OPENCLAW_NODE_UPDATE_RESPAWNED !== "1") throw new Error("legacy lifecycle loaded"); export function completePendingPackageLifecycle() {}',
         );
       }
-      const run = (input: string, args = ["status"], env: NodeJS.ProcessEnv = {}) =>
+      const run = (input: string, args = ["status"], env: NodeJS.ProcessEnv = {}, cwd = root) =>
         spawnSync(
           process.execPath,
           ["--import", pathToFileURL(preload).href, path.join(root, "openclaw.mjs"), ...args],
           {
-            cwd: root,
+            cwd,
             env: {
               ...launcherEnv(),
               HOME: home,
@@ -258,6 +269,49 @@ describe("openclaw launcher", () => {
       return { root, home, nodePath, installLog, run };
     }
 
+    it.each(
+      ["HOME", "OPENCLAW_HOME"].flatMap((homeVariable) =>
+        ["cached", "install", "decline", "non-interactive"].map((mode) => ({
+          homeVariable,
+          mode,
+        })),
+      ),
+    )(
+      "preserves $mode private recovery when cwd equals $homeVariable",
+      async ({ homeVariable, mode }) => {
+        const fixture = await prepareRecovery({
+          cached: mode === "cached",
+          tty: mode !== "non-interactive",
+        });
+        const result = fixture.run(
+          mode === "install" ? "y\n" : "n\n",
+          ["status"],
+          {
+            HOME: homeVariable === "HOME" ? fixture.home : fixture.root,
+            OPENCLAW_HOME: homeVariable === "OPENCLAW_HOME" ? fixture.home : undefined,
+            PATH: "",
+          },
+          fixture.home,
+        );
+        const recovered = mode === "cached" || mode === "install";
+        expect(result.status, result.stderr).toBe(recovered ? 17 : 1);
+        expect(result.stderr.includes("Update NodeJS: Y/N")).toBe(
+          mode === "install" || mode === "decline",
+        );
+        if (recovered) {
+          expect(JSON.parse(result.stdout)).toMatchObject({
+            recovered: true,
+            cwd: await fs.realpath(fixture.home),
+          });
+        } else {
+          expect(result.stderr).toContain("nvm install");
+        }
+        if (mode !== "install") {
+          await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      },
+    );
+
     it("accepts Yes before pending lifecycle imports, installs only Node, and retries exact arguments", async () => {
       const fixture = await prepareRecovery({ pendingLifecycle: true });
       const args = ["status", "--profile", "two words", "literal;argument"];
@@ -271,8 +325,9 @@ describe("openclaw launcher", () => {
         args,
         cwd: fixture.root,
         path: expect.any(String),
+        recovered: true,
       });
-      expect(output.path.split(path.delimiter)[0]).toBe(path.dirname(fixture.nodePath));
+      expect(output.path).toBe(process.env.PATH);
       expect(JSON.parse(await fs.readFile(fixture.installLog, "utf8"))).toEqual({
         command: process.platform === "darwin" ? "/bin/bash" : "bash",
         args: [
@@ -347,9 +402,7 @@ describe("openclaw launcher", () => {
       const result = fixture.run("", args);
       expect(result.status, result.stderr).toBe(17);
       expect(result.stderr).not.toContain("Update NodeJS:");
-      expect(JSON.parse(result.stdout).path.split(path.delimiter)[0]).toBe(
-        path.dirname(fixture.nodePath),
-      );
+      expect(JSON.parse(result.stdout)).toMatchObject({ path: process.env.PATH, recovered: true });
       await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
     });
 

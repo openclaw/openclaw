@@ -9,14 +9,14 @@ title: "Android app"
 ---
 
 <Note>
-The official Android app is available on [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) and as a signed standalone APK on supported [GitHub Releases](https://github.com/openclaw/openclaw/releases). It is a companion node and requires a running OpenClaw Gateway. Source: [apps/android](https://github.com/openclaw/openclaw/tree/main/apps/android) ([build instructions](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md)).
+The official Android app is available on [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) and, for sideloading, as a signed standalone APK on selected [GitHub Releases](https://github.com/openclaw/openclaw/releases). Not every release includes the APK and checksum. See [Install outside Google Play](/platforms/android#install-outside-google-play) to find and verify both files. It is a companion node and requires a running OpenClaw Gateway. Source: [apps/android](https://github.com/openclaw/openclaw/tree/main/apps/android) ([build instructions](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md)).
 </Note>
 
 ## Support snapshot
 
 - Role: companion node app (Android does not host the Gateway).
 - Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
-- Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) or `OpenClaw-Android.apk` from a supported [GitHub Release](https://github.com/openclaw/openclaw/releases), [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
+- Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) or `OpenClaw-Android.apk` from a [GitHub Release](https://github.com/openclaw/openclaw/releases) that lists both required assets (see [Install outside Google Play](/platforms/android#install-outside-google-play)), [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 - Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability.
@@ -45,9 +45,20 @@ The Wear OS companion uses the paired Android phone's authenticated Gateway conn
 
 ## Install outside Google Play
 
-Regular final and correction GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance.
+Selected GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance. Android assets may be attached after a release becomes public. Select a release by its listed assets, not by the latest Gateway release tag.
 
-Choose a [release](https://github.com/openclaw/openclaw/releases) that lists both assets, then download and verify that exact tag before sideloading:
+List published releases that contain both required assets:
+
+```bash
+gh api --paginate "repos/openclaw/openclaw/releases?per_page=50" \
+  --jq '.[] | select(.draft | not) | {
+    tag: .tag_name,
+    apk: ([.assets[].name] | any(. == "OpenClaw-Android.apk")),
+    checksum: ([.assets[].name] | any(. == "OpenClaw-Android-SHA256SUMS.txt"))
+  } | select(.apk and .checksum)'
+```
+
+Pick a release that lists both assets, then download and verify that exact tag before sideloading:
 
 ```bash
 release_tag=vYYYY.M.PATCH
@@ -62,6 +73,8 @@ gh attestation verify OpenClaw-Android.apk \
   --source-ref "refs/tags/${release_tag}" \
   --deny-self-hosted-runners
 ```
+
+If no release lists both files, use Google Play or build from source with your own signing identity.
 
 <Warning>
 Google Play and standalone APK installs use different update channels and may have different signing identities. Android may require uninstalling the existing app before switching channels, which removes its local app data. Stay on one channel for normal updates.
@@ -189,19 +202,30 @@ For Tailscale or public hosts, Android requires a secure endpoint:
 
 ### 1. Start the Gateway
 
-```bash
-openclaw gateway --port 18789 --verbose
-```
+Use an authenticated Gateway. If it is not configured yet, run `openclaw onboard` first to configure a token or password.
 
-Confirm in logs you see something like:
-
-- `listening on ws://0.0.0.0:18789`
-
-For remote Android access over Tailscale, prefer Serve/Funnel instead of a raw tailnet bind:
+For a trusted same-LAN setup, persist the LAN bind before starting:
 
 ```bash
-openclaw gateway --tailscale serve
+openclaw config set gateway.bind lan
+openclaw gateway --port 18789
 ```
+
+Bare-metal and virtual-machine hosts default to loopback, which a phone cannot reach. Detected containers can default to `auto` instead. Set the bind explicitly for this setup.
+
+Use the config command rather than `--bind lan` alone: a startup-only flag does not change the configuration read by a separate `openclaw qr` command. Without another configured URL route, setup-code creation still sees loopback and refuses to mint a code.
+
+Run `openclaw gateway status`. Its `Gateway:` line should show `bind=lan (0.0.0.0)` and `port=18789`.
+
+For remote Android access, choose managed Tailscale Serve as an alternative to LAN binding. Keep its settings in config so setup-code creation can use the same route:
+
+```bash
+openclaw config set gateway.bind loopback
+openclaw config set gateway.tailscale.mode serve
+openclaw gateway --port 18789
+```
+
+Tailscale must be installed and logged in. Managed Serve and Funnel require loopback binding; do not leave `gateway.bind=lan` set when switching to them. See [Tailscale](/gateway/tailscale) for Serve and password-authenticated Funnel setup.
 
 This gives Android a secure `wss://` / `https://` endpoint. A plain `gateway.bind: "tailnet"` setup is not enough for first-time remote Android pairing unless you also terminate TLS separately.
 
@@ -233,6 +257,20 @@ Android NSD/mDNS discovery does not cross networks. If the Android node and the 
 Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 
 ### 3. Connect from Android
+
+Create a setup code in the [Control UI](/web/control-ui) (**Devices → Pair device**) or with `openclaw qr`.
+
+An explicit `--url` or `--public-url` override wins. Otherwise, setup-code URL selection uses this order:
+
+1. `plugins.entries.device-pair.config.publicUrl`, unless remote preference was requested.
+2. `gateway.remote.url` when explicitly preferred.
+3. Managed Tailscale Serve or Funnel.
+4. The ordinary `gateway.remote.url` setting.
+5. A usable configured bind, such as the LAN bind from step 1.
+
+`openclaw qr --remote` selects remote credentials, ignores the configured device-pair `publicUrl`, and prefers `gateway.remote.url` before managed Tailscale. See [QR](/cli/qr).
+
+URL selection does not test network reachability. Resolution errors stop setup-code creation instead of triggering a lower-priority route. A loopback-only Gateway with no configured URL or managed Tailscale route refuses to mint a code.
 
 In the Android app:
 
@@ -267,6 +305,10 @@ The app keeps a registry of every Gateway it has paired with, so you can keep op
 - Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per Gateway. Changing focus never mixes state between Gateways, and messages queued while offline are delivered only to the Gateway they were written for.
 - **Forget** removes a Gateway's registry entry together with its credentials, device tokens, TLS pin, and cached chats.
 
+Opening or replying to a conversation notification reconnects its saved Gateway when needed. An already connecting or connected target is retained. Replies wait for that target connection to become ready, including required TLS approval. If the target is no longer available, opening the notification shows **Gateway unavailable** and opens Gateway settings without disconnecting another Gateway. Disconnect is checked again before a notification reply enters the durable send queue; already queued input keeps its normal recovery behavior.
+
+**Reply queued** confirms that the reply entered the durable send queue, not that it was delivered. The notification keeps a private preview of the submitted text and offers **Open conversation**. If the reply status is unknown, open the conversation to check before sending again; the notification does not offer another Reply action. Feedback updates only the latest notification for that conversation, so an older result cannot replace a newer notice. A notification posted before an app update can still send replies. Its result does not rewrite or dismiss that notification, so open the conversation to check its status.
+
 The **Channels**, **Dreaming**, **Health** logs, **Skills**, and **Usage** pages keep their last loaded data while refreshing. A failed first load shows an error rather than empty counts or default health values. When refreshes overlap, only the latest request updates the page's data, error, and progress. Disconnecting clears the displayed summaries.
 
 On **Health**, **Chat: Not ready** means chat health is unconfirmed or its check failed; the Gateway can still be **Online**. The chat header's accessibility status uses the same readiness wording. Use **Refresh chat** in chat actions to check again; **Refresh Logs** only reloads logs. The Overview's Gateway card reports connection status and highlights known issues, not overall system health.
@@ -275,7 +317,7 @@ On **Health**, **Chat: Not ready** means chat health is unconfirmed or its check
 
 After the authenticated node session connects, and when the app moves to the background while the foreground service is still connected, Android calls `node.event` with `event: "node.presence.alive"`. The Gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
 
-The app counts the beacon as successfully recorded only when the Gateway response includes `handled: true`. Older Gateways may acknowledge `node.event` with `{ "ok": true }`; that response is compatible but does not count as a durable last-seen update.
+The app counts the beacon as successfully recorded only when the Gateway response includes `handled: true`. A Gateway that acknowledges `node.event` with `{ "ok": true }` and no `handled` field is compatible, but that response does not count as a durable last-seen update.
 
 ### 4. Approve pairing (CLI)
 

@@ -6,12 +6,11 @@ import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   resolveManagedServiceUpdateFailureExitCode,
 } from "../../infra/update-control-plane-sentinel.js";
-import { finishUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { formatCliCommand } from "../command-format.js";
-import { printResult } from "./progress.js";
 import { tryWriteCompletionCache } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
@@ -31,7 +30,6 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
-import { completeUpdateCommandRun } from "./update-command-run.js";
 import { UpdateServiceLoadBoundaryError } from "./update-command-service-load.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
@@ -44,6 +42,12 @@ import {
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
+import {
+  deferUpdateCommandTerminalResult,
+  recordVerifiedUpdatePackageCleanup,
+  publishUpdateCommandTerminalResult,
+  resolveSettledUpdateCommandResult,
+} from "./update-command-terminal.js";
 
 export type { FinishUpdateParams } from "./update-command-finish-types.js";
 
@@ -120,22 +124,25 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   // Restart can let the new Gateway finish the row before CLI finalization resumes.
   // Store the next action before that handoff, and refresh it if recovery changes the outcome.
   recordNextAction(params.result);
-  const printFinalResult = (input: UpdateRunResult) => {
-    assertCurrent();
-    const nextAction = recordNextAction(input);
-    const run = params.opts.run;
-    const downtimeMs = pendingRestartAtMs === undefined ? completedDowntimeMs : undefined;
-    if (run && rolledBack) {
-      finishUpdateRun(
-        run.runId,
-        { status: "rolled-back", reason: input.reason, after: input.after, downtimeMs },
-        { env: run.env },
-      );
+
+  let pendingResult = params.result;
+  let pendingNotify = true;
+  const publishFinalResult = async (failure?: unknown): Promise<UpdateRunResult> => {
+    const settled = await resolveSettledUpdateCommandResult(params, pendingResult, failure);
+    const result = completedResult(settled.result);
+    if (pendingNotify) {
+      await writeControlPlaneUpdateRestartSentinelBestEffort({
+        meta: params.controlPlaneUpdateSentinelMeta,
+        result,
+        jsonMode: Boolean(params.opts.json),
+      });
     }
-    const result = completeUpdateCommandRun(input, run, downtimeMs);
-    printResult(result, params.opts, { nextAction });
-    return result;
+    return publishUpdateCommandTerminalResult(params, result, {
+      rolledBack: rolledBack && !settled.settlementFailed,
+      downtimeMs: pendingRestartAtMs === undefined ? completedDowntimeMs : undefined,
+    });
   };
+  const deferredTerminal = deferUpdateCommandTerminalResult(params.opts.run, publishFinalResult);
   const recoverFailedResult = async (
     initialResult: UpdateRunResult,
     initialRecoverService: boolean,
@@ -241,6 +248,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           }
         : {}),
     });
+    pendingResult = finalResult;
+    pendingNotify = notify;
     if (!restoreFailure) {
       try {
         if (
@@ -291,7 +300,10 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     const retireBackup =
       finalResult.status === "ok" || finalResult.recovery?.packageRollbackVerified === true;
     if (params.packageTransaction && !retireBackup) {
-      const retained = await params.packageTransaction.complete({ activationVerified: false });
+      const retained = await params.packageTransaction.complete(
+        { activationVerified: false },
+        assertCurrent,
+      );
       if (retained) {
         const backupPath = params.packageTransaction.backupRoot;
         finalResult.steps = [
@@ -315,7 +327,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       );
     }
     recordNextAction(finalResult);
-    if (notify) {
+    if (notify && recoverService) {
+      pendingNotify = false;
       await writeControlPlaneUpdateRestartSentinelBestEffort({
         meta: params.controlPlaneUpdateSentinelMeta,
         result: finalResult,
@@ -354,17 +367,16 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         (finalResult.recovery?.serviceRestartSafe === true &&
           finalResult.recovery.service === "healthy"),
     );
-    // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
-    const reportedResult = printFinalResult(
-      recoverService ? completedResult(finalResult) : finalResult,
-    );
     assertCurrent();
-    if (retireBackup) {
-      await params.packageTransaction
-        ?.complete({ activationVerified: finalResult.status === "ok" })
-        .catch((error: unknown) => {
-          defaultRuntime.error(`Update backup cleanup failed: ${formatErrorMessage(error)}`);
-        });
+    const cleanupFailure = retireBackup
+      ? await recordVerifiedUpdatePackageCleanup(params, finalResult, assertCurrent)
+      : undefined;
+    assertCurrent();
+    pendingResult = completedResult(cleanupFailure?.result ?? finalResult);
+    const reportedResult = deferredTerminal ? pendingResult : await publishFinalResult();
+    if (cleanupFailure) {
+      const { detail } = cleanupFailure;
+      throw new UpdateCommandFailure(reportedResult, 1, detail, { cause: cleanupFailure });
     }
     if (restoreFailure) {
       // Persist the unsafe outcome before unwinding. Keep both failures for

@@ -124,6 +124,41 @@ function expectNoRequestCall(request: ReturnType<typeof vi.fn>, method: string) 
 }
 
 describe("executeSlashCommand directives", () => {
+  it("keeps unknown partial thinking support under server validation", async () => {
+    const key = "agent:main:main";
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ...createSessionsResult([row(key, { model: "model" })]),
+          defaults: { model: "other", modelProvider: "openai", contextTokens: null },
+        };
+      }
+      if (method === "sessions.patch") {
+        return { ok: true, key, entry: { thinkingLevel: "low" } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const result = await executeSlashCommand(
+      createTestGatewayClient(request),
+      key,
+      "think",
+      "low",
+      {
+        chatModelCatalog: [
+          {
+            id: "model",
+            name: "Model",
+            provider: "openai",
+            thinkingLevels: [{ id: "high", label: "High" }],
+            thinkingDefault: "high",
+          },
+        ],
+      },
+    );
+    expect(result.content).toBe(t("chat.commandResults.thinking.set", { level: "**low**" }));
+    expect(request).toHaveBeenCalledWith("sessions.patch", { key, thinkingLevel: "low" });
+  });
+
   it("lets the canonical row retire a slash-command selection equal to the default", async () => {
     const key = "agent:main:main";
     const request = vi.fn(async (method: string) => {

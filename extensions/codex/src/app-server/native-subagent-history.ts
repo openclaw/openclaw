@@ -4,6 +4,10 @@ import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-s
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import { itemToolArgs, itemTranscriptResultText } from "./event-projector-tool-items.js";
 import {
+  codexNativeSubagentHistoryConnectionFingerprint,
+  readCodexNativeSubagentHistoryOwner,
+} from "./native-subagent-history-owner.js";
+import {
   CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX,
   CODEX_NATIVE_SUBAGENT_TASK_KIND,
 } from "./native-subagent-task-ids.js";
@@ -67,9 +71,20 @@ export async function readCodexNativeSubagentHistory(
   if (!session?.sessionId) {
     throw new Error("Subagent parent session is unavailable.");
   }
+  const sessionId = session.sessionId;
+  const lifecycleRevision = session.lifecycleRevision;
+  const historyOwner = readCodexNativeSubagentHistoryOwner(task.detail);
+  if (
+    historyOwner &&
+    (historyOwner.lifecycleRevision
+      ? historyOwner.lifecycleRevision !== lifecycleRevision
+      : historyOwner.sessionId !== sessionId)
+  ) {
+    throw new Error("Subagent history owner changed; reconnect its parent session.");
+  }
   const identity = sessionBindingIdentity({
     agentId,
-    sessionId: session.sessionId,
+    sessionId,
     sessionKey,
     config: cfg,
   });
@@ -77,11 +92,22 @@ export async function readCodexNativeSubagentHistory(
   if (!binding || binding.pendingSupervisionBranch) {
     throw new Error("Subagent parent thread is unavailable.");
   }
+  if (
+    historyOwner &&
+    historyOwner.connectionFingerprint !== codexNativeSubagentHistoryConnectionFingerprint(binding)
+  ) {
+    throw new Error("Subagent history owner changed; reconnect its parent session.");
+  }
+  // Completion delivery can start a fresh parent thread. Keep the child's original ancestry.
+  // Existing tasks without this locator can still use their unchanged parent binding.
+  const historyParentThreadId = historyOwner?.parentThreadId ?? binding.threadId;
   const assertCurrent = () => {
     params.assertCurrent();
+    const currentSession = readSession();
     const current = options.bindingStore.read(identity);
     if (
-      readSession()?.sessionId !== session.sessionId ||
+      currentSession?.sessionId !== sessionId ||
+      currentSession?.lifecycleRevision !== lifecycleRevision ||
       current?.threadId !== binding.threadId ||
       current?.appServerRuntimeFingerprint !== binding.appServerRuntimeFingerprint ||
       current?.connectionScope !== binding.connectionScope ||
@@ -127,7 +153,7 @@ export async function readCodexNativeSubagentHistory(
       { assertCurrent },
     );
     assertCurrent();
-    if (thread.id !== threadId || threadId === binding.threadId) {
+    if (thread.id !== threadId || threadId === historyParentThreadId) {
       throw new Error("Subagent transcript does not belong to this parent session.");
     }
     // Nested children share the OpenClaw requester, but native lineage records their immediate parent.
@@ -135,7 +161,7 @@ export async function readCodexNativeSubagentHistory(
     let ancestor = thread;
     for (;;) {
       const parentId = parentThreadId(ancestor);
-      if (parentId === binding.threadId) {
+      if (parentId === historyParentThreadId) {
         break;
       }
       if (!parentId || visited.has(parentId) || visited.size >= MAX_SUBAGENT_ANCESTRY_READS) {

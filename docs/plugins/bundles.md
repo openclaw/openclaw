@@ -69,25 +69,27 @@ command pack, or a Codex skill bundle and use it immediately.
 
 ## What OpenClaw maps from bundles
 
-Not every bundle feature runs in OpenClaw today. Here is what works and what
-is detected but not yet wired.
+Not every bundle feature runs in OpenClaw. Here is what works and what is
+detected but not wired.
 
 ### Supported now
 
-| Feature       | How it maps                                                                                       | Applies to     |
-| ------------- | ------------------------------------------------------------------------------------------------- | -------------- |
-| Skill content | Bundle skill roots load as normal OpenClaw skills                                                 | All formats    |
-| Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                        | Claude, Cursor |
-| Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                                   | Claude, Codex  |
-| MCP tools     | Bundle MCP config merged into embedded OpenClaw settings; supported stdio and HTTP servers loaded | All formats    |
-| Env contract  | `PLUGIN_ROOT` and `PLUGIN_DATA` env vars plus placeholder expansion for stdio MCP servers         | Agent Plugins  |
-| LSP servers   | Claude `.lsp.json` and manifest-declared `lspServers` merged into embedded OpenClaw LSP defaults  | Claude         |
-| Settings      | Claude `settings.json` imported as embedded OpenClaw defaults                                     | Claude         |
+| Feature                  | How it maps                                                                                       | Applies to     |
+| ------------------------ | ------------------------------------------------------------------------------------------------- | -------------- |
+| Skill content            | Bundle skill roots load as normal OpenClaw skills                                                 | All formats    |
+| Commands                 | `commands/` and `.cursor/commands/` treated as skill roots                                        | Claude, Cursor |
+| Agents and output styles | Claude `agents/` and `output-styles/` treated as skill roots                                      | Claude         |
+| Hook packs               | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                                   | Claude, Codex  |
+| MCP tools                | Bundle MCP config merged into embedded OpenClaw settings; supported stdio and HTTP servers loaded | All formats    |
+| Env contract             | `PLUGIN_ROOT` and `PLUGIN_DATA` env vars plus placeholder expansion for stdio MCP servers         | Agent Plugins  |
+| LSP servers              | Claude `.lsp.json` and manifest-declared `lspServers` merged into embedded OpenClaw LSP defaults  | Claude         |
+| Settings                 | Claude `settings.json` imported as embedded OpenClaw defaults                                     | Claude         |
 
 #### Skill content
 
 - Bundle skill roots load as normal OpenClaw skill roots.
-- Claude `commands/` roots are treated as additional skill roots.
+- Claude `commands/`, `agents/`, and `output-styles/` roots are treated as
+  additional skill roots.
 - Cursor `.cursor/commands/` roots are treated as additional skill roots.
 
 Claude markdown command files and Cursor command markdown both work through the
@@ -105,7 +107,33 @@ Claude `hooks/hooks.json` remains in the declared capabilities, but does not app
 as a supported hook. A bundle containing both layouts keeps its OpenClaw hook packs.
 Inspection does not execute handlers or prove that the running Gateway loaded them.
 
-#### MCP for embedded OpenClaw
+#### Embedded OpenClaw settings
+
+Claude `settings.json` is imported as default embedded OpenClaw settings when
+the bundle is enabled. OpenClaw sanitizes shell override keys before applying
+them:
+
+- `shellPath`
+- `shellCommandPrefix`
+
+#### Embedded OpenClaw LSP
+
+- Enabled Claude bundles can contribute LSP server config.
+- OpenClaw loads `.lsp.json` plus any manifest-declared `lspServers` paths.
+- Bundle LSP config is merged into the effective embedded OpenClaw LSP
+  defaults.
+- Only supported stdio-backed LSP servers are runnable; unsupported
+  transports still show up in `openclaw plugins inspect <id>`.
+
+### Detected but not executed
+
+These are recognized and shown in diagnostics, but OpenClaw does not run them:
+
+- Claude `hooks/hooks.json` automation
+- Cursor `.cursor/agents`, `.cursor/hooks.json`, `.cursor/rules`
+- Codex `.app.json` metadata beyond capability reporting
+
+## MCP for embedded OpenClaw
 
 - Enabled bundles can contribute MCP server config.
 - OpenClaw merges bundle MCP config into the effective embedded OpenClaw
@@ -119,7 +147,7 @@ Inspection does not execute handlers or prove that the running Gateway loaded th
 - Bundle MCP tool catalogs are sorted deterministically before registration, so
   upstream `listTools()` order changes do not thrash prompt-cache tool blocks.
 
-##### Transports
+### Transports
 
 MCP servers can use stdio or HTTP transport.
 
@@ -170,7 +198,7 @@ MCP servers can use stdio or HTTP transport.
   both stdio and HTTP transports. Request timeout defaults to 60 seconds and
   can be overridden with `requestTimeoutMs`.
 
-##### Tool naming
+### Tool naming
 
 OpenClaw registers bundle MCP tools with provider-safe names in the form
 `serverName__toolName`. For example, a server keyed `"vigil-harbor"` exposing a
@@ -188,32 +216,6 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 - Profile filtering treats every tool from one bundle MCP server as
   plugin-owned by `bundle-mcp`, so profile allow/deny lists can reference
   either individual exposed tool names or the `bundle-mcp` plugin key.
-
-#### Embedded OpenClaw settings
-
-Claude `settings.json` is imported as default embedded OpenClaw settings when
-the bundle is enabled. OpenClaw sanitizes shell override keys before applying
-them:
-
-- `shellPath`
-- `shellCommandPrefix`
-
-#### Embedded OpenClaw LSP
-
-- Enabled Claude bundles can contribute LSP server config.
-- OpenClaw loads `.lsp.json` plus any manifest-declared `lspServers` paths.
-- Bundle LSP config is merged into the effective embedded OpenClaw LSP
-  defaults.
-- Only supported stdio-backed LSP servers are runnable today; unsupported
-  transports still show up in `openclaw plugins inspect <id>`.
-
-### Detected but not executed
-
-These are recognized and shown in diagnostics, but OpenClaw does not run them:
-
-- Claude `agents`, `hooks/hooks.json` automation, `outputStyles`
-- Cursor `.cursor/agents`, `.cursor/hooks.json`, `.cursor/rules`
-- Codex `.app.json` metadata beyond capability reporting
 
 ## Bundle formats
 
@@ -245,7 +247,7 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
       skills keep loading; invalid individual server entries are skipped
     - `.mcp.json` (dot-prefixed) and inline manifest `mcpServers` are **not**
       read for this format; the standard's closed schema wins
-    - OpenClaw reads `extensions["ai.openclaw"]`; it currently supports
+    - OpenClaw reads `extensions["ai.openclaw"]`; it supports only
       `activation` with the same semantics as other bundle manifests
     - Other manifest extension namespaces are ignored and reserved for their
       clients
@@ -269,9 +271,15 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
     - **Manifest-based:** `.claude-plugin/plugin.json`
     - **Manifestless:** default Claude layout (`skills/`, `commands/`, `agents/`, `hooks/`, `.mcp.json`, `.lsp.json`, `settings.json`)
 
+    `output-styles/` is not a detection marker. A bundle whose only content is
+    `output-styles/` is not recognized as a Claude bundle. Add
+    `.claude-plugin/plugin.json`, or one of the markers above, so detection
+    succeeds. Detection runs before manifest loading, so an undetected
+    directory never reaches the component paths below.
+
     Claude-specific behavior:
 
-    - `commands/` is treated as skill content
+    - `commands/`, `agents/`, and `output-styles/` are treated as skill content
     - `settings.json` is imported into embedded OpenClaw settings (shell override keys are sanitized)
     - `.mcp.json` exposes supported stdio tools to embedded OpenClaw
     - `.lsp.json` plus manifest-declared `lspServers` paths load into embedded OpenClaw LSP defaults
@@ -338,9 +346,10 @@ bundles as trusted content for the features they do expose.
     not wired, that is a product limit, not a broken install.
   </Accordion>
 
-  <Accordion title="Claude command files do not appear">
+  <Accordion title="Claude command, agent, or output-style files do not appear">
     Make sure the bundle is enabled and the markdown files are inside a detected
-    `commands/` or `skills/` root.
+    `skills/`, `commands/`, `agents/`, or `output-styles/` root. All four load
+    through the same skill loader.
   </Accordion>
 
   <Accordion title="Claude settings do not apply">

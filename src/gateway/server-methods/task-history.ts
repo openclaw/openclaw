@@ -30,6 +30,7 @@ function historyBinding(task: TaskRecord): string {
         task.requesterAgentId,
         task.requesterSessionKey,
         task.ownerKey,
+        taskTranscriptSessionKey(task) ? null : task.detail,
       ]),
     )
     .digest("base64url");

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../api/types.ts";
 import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import {
@@ -628,6 +629,37 @@ describe("chat pane embedded panels", () => {
       scope: "all",
     });
     expect(state.sidebarContent).toBeNull();
+  });
+
+  it("shows why a file could not open instead of falling back to the session diff", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:review",
+      branch: "feature/review",
+      baseRef: "main",
+      additions: 1,
+      deletions: 1,
+      files: [{ path: "example.txt", status: "modified", additions: 1, deletions: 1 }],
+    });
+    const { mount, renderPanels, state } = createReviewFixture();
+    const message = 'Failed to load docs/chat.md: <img src="missing.png">';
+    state.client = createGatewayBrowserClientFixture({
+      request: (method, params) =>
+        method === "tasks.list" ? { tasks: [] } : request(method, params),
+    });
+    state.hello = gatewayHelloForMethods(["sessions.diff"]);
+    state.sessionKey = "agent:main:review";
+    state.sidebarContent = { kind: "unavailable", message };
+    state.updateSidebarLayout(openSlot(state.sidebarLayout, "detail"));
+    await renderPanels();
+
+    const notice = mount.querySelector(".review-unavailable");
+    expect(notice?.getAttribute("role")).toBe("alert");
+    expect(notice?.classList.contains("danger")).toBe(true);
+    expect(notice?.querySelector("strong")?.textContent).toBe("Unable to open");
+    expect(notice?.querySelector("span")?.textContent).toBe(message);
+    expect(notice?.querySelector("img")).toBeNull();
+    expect(mount.querySelector("openclaw-session-diff")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("enumerates a structural loading variant for every side-panel tab", async () => {

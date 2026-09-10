@@ -8,6 +8,8 @@ import {
   normalizePromptCapabilityIds,
   normalizeStructuredPromptSection,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "@openclaw/ai/internal/shared";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1548,10 +1550,13 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities),
     ...(runtimeInfo?.gitCoauthorPrompt ? [runtimeInfo.gitCoauthorPrompt] : []),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
     `Reasoning=${reasoningLevel}; hidden unless on/stream. Toggle /reasoning; /status shows when enabled.`,
+    // Only Runtime facts may move behind tools. Close the region before callers
+    // append hook instructions or permission notices that must retain their role.
+    SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+    `${buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities)}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
   );
 
   return lines.filter(Boolean).join("\n");

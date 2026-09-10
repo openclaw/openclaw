@@ -8,6 +8,10 @@ title: "Zalo ClawBot"
 
 OpenClaw connects to Zalo ClawBot through the catalog-listed external `@zalo-platforms/openclaw-zaloclawbot` plugin. Login uses a Zalo Mini App QR code; the plugin id in config is `openclaw-zaloclawbot`.
 
+<Note>
+  This plugin's runtime lives entirely in the external `@zalo-platforms/openclaw-zaloclawbot` package. Behavior details on this page beyond install and config are as reported by the plugin's maintainers and are not verified against OpenClaw core source.
+</Note>
+
 ## Compatibility
 
 | Plugin Version | OpenClaw Version | npm dist-tag | Status        |
@@ -73,8 +77,6 @@ Unlike the standard Zalo channel, which requires registering your own Zalo Offic
 The plugin communicates with Zalo via a persistent long-polling loop (`getUpdates`). Webhooks are disabled by default for local desktop/terminal gateway runs. Messages are processed client-side and mapped to your local agent runtime.
 
 The plugin manages bot credentials under the OpenClaw state directory. Treat that directory as sensitive and cover it under the same access-control and backup policy as the rest of OpenClaw state.
-
-This plugin's runtime lives entirely in the external `@zalo-platforms/openclaw-zaloclawbot` package; behavior details below beyond install/config are as reported by the plugin's maintainers and are not verified against OpenClaw core source.
 
 ## Troubleshooting
 

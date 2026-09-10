@@ -214,8 +214,8 @@ openclaw plugins install ./my-plugin
 openclaw plugins install --link ./my-plugin
 ```
 
-Bare package specs install from npm during the launch cutover, unless the
-name matches a bundled or official plugin id, in which case OpenClaw uses
+Bare package specs install from npm, unless the name matches a bundled or
+official plugin id, in which case OpenClaw uses
 that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or
 `npm-pack:` for deterministic source selection. OpenClaw's bundled and official
 catalog packages are trusted alongside ClawHub packages. New arbitrary npm,

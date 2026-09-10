@@ -24,7 +24,6 @@ export async function postJsonWithRetry<T>(params: {
         fetchImpl: params.fetchImpl,
         body: params.body,
         errorPrefix: params.errorPrefix,
-        attachStatus: true,
         parse: async (payload) => payload as T,
       });
     },

@@ -82,3 +82,4 @@ execution is fully allowed, and filesystem tools are restricted to `--cwd`.
 
 - [Doctor lint mode](/cli/doctor#lint-mode)
 - [Path CLI](/cli/path)
+- [Policy plugin reference](/plugins/reference/policy) — the plugin that adds these policy-backed doctor checks

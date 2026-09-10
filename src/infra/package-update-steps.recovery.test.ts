@@ -260,17 +260,17 @@ describe("package update recovery safety", () => {
             activationFailed ? "old launcher\n" : "new launcher\n",
           );
           if (outcome !== "confirm") {
-            const restored = await transaction.rollback();
+            const restored = await transaction.rollback(() => {});
             expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
-            expect(await transaction.rollback()).toEqual(restored);
+            expect(await transaction.rollback(() => {})).toEqual(restored);
             await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
           }
-          await transaction.complete({ activationVerified: outcome === "confirm" });
-          await transaction.complete({ activationVerified: outcome === "confirm" });
+          await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
+          await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
           await expect(
             fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
           ).resolves.toContain(`"version":"${outcome === "confirm" ? "2.0.0" : "1.0.0"}"`);
-          expect((await transaction.rollback()).exitCode).toBe(1);
+          expect((await transaction.rollback(() => {})).exitCode).toBe(1);
         }
         expect((await fs.readdir(globalRoot)).filter((entry) => entry.startsWith("."))).toEqual([]);
       });
