@@ -4,7 +4,10 @@ import {
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
-import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
+import {
+  prepareHeadersForSimpleCompletion,
+  prepareModelForSimpleCompletion,
+} from "@openclaw/ai/transports";
 import {
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
@@ -27,6 +30,8 @@ import type { ResolvedProviderAuth } from "./model-auth.js";
 import { isOpenAIProvider } from "./openai-routing.js";
 
 type SimpleCompletionModelOptions = {
+  headers?: Record<string, string>;
+  sessionId?: string;
   maxTokens?: number;
   temperature?: number;
   reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
@@ -57,10 +62,12 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   }
   const { reasoning: rawReasoning, strictReasoningTags, ...options } = params.options ?? {};
   const reasoning = normalizeSimpleCompletionReasoning(rawReasoning, completionModel);
+  const headers = prepareHeadersForSimpleCompletion(completionModel, options);
   const completionOptions = {
     ...options,
     ...(reasoning ? { reasoning } : {}),
     apiKey: params.auth.apiKey,
+    ...(headers ? { headers } : {}),
   };
   if (strictReasoningTags) {
     reasoningTagTextPolicy.markStrict(completionOptions);
