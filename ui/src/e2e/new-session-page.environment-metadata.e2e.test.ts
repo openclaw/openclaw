@@ -252,9 +252,9 @@ suite.define(() => {
       const openPicker = async () => {
         const afterShow = place.evaluate(
           (element) =>
-            new Promise<void>((resolve) =>
-              element.addEventListener("wa-after-show", () => resolve(), { once: true }),
-            ),
+            new Promise<void>((resolve) => {
+              element.addEventListener("wa-after-show", () => resolve(), { once: true });
+            }),
         );
         await page.locator("#new-session-where-trigger").click();
         await afterShow;
