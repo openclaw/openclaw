@@ -260,6 +260,96 @@ describe("createMSTeamsReactionHandler", () => {
     });
   });
 
+  describe("team/channel route authorization", () => {
+    const routeCfg = {
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["allowed-aad"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["allowed-aad"],
+          teams: { trustedTeam: { channels: { "19:trusted-channel@thread.tacv2": {} } } },
+        },
+      },
+    } as OpenClawConfig;
+
+    function createRouteHarness() {
+      const mockRuntime = buildMockRuntime();
+      setMSTeamsRuntime(mockRuntime);
+      const handler = createMSTeamsReactionHandler(buildDeps(routeCfg, mockRuntime));
+      return {
+        handler,
+        enqueue: mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>,
+        resolveAgentRoute: mockRuntime.channel.routing.resolveAgentRoute as ReturnType<
+          typeof vi.fn
+        >,
+      };
+    }
+
+    function reactionFrom(conversation: Record<string, unknown>, teamId: string) {
+      return {
+        reactionsAdded: [{ type: "like" }],
+        from: { id: "teams-user", aadObjectId: "allowed-aad", name: "Allowed Sender" },
+        conversation,
+        channelData: { team: { id: teamId } },
+        replyToId: "target-message",
+      };
+    }
+
+    it.each(["added", "removed"] as const)(
+      "drops a %s reaction from a team/channel outside the configured allowlist",
+      async (direction) => {
+        const { handler, enqueue } = createRouteHarness();
+        const reaction = reactionFrom(
+          { id: "19:excluded-channel@thread.tacv2", conversationType: "channel" },
+          "excludedTeam",
+        );
+        await invokeReactionEvent(
+          handler,
+          direction === "added"
+            ? reaction
+            : { ...reaction, reactionsAdded: undefined, reactionsRemoved: [{ type: "like" }] },
+          direction,
+        );
+
+        expect(enqueue).not.toHaveBeenCalled();
+      },
+    );
+
+    it("enqueues a reaction from an allowlisted team/channel", async () => {
+      const { handler, enqueue } = createRouteHarness();
+      await invokeReactionEvent(
+        handler,
+        reactionFrom(
+          { id: "19:trusted-channel@thread.tacv2", conversationType: "channel" },
+          "trustedTeam",
+        ),
+        "added",
+      );
+
+      expect(enqueue).toHaveBeenCalledOnce();
+    });
+
+    it("never routes a directly admitted reaction into a team-scoped session", async () => {
+      const { handler, resolveAgentRoute } = createRouteHarness();
+      // Admission classifies this conversation as direct, so it carries no team/channel gate.
+      await invokeReactionEvent(
+        handler,
+        reactionFrom(
+          { id: "19:excluded-channel@thread.tacv2", conversationType: "personal", isGroup: true },
+          "excludedTeam",
+        ),
+        "added",
+      );
+
+      expect(resolveAgentRoute).toHaveBeenCalledOnce();
+      expect(resolveAgentRoute.mock.calls[0]?.[0]).toMatchObject({
+        peer: { kind: "direct", id: "allowed-aad" },
+      });
+      expect(resolveAgentRoute.mock.calls[0]?.[0]).not.toHaveProperty("teamId");
+    });
+  });
+
   describe("sender authorization", () => {
     it("drops reaction from non-allowlisted DM sender", async () => {
       const { handler, enqueue } = createReactionTestHarness();
