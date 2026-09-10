@@ -439,24 +439,30 @@ async function copySandboxPath(
   },
 ): Promise<void> {
   const fsBridge = execServer.fsBridge;
-  // Authorize the canonical copy destination before pinning the mutation so a
-  // symlinked parent cannot redirect an approved copy into a protected path.
-  const canonicalDestination = await fsBridge.resolvePinnedMutationTarget?.({
-    filePath: params.destinationPath,
-    action: "copy-destination",
-  });
+  // Lexical policy checks run before any filesystem access so denied sources
+  // and destinations fail without side effects.
   assertResolvedFsSandboxAccess(params.fsSandboxPolicy, [
     { path: params.sourcePath, access: "read" },
     { path: params.destinationPath, access: "write" },
-    ...(canonicalDestination
-      ? [{ path: canonicalDestination.policyPath, access: "write" as const }]
-      : []),
   ]);
   const sourceStat = await fsBridge.stat({ filePath: params.sourcePath });
   if (!sourceStat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
   }
-  if (sourceStat?.type === "directory") {
+  // Authorize the canonical copy destination before pinning the mutation so a
+  // symlinked parent cannot redirect an approved copy into a protected path.
+  // Recursive directory copies authorize the destination directory itself (an
+  // alias may rename it and an existing mount root stays valid); file copies
+  // authorize the canonical parent plus the requested basename.
+  const canonicalDestination = await fsBridge.resolvePinnedMutationTarget?.({
+    filePath: params.destinationPath,
+    action: sourceStat.type === "directory" ? "mkdir" : "copy-destination",
+  });
+  const canonicalPolicyEntries = canonicalDestination
+    ? [{ path: canonicalDestination.policyPath, access: "write" as const }]
+    : [];
+  assertResolvedFsSandboxAccess(params.fsSandboxPolicy, canonicalPolicyEntries);
+  if (sourceStat.type === "directory") {
     if (!params.recursive) {
       throw new Error(`Cannot copy directory without recursive=true: ${params.sourcePath}`);
     }
