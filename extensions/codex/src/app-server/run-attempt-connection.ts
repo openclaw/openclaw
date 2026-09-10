@@ -22,6 +22,7 @@ import {
   assertCodexSessionRuntimeOwnership,
   resolveCodexBindingAppServerConnection,
 } from "./binding-connection.js";
+import { resolveArgs } from "./config-utils.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   isCodexPairedNodeRemoteExecPlacementSandbox,
@@ -35,6 +36,7 @@ import {
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
+import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
@@ -89,7 +91,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     params.runtimePlan?.auth.deferredRouteSupport &&
     !configuredPlugin.appServer?.homeScope &&
     (configuredPlugin.appServer?.transport === undefined ||
-      configuredPlugin.appServer.transport === "stdio")
+      configuredPlugin.appServer.transport === "stdio") &&
+    !isCodexAppServerProxyLaunch(
+      resolveArgs(configuredPlugin.appServer?.args, process.env.OPENCLAW_CODEX_APP_SERVER_ARGS),
+    )
       ? {
           ...configuredPlugin,
           appServer: { ...configuredPlugin.appServer, homeScope: "user" as const },

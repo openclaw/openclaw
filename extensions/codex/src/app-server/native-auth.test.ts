@@ -112,6 +112,35 @@ describe("Codex native login discovery", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it.each(["config", "env"] as const)(
+    "does not borrow the local login for a proxy selected through %s arguments",
+    async (source) => {
+      run.mockResolvedValue({
+        termination: "exit",
+        code: 0,
+        stdout: "",
+        stderr: "Logged in using ChatGPT",
+      });
+      expect(
+        await probeCodexNativeAuth({
+          pluginConfig: {
+            appServer: {
+              command: "native-codex-fixture",
+              ...(source === "config"
+                ? { args: ["app-server", "proxy", "--sock", "/fixture/server.sock"] }
+                : {}),
+            },
+          },
+          env:
+            source === "env"
+              ? { OPENCLAW_CODEX_APP_SERVER_ARGS: "app-server proxy --sock /fixture/server.sock" }
+              : {},
+        }),
+      ).toBeUndefined();
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not publish a result after its capture is cancelled", async () => {
     const owner = new AbortController();
     run.mockImplementation(async () => {

@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
@@ -41,6 +41,8 @@ const catalogParams = {
 };
 
 describe("Codex app-server model catalog", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   beforeEach(() => {
     vi.mocked(probeCodexNativeAuth).mockReset().mockResolvedValue({
       apiKey: "native-presence",
@@ -60,16 +62,16 @@ describe("Codex app-server model catalog", () => {
     listModelsMock.mockResolvedValue({
       models: [
         {
-          id: "gpt-5.6-sol",
+          id: "synthetic-reasoning-model",
           model: "codex-execution-model",
-          displayName: "GPT-5.6 Sol",
+          displayName: "Synthetic reasoning model",
           inputModalities: ["text", "image", "unknown"],
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
         },
         {
-          id: "gpt-5.6-luna",
-          model: "gpt-5.6-luna",
-          displayName: "GPT-5.6 Luna",
+          id: "synthetic-basic-model",
+          model: "synthetic-basic-model",
+          displayName: "Synthetic basic model",
           inputModalities: ["text"],
           supportedReasoningEfforts: [],
         },
@@ -80,8 +82,8 @@ describe("Codex app-server model catalog", () => {
       {
         provider: "openai",
         nativeRuntime: "codex",
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
+        id: "synthetic-reasoning-model",
+        name: "Synthetic reasoning model",
         providerOrder: 0,
         reasoning: true,
         input: ["text", "image"],
@@ -94,8 +96,8 @@ describe("Codex app-server model catalog", () => {
       {
         provider: "openai",
         nativeRuntime: "codex",
-        id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
+        id: "synthetic-basic-model",
+        name: "Synthetic basic model",
         providerOrder: 1,
         reasoning: false,
         input: ["text"],
@@ -120,32 +122,57 @@ describe("Codex app-server model catalog", () => {
   });
 
   it.each([
-    { transport: "unix", url: "unix:///tmp/native-catalog.sock", homeScope: "user" },
-    { transport: "websocket", url: "ws://127.0.0.1:12345", homeScope: "agent" },
-  ])("uses the $transport server account without probing a local login", async (appServer) => {
-    vi.mocked(probeCodexNativeAuth).mockResolvedValue(undefined);
-    listModelsMock.mockResolvedValue({
-      models: [
-        {
-          id: "synthetic-opaque",
-          model: "synthetic-opaque",
-          inputModalities: ["text"],
-          supportedReasoningEfforts: [],
-        },
-      ],
-    });
-    const pluginConfig = { appServer };
-    expect(await owner.load(catalogParams, pluginConfig)).toContainEqual(
-      expect.objectContaining({ id: "synthetic-opaque", nativeRuntime: "codex" }),
-    );
-    expect(
-      owner.read(
-        { ...catalogParams, provider: "openai", modelId: "synthetic-opaque" },
-        pluginConfig,
-      ),
-    ).toEqual({ accountType: "apiKey", authMode: "api_key" });
-    expect(probeCodexNativeAuth).not.toHaveBeenCalled();
-  });
+    {
+      name: "Unix",
+      appServer: { transport: "unix", url: "unix:///tmp/native-catalog.sock", homeScope: "user" },
+      envArgs: undefined,
+    },
+    {
+      name: "WebSocket",
+      appServer: { transport: "websocket", url: "ws://127.0.0.1:12345", homeScope: "agent" },
+      envArgs: undefined,
+    },
+    {
+      name: "configured stdio proxy",
+      appServer: {
+        transport: "stdio",
+        args: ["app-server", "proxy", "--sock", "/fixture/server.sock"],
+      },
+      envArgs: undefined,
+    },
+    {
+      name: "environment-selected stdio proxy",
+      appServer: { transport: "stdio" },
+      envArgs: "app-server proxy --sock /fixture/server.sock",
+    },
+  ])(
+    "uses the $name server account without probing a local login",
+    async ({ appServer, envArgs }) => {
+      vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_ARGS", envArgs);
+      vi.mocked(probeCodexNativeAuth).mockResolvedValue(undefined);
+      listModelsMock.mockResolvedValue({
+        models: [
+          {
+            id: "synthetic-opaque",
+            model: "synthetic-opaque",
+            inputModalities: ["text"],
+            supportedReasoningEfforts: [],
+          },
+        ],
+      });
+      const pluginConfig = { appServer };
+      expect(await owner.load(catalogParams, pluginConfig)).toContainEqual(
+        expect.objectContaining({ id: "synthetic-opaque", nativeRuntime: "codex" }),
+      );
+      expect(
+        owner.read(
+          { ...catalogParams, provider: "openai", modelId: "synthetic-opaque" },
+          pluginConfig,
+        ),
+      ).toEqual({ accountType: "apiKey", authMode: "api_key" });
+      expect(probeCodexNativeAuth).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["oauth", "token"] as const)(
     "retains the observed native %s mode through discovery",

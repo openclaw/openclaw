@@ -2,6 +2,7 @@ import type { AgentHarnessModelCatalogParams } from "openclaw/plugin-sdk/agent-h
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
+import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { listAllCodexAppServerModels, type CodexAppServerModel } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
@@ -101,7 +102,9 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       }
       const options = resolveCodexAppServerRuntimeOptions({ pluginConfig });
       const usesNativeHome =
-        configured.appServer?.homeScope !== "agent" && options.start.transport === "stdio";
+        configured.appServer?.homeScope !== "agent" &&
+        options.start.transport === "stdio" &&
+        !isCodexAppServerProxyLaunch(options.start.args);
       const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
         return [];

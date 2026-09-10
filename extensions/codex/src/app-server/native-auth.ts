@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/windows-spawn";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
-import { buildCodexLoginStatusArgs } from "./launch-args.js";
+import { buildCodexLoginStatusArgs, isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
@@ -31,8 +31,12 @@ export async function probeCodexNativeAuth(params: {
       params.pluginConfig ?? params.config?.plugins?.entries?.codex?.config,
     );
     const options = resolveCodexAppServerRuntimeOptions({ pluginConfig, env: params.env });
-    // An explicitly isolated home or remote endpoint cannot borrow the operator's login.
-    if (options.start.transport !== "stdio" || pluginConfig.appServer?.homeScope === "agent") {
+    // Isolated homes and external servers cannot borrow the operator's local login.
+    if (
+      options.start.transport !== "stdio" ||
+      pluginConfig.appServer?.homeScope === "agent" ||
+      isCodexAppServerProxyLaunch(options.start.args)
+    ) {
       return undefined;
     }
     const start = await resolveManagedCodexAppServerStartOptions(options.start, {
