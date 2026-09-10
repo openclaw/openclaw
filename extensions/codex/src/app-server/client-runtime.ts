@@ -1,12 +1,14 @@
 /** Client-scoped Codex auth and account observers. */
+import { createHash } from "node:crypto";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
-import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
+import { refreshCodexAppServerAuthTokens, type CodexAppServerAuthHandoff } from "./auth-bridge.js";
+import { fingerprintTokenAuthProfileCacheKey } from "./auth-cache-key.js";
+import type { CodexAppServerAuthProfileLookup } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject, type CodexServiceTier, type JsonObject } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
-import type { CodexAppServerAuthProfileLookup } from "./session-binding.js";
 import { withTimeout } from "./timeout.js";
 
 type ClientRuntimeContext = Omit<CodexAppServerAuthProfileLookup, "agentDir"> & {
@@ -17,12 +19,14 @@ type ClientRuntimeContext = Omit<CodexAppServerAuthProfileLookup, "agentDir"> & 
 
 type ClientRuntime = {
   context: ClientRuntimeContext;
+  authHandoff?: CodexAppServerAuthHandoff;
   closed: boolean;
   retainedThreads: Map<string, RetainedLiveThread>;
   claimedThreads: Map<string, symbol>;
   releasingThreads: Map<string, ThreadReleaseTransition>;
   protectedThreads: Map<string, number>;
   sessionMetadata: Map<string, { sessionsRoot: string; rolloutPath: string; metadata: JsonObject }>;
+  workspaceReferences: Map<string, { digest?: string; needsReintroduction: boolean }>;
   evictionTimer?: ReturnType<typeof setTimeout>;
 };
 
@@ -70,6 +74,49 @@ const claimedThreadReleaseTokens = new WeakMap<
 export function isCodexAppServerClientRuntimeLive(client: CodexAppServerClient): boolean {
   const runtime = configuredClients.get(client);
   return runtime !== undefined && !runtime.closed;
+}
+
+export function recordCodexAppServerAuthHandoff(
+  client: CodexAppServerClient,
+  handoff: CodexAppServerAuthHandoff | undefined,
+): void {
+  const runtime = configuredClients.get(client);
+  if (runtime && !runtime.closed && handoff) {
+    runtime.authHandoff = handoff;
+  }
+}
+
+/** Reference history is only trusted while this native subscription stays warm. */
+export function forgetCodexWorkspaceReferences(
+  client: CodexAppServerClient,
+  threadId: string,
+): void {
+  configuredClients.get(client)?.workspaceReferences.delete(threadId);
+}
+
+/** Record accepted input without clearing a compaction observed during turn/start. */
+export function prepareCodexWorkspaceReferences(
+  client: CodexAppServerClient,
+  threadId: string,
+  reference: string | undefined,
+) {
+  const runtime = configuredClients.get(client);
+  const digest = createHash("sha256")
+    .update(reference ?? "")
+    .digest("hex");
+  const previous = runtime?.workspaceReferences.get(threadId) ?? { needsReintroduction: true };
+  if (runtime && !runtime.closed) {
+    runtime.workspaceReferences.set(threadId, previous);
+  }
+  return {
+    include: previous.needsReintroduction || previous.digest !== digest,
+    accepted: () => {
+      if (!runtime || runtime.closed || runtime.workspaceReferences.get(threadId) !== previous) {
+        return;
+      }
+      runtime.workspaceReferences.set(threadId, { digest, needsReintroduction: false });
+    },
+  };
 }
 
 /** Immutable declarations are data owned by this physical client, never retained executors. */
@@ -134,6 +181,7 @@ export function ensureCodexAppServerClientRuntime(
     releasingThreads: new Map(),
     protectedThreads: new Map(),
     sessionMetadata: new Map(),
+    workspaceReferences: new Map(),
   };
   configuredClients.set(client, runtime);
   client.addCloseHandler(() => {
@@ -148,6 +196,7 @@ export function ensureCodexAppServerClientRuntime(
     runtime.claimedThreads.clear();
     runtime.protectedThreads.clear();
     runtime.sessionMetadata.clear();
+    runtime.workspaceReferences.clear();
   });
   client.addRequestHandler(async (request) => {
     if (request.method !== "account/chatgptAuthTokens/refresh") {
@@ -160,11 +209,13 @@ export function ensureCodexAppServerClientRuntime(
       isJsonObject(request.params) && typeof request.params.previousAccountId === "string"
         ? request.params.previousAccountId.trim() || undefined
         : undefined;
+    const authHandoff = runtime.authHandoff;
     try {
       const tokens = await withTimeout(
         refreshCodexAppServerAuthTokens({
           agentDir: runtime.context.agentDir,
           authProfileId: runtime.context.authProfileId,
+          ...(authHandoff ? { authHandoff } : {}),
           ...(previousAccountId ? { previousAccountId } : {}),
           ...(runtime.context.authProfileStore
             ? { authProfileStore: runtime.context.authProfileStore }
@@ -179,6 +230,13 @@ export function ensureCodexAppServerClientRuntime(
           "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
         );
       }
+      if (runtime.closed) {
+        throw new Error("Codex app-server client closed during ChatGPT token refresh.");
+      }
+      runtime.authHandoff = {
+        accessFingerprint: fingerprintTokenAuthProfileCacheKey(tokens.accessToken),
+        chatgptAccountId: tokens.chatgptAccountId,
+      };
       return { ...tokens };
     } catch (error) {
       // Failed refresh leaves Codex holding its old account. Detach the cached
@@ -188,6 +246,20 @@ export function ensureCodexAppServerClientRuntime(
     }
   });
   client.addNotificationHandler((notification) => {
+    if (
+      notification.method === "item/completed" &&
+      isJsonObject(notification.params) &&
+      isJsonObject(notification.params.item) &&
+      notification.params.item.type === "contextCompaction" &&
+      typeof notification.params.threadId === "string"
+    ) {
+      const threadId = notification.params.threadId;
+      // Observe manual and automatic compaction even without an active turn projector.
+      const previous = runtime.workspaceReferences.get(threadId);
+      if (previous) {
+        runtime.workspaceReferences.set(threadId, { ...previous, needsReintroduction: true });
+      }
+    }
     if (notification.method === "account/rateLimits/updated") {
       mergeCodexRateLimitsUpdate(client, notification.params);
       return;
@@ -208,6 +280,7 @@ export function ensureCodexAppServerClientRuntime(
         runtime.retainedThreads.delete(threadId);
         runtime.claimedThreads.delete(threadId);
         runtime.sessionMetadata.delete(threadId);
+        runtime.workspaceReferences.delete(threadId);
         scheduleRetainedThreadEviction(client, runtime);
       }
     }
@@ -286,6 +359,7 @@ async function releaseRetainedThread(
   runtime.releasingThreads.set(threadId, transition);
   try {
     await transition.completion;
+    runtime.workspaceReferences.delete(threadId);
     return true;
   } catch (error) {
     if (
@@ -525,6 +599,7 @@ function claimCodexAppServerThreadOwnership(
       await transition.completion;
       if (runtime.claimedThreads.get(threadId) === claimed) {
         runtime.claimedThreads.delete(threadId);
+        runtime.workspaceReferences.delete(threadId);
       }
     } finally {
       if (runtime.releasingThreads.get(threadId) === transition) {
@@ -596,6 +671,7 @@ export async function unsubscribeCodexAppServerLiveThread(
     await client.request("thread/unsubscribe", { threadId }, { timeoutMs, assertCurrent });
     // Revalidate before successful release removes its own claim below.
     assertCurrent?.();
+    runtime?.workspaceReferences.delete(threadId);
   });
   const ownsTransition = runtime !== undefined && transition === undefined;
   if (transition) {

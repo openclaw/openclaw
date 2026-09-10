@@ -7,6 +7,7 @@ import { resolveOpenAICompletionsCompat } from "../../packages/ai/src/transports
 import type { Context, Model } from "../../packages/ai/src/types.js";
 import { projectProviderError } from "../../packages/ai/src/utils/provider-error.js";
 import { createOpenClawReadTool } from "../agents/agent-tools.read.js";
+import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import "./ai-transport-host.js";
@@ -14,6 +15,27 @@ import "./ai-transport-host.js";
 afterEach(resetSecretRedactionRegistryForTest);
 
 describe("OpenClaw provider error redaction", () => {
+  it("preserves a nested transport code after installed host redaction", () => {
+    const cause = Object.assign(new Error("getaddrinfo failed at fixture.invalid"), {
+      code: "EAI_AGAIN",
+      authorization: "Bearer fixture-sensitive-authorization",
+    });
+    const projected = projectProviderError(new Error("Connection error.", { cause }));
+    expect(projected).toEqual({
+      stopReason: "error",
+      errorMessage: "Connection error.",
+      errorCode: "EAI_AGAIN",
+    });
+  });
+
+  it("keeps registered transport strings secret in provider errors", () => {
+    registerSecretValueForRedaction("EAI_AGAIN");
+    const cause = Object.assign(new Error("lookup failed"), { code: "EAI_AGAIN" });
+    expect(projectProviderError(new Error("Connection error.", { cause })).errorCode).not.toBe(
+      "EAI_AGAIN",
+    );
+  });
+
   it("redacts registered opaque secrets from ordinary provider error messages", () => {
     const secret = "opaque-configured-provider-value";
     registerSecretValueForRedaction(secret);
@@ -87,14 +109,7 @@ describe("OpenClaw provider tool-result redaction", () => {
           provider: "anthropic",
           model: "claude-test",
           content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
           stopReason: "toolUse",
           timestamp: 1,
         },

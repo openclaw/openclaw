@@ -15,8 +15,9 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
-import { getRuntimeConfig, replaceConfigFile } from "../config/config.js";
+import { parseAccountSelector } from "../commands/channels/account-selector.js";
+import { requireValidConfigForWrite } from "../commands/config-validation.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -28,7 +29,7 @@ import { getScopedChannelsCommandSecretTargets } from "./command-secret-targets.
 import { formatHelpExamples } from "./help-format.js";
 
 function parseLimit(value: unknown): number | null {
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
     return null;
   }
   const parsed = parseStrictPositiveInteger(value);
@@ -106,16 +107,16 @@ export function registerDirectoryCli(program: Command) {
   const withChannel = (cmd: Command) =>
     cmd
       .option("--channel <name>", "Channel (auto when only one is configured)")
-      .option("--account <id>", "Account id (accountId)")
+      .option("--account <id>", "Account id (accountId)", parseAccountSelector)
       .option("--json", "Output JSON", false);
 
   const resolve = async (opts: { channel?: string; account?: string }) => {
-    const sourceSnapshot = await requireValidConfigFileSnapshot(defaultRuntime);
-    if (!sourceSnapshot) {
+    const writeSnapshot = await requireValidConfigForWrite(defaultRuntime);
+    if (!writeSnapshot) {
       return null;
     }
     const autoEnabled = applyPluginAutoEnable({
-      config: sourceSnapshot.sourceConfig,
+      config: writeSnapshot.snapshot.sourceConfig,
       env: process.env,
     });
     const sourceConfig = autoEnabled.config;
@@ -130,18 +131,12 @@ export function registerDirectoryCli(program: Command) {
           supports: (plugin) => Boolean(plugin.directory),
         })
       : null;
-    if (resolvedExplicit?.configChanged) {
-      // Installing an explicit channel can update plugin records; commit before directory calls
-      // so subsequent registry reads see the channel the user just selected.
+    if (resolvedExplicit?.configChanged || autoEnabled.changes.length > 0) {
+      // Commit install records and enablement before directory calls consume the new runtime.
       await commitConfigWithPendingPluginInstalls({
-        nextConfig: resolvedExplicit.cfg,
-        baseHash: sourceSnapshot.hash,
-      });
-    } else if (autoEnabled.changes.length > 0) {
-      // Auto-enable changes are config-only and must be persisted before later CLI invocations.
-      await replaceConfigFile({
-        nextConfig: sourceConfig,
-        baseHash: sourceSnapshot.hash,
+        sourceConfig: resolvedExplicit?.cfg ?? sourceConfig,
+        baseHash: writeSnapshot.snapshot.hash,
+        writeOptions: writeSnapshot.writeOptions,
       });
     }
     // Config writes refresh the active runtime snapshot. Directory execution must use that
@@ -340,6 +335,10 @@ export function registerDirectoryCli(program: Command) {
     .action((opts) =>
       runDirectoryAction(opts, async () => {
         const limit = parseLimit(opts.limit);
+        const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
+        if (!groupId) {
+          throw new Error("Missing --group-id");
+        }
         const resolved = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
@@ -351,10 +350,6 @@ export function registerDirectoryCli(program: Command) {
         const fn = plugin.directory?.listGroupMembers;
         if (!fn) {
           throw new Error(`Channel ${channelId} does not support group members listing`);
-        }
-        const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
-        if (!groupId) {
-          throw new Error("Missing --group-id");
         }
         const result = await fn({
           cfg,

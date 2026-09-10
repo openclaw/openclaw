@@ -73,6 +73,7 @@ import {
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
+import { createTuiQuestionController } from "./tui-questions.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import { createTuiRunIdTracker } from "./tui-session-run-coordinator.js";
@@ -508,12 +509,6 @@ const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
 const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
 const TUI_PROCESS_EXIT_AFTER_RETURN_MS = 2000;
 
-type TuiProcessExitTimer = {
-  unref?: () => void;
-};
-
-type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProcessExitTimer;
-
 type TuiShutdownTask = () => void | Promise<void>;
 
 export function beginTuiShutdown(params: {
@@ -526,14 +521,9 @@ export function beginTuiShutdown(params: {
   hardExitMs: number;
   keepHardExitArmed?: boolean;
   onError: (error: unknown) => void;
-  clearTimeoutFn?: (timer: TuiProcessExitTimer) => void;
-  setTimeoutFn?: TuiProcessExitTimeout;
-}): TuiProcessExitTimer {
-  const hardExit = params.setTimeoutFn
-    ? { kind: "custom" as const, timer: params.setTimeoutFn(params.forceExit, params.hardExitMs) }
-    : { kind: "native" as const, timer: setTimeout(params.forceExit, params.hardExitMs) };
-  const hardExitTimer = hardExit.timer;
-  hardExitTimer.unref?.();
+}): ReturnType<typeof setTimeout> {
+  const hardExitTimer = setTimeout(params.forceExit, params.hardExitMs);
+  hardExitTimer.unref();
   // Stop referenced animations before transport teardown can stall or redraw.
   params.disposeStatus();
   void Promise.resolve()
@@ -562,11 +552,7 @@ export function beginTuiShutdown(params: {
     })
     .finally(() => {
       if (params.keepHardExitArmed !== true) {
-        if (params.clearTimeoutFn) {
-          params.clearTimeoutFn(hardExitTimer);
-        } else if (hardExit.kind === "native") {
-          clearTimeout(hardExit.timer);
-        }
+        clearTimeout(hardExitTimer);
       }
       params.disposeStatus();
     })
@@ -632,41 +618,19 @@ export function resolveTuiShutdownHardExitMs(params: { localMode?: boolean } = {
   return TUI_SHUTDOWN_HARD_EXIT_MS + (params.localMode ? resolveLocalRunShutdownGraceMs() : 0);
 }
 
-type ScheduleProcessExitAfterTuiReturnParams = {
-  delayMs?: number;
-  setTimeoutFn?: TuiProcessExitTimeout;
-  exit?: (code?: number) => never | void;
-  writeStderr?: (text: string) => void;
-};
-
 export function scheduleProcessExitAfterTuiReturn(
-  params?: ScheduleProcessExitAfterTuiReturnParams & { setTimeoutFn?: undefined },
-): ReturnType<typeof setTimeout>;
-export function scheduleProcessExitAfterTuiReturn(
-  params: ScheduleProcessExitAfterTuiReturnParams & { setTimeoutFn: TuiProcessExitTimeout },
-): TuiProcessExitTimer;
-export function scheduleProcessExitAfterTuiReturn(
-  params: ScheduleProcessExitAfterTuiReturnParams = {},
-): TuiProcessExitTimer {
+  params: { delayMs?: number } = {},
+): ReturnType<typeof setTimeout> {
   const delayMs = Math.max(0, Math.floor(params.delayMs ?? TUI_PROCESS_EXIT_AFTER_RETURN_MS));
-  const exit = params.exit ?? ((code?: number) => process.exit(code));
-  const writeStderr =
-    params.writeStderr ??
-    ((text: string) => {
-      process.stderr.write(text);
-    });
-  const onTimeout = () => {
+  const timer = setTimeout(() => {
     try {
-      writeStderr("openclaw tui forcing process exit after return\n");
+      process.stderr.write("openclaw tui forcing process exit after return\n");
     } catch {
       // Best effort only; forced exit must not depend on stderr.
     }
-    exit(0);
-  };
-  const timer = params.setTimeoutFn
-    ? params.setTimeoutFn(onTimeout, delayMs)
-    : setTimeout(onTimeout, delayMs);
-  timer.unref?.();
+    process.exit(0);
+  }, delayMs);
+  timer.unref();
   return timer;
 }
 
@@ -941,6 +905,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const header = new Text("", 1, 0);
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
+  const questionStatus = new Text("", 1, 0);
   const chatLog = new ChatLog();
   const connectionNotices: string[] = [];
   const addConnectionNotice = (text: string) => {
@@ -961,6 +926,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   root.addChild(chatLog);
   root.addChild(statusContainer);
   root.addChild(footer);
+  root.addChild(questionStatus);
   root.addChild(editor);
 
   const resolveDynamicSlashCommandsKey = () => state.currentAgentId;
@@ -1446,6 +1412,27 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
+  const questions = createTuiQuestionController({
+    client,
+    chatLog,
+    getAgentId: () => state.currentAgentId,
+    getSessionKey: () => state.currentSessionKey,
+    openOverlay,
+    closeOverlay,
+    requestRender: () => tui.requestRender(),
+    onPendingChange: (text) => questionStatus.setText(theme.accent(text)),
+  });
+  const reportQuestionRefreshError = () => {
+    chatLog.addSystem("question refresh failed; reconnect or use /question to retry");
+    tui.requestRender();
+  };
+  const refreshQuestions = async () => {
+    try {
+      await questions.refresh();
+    } catch {
+      reportQuestionRefreshError();
+    }
+  };
   const pluginApprovals = createTuiPluginApprovalController({
     client,
     chatLog,
@@ -1523,6 +1510,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   });
   notifySessionChanged = () => {
     pluginApprovals.sessionChanged();
+    void questions.sessionChanged().catch(reportQuestionRefreshError);
     taskSuggestions.sessionChanged();
   };
 
@@ -1547,6 +1535,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     state,
     localMode: isLocalMode,
     setActivityStatus,
+    updateFooter,
     refreshSessionInfo,
     loadHistory,
     noteLocalRunId: localRunIds.note,
@@ -1597,6 +1586,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     };
     disposeEventHandlers();
     pluginApprovals?.dispose();
+    questions.dispose();
     taskSuggestions?.dispose();
     beginTuiShutdown({
       stopCommandScopes: () => localShell.shutdown(),
@@ -1658,6 +1648,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     isRunObserved,
     flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
+    reopenQuestion: () => questions.reopen().catch(reportQuestionRefreshError),
     requestExit,
   });
 
@@ -1776,6 +1767,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     pluginApprovals?.handleEvent(evt.event, evt.payload);
+    questions.handleEvent(evt.event, evt.payload);
     taskSuggestions?.handleEvent(evt.event, evt.payload);
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
@@ -1851,6 +1843,10 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       }
       updateHeader();
       updateAutocompleteProvider();
+      await refreshQuestions();
+      if (!ownsConnection()) {
+        return;
+      }
       try {
         await pluginApprovals?.refresh();
       } catch (err) {
@@ -1961,6 +1957,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
     addConnectionNotice(`gateway event gap: expected ${info.expected}, got ${info.received}`);
     reconcileHistoryAfterGap();
+    void refreshQuestions();
     void (async () => {
       try {
         await pluginApprovals?.refresh();
@@ -1996,6 +1993,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       disposeStatus();
       disposeEventHandlers();
       pluginApprovals?.dispose();
+      questions.dispose();
       taskSuggestions?.dispose();
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);

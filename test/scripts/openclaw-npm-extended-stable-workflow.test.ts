@@ -164,6 +164,8 @@ describe("minimal npm extended-stable workflow", () => {
     expect(sourceAncestry).toMatchObject({
       env: {
         RELEASE_ANCESTRY_MODE: "merge-base",
+        RELEASE_ANCESTRY_SOURCE_REF:
+          "${{ inputs.release_candidate_branch != '' && format('refs/heads/{0}', inputs.release_candidate_branch) || '' }}",
         RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
       },
     });
@@ -233,11 +235,6 @@ describe("minimal npm extended-stable workflow", () => {
     expect(parsed.jobs?.preflight_openclaw_npm?.with?.use_github_hosted_runners).toBe(
       "${{ inputs.use_github_hosted_runners }}",
     );
-    for (const job of Object.values(workflow(preflightWorkflowPath).jobs ?? {})) {
-      expect(job["runs-on"]).toBe(
-        "${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}",
-      );
-    }
   });
 
   it("binds intentional Plugin SDK release changes to the reported digest", () => {
@@ -448,7 +445,14 @@ describe("minimal npm extended-stable workflow", () => {
     });
     expect(plugins.run).toContain("--selection-mode all-publishable");
     expect(plugins.run).toContain("--npm-dist-tag extended-stable");
-    expect(plugins.run).toContain("scripts/check-plugin-npm-runtime-builds.mts");
+    expect(plugins.run).toContain(
+      'node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/plugin-npm-release-plan.ts"',
+    );
+    // A validation target can predate this verifier; plugin runtime qualification
+    // must run from the trusted workflow checkout while inspecting target packages.
+    expect(plugins.run).toMatch(
+      /TSX_TSCONFIG_PATH="\$tooling_dir\/tsconfig\.json" \\\n\s+node --import "\$tooling_dir\/scripts\/tsx\.mjs" "\$tooling_dir\/scripts\/check-plugin-npm-runtime-builds\.mts"/,
+    );
     expect(plugins.run).toContain("scripts/plugin-npm-publish.sh --pack");
     expect(plugins.run).toContain("OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR");
     expect(plugins.run).not.toContain("--publish");
@@ -494,6 +498,9 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(verifyReleaseContents.if).toBeUndefined();
     expect(verifyReleaseContents.run).toContain('--tarball "$PREPARED_TARBALL_PATH"');
+    expect(verifyReleaseContents.run).toMatch(
+      /TSX_TSCONFIG_PATH="\$tooling_dir\/tsconfig\.json" \\\n\s+node --import "\$tooling_dir\/scripts\/tsx\.mjs" "\$tooling_dir\/scripts\/openclaw-npm-prepublish-verify\.ts"/,
+    );
 
     const save = step(preflight, "Save preflight build outputs");
     const setup = step(preflight, "Setup Node environment");

@@ -41,7 +41,7 @@ metadata precedence does not change MIME detection when media bytes are loaded o
 
 - Input: local file path **or** HTTP(S) URL.
 - Flow: load into a buffer, detect media kind, then build the outbound payload per kind:
-  - **Images:** optimized to fit under `channels.whatsapp.mediaMaxMb` (default 50MB). Opaque images are recompressed to JPEG (default side ladder starts at 2048px, descending on repeated size misses); images with transparency are kept as PNG. If the source is already an acceptable JPEG/PNG/WebP within the size and side-length budget, the original bytes are preserved unchanged instead of being recompressed. Animated GIFs are never re-encoded, only size-checked.
+  - **Images:** optimized to fit under `channels.whatsapp.mediaMaxMb` (default 50MB). Opaque images are recompressed to JPEG (default side ladder starts at 2048px, descending on repeated size misses); images with transparency are kept as PNG. If the source is already an acceptable JPEG/PNG/WebP within the size and side-length budget, the original bytes are preserved unchanged instead of being recompressed, even when a stale `.heic` or `.heif` filename remains after conversion. Animated GIFs are never re-encoded, only size-checked.
   - **Audio/voice:** unless already native voice audio (`.ogg`/`.opus`, or `audio/ogg`/`audio/opus`), outbound audio is transcoded via `ffmpeg` to Opus/OGG (48kHz mono, 64kbps, capped at 20 minutes) before sending as a voice note (`ptt: true`).
   - **Video:** pass-through up to 16MB.
   - **Documents:** anything else, up to 100MB, with filename preserved when available.
@@ -59,6 +59,9 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 - `getReplyFromConfig` returns a reply payload (or array of payloads) with `text?`, `mediaUrl?`, and `mediaUrls?` among other fields.
 - When media is present, the web sender resolves local paths or URLs using the same pipeline as `openclaw message send`.
 - Multiple media entries are sent sequentially if provided.
+
+Generated attachments stay separate from later tool-error warnings. Image references
+in errors or reasoning do not select or discard generated attachments.
 
 When a channel converts Markdown image links into attachments, image syntax inside
 code blocks or inline code, and escaped image syntax, stays in the text. Inline
@@ -87,7 +90,7 @@ image destinations retain their URL punctuation.
 - Images: up to `channels.whatsapp.mediaMaxMb` (default 50MB) after optimization.
 - Audio/video: 16MB cap (shared default; overridden by `mediaMaxMb` when sending through WhatsApp).
 - Documents: 100MB cap (shared default; overridden by `mediaMaxMb` when sending through WhatsApp).
-- Oversize or unreadable media produces a clear error in logs, and the reply is skipped.
+- Oversize or unreadable media produces a clear error in logs, and the reply is skipped. Size errors use readable byte units rather than rounding fractional caps to a whole MB.
 
 **Media understanding caps (transcription/description)**
 

@@ -115,6 +115,9 @@ describe("prepared model catalog worker plugin scope", () => {
         agentDir,
         workspaceDir,
         config,
+        observationConfig: prepared.snapshot.observationConfig,
+        isCurrent: prepared.snapshot.isCurrent,
+        pluginRegistry: prepared.snapshot.pluginRegistry,
         catalogComplete: full,
         authModes: prepared.snapshot.authModes,
         authStore,
@@ -129,13 +132,18 @@ describe("prepared model catalog worker plugin scope", () => {
           authStore: _authStore,
           metadataSnapshot: _metadataSnapshot,
           authMaterializations: _authMaterializations,
+          observationConfig: _observationConfig,
+          isCurrent: _isCurrent,
+          pluginRegistry: _pluginRegistry,
           ...snapshot
         } = await projectSnapshot(params?.readOnly === false);
         return snapshot;
       };
+    let published = await projectSnapshot(false);
     registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
-      loadDeferred: async (params) => await projectSnapshot(params?.readOnly === false),
-      readPrepared: async () => await projectSnapshot(false),
+      loadDeferred: async (params) =>
+        (published = await projectSnapshot(params?.readOnly === false)),
+      readPrepared: async () => published,
     });
     const respond = vi.fn();
     const context = Object.assign({} as GatewayRequestContext, {
@@ -147,8 +155,13 @@ describe("prepared model catalog worker plugin scope", () => {
       modelsHandlers["models.list"],
       'modelsHandlers["models.list"] test invariant',
     )({
-      req: { type: "req", id: "models-list-worker-scope", method: "models.list", params: {} },
-      params: { view: "all" },
+      req: {
+        type: "req",
+        id: "models-list-worker-scope",
+        method: "models.list",
+        params: { view: "all", refresh: true },
+      },
+      params: { view: "all", refresh: true },
       respond: respond as RespondFn,
       client: null,
       isWebchatConnect: () => false,

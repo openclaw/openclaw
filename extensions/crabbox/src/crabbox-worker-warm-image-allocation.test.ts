@@ -1,14 +1,16 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import {
-  WARM_IMAGE_MAX_ALLOCATIONS,
-  type WarmProfileRecord,
-} from "./crabbox-worker-warm-image-store.js";
+  parseCrabboxProfile,
+  resolveCrabboxProvisionProfile,
+  resolveCrabboxWarmImageProfileKey,
+} from "./crabbox-worker-profile.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 import {
   CHECKPOINT_ID,
   PROFILE,
+  NODE_RUNTIME_IDENTITY,
   checkpointResult,
   commandResult,
   openWarmImageStore,
@@ -18,6 +20,7 @@ import {
 function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-allocation-"));
   const calls: string[][] = [];
+  let captures = 0;
   const manager = () =>
     createCrabboxWarmImageManager({
       warn: vi.fn(),
@@ -29,7 +32,12 @@ function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
           return commandResult({ code: null, killed: true, termination: "timeout" });
         }
         if (argv[2] === "create") {
-          return checkpointResult(CHECKPOINT_ID, argv[argv.indexOf("--id") + 1]!, "available");
+          captures += 1;
+          return checkpointResult(
+            captures === 1 ? CHECKPOINT_ID : `${CHECKPOINT_ID}_${captures}`,
+            argv[argv.indexOf("--id") + 1]!,
+            "available",
+          );
         }
         if (argv[2] === "inspect") {
           return commandResult({
@@ -60,6 +68,7 @@ function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
     provider: "aws",
     slug: id,
     profile: resolveCrabboxProvisionProfile(PROFILE, undefined).profile,
+    nodeRuntimeIdentity: NODE_RUNTIME_IDENTITY,
     ...(projectKey ? { projectKey } : {}),
     timeoutMs: () => 60_000,
   });
@@ -67,6 +76,216 @@ function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
 }
 
 describe("Crabbox durable allocation admission", () => {
+  it("preserves exact preparation replay and cache compatibility across reopen", async () => {
+    const { manager, context, calls } = fixture();
+    const owner = manager();
+    const source = {
+      ...context("cbx_prepared", "project-a"),
+      preparation: {
+        key: "a".repeat(64),
+        cacheKey: "b".repeat(64),
+        purpose: "reserve" as const,
+        demandAtMs: Date.now(),
+      },
+    };
+    await owner.allocate(source);
+    owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    resetPluginStateStoreForTests();
+    const restarted = manager();
+    const recorded = structuredClone(openWarmImageStore().entries());
+    calls.length = 0;
+    for (const changed of [
+      { key: "c".repeat(64) },
+      { cacheKey: "c".repeat(64) },
+      { purpose: "session" as const },
+      { demandAtMs: source.preparation.demandAtMs + 1 },
+    ]) {
+      await expect(
+        restarted.allocate({
+          ...source,
+          preparation: { ...source.preparation, ...changed },
+        }),
+      ).rejects.toThrow("recorded profile or project identity");
+    }
+    expect(calls).toEqual([]);
+    expect(openWarmImageStore().entries()).toEqual(recorded);
+
+    const compatible = {
+      ...source,
+      id: "cbx_compatible",
+      preparation: { ...source.preparation, key: "c".repeat(64), purpose: "session" as const },
+    };
+    expect(await restarted.allocate(compatible)).toEqual({
+      kind: "checkpoint",
+      checkpointId: CHECKPOINT_ID,
+    });
+    expect(
+      await restarted.allocate({
+        ...compatible,
+        id: "cbx_incompatible",
+        preparation: { ...compatible.preparation, cacheKey: "d".repeat(64) },
+      }),
+    ).toEqual({ kind: "cold" });
+    const before = structuredClone(openWarmImageStore().entries());
+    restarted.notePreparedDemand(compatible.id, {
+      preparationKey: "e".repeat(64),
+      demandAtMs: Date.now() + 60_000,
+    });
+    expect(openWarmImageStore().entries()).toEqual(before);
+  });
+
+  it("does not keep an image alive through refill after actual demand expires", async () => {
+    const { manager, context, calls } = fixture();
+    const owner = manager();
+    const demandAtMs = Date.now();
+    const source = {
+      ...context("cbx_source", "project-a"),
+      preparation: {
+        key: "a".repeat(64),
+        cacheKey: "b".repeat(64),
+        purpose: "reserve" as const,
+        demandAtMs,
+      },
+    };
+    await owner.allocate(source);
+    owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    await owner.release(source);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(demandAtMs + 13 * 86_400_000);
+    const reserve = { ...source, id: "cbx_refill" };
+    expect(await owner.allocate(reserve)).toEqual({
+      kind: "checkpoint",
+      checkpointId: CHECKPOINT_ID,
+    });
+    expect(openWarmImageStore().entries()[0]!.value.image?.lastDemandAtMs).toBe(demandAtMs);
+    await owner.release(reserve);
+    clock.mockReturnValue(demandAtMs + 14 * 86_400_000);
+    calls.length = 0;
+    await owner.maintain({ binaries: ["crabbox"] });
+    expect(calls.filter((argv) => argv[2] === "delete").map((argv) => argv[3])).toEqual([
+      CHECKPOINT_ID,
+    ]);
+    expect(openWarmImageStore().entries()).toEqual([]);
+  });
+
+  it("preserves persisted Linux profile keys", () => {
+    const linux = parseCrabboxProfile(PROFILE);
+    const historicalKey = "e35cd88dba7a4bea90d23da00f994d326515a833ab64fdaa982c5c346bfc9e0f";
+    expect(resolveCrabboxWarmImageProfileKey(linux)).toBe(historicalKey);
+  });
+
+  it("records Linux and replays historical allocations without os as Linux", async () => {
+    const { manager, context } = fixture();
+    const owner = manager();
+    const allocation = context("cbx_historical_linux");
+    await owner.allocate(allocation);
+    expect(owner.lookupLease(allocation.id)).toMatchObject({
+      machineClass: "standard",
+      os: "linux",
+    });
+    const store = openWarmImageStore();
+    const entry = store.entries()[0]!;
+    delete entry.value.allocations[allocation.id]!.os;
+    store.register(entry.key, entry.value);
+    await expect(manager().allocate(allocation)).resolves.toEqual({ kind: "cold" });
+  });
+
+  it.each([
+    { nodeBootstrapSha256: "b".repeat(64) },
+    { executionMode: "remote-exec" as const },
+    { workerBundleSha256: "c".repeat(64) },
+  ])(
+    "refreshes changed runtime content without letting an older cold allocation replace it: %j",
+    async (change) => {
+      const { manager, context, calls } = fixture();
+      const owner = manager();
+      const initial = context("cbx_initial");
+      const older = context("cbx_older");
+      await owner.allocate(initial);
+      await owner.allocate(older);
+      owner.markEnrolled(initial.id);
+      owner.markEnrolled(older.id);
+      await owner.capture(initial);
+      await owner.release(initial);
+      const newer = {
+        ...context("cbx_newer"),
+        nodeRuntimeIdentity: { ...NODE_RUNTIME_IDENTITY, ...change },
+      };
+      expect(await owner.allocate(newer)).toEqual({
+        kind: "checkpoint",
+        checkpointId: CHECKPOINT_ID,
+      });
+      owner.markEnrolled(newer.id);
+      expect(await owner.capture(newer)).toBe(true);
+      await owner.release(newer);
+      const published = structuredClone(openWarmImageStore().entries()[0]!.value);
+      expect(published.image?.runtimeIdentity).toEqual(newer.nodeRuntimeIdentity);
+      expect(published.operation).toBeUndefined();
+      calls.length = 0;
+      expect(await owner.capture(older)).toBe(false);
+      expect(calls).toEqual([]);
+      expect(openWarmImageStore().entries()[0]!.value.image).toEqual(published.image);
+      await owner.release(older);
+      expect(openWarmImageStore().entries()).toHaveLength(1);
+    },
+  );
+
+  it.each(["pending", "enrolled"] as const)(
+    "preserves %s replay choices when runtime identity is missing or changes",
+    async (phase) => {
+      const { manager, context, calls } = fixture();
+      const owner = manager();
+      const original = context("cbx_original");
+      await owner.allocate(original);
+      if (phase === "enrolled") {
+        owner.markEnrolled(original.id);
+      }
+      const recorded = structuredClone(openWarmImageStore().entries()[0]!);
+      const changed = {
+        ...original,
+        nodeRuntimeIdentity: { ...NODE_RUNTIME_IDENTITY, nodeBootstrapSha256: "d".repeat(64) },
+      };
+      calls.length = 0;
+      await expect(manager().allocate(changed)).rejects.toThrow("recorded node runtime identity");
+      expect(calls).toEqual([]);
+      expect(openWarmImageStore().entries()[0]).toEqual(recorded);
+      delete recorded.value.allocations[original.id]!.runtimeIdentity;
+      openWarmImageStore().register(recorded.key, recorded.value);
+      const legacyRecorded = structuredClone(openWarmImageStore().entries()[0]!);
+      resetPluginStateStoreForTests();
+      const restarted = manager();
+      await expect(restarted.allocate(original)).rejects.toThrow("recorded node runtime identity");
+      expect(await restarted.capture(original)).toBe(false);
+      expect(calls).toEqual([]);
+      expect(openWarmImageStore().entries()[0]).toEqual(legacyRecorded);
+      await restarted.release(original);
+      expect(openWarmImageStore().entries()).toEqual([]);
+    },
+  );
+
+  it("uses an image without runtime metadata as a base but refreshes its unproven content", async () => {
+    const { manager, context } = fixture();
+    const owner = manager();
+    const original = context("cbx_original");
+    await owner.allocate(original);
+    owner.markEnrolled(original.id);
+    await owner.capture(original);
+    await owner.release(original);
+    const legacy = openWarmImageStore().entries()[0]!;
+    delete legacy.value.image!.runtimeIdentity;
+    openWarmImageStore().register(legacy.key, legacy.value);
+    const next = context("cbx_next");
+    expect(await owner.allocate(next)).toEqual({ kind: "checkpoint", checkpointId: CHECKPOINT_ID });
+    owner.markEnrolled(next.id);
+    expect(await owner.capture(next)).toBe(true);
+    expect(openWarmImageStore().entries()[0]!.value.image?.runtimeIdentity).toEqual(
+      NODE_RUNTIME_IDENTITY,
+    );
+    await owner.release(next);
+    expect(openWarmImageStore().entries()).toHaveLength(1);
+  });
+
   it("does not begin a native capture after project authority closes during scrub", async () => {
     let active = true;
     const { manager, context, calls } = fixture(false, (argv) => {
@@ -121,11 +340,9 @@ describe("Crabbox durable allocation admission", () => {
     const store = openWarmImageStore();
     const entry = store.entries()[0]!;
     const allocations: WarmProfileRecord["allocations"] = { ...entry.value.allocations };
-    for (let index = 1; index < WARM_IMAGE_MAX_ALLOCATIONS; index++) {
+    for (let index = 1; index < 256; index++) {
       allocations[`cbx_pending_${index}`] = {
-        choice: { kind: "cold" },
-        machineClass: "standard",
-        phase: "pending",
+        ...entry.value.allocations.cbx_existing!,
       };
     }
     store.register(entry.key, { ...entry.value, allocations });
@@ -141,6 +358,30 @@ describe("Crabbox durable allocation admission", () => {
     await reopened.allocate(context("cbx_rejected"));
     expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
     expect(reopened.lookupLease("cbx_rejected")?.choice).toEqual({ kind: "cold" });
+  });
+
+  it("captures newly completed setup only from the current image generation", async () => {
+    const { manager, context, calls } = fixture();
+    const owner = manager();
+    const source = context("cbx_source", "project-a");
+    await owner.allocate(source);
+    owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    const next = context("cbx_completed", "project-a");
+    const stale = context("cbx_stale", "project-a");
+    await owner.allocate(next);
+    await owner.allocate(stale);
+    owner.markPrepared(next.id, "a".repeat(40));
+    calls.length = 0;
+    await owner.capture(next);
+    expect(calls.some((argv) => argv[2] === "create")).toBe(false);
+    await owner.capture({ ...next, projectCaptureRequired: true });
+    expect(openWarmImageStore().entries()[0]?.value.image?.checkpointId).toBe(`${CHECKPOINT_ID}_2`);
+    const captures = calls.filter((argv) => argv[2] === "create").length;
+    owner.markPrepared(stale.id, "a".repeat(40));
+    await owner.capture({ ...stale, projectCaptureRequired: true });
+    expect(calls.filter((argv) => argv[2] === "create")).toHaveLength(captures);
+    expect(captures).toBe(1);
   });
 
   it("captures a verified prepared project once and never captures its enrolled session", async () => {

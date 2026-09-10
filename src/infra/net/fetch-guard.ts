@@ -43,15 +43,9 @@ import {
 } from "./undici-runtime.js";
 
 function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
-  if (fromParams !== undefined) {
-    return fromParams;
-  }
   // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
   // (avoids reading Undici's non-public `.options` field)
-  if (globalUndiciStreamTimeoutMs !== undefined) {
-    return globalUndiciStreamTimeoutMs;
-  }
-  return undefined;
+  return fromParams !== undefined ? fromParams : globalUndiciStreamTimeoutMs;
 }
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -90,6 +84,8 @@ export type GuardedFetchOptions = {
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  /** Resolve a synchronous per-hop override so redirects can change proxy or direct routing. */
+  resolveDispatcherPolicy?: (url: URL) => PinnedDispatcherPolicy | undefined;
   retainAuthorizationRedirectHostnameAllowlist?: string[];
   mode?: GuardedFetchMode;
   pinDns?: boolean;
@@ -126,7 +122,6 @@ export class GuardedFetchRedirectError extends Error {
 
 type GuardedFetchInternalOptions = GuardedFetchOptions & {
   managedProxyBypass?: ConfiguredLocalOriginManagedProxyBypass;
-  resolveDispatcherPolicy?: (url: URL) => PinnedDispatcherPolicy | undefined;
   /** Preserve ambient Undici env-proxy routing for each eligible URL while keeping strict checks otherwise. */
   useEnvProxyForEligibleUrls?: boolean;
 };
@@ -181,7 +176,7 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
   return GUARDED_FETCH_MODE.STRICT;
 }
 
-function isManagedProxyActive(): boolean {
+export function isManagedProxyActive(): boolean {
   return process.env["OPENCLAW_PROXY_ACTIVE"] === "1";
 }
 
@@ -227,13 +222,11 @@ function createPolicyDispatcherWithoutPinnedDns(
   }
 
   const proxyUrl = dispatcherPolicy.proxyUrl.trim();
-  if (dispatcherPolicy.proxyTls) {
-    return createHttp1ProxyAgent(
-      { uri: proxyUrl, requestTls: { ...dispatcherPolicy.proxyTls } },
-      timeoutMs,
-    );
-  }
-  return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
+  const requestTls = dispatcherPolicy.proxyTls;
+  return createHttp1ProxyAgent(
+    { uri: proxyUrl, ...(requestTls ? { requestTls: { ...requestTls } } : {}) },
+    timeoutMs,
+  );
 }
 
 async function assertExplicitProxyAllowed(
@@ -241,6 +234,7 @@ async function assertExplicitProxyAllowed(
   lookupFn: LookupFn | undefined,
   policy: SsrFPolicy | undefined,
   signal: AbortSignal | undefined,
+  trustedProxy: boolean,
 ): Promise<void> {
   // Explicit proxies are operator-configured, but the proxy host still needs
   // basic URL and private-network validation before target validation proceeds.
@@ -253,7 +247,10 @@ async function assertExplicitProxyAllowed(
   } catch {
     throw new Error("Invalid explicit proxy URL");
   }
-  if (!["http:", "https:"].includes(parsedProxyUrl.protocol)) {
+  // SOCKS resolves target DNS remotely; only the existing trusted-proxy mode
+  // can delegate that check. Strict callers must retain local DNS pinning.
+  const trustedSocks = trustedProxy && ["socks:", "socks5:"].includes(parsedProxyUrl.protocol);
+  if (!["http:", "https:"].includes(parsedProxyUrl.protocol) && !trustedSocks) {
     throw new Error("Explicit proxy URL must use http or https");
   }
   const proxyPolicy: SsrFPolicy | undefined =
@@ -295,42 +292,16 @@ export function retainSafeHeadersForCrossOriginRedirectHeaders(
   return retainSafeRedirectHeaders(headers);
 }
 
-async function captureGuardedFetchExchange(params: {
-  url: string;
-  method: string;
-  requestHeaders?: Headers | Record<string, string> | undefined;
-  requestBody?: BodyInit | Buffer | string | null;
-  response: Response;
-  transport?: "http" | "sse";
-  capture: GuardedFetchOptions["capture"];
-  auditContext?: string;
-  capturedByGlobalFetchPatch?: boolean;
-}): Promise<void> {
+async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl: FetchLike) {
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
-    return;
+    return { fetchImpl };
   }
-  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+  const { prepareHttpCapture, resolveDebugProxyFetchTransport } =
     await import("../../proxy-capture/runtime.js");
-  if (params.capturedByGlobalFetchPatch && isDebugProxyGlobalFetchPatchInstalled()) {
-    return;
-  }
-  captureHttpExchange({
-    url: params.url,
-    method: params.method,
-    requestHeaders: params.requestHeaders,
-    requestBody: params.requestBody,
-    response: params.response,
-    transport: params.transport,
-    flowId: params.capture?.flowId,
-    meta: {
-      captureOrigin: "guarded-fetch",
-      ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-      ...params.capture?.meta,
-      ...(params.capture?.sensitiveRequestHeaderNames
-        ? { sensitiveRequestHeaderNames: params.capture.sensitiveRequestHeaderNames }
-        : {}),
-    },
-  });
+  return {
+    fetchImpl: resolveDebugProxyFetchTransport(fetchImpl),
+    capture: prepareHttpCapture(),
+  };
 }
 
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
@@ -465,11 +436,20 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
 async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
-  const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
+  const globalFetch = globalThis.fetch;
+  const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalFetch;
   if (!defaultFetch) {
     throw new Error("fetch is not available");
   }
   const isUsingMockedFetch = isMockedFetch(defaultFetch);
+  const supportsDispatcherInit =
+    (params.fetchImpl !== undefined &&
+      !isAmbientGlobalFetch({ fetchImpl: params.fetchImpl, globalFetch })) ||
+    isUsingMockedFetch;
+  // Admission precedes DNS and transport awaits. Capture must not resolve a new
+  // session after a delayed request outlives its original capture generation.
+  // Bypass only our exact global wrapper so its owner cannot also record.
+  const captureAdmission = await prepareGuardedFetchCapture(params, defaultFetch);
 
   const maxRedirects =
     typeof params.maxRedirects === "number" && Number.isFinite(params.maxRedirects)
@@ -547,7 +527,13 @@ async function fetchWithSsrFGuardInternal(
         dispatcherPolicy,
         usesTrustedExplicitProxyMode ? false : params.pinDns,
       );
-      await assertExplicitProxyAllowed(dispatcherPolicy, params.lookupFn, params.policy, signal);
+      await assertExplicitProxyAllowed(
+        dispatcherPolicy,
+        params.lookupFn,
+        params.policy,
+        signal,
+        usesTrustedExplicitProxyMode,
+      );
       const isStrictManagedProxyActive =
         mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive();
       const shouldCheckManagedProxyBypass =
@@ -660,13 +646,6 @@ async function fetchWithSsrFGuardInternal(
           : requestController.signal,
       };
 
-      const supportsDispatcherInit =
-        (params.fetchImpl !== undefined &&
-          !isAmbientGlobalFetch({
-            fetchImpl: params.fetchImpl,
-            globalFetch: globalThis.fetch,
-          })) ||
-        isUsingMockedFetch;
       // Explicit caller stubs and test-installed fetch mocks should win.
       // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,
       // because the default global fetch path will not honor per-request
@@ -677,28 +656,33 @@ async function fetchWithSsrFGuardInternal(
         void Promise.resolve(beforeRequestResult).catch(() => undefined);
         throw new TypeError("beforeRequest must be synchronous.");
       }
-      response = shouldUseRuntimeFetch
-        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-        : await defaultFetch(parsedUrl.toString(), init);
-      const capturedByGlobalFetchPatch =
-        !shouldUseRuntimeFetch &&
-        isAmbientGlobalFetch({
-          fetchImpl: defaultFetch,
-          globalFetch: globalThis.fetch,
-        });
-
-      await captureGuardedFetchExchange({
+      const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
         requestBody:
           (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
-        response,
-        transport: "http",
-        capture: params.capture,
-        auditContext: params.auditContext,
-        capturedByGlobalFetchPatch,
-      });
+        transport: "http" as const,
+        flowId: params.capture === false ? undefined : params.capture?.flowId,
+        meta: {
+          captureOrigin: "guarded-fetch",
+          ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+          ...(params.capture === false ? {} : params.capture?.meta),
+          ...(params.capture && params.capture.sensitiveRequestHeaderNames
+            ? { sensitiveRequestHeaderNames: params.capture.sensitiveRequestHeaderNames }
+            : {}),
+        },
+      };
+      // Only transport rejection belongs here, not policy or capture failures.
+      try {
+        response = shouldUseRuntimeFetch
+          ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+          : await captureAdmission.fetchImpl(parsedUrl.toString(), init);
+      } catch (error) {
+        captureAdmission.capture?.({ ...captureParams, error });
+        throw error;
+      }
+      captureAdmission.capture?.({ ...captureParams, response });
 
       if (isRedirectStatus(response.status)) {
         redirectCount += 1;

@@ -7,9 +7,10 @@ read_when:
 title: "Exa search"
 ---
 
-[Exa AI](https://exa.ai/) is a `web_search` provider with neural, keyword, and
-hybrid search modes plus built-in content extraction (highlights, text,
-summaries).
+[Exa AI](https://exa.ai/) is a `web_search` provider. It offers the `auto`,
+`neural`, `fast`, `deep`, `deep-reasoning`, and `instant` search modes described
+in [Search modes](#search-modes). It also has built-in content extraction
+(highlights, text, summaries).
 
 ## Install plugin
 

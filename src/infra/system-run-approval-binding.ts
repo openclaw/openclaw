@@ -1,19 +1,22 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
-import { normalizeExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 // Binds system-run approval requests to stable command identities.
 import type {
   ExecCommandSegment,
   SystemRunApprovalBinding,
   SystemRunApprovalFileOperand,
-  SystemRunApprovalPlan,
 } from "./exec-approvals.js";
 import { planShellAuthorization } from "./exec-authorization-plan.js";
-import { resolveCommandResolutionFromArgv } from "./exec-command-resolution.js";
+import {
+  type ExecutableResolution,
+  resolveCommandResolutionFromArgv,
+} from "./exec-command-resolution.js";
+import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { normalizeHostOverrideEnvVarKey } from "./host-env-security.js";
+import { resolveEnvironmentValue } from "./process-env.js";
 import { extractShellCommandFromArgv } from "./system-run-command.js";
+import { snapshotFileOperandAtPath } from "./system-run-file-snapshot.js";
 import {
   isSystemRunCommandTextBoundInterpreterInvocation,
   resolveSystemRunMutableFileOperandTarget,
@@ -31,68 +34,6 @@ export const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 
 type NormalizedSystemRunEnvEntry = [key: string, value: string];
-
-function normalizeSystemRunApprovalFileOperand(
-  value: unknown,
-): SystemRunApprovalFileOperand | null | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const candidate = value as Record<string, unknown>;
-  const argvIndex =
-    typeof candidate.argvIndex === "number" &&
-    Number.isInteger(candidate.argvIndex) &&
-    candidate.argvIndex >= 0
-      ? candidate.argvIndex
-      : null;
-  const filePath = normalizeNonEmptyString(candidate.path);
-  const sha256 = normalizeNonEmptyString(candidate.sha256);
-  if (argvIndex === null || !filePath || !sha256) {
-    return null;
-  }
-  return {
-    argvIndex,
-    path: filePath,
-    sha256,
-  };
-}
-
-export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprovalPlan | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const candidate = value as Record<string, unknown>;
-  const argv = normalizeStringArray(candidate.argv);
-  if (argv.length === 0) {
-    return null;
-  }
-  const mutableFileOperand = normalizeSystemRunApprovalFileOperand(candidate.mutableFileOperand);
-  if (candidate.mutableFileOperand !== undefined && mutableFileOperand === null) {
-    return null;
-  }
-  const policySnapshot = normalizeExecApprovalPolicySnapshot(candidate.policySnapshot);
-  if (candidate.policySnapshot !== undefined && policySnapshot === null) {
-    return null;
-  }
-  const commandText =
-    normalizeNonEmptyString(candidate.commandText) ?? normalizeNonEmptyString(candidate.rawCommand);
-  if (!commandText) {
-    return null;
-  }
-  return {
-    argv,
-    cwd: normalizeNonEmptyString(candidate.cwd),
-    commandText,
-    commandPreview: normalizeNonEmptyString(candidate.commandPreview),
-    agentId: normalizeNonEmptyString(candidate.agentId),
-    sessionKey: normalizeNonEmptyString(candidate.sessionKey),
-    ...(policySnapshot ? { policySnapshot } : {}),
-    mutableFileOperand: mutableFileOperand ?? undefined,
-  };
-}
 
 function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry[] {
   if (!env || typeof env !== "object" || Array.isArray(env)) {
@@ -276,45 +217,6 @@ export function toSystemRunApprovalMismatchError(params: {
   };
 }
 
-function hashFileContentsSync(filePath: string): string {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
-}
-
-function snapshotFileOperandAtPath(params: {
-  argvIndex: number;
-  filePath: string;
-}): { ok: true; snapshot: SystemRunApprovalFileOperand } | { ok: false; message: string } {
-  let realPath: string;
-  let stat: fs.Stats;
-  try {
-    realPath = fs.realpathSync(params.filePath);
-    stat = fs.statSync(realPath);
-  } catch {
-    return {
-      ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires an existing script operand",
-    };
-  }
-  if (!stat.isFile()) {
-    return {
-      ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires a file script operand",
-    };
-  }
-  let sha256: string;
-  try {
-    sha256 = hashFileContentsSync(realPath);
-  } catch {
-    // An unreadable script has no approved byte identity. Treating it as
-    // unbound would let later readable bytes execute under this approval.
-    return {
-      ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires a readable script operand",
-    };
-  }
-  return { ok: true, snapshot: { argvIndex: params.argvIndex, path: realPath, sha256 } };
-}
-
 /** Captures file identity for a mutable script operand that approval is bound to. */
 export function resolveMutableFileOperandSnapshotSync(params: {
   argv: string[];
@@ -341,39 +243,18 @@ export function resolveMutableFileOperandSnapshotSync(params: {
   });
 }
 
-export function revalidateApprovedMutableFileOperand(params: {
-  snapshot: SystemRunApprovalFileOperand;
-  argv: string[];
-  cwd: string | undefined;
-}): boolean {
-  const operand = params.argv[params.snapshot.argvIndex]?.trim();
-  if (!operand) {
-    return false;
-  }
-  let realPath: string;
-  try {
-    realPath = fs.realpathSync(path.resolve(params.cwd ?? process.cwd(), operand));
-  } catch {
-    return false;
-  }
-  if (realPath !== params.snapshot.path) {
-    return false;
-  }
-  try {
-    return hashFileContentsSync(realPath) === params.snapshot.sha256;
-  } catch {
-    return false;
-  }
-}
-
 export type SystemRunMutableFileBinding = {
   commands: string[][];
-  operands: Array<{
-    argv: string[];
-    snapshot: SystemRunApprovalFileOperand;
-    executable?: true;
-    pathSearch?: { path?: string; pathExt?: string };
-  }>;
+  operands: Array<
+    { argv: string[]; pathSearch?: { path?: string; pathExt?: string } } & (
+      | { kind: "mutable"; snapshot: SystemRunApprovalFileOperand; executable?: true }
+      | {
+          kind: "identity";
+          snapshot: { argvIndex: number; path: string; sha256?: never };
+          executable: true;
+        }
+    )
+  >;
 };
 
 type SystemRunMutableFileBindingCommand =
@@ -418,7 +299,7 @@ function prepareMutableFileBindingsForArgv(params: {
       return prepared;
     }
     if (prepared.snapshot) {
-      operands.push({ argv: [...argv], snapshot: prepared.snapshot });
+      operands.push({ kind: "mutable", argv: [...argv], snapshot: prepared.snapshot });
     }
   }
   return {
@@ -438,7 +319,6 @@ function prepareMutableFileBindingsForSegments(params: {
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
     };
   }
-  const pathOperands: SystemRunMutableFileBinding["operands"] = [];
   const ordinaryCommands: string[][] = [];
   for (const [index, segment] of params.segments.entries()) {
     const effectiveArgv = unwrapSystemRunMutableFileOperandArgv(segment.argv);
@@ -481,29 +361,6 @@ function prepareMutableFileBindingsForSegments(params: {
         message: "SYSTEM_RUN_DENIED: approval requires a resolved executable",
       };
     }
-    if (
-      executable &&
-      resolvedExecutable &&
-      pathLooksMutableForShellPayloadSync(resolvedExecutable)
-    ) {
-      const snapshot = snapshotFileOperandAtPath({ argvIndex: 0, filePath: resolvedExecutable });
-      if (!snapshot.ok) {
-        return snapshot;
-      }
-      pathOperands.push({
-        argv: [...segment.argv],
-        snapshot: snapshot.snapshot,
-        executable: true,
-        ...(!looksLikeExplicitPathToken(executable)
-          ? {
-              pathSearch: {
-                path: params.env?.PATH ?? process.env.PATH,
-                pathExt: params.env?.PATHEXT ?? process.env.PATHEXT,
-              },
-            }
-          : {}),
-      });
-    }
     ordinaryCommands.push(segment.argv);
   }
   const ordinary = prepareMutableFileBindingsForArgv({
@@ -513,24 +370,107 @@ function prepareMutableFileBindingsForSegments(params: {
   if (!ordinary.ok) {
     return ordinary;
   }
+  const executables = prepareSystemRunExecutableIdentityBinding({ ...params, shellCommand: true });
+  if (!executables.ok) {
+    return executables;
+  }
   return {
     ok: true,
     binding: {
       commands: ordinary.binding.commands,
-      operands: [
-        ...ordinary.binding.operands,
-        ...pathOperands.filter(
-          (candidate) =>
-            !ordinary.binding.operands.some(
-              (operand) => operand.snapshot.path === candidate.snapshot.path,
-            ),
-        ),
-      ],
+      operands: [...ordinary.binding.operands, ...executables.binding.operands],
     },
   };
 }
 
-/** Captures every mutable file operand whose bytes an approval would release. */
+/** In-memory executable identities; wire approval plans retain their script snapshot shape. */
+export function prepareSystemRunExecutableIdentityBinding(params: {
+  segments: ExecCommandSegment[];
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  shellCommand: boolean;
+}): SystemRunMutableFileBindingResult {
+  const operands: SystemRunMutableFileBinding["operands"] = [];
+  for (const segment of params.segments) {
+    const executions: Array<{ argv: string[]; execution: ExecutableResolution | undefined }> = [];
+    const plan = resolveExecWrapperTrustPlan(segment.sourceArgv ?? segment.argv);
+    let shellCommandPosition = params.shellCommand;
+    for (const { wrapper, sourceArgv } of plan.wrapperInvocations) {
+      // An external wrapper dispatches these names through PATH, not as shell builtins.
+      if (
+        shellCommandPosition &&
+        (wrapper === "builtin" || wrapper === "command" || wrapper === "exec")
+      ) {
+        if (wrapper === "exec") {
+          shellCommandPosition = false;
+        }
+        continue;
+      }
+      shellCommandPosition = false;
+      const argv = sourceArgv.slice(0, 1);
+      const execution = resolveCommandResolutionFromArgv(
+        argv,
+        params.cwd,
+        params.env,
+        process.platform,
+        { useCache: false },
+      )?.execution;
+      if (!execution?.resolvedRealPath && !execution?.resolvedPath) {
+        return { ok: false, message: "SYSTEM_RUN_DENIED: approval requires a resolved executable" };
+      }
+      executions.push({ argv, execution });
+    }
+    executions.push({ argv: segment.argv, execution: segment.resolution?.execution });
+    for (const { argv, execution } of executions) {
+      const resolvedExecutable = execution?.resolvedRealPath ?? execution?.resolvedPath;
+      if (!execution || !resolvedExecutable) {
+        continue;
+      }
+      let realPath: string;
+      try {
+        realPath = fs.realpathSync(resolvedExecutable);
+      } catch {
+        return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
+      }
+      const pathSearch = !looksLikeExplicitPathToken(execution.rawExecutable)
+        ? {
+            path:
+              resolveEnvironmentValue(params.env, "PATH") ??
+              resolveEnvironmentValue(process.env, "PATH") ??
+              "",
+            pathExt:
+              resolveEnvironmentValue(params.env, "PATHEXT") ??
+              resolveEnvironmentValue(process.env, "PATHEXT") ??
+              ".EXE;.CMD;.BAT;.COM",
+          }
+        : undefined;
+      if (pathLooksMutableForShellPayloadSync(resolvedExecutable)) {
+        const snapshot = snapshotFileOperandAtPath({ argvIndex: 0, filePath: realPath });
+        if (!snapshot.ok) {
+          return snapshot;
+        }
+        operands.push({
+          kind: "mutable",
+          argv: [...argv],
+          snapshot: snapshot.snapshot,
+          executable: true,
+          pathSearch,
+        });
+      } else {
+        operands.push({
+          kind: "identity",
+          argv: [...argv],
+          snapshot: { argvIndex: 0, path: realPath },
+          executable: true,
+          pathSearch,
+        });
+      }
+    }
+  }
+  return { ok: true, binding: { commands: [], operands } };
+}
+
+/** Captures executable identities and mutable file bytes an approval would release. */
 export async function prepareSystemRunMutableFileBinding(params: {
   command: SystemRunMutableFileBindingCommand;
   cwd?: string;
@@ -551,7 +491,7 @@ export async function prepareSystemRunMutableFileBinding(params: {
       binding: {
         commands: [[...params.command.argv]],
         operands: prepared.snapshot
-          ? [{ argv: [...params.command.argv], snapshot: prepared.snapshot }]
+          ? [{ kind: "mutable", argv: [...params.command.argv], snapshot: prepared.snapshot }]
           : [],
       },
     };
@@ -621,7 +561,7 @@ export async function prepareSystemRunMutableFileBinding(params: {
   return prepareMutableFileBindingsForSegments({ segments, cwd: params.cwd, env: params.env });
 }
 
-/** Revalidates the exact approved bytes after all awaited policy and approval work. */
+/** Revalidates approved executable identities and bytes after awaited approval work. */
 export async function revalidateSystemRunMutableFileBinding(params: {
   binding: SystemRunMutableFileBinding;
   cwd?: string;
@@ -663,15 +603,25 @@ export async function revalidateSystemRunMutableFileBinding(params: {
             : {}),
         }
       : undefined;
-    const resolution = resolveCommandResolutionFromArgv(operand.argv, params.cwd, env);
+    const resolution = resolveCommandResolutionFromArgv(
+      operand.argv,
+      params.cwd,
+      env,
+      process.platform,
+      {
+        useCache: false,
+      },
+    );
     const resolvedPath =
       resolution?.execution.resolvedRealPath ?? resolution?.execution.resolvedPath;
     if (!resolvedPath || resolvedPath !== operand.snapshot.path) {
       return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
     }
-    const snapshot = snapshotFileOperandAtPath({ argvIndex: 0, filePath: resolvedPath });
-    if (!snapshot.ok || snapshot.snapshot.sha256 !== operand.snapshot.sha256) {
-      return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
+    if (operand.kind === "mutable") {
+      const snapshot = snapshotFileOperandAtPath({ argvIndex: 0, filePath: resolvedPath });
+      if (!snapshot.ok || snapshot.snapshot.sha256 !== operand.snapshot.sha256) {
+        return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
+      }
     }
   }
   return { ok: true };
@@ -699,7 +649,7 @@ export async function prepareSystemRunMutableFileApproval(params: {
   const binding = prepared.binding;
   return {
     ok: true,
-    requiresOneShot: binding.operands.length > 0,
+    requiresOneShot: binding.operands.some((operand) => operand.kind === "mutable"),
     revalidate: async () =>
       await revalidateSystemRunMutableFileBinding({ binding, cwd: params.cwd }),
   };

@@ -1,6 +1,7 @@
 {
   "id": "minimax",
-  "icon": "https://cdn.simpleicons.org/minimax",
+  "categories": ["models", "voice", "media"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

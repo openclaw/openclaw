@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -98,7 +99,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       }
       try {
         const result = await service.remove({
-          id: params.id,
+          id: normalizeOptionalString(params.id) ?? params.id,
           reason: "manual-delete",
           allowSnapshotLoss: params.force,
         });
@@ -126,7 +127,8 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      respond(true, await service.restore({ id: params.id }), undefined);
+      const id = normalizeOptionalString(params.id) ?? params.id;
+      respond(true, await service.restore({ id }), undefined);
     },
     "worktrees.branches": async (opts) => {
       const { params, respond } = opts;

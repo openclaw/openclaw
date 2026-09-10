@@ -165,7 +165,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
     | **low** / **medium** / **high** / **xhigh** / **adaptive** / **max** | `high`                       |
 
     <Warning>
-    Avoid combining Medium 3.5 reasoning mode with `temperature: 0`; the Mistral HTTP API has been reported to reject `reasoning_effort="high"` plus `temperature: 0` with a 400 response. Leave temperature unset, or turn thinking off/minimal so OpenClaw sends `reasoning_effort: "none"` before you set a low temperature.
+    Avoid combining Medium 3.5 reasoning mode with `temperature: 0`. The Mistral HTTP API has been reported to reject `reasoning_effort="high"` plus `temperature: 0` with a 400 response. Leave temperature unset, or turn thinking off/minimal so OpenClaw sends `reasoning_effort: "none"` before you set a low temperature.
     </Warning>
 
     Example model-scoped config for Medium 3.5 reasoning:
@@ -186,7 +186,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
     ```
 
     <Note>
-    Other Mistral catalog models do not use this parameter. Mistral's native Magistral models are deprecated; use adjustable reasoning on Mistral Small 4 or Mistral Medium 3.5 for current API models.
+    Other Mistral catalog models do not use this parameter. Mistral's native Magistral models are deprecated. Use adjustable reasoning on Mistral Small 4 or Mistral Medium 3.5 for current API models.
     </Note>
 
   </Accordion>

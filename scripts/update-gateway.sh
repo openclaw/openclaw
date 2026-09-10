@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Updates a self-hosted OpenClaw gateway that runs from this source checkout.
 #
 # Reference workflow for team-operated servers (see docs/install/updating.md).
@@ -138,7 +142,8 @@ for build_path in dist dist-runtime .artifacts; do
 done
 # The build owns cleanup under its checkout-local artifact lock. Deleting here
 # would race declaration writers and readers before that ownership is acquired.
-run_pnpm build
+# Match CLI updates: build runtime artifacts unless declarations were explicitly requested.
+OPENCLAW_UPDATE_IN_PROGRESS=1 run_pnpm build
 
 restart_cmd="${OPENCLAW_UPDATE_RESTART_CMD-openclaw gateway restart}"
 if [ -n "$restart_cmd" ]; then

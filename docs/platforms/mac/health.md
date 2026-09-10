@@ -19,10 +19,10 @@ refreshes health on demand.
 
 ## Settings
 
-- In **Connection** settings, **Local Gateway** shows a health row: status
+- In the native **Connection… → Connection** tab, **Local Gateway** shows a health row: status
   dot, channel summary, and an optional failure detail line, with **Retry now** and
   **Open logs** buttons.
-- **Channels tab** surfaces per-channel status and controls (login QR,
+- **Dashboard → Settings → Channels** surfaces per-channel status and controls (login QR,
   logout, probe, last disconnect/error).
 
 The health row uses these states:
@@ -35,21 +35,27 @@ The health row uses these states:
 
 The summary can read "Telegram ready", "Telegram running", or
 "linked · auth 12m". The app honors the Gateway's startup and reconnect grace
-windows; transient transport flags alone do not mark a channel degraded.
+windows. Transient transport flags alone do not mark a channel degraded.
 Reported failures such as a stale socket or unavailable inbound processing
 still take precedence over a ready-looking connection.
 
-A missing HTTP status does not by itself mean a timeout; the app preserves
+A missing HTTP status does not by itself mean a timeout. The app preserves
 the Gateway's reported probe error.
 
 ## How health refresh works
 
 The app calls the Gateway's `health` RPC over its existing WebSocket
 connection (not a CLI shell-out) every ~60s and on demand. This reads the
-Gateway's health snapshot; it does not request an active channel probe or
+Gateway's health snapshot. It does not request an active channel probe or
 send messages. The app caches the last
 good snapshot and the last error separately so the UI loads instantly and
 does not flicker while offline.
+
+The native health row follows the Primary Gateway.
+Switching Primary immediately clears the previous Gateway's cached status.
+Delayed replies from that Gateway cannot replace the new results. Reconnecting
+to the same Gateway retains its last good health snapshot while a fresh check
+runs. Connection errors stay with the Gateway that reported them.
 
 ## When in doubt
 

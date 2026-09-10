@@ -9,6 +9,7 @@ import type {
 } from "./task-flow-registry.audit.types.js";
 import { getTaskFlowRegistryRestoreFailure, listTaskFlowRecords } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { summarizeAuditFindings } from "./task-registry.audit.shared.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 export type {
@@ -257,15 +258,5 @@ export function listTaskFlowAuditFindings(
 export function summarizeTaskFlowAuditFindings(
   findings: Iterable<TaskFlowAuditFinding>,
 ): TaskFlowAuditSummary {
-  const summary = createEmptyTaskFlowAuditSummary();
-  for (const finding of findings) {
-    summary.total += 1;
-    summary.byCode[finding.code] += 1;
-    if (finding.severity === "error") {
-      summary.errors += 1;
-    } else {
-      summary.warnings += 1;
-    }
-  }
-  return summary;
+  return summarizeAuditFindings(findings, createEmptyTaskFlowAuditSummary());
 }

@@ -5,6 +5,7 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import {
   decodeNodePtyResumeParams,
   resolveNodeHostExecutable,
@@ -52,6 +53,7 @@ type SessionCatalogFamilyMessages = {
 
 type SessionCatalogTerminalOptions = {
   executable: string;
+  uploadPathStyle?: TerminalUploadPathStyle;
   args: (threadId: string) => string[];
   title: (threadId: string) => string;
   requireLocalSession: (threadId: string) => Promise<SessionCatalogSession>;
@@ -355,6 +357,10 @@ async function listHosts(
       query.onHost?.(host);
     }
   }
+  // Use the captured host selection after local discovery and progress callbacks.
+  if (requested && !Array.from(requested).some((hostId) => hostId.startsWith("node:"))) {
+    return hosts;
+  }
   let nodes: CatalogNode[];
   try {
     nodes = (await (query.listNodes?.() ?? options.runtime.nodes.list())).nodes;
@@ -478,6 +484,9 @@ async function openTerminal(
     kind: "node" as const,
     nodeId,
     command: options.node.terminalCommand,
+    ...(options.terminal.uploadPathStyle
+      ? { uploadPathStyle: options.terminal.uploadPathStyle }
+      : {}),
     paramsJSON: JSON.stringify({ threadId: request.threadId }),
     ...(session.cwd ? { cwd: session.cwd } : {}),
     title,

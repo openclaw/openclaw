@@ -2,9 +2,81 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { isPathInside } from "../infra/path-guards.js";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
+import type { NodeWorkerWorkspaceRetainInput } from "../worker/node-workspace-retain-protocol.js";
+import type { NodeWorkerPreparedWorkspaceRow } from "./node-worker-prepared-workspace-store.js";
 
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+
+export function assertNodePreparedWorkspacePaths(
+  root: string,
+  request: {
+    gatewayNamespace: string;
+    cacheKey: string;
+    workspaceDir: string;
+    homeDir: string;
+  },
+): void {
+  const ownerRoot = path.join(root, request.gatewayNamespace, request.cacheKey);
+  if (
+    !GATEWAY_NAMESPACE_PATTERN.test(request.gatewayNamespace) ||
+    !/^[a-f0-9]{64}$/u.test(request.cacheKey)
+  ) {
+    throw new Error("INVALID_REQUEST: invalid prepared workspace identity");
+  }
+  for (const [name, target] of [
+    ["workspace", request.workspaceDir],
+    ["home", request.homeDir],
+  ] as const) {
+    const expected = path.join(ownerRoot, name);
+    const stats = fs.lstatSync(target);
+    if (
+      target !== expected ||
+      !stats.isDirectory() ||
+      stats.isSymbolicLink() ||
+      fs.realpathSync.native(target) !== expected
+    ) {
+      throw new Error("INVALID_REQUEST: prepared workspace path escaped its owner root");
+    }
+  }
+}
+
+export function resolveNodePreparedWorkspaceIdentity(
+  root: string,
+  row: NodeWorkerPreparedWorkspaceRow,
+  request: NodeWorkerManagedWorkspaceRequest,
+) {
+  if (
+    row.state !== "bound" ||
+    row.workspace_dir !== request.workspaceDir ||
+    row.environment_id !== request.environmentId ||
+    row.session_id !== request.sessionId ||
+    row.session_key !== request.sessionKey ||
+    row.owner_epoch !== request.ownerEpoch ||
+    row.bound_at_ms === null ||
+    row.retired_at_ms !== null
+  ) {
+    throw new Error("INVALID_REQUEST: node placement does not own the prepared workspace");
+  }
+  assertNodePreparedWorkspacePaths(root, {
+    gatewayNamespace: row.gateway_namespace,
+    cacheKey: row.cache_key,
+    workspaceDir: row.workspace_dir,
+    homeDir: row.home_dir,
+  });
+  return {
+    workspaceDir: row.workspace_dir,
+    homeDir: row.home_dir,
+    gatewayNamespace: row.gateway_namespace,
+    generationKey: nodeWorkerWorkspaceLaunchGenerationKey({
+      gatewayNamespace: row.gateway_namespace,
+      environmentId: row.environment_id,
+      sessionId: request.sessionId,
+      ownerEpoch: request.ownerEpoch,
+    }),
+  };
+}
 
 export type NodeWorkerManagedWorkspaceRequest = {
   workspaceDir: string;
@@ -12,6 +84,22 @@ export type NodeWorkerManagedWorkspaceRequest = {
   sessionId: string;
   ownerEpoch: number;
   sessionKey: string;
+};
+
+export type NodeWorkerWorkspaceLaunchReference = {
+  gatewayNamespace: string;
+  environmentId: string;
+  sessionId: string;
+  ownerEpoch: number;
+};
+
+export type NodeWorkerWorkspaceSession = {
+  gatewayNamespace: string;
+  environmentHash: string;
+  sessionHash: string;
+  workspacesRoot: string;
+  environmentRoot: string;
+  sessionRoot: string;
 };
 
 export function hashNodeWorkerWorkspaceComponent(value: string, length: number): string {
@@ -32,12 +120,9 @@ export function nodeWorkerWorkspaceGenerationKey(params: {
   ].join("/");
 }
 
-export function nodeWorkerWorkspaceLaunchGenerationKey(reference: {
-  gatewayNamespace: string;
-  environmentId: string;
-  sessionId: string;
-  ownerEpoch: number;
-}): string {
+export function nodeWorkerWorkspaceLaunchGenerationKey(
+  reference: NodeWorkerWorkspaceLaunchReference,
+): string {
   return nodeWorkerWorkspaceGenerationKey({
     gatewayNamespace: reference.gatewayNamespace,
     environmentHash: hashNodeWorkerWorkspaceComponent(reference.environmentId, 16),
@@ -133,5 +218,131 @@ export function resolveNodeManagedWorkspaceIdentity(
       sessionHash,
       generation: request.ownerEpoch,
     }),
+  };
+}
+
+export function ensureContainedDirectory(parent: string, name: string): string {
+  const candidate = path.join(parent, name);
+  fs.mkdirSync(candidate, { recursive: true });
+  const stats = fs.lstatSync(candidate);
+  const resolved = fs.realpathSync.native(candidate);
+  if (stats.isSymbolicLink() || !stats.isDirectory() || !isPathInside(parent, resolved)) {
+    throw new Error("INVALID_REQUEST: node worker workspace path escaped its owner root");
+  }
+  return resolved;
+}
+
+function resolveArgumentPath(workspaceDir: string, arg: string): string | undefined {
+  if (path.isAbsolute(arg)) {
+    return arg;
+  }
+  if (arg.startsWith(".") || arg.includes("/") || (path.sep === "\\" && arg.includes("\\"))) {
+    return path.resolve(workspaceDir, arg);
+  }
+  return undefined;
+}
+
+export function assertWorkspaceArgv(workspaceDir: string, argv: readonly string[]): void {
+  // This private transport owns cwd and direct path operands; it is not the user-facing
+  // system.run policy domain, so absolute/relative escapes must never cross its workspace.
+  for (const [index, arg] of argv.entries()) {
+    // Canonical workspace helpers travel as the source operand to `node -e`.
+    // Treating JavaScript slash characters as host paths rejects the shipped scripts.
+    if (index > 0 && argv[index - 1] === "-e" && path.basename(argv[0] ?? "") === "node") {
+      continue;
+    }
+    const candidate = resolveArgumentPath(workspaceDir, arg);
+    if (!candidate) {
+      continue;
+    }
+    let resolved = candidate;
+    try {
+      resolved = fs.realpathSync.native(candidate);
+    } catch (error) {
+      if (extractErrorCode(error) !== "ENOENT") {
+        throw error;
+      }
+    }
+    if (resolved !== workspaceDir && !isPathInside(workspaceDir, resolved)) {
+      throw new Error("INVALID_REQUEST: workspace command argv resolves outside its workspace");
+    }
+  }
+}
+
+export async function removeNodeWorkerWorkspaceEntry(
+  root: string,
+  target: string,
+  kind: "directory" | "file",
+  canDelete: () => boolean = () => true,
+): Promise<boolean> {
+  try {
+    const [stats, parent, resolved] = await Promise.all([
+      fs.promises.lstat(target),
+      fs.promises.realpath(path.dirname(target)),
+      fs.promises.realpath(target),
+    ]);
+    if (
+      stats.isSymbolicLink() ||
+      !(kind === "directory" ? stats.isDirectory() : stats.isFile()) ||
+      path.dirname(resolved) !== parent ||
+      !isPathInside(root, resolved)
+    ) {
+      return false;
+    }
+    if (!canDelete()) {
+      return false;
+    }
+    await fs.promises.rm(target, { recursive: kind === "directory", force: true });
+    return true;
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export type NodeWorkerWorkspaceRetainSnapshot = {
+  controllerId: string;
+  sequence: number;
+  signature: string;
+  retainedGenerations: Set<string>;
+  manifestsBySession: Map<string, Set<string> | null>;
+};
+
+export function buildNodeWorkerWorkspaceRetainSnapshot(
+  input: NodeWorkerWorkspaceRetainInput,
+): NodeWorkerWorkspaceRetainSnapshot {
+  const retainedGenerations = new Set<string>();
+  const manifestsBySession = new Map<string, Set<string> | null>();
+  for (const entry of input.retain) {
+    const environmentHash = hashNodeWorkerWorkspaceComponent(entry.environmentId, 16);
+    const sessionHash = hashNodeWorkerWorkspaceComponent(entry.sessionId, 32);
+    retainedGenerations.add(
+      nodeWorkerWorkspaceGenerationKey({
+        gatewayNamespace: input.gatewayNamespace,
+        environmentHash,
+        sessionHash,
+        generation: entry.generation,
+      }),
+    );
+    const sessionKey = nodeWorkerWorkspaceSessionKey(environmentHash, sessionHash);
+    const current = manifestsBySession.get(sessionKey);
+    if (current === null || entry.manifestRefs === null) {
+      manifestsBySession.set(sessionKey, null);
+      continue;
+    }
+    const refs = current ?? new Set<string>();
+    for (const manifestRef of entry.manifestRefs) {
+      refs.add(manifestRef);
+    }
+    manifestsBySession.set(sessionKey, refs);
+  }
+  return {
+    controllerId: input.controllerId,
+    sequence: input.sequence,
+    signature: JSON.stringify(input.retain),
+    retainedGenerations,
+    manifestsBySession,
   };
 }

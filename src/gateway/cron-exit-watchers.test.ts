@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import { resolveExitWatchShell } from "./cron-exit-watch-shell.js";
 import { createCronExitWatchers, type CronExitResult } from "./cron-exit-watchers.js";
@@ -148,10 +149,7 @@ describe("createCronExitWatchers", () => {
 
   it("rebinds live watchers but drains callbacks already owned by the previous scheduler", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
-    let releasePersistence = () => {};
-    const persistenceGate = new Promise<void>((resolve) => {
-      releasePersistence = resolve;
-    });
+    const { promise: persistenceGate, resolve: releasePersistence } = createDeferred();
     const releaseCompletion = vi.fn();
     const oldPersistCompletion = vi.fn(async () => {
       await persistenceGate;

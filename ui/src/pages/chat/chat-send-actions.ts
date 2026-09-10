@@ -6,7 +6,8 @@ import {
   isMovableChatQueueItem,
   reorderChatQueueItems,
 } from "../../lib/chat/chat-queue-order.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
+import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { hasUiSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
@@ -38,7 +39,7 @@ import {
   resolveDisplayedLeafEntryId,
 } from "./chat-send-request.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryHost } from "./chat-state-contract.ts";
 import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
@@ -49,7 +50,11 @@ import {
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
 
-function applyChatSendError(state: ChatState, err: unknown, canApplyError: () => boolean): string {
+function applyChatSendError(
+  state: ChatHistoryHost,
+  err: unknown,
+  canApplyError: () => boolean,
+): string {
   const error = isActiveLeafChangedError(err)
     ? t("chat.sendErrors.activeLeafChanged")
     : formatConnectError(err);
@@ -63,19 +68,20 @@ function applyChatSendError(state: ChatState, err: unknown, canApplyError: () =>
 }
 
 export async function sendChatMessageWithGeneratedRunId(
-  state: ChatState,
+  state: ChatHistoryHost,
   message: string,
   attachments?: ChatAttachment[],
   options: {
     canApplyError?: () => boolean;
     expectedLeafEntryId?: string | null;
+    mentions?: readonly HumanMention[];
     queueMode?: QueueMode;
     replyToId?: string;
     runId?: string;
   } = {},
 ) {
-  const msg = message.trim();
-  if (!state.client || !state.connected || (!msg && !attachments?.length)) {
+  const submitted = trimHumanMentions(message, options.mentions);
+  if (!state.client || !state.connected || (!submitted.text && !attachments?.length)) {
     return null;
   }
   const canApplyError = options.canApplyError ?? (() => true);
@@ -87,7 +93,8 @@ export async function sendChatMessageWithGeneratedRunId(
   const expectedLeafEntryId = resolveDisplayedLeafEntryId(state);
   try {
     return await requestChatSend(state, {
-      message: msg,
+      message: submitted.text,
+      mentions: submitted.mentions,
       attachments,
       runId,
       ...(options.queueMode !== "steer" && options.expectedLeafEntryId !== undefined

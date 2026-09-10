@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import process from "node:process";
+import { readFileRangeAsync } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   isExternalUserText,
   type SessionCatalogContinueProviderResult,
@@ -11,23 +12,6 @@ import { readPiSessionFileBaseline } from "./pi-session-store.js";
 import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const MAX_PI_UPSTREAM_SCAN_BYTES = 1024 * 1024;
-
-async function readFileRange(
-  handle: Awaited<ReturnType<typeof fs.open>>,
-  position: number,
-  length: number,
-): Promise<Buffer> {
-  const buffer = Buffer.alloc(length);
-  let offset = 0;
-  while (offset < length) {
-    const { bytesRead } = await handle.read(buffer, offset, length - offset, position + offset);
-    if (bytesRead <= 0) {
-      break;
-    }
-    offset += bytesRead;
-  }
-  return offset === length ? buffer : buffer.subarray(0, offset);
-}
 
 function parseCompletePiRows(tail: Buffer): {
   entries: Record<string, unknown>[];
@@ -139,7 +123,7 @@ async function checkPiSessionUpstreamActivity(
       return undefined;
     }
     const readLength = Math.min(stat.size - markerOffset, MAX_PI_UPSTREAM_SCAN_BYTES);
-    const tail = await readFileRange(handle, markerOffset, readLength);
+    const tail = await readFileRangeAsync(handle, markerOffset, readLength);
     const { entries, classifiedBytes } = parseCompletePiRows(tail);
     if (classifiedBytes === 0) {
       // Never advance past an invalid, partial, or over-cap JSONL row.

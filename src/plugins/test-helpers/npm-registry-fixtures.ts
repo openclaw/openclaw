@@ -24,6 +24,7 @@ type PackPluginParams = {
   dependencies?: Record<string, string>;
   hookName?: string;
   indexJs?: string;
+  manifest?: Record<string, unknown>;
   openclaw?: Record<string, unknown>;
   optionalDependencies?: Record<string, string>;
   packageName: string;
@@ -35,6 +36,7 @@ type PackPluginParams = {
 
 export type RegistryPackage = {
   latest: string;
+  omitIntegrity?: boolean;
   packageName: string;
   versions: PackedVersion[];
 };
@@ -98,6 +100,7 @@ export async function packPlugins(
             id: params.pluginId ?? params.packageName,
             name: params.pluginId ?? params.packageName,
             configSchema: { type: "object" },
+            ...params.manifest,
           },
           null,
           2,
@@ -148,12 +151,16 @@ export async function packPlugins(
 
 export async function registryPackages(
   rootDir: string,
-  packages: [PackPluginParams & { latest?: string }, ...(PackPluginParams & { latest?: string })[]],
+  packages: [
+    PackPluginParams & { latest?: string; omitIntegrity?: boolean },
+    ...(PackPluginParams & { latest?: string; omitIntegrity?: boolean })[],
+  ],
 ): Promise<RegistryPackage[]> {
   const versions = await packPlugins(rootDir, packages);
   return packages.map((params, index) => ({
     packageName: params.packageName,
     latest: params.latest ?? params.version ?? "1.0.0",
+    ...(params.omitIntegrity ? { omitIntegrity: true } : {}),
     versions: [expectDefined(versions[index], "packed fixture version")],
   }));
 }
@@ -187,7 +194,7 @@ export async function startStaticRegistry(
     }
 
     for (const pkg of packageEntries) {
-      if (url.pathname === `/${pkg.encodedPackageName}`) {
+      if (decodeURIComponent(url.pathname) === `/${pkg.packageName}`) {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
           `${JSON.stringify({
@@ -209,7 +216,7 @@ export async function startStaticRegistry(
                     ? { peerDependenciesMeta: entry.peerDependenciesMeta }
                     : {}),
                   dist: {
-                    integrity: entry.integrity,
+                    ...(pkg.omitIntegrity ? {} : { integrity: entry.integrity }),
                     shasum: entry.shasum,
                     tarball: `${baseUrl}/${pkg.encodedPackageName}/-/${entry.tarballName}`,
                   },
@@ -279,7 +286,7 @@ export async function startMutableRegistry(
       return;
     }
 
-    if (url.pathname === `/${encodedPackageName}`) {
+    if (decodeURIComponent(url.pathname) === `/${params.packageName}`) {
       metadataRequests += 1;
       const metadataLatest = latestVersion;
       if (metadataRequests === 1) {

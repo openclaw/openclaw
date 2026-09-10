@@ -2,6 +2,7 @@ import { createRouter, definePage, type RouteMatch, type Router } from "@opencla
 import { html, nothing, type LitElement } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./router-outlet.ts";
 
@@ -22,22 +23,6 @@ type RouterOutletElement = LitElement & {
   retryContext?: TestContext;
   onNotFound?: () => void;
 };
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: unknown) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  return { promise, resolve, reject };
-}
 
 function createOutlet(router: TestRouter, context: TestContext): RouterOutletElement {
   const outlet = document.createElement("openclaw-router-outlet") as RouterOutletElement;
@@ -62,7 +47,7 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
 describe("openclaw-router-outlet", () => {
   it("retains MCP Apps across route IDs that share an explicit owner", async () => {
     const teardownView = vi.fn(async () => undefined);
-    const nextData = deferred<TestData>();
+    const nextData = createDeferredCore<TestData>();
     const renderOwnedRoute = vi.fn((data: TestData | undefined) =>
       data
         ? html`
@@ -106,7 +91,7 @@ describe("openclaw-router-outlet", () => {
 
     const navigation = router.navigate("next", context);
     await settleOutlet(outlet);
-    expect(renderOwnedRoute).toHaveBeenCalledWith(undefined);
+    expect(renderOwnedRoute).toHaveBeenCalledWith(undefined, true);
     expect(outlet.querySelector("mcp-app-view")).toBe(appView);
     expect(outlet.querySelector('[data-testid="owned-route"]')?.textContent).toBe("page");
     expect(teardownView).not.toHaveBeenCalled();
@@ -122,9 +107,9 @@ describe("openclaw-router-outlet", () => {
     router.stop();
   });
 
-  it("replaces the centered loading mascot with the resolved route", async () => {
+  it("replaces the loading skeleton with the resolved route", async () => {
     vi.useFakeTimers();
-    const routeModule = deferred<TestModule>();
+    const routeModule = createDeferredCore<TestModule>();
     const context = { label: "loaded" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
@@ -147,7 +132,10 @@ describe("openclaw-router-outlet", () => {
 
     const loadingState = outlet.querySelector('[role="status"]');
     expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
-    expect(loadingState?.querySelector("openclaw-mascot")?.getAttribute("mood")).toBe("thinking");
+    expect(loadingState?.querySelector(".loading-skeleton")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(loadingState?.getAttribute("aria-busy")).toBeNull();
     expect(loadingState?.textContent?.trim()).toBe("");
     expect(outlet.textContent).not.toContain("Loading panel");
 
@@ -159,13 +147,13 @@ describe("openclaw-router-outlet", () => {
 
     expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("loaded");
     expect(outlet.querySelector('[role="status"]')).toBeNull();
-    expect(outlet.querySelector("openclaw-mascot")).toBeNull();
+    expect(outlet.querySelector(".loading-skeleton")).toBeNull();
     outlet.remove();
     router.stop();
   });
 
   it("keeps the current route mounted until nested MCP Apps finish teardown", async () => {
-    const teardown = deferred<void>();
+    const teardown = createDeferredCore();
     const teardownView = vi.fn(() => teardown.promise);
     const context = { label: "loaded" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
@@ -241,7 +229,7 @@ describe("openclaw-router-outlet", () => {
   });
 
   it("keeps a loaded route visible with an error and retries through the latest context", async () => {
-    const firstLoad = deferred<TestData>();
+    const firstLoad = createDeferredCore<TestData>();
     let loadCount = 0;
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [

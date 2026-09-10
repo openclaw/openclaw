@@ -10,6 +10,7 @@ import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
   isAgentsCoreIsolatedTestFile,
+  isAgentsSpawnProductionBoundaryTestFile,
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
@@ -27,40 +28,10 @@ import {
   channelSessionContractPatterns,
   channelSurfaceContractPatterns,
 } from "../test/vitest/vitest.contracts-paths.mjs";
-import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
-import { isActiveMemoryExtensionRoot } from "../test/vitest/vitest.extension-active-memory-paths.mjs";
-import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
-import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
-import {
-  codexExtensionTestRoots,
-  isCodexExtensionRoot,
-} from "../test/vitest/vitest.extension-codex-paths.mjs";
-import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
-import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
-import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
-import {
-  isMatrixExtensionRoot,
-  matrixExtensionTestRoots,
-} from "../test/vitest/vitest.extension-matrix-paths.mjs";
-import { isMattermostExtensionRoot } from "../test/vitest/vitest.extension-mattermost-paths.mjs";
-import { isMediaExtensionRoot } from "../test/vitest/vitest.extension-media-paths.mjs";
-import { isMemoryExtensionRoot } from "../test/vitest/vitest.extension-memory-paths.mjs";
-import { isMessagingExtensionRoot } from "../test/vitest/vitest.extension-messaging-paths.mjs";
-import { isMiscExtensionRoot } from "../test/vitest/vitest.extension-misc-paths.mjs";
-import { isMsTeamsExtensionRoot } from "../test/vitest/vitest.extension-msteams-paths.mjs";
-import {
-  isProviderExtensionRoot,
-  isProviderOpenAiExtensionRoot,
-} from "../test/vitest/vitest.extension-provider-paths.mjs";
-import { isQaExtensionRoot } from "../test/vitest/vitest.extension-qa-paths.mjs";
-import {
-  isTelegramExtensionRoot,
-  telegramExtensionTestRoots,
-} from "../test/vitest/vitest.extension-telegram-paths.mjs";
-import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
-import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
-import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
-import { narrowIncludePatternsForCli } from "../test/vitest/vitest.pattern-file.ts";
+import { codexExtensionTestRoots } from "../test/vitest/vitest.extension-codex-paths.mjs";
+import { matrixExtensionTestRoots } from "../test/vitest/vitest.extension-matrix-paths.mjs";
+import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-telegram-paths.mjs";
+import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
@@ -76,7 +47,11 @@ import {
   isUiIsolatedTestFile,
   uiIsolatedTestFiles,
 } from "../test/vitest/vitest.ui-isolated-paths.mjs";
-import { isUiBrowserTestFile } from "../test/vitest/vitest.ui-paths.mjs";
+import {
+  isControlUiSourcePath,
+  isPluginControlUiPath,
+  isUiBrowserTestFile,
+} from "../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
@@ -89,7 +64,6 @@ import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
   isUnitConfigTestFile,
-  unitTestIncludePatterns,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedLanes,
@@ -101,6 +75,7 @@ import {
   GIT_LS_FILES_MAX_BUFFER_BYTES,
   createExtensionTestProcessTargetChunks,
   listTrackedTestPlanFiles,
+  resolveExtensionTestConfig,
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
 import {
@@ -109,27 +84,34 @@ import {
   splitTestTargetChunks as splitTargetChunks,
 } from "./lib/gateway-server-test-plan.mts";
 import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
+// CI imports planning before dependency installation; execution owners stay outside this closure.
+import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
+import {
+  collectVitestFileFilters,
+  resolveBooleanModeFlag,
+  vitestOptionConsumesNextArg,
+} from "./lib/vitest-cli-mode.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
 import {
+  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
+  resolveDefaultVitestNoOutputTimeoutMs,
+  resolveVitestNodeArgs,
+} from "./lib/vitest-process-env.mts";
+import {
   estimateVitestTestFileSeconds,
   estimateVitestToolingFileSeconds,
   resolveShardTimingKey,
   type VitestShardTimingSpec,
 } from "./lib/vitest-shard-metadata.mts";
-import {
-  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
-  resolveDefaultVitestNoOutputTimeoutMs,
-  resolveVitestCliEntry,
-  resolveVitestNodeArgs,
-} from "./run-vitest.mts";
 
 type VitestRunPlan = {
   config: string;
   forwardedArgs: string[];
+  timingTargets?: string[];
   includePatterns: string[] | null;
   watchMode: boolean;
 };
@@ -161,17 +143,25 @@ type ChangedTestTargetPlan = {
 };
 
 type ImportGraphOptions = { tooling?: boolean };
-type VitestSpecShape = Pick<VitestRunSpec, "config" | "env">;
+type VitestSpecShape = Pick<VitestRunSpec, "config" | "env"> & {
+  cacheAssignment?: VitestCacheAssignment;
+};
+export type VitestCacheAssignment =
+  | { kind: "scheduler"; root: string; leased?: true }
+  | { kind: "caller" };
+type CacheAssignedSpec<T> = Omit<T, "env"> & {
+  env: NodeJS.ProcessEnv;
+  cacheAssignment?: VitestCacheAssignment;
+};
 type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode">;
 type ImportGraph = {
   reverseImports: Map<string, string[]>;
-  reverseReexports: Map<string, string[]>;
   testFiles: Set<string>;
 };
 type ImportGraphEdges = {
   file: string;
+  specifiers: string[];
   imports: Set<string>;
-  reexports: Set<string>;
   references: Set<string>;
 };
 type UnmatchedExplicitTestTarget = {
@@ -182,6 +172,8 @@ type UnmatchedExplicitTestTarget = {
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_EMBEDDED_AGENT_TEST_ROOT = agentVitestProjectOwners.embedded.root;
+const AGENTS_SPAWN_PRODUCTION_BOUNDARY_VITEST_CONFIG =
+  agentVitestProjectOwners.spawnProductionBoundary.config;
 const AGENTS_CORE_ISOLATED_VITEST_CONFIG = agentVitestProjectOwners.coreIsolated.config;
 const AGENTS_CORE_VITEST_CONFIG = agentVitestProjectOwners.core.config;
 const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = agentVitestProjectOwners.embedded.config;
@@ -213,7 +205,7 @@ const CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG =
   "test/vitest/vitest.contracts-channel-session.config.ts";
 const CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG =
   "test/vitest/vitest.contracts-channel-surface.config.ts";
-const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.config.ts";
+export const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.config.ts";
 const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
@@ -378,7 +370,7 @@ function resolveSpecSortWeight(
   }
   // Exact selections use their file costs; a whole-config sample would price a
   // single worker proof like all tooling. Globs keep the whole-config fallback.
-  const includes = spec.includePatterns;
+  const includes = spec.timingTargets ?? spec.includePatterns;
   const estimateFileSeconds =
     spec.config === TOOLING_VITEST_CONFIG
       ? estimateVitestToolingFileSeconds
@@ -441,12 +433,10 @@ const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.t
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
 const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
-const PACKAGE_DOCKER_VITEST_CONFIG = "test/vitest/vitest.package-docker.config.ts";
+const PACKAGE_CONTRACT_VITEST_CONFIG = "test/vitest/vitest.package-contract.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
-const PACKAGE_DOCKER_TEST_TARGET =
-  "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts";
 const TOOLING_DOCKER_TEST_TARGET = "test/scripts/docker-build-helper.test.ts";
 const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/**/*.test.ts",
@@ -460,7 +450,7 @@ const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UI_BROWSER_VITEST_CONFIG = "test/vitest/vitest.ui-browser.config.ts";
-const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
+export const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UI_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.ui-isolated.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
@@ -494,7 +484,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   daemon: DAEMON_VITEST_CONFIG,
   media: MEDIA_VITEST_CONFIG,
   logging: LOGGING_VITEST_CONFIG,
-  packageDocker: PACKAGE_DOCKER_VITEST_CONFIG,
+  packageContract: PACKAGE_CONTRACT_VITEST_CONFIG,
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   pluginSdk: PLUGIN_SDK_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
@@ -521,6 +511,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  agentsSpawnProductionBoundary: AGENTS_SPAWN_PRODUCTION_BOUNDARY_VITEST_CONFIG,
   agentsCoreIsolated: AGENTS_CORE_ISOLATED_VITEST_CONFIG,
   agentsCore: AGENTS_CORE_VITEST_CONFIG,
   agentsSupport: AGENTS_SUPPORT_VITEST_CONFIG,
@@ -576,17 +567,21 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
   [
-    "patches/vitest@4.1.11.patch",
+    "patches/vitest@5.0.0.patch",
     [
       "test/scripts/run-vitest-profile.test.ts",
       "test/scripts/run-vitest-state-cleanup.test.ts",
       "test/scripts/vitest-fork-shutdown.test.ts",
+      "test/scripts/vitest-runner-task-updates.test.ts",
     ],
   ],
   ["test/fixtures/vitest-fork-shutdown.mjs", ["test/scripts/vitest-fork-shutdown.test.ts"]],
+  ...["clock", "runner"].map<[string, string[]]>((part) => [
+    `test/fixtures/vitest-runner-task-updates.${part}.mjs`,
+    ["test/scripts/vitest-runner-task-updates.test.ts"],
+  ]),
   ...[
     "src/system-agent/setup-inference-persist.ts",
-    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ].map<[string, string[]]>((sourcePath) => [
     sourcePath,
@@ -705,6 +700,13 @@ const MERMAID_RENDERER_TEST_TARGETS = [
 ];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  [
+    "extensions/browser/src/browser/chrome-mcp-options.ts",
+    [
+      "extensions/browser/src/browser/chrome-mcp.test.ts",
+      "test/scripts/ci-chrome-mcp-prewarm.test.ts",
+    ],
+  ],
   [
     "scripts/prepare-apple-mermaid.mjs",
     [
@@ -878,11 +880,19 @@ const SOURCE_ROOTS_FOR_IMPORT_GRAPH = [
   "packages",
   "ui/src",
   "ui/config",
+  "ui/public",
   "test",
 ];
 const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
-const IMPORT_GRAPH_GREP_PATHS = SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) =>
-  IMPORTABLE_FILE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`),
+function importGraphPathspecs(roots: string[], suffixes: readonly string[]) {
+  return [
+    ...roots.flatMap((root) => suffixes.map((suffix) => `:(glob)${root}/**/*${suffix}`)),
+    ...suffixes.map((suffix) => `:(glob)ui/*${suffix}`),
+  ];
+}
+const IMPORT_GRAPH_GREP_PATHS = importGraphPathspecs(
+  SOURCE_ROOTS_FOR_IMPORT_GRAPH,
+  IMPORTABLE_FILE_EXTENSIONS,
 );
 const TOOLING_IMPORT_GRAPH_ROOTS = [...SOURCE_ROOTS_FOR_IMPORT_GRAPH, "scripts"];
 const TOOLING_IMPORTABLE_FILE_EXTENSIONS = [
@@ -892,8 +902,9 @@ const TOOLING_IMPORTABLE_FILE_EXTENSIONS = [
   ".mjs",
   ".cjs",
 ];
-const TOOLING_IMPORT_GRAPH_GREP_PATHS = TOOLING_IMPORT_GRAPH_ROOTS.flatMap((root) =>
-  TOOLING_IMPORTABLE_FILE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`),
+const TOOLING_IMPORT_GRAPH_GREP_PATHS = importGraphPathspecs(
+  TOOLING_IMPORT_GRAPH_ROOTS,
+  TOOLING_IMPORTABLE_FILE_EXTENSIONS,
 );
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
@@ -1022,7 +1033,10 @@ function listUnitFastFullSuiteTestTargets() {
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd: string) {
-  const isolatedTests = new Set(agentVitestProjectOwners.coreIsolated.include);
+  const isolatedTests = new Set([
+    ...agentVitestProjectOwners.spawnProductionBoundary.include,
+    ...agentVitestProjectOwners.coreIsolated.include,
+  ]);
   const agentsDir = path.join(cwd, "src/agents");
   if (!fs.existsSync(agentsDir)) {
     return [];
@@ -1224,10 +1238,7 @@ function listExplicitTestTargetFilesFromGit(cwd: string) {
   if (result.status !== 0) {
     return null;
   }
-  return result.stdout
-    .split("\0")
-    .map((line) => normalizePathPattern(line.trim()))
-    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+  return result.stdout.split("\0").filter((line) => line.length > 0 && isImportableGraphFile(line));
 }
 
 function listExplicitTestTargetFilesForCwd(cwd: string) {
@@ -1310,7 +1321,10 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string) {
   const forceFullImportGraph = sourceTargetCount > EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD;
   return targetArgs.flatMap((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
-    if (isPathAtOrUnder(relative, "ui") && isGlobTarget(relative)) {
+    if (
+      (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) &&
+      isGlobTarget(relative)
+    ) {
       // Expand mixed browser globs before assigning files to their disjoint runners.
       const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
         (file) => isTestFileTarget(file) && path.matchesGlob(file, relative),
@@ -1505,6 +1519,7 @@ function listImportGraphFiles(
   directory: string,
   files: string[] = [],
   extensions: readonly string[] = IMPORTABLE_FILE_EXTENSIONS,
+  recursive = true,
 ) {
   let entries;
   try {
@@ -1516,7 +1531,7 @@ function listImportGraphFiles(
   for (const entry of entries) {
     const relative = normalizePathPattern(path.posix.join(directory, entry.name));
     if (entry.isDirectory()) {
-      if (!isSkippedImportGraphDirectory(entry.name)) {
+      if (recursive && !isSkippedImportGraphDirectory(entry.name)) {
         listImportGraphFiles(cwd, relative, files, extensions);
       }
       continue;
@@ -1576,11 +1591,14 @@ function listImportGraphFilesForCwd(cwd: string, options: ImportGraphOptions = {
   }
   const roots = tooling ? TOOLING_IMPORT_GRAPH_ROOTS : SOURCE_ROOTS_FOR_IMPORT_GRAPH;
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
-  const files =
-    listTrackedTestPlanFiles(
-      cwd,
-      tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS,
-    ) ?? roots.flatMap((root) => listImportGraphFiles(cwd, root, [], extensions));
+  const files = listTrackedTestPlanFiles(
+    cwd,
+    tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS,
+  ) ?? [
+    ...roots.flatMap((root) => listImportGraphFiles(cwd, root, [], extensions)),
+    // Root configs are inputs; UI caches and generated sibling trees are not.
+    ...listImportGraphFiles(cwd, "ui", [], extensions, false),
+  ];
   cachedImportGraphFiles.set(cacheKey, files);
   return files;
 }
@@ -1631,7 +1649,7 @@ function readImportGraphEdges(
     .filter(({ parseImports }) => parseImports || terms.length > 0);
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
   return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES).map(
-    ({ file, imports, reexports, matches, references }) => {
+    ({ file, imports, matches, references }) => {
       const resolve = (specifiers: string[]) =>
         new Set(
           specifiers
@@ -1640,8 +1658,8 @@ function readImportGraphEdges(
         );
       const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
         file,
+        specifiers: imports,
         imports: resolve(imports),
-        reexports: resolve(reexports),
         references: new Set<string>(),
       };
       for (const reference of references) {
@@ -1677,55 +1695,31 @@ function listImportGraphGrepMatches(
   const suffixes = testFilesOnly
     ? extensions.flatMap((ext) => [`.test${ext}`, `.spec${ext}`])
     : extensions;
-  const grepPaths = roots.flatMap((root) =>
-    suffixes.map((suffix) => `:(glob)${root}/**/*${suffix}`),
-  );
+  const grepPaths = importGraphPathspecs(roots, suffixes);
   const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
     cwd,
     encoding: "utf8",
-    // A frontier can exceed the platform argv limit; both search tools accept stdin patterns.
+    // A frontier can exceed the platform argv limit; Git accepts stdin patterns.
     input: missing.join("\n"),
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["pipe", "pipe", "pipe"],
   };
-  let result = spawnSync(
-    "rg",
-    [
-      "--files-with-matches",
-      "--fixed-strings",
-      "--hidden",
-      "--no-ignore",
-      ...suffixes.flatMap((suffix) => ["--glob", `*${suffix}`]),
-      "--glob",
-      "!**/node_modules/**",
-      "--glob",
-      "!**/dist/**",
-      "--glob",
-      "!**/vendor/**",
-      "-f",
-      "-",
-      "--",
-      ...roots,
-    ],
+  const result = spawnSync(
+    "git",
+    ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
     spawnOptions,
   );
-  if (result.error || (result.status !== 0 && result.status !== 1)) {
-    result = spawnSync(
-      "git",
-      ["grep", "-l", "--fixed-strings", "-f", "-", "--", ...grepPaths],
-      spawnOptions,
-    );
-  }
   for (const term of missing) {
-    matches.set(term, result.status === 0 || result.status === 1 ? [] : null);
+    matches.set(term, []);
   }
-  if (result.status === 0) {
+  if (result.status !== 1) {
     const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
-    const candidates = result.stdout
-      .split("\n")
-      .map((line) => normalizePathPattern(line.trim()))
-      .filter((file) => trackedFiles.has(file))
-      .toSorted((left, right) => left.localeCompare(right));
+    // Source archives use the same filesystem inventory and native reader as the full graph.
+    const candidates = (
+      result.status === 0
+        ? result.stdout.split("\0").filter((file) => trackedFiles.has(file))
+        : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
+    ).toSorted((left, right) => left.localeCompare(right));
     // Per-term membership protects the broad cap and helper first-success rule.
     // Cached edges need only term facts; full-graph acquisition reuses their parsing.
     for (const { edges, matches: fileTerms } of readImportGraphEdges(
@@ -1781,23 +1775,49 @@ function findDirectImporters(
   return skippedBroadTerm && importers.length === 0 && !isTestHelper ? null : importers;
 }
 
+/** Prove an entry is unshared using the canonical targeted reverse-import scan. */
+export function hasImportGraphConsumers(
+  changedPaths: string[],
+  cwd = process.cwd(),
+  options: ImportGraphOptions = {},
+) {
+  const tracked = listTrackedTestPlanFiles(
+    cwd,
+    options.tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS,
+  );
+  // An incomplete archive/filesystem inventory cannot prove that an entry is unshared.
+  if (tracked === null) {
+    return true;
+  }
+  cachedImportGraphFiles.set(`${cwd}\0${options.tooling ? "tooling" : "source"}`, tracked);
+  const files = new Set(tracked);
+  const extensions = options.tooling
+    ? TOOLING_IMPORTABLE_FILE_EXTENSIONS
+    : IMPORTABLE_FILE_EXTENSIONS;
+  const terms = changedPaths.flatMap((file) => resolveImportGraphSearchTerms(file, extensions));
+  const matches = listImportGraphGrepMatches(cwd, terms, options);
+  return changedPaths.some((file) => {
+    const consumers = files.has(file) ? findDirectImporters(file, matches, extensions) : null;
+    return consumers === null || consumers.length > 0;
+  });
+}
+
 function resolveAffectedTestsFromTargetedImportScan(
   changedPath: string,
   cwd: string,
   options: ImportGraphOptions & { direct?: boolean } = {},
 ) {
-  const normalized = normalizePathPattern(changedPath);
   const tooling = options.tooling === true;
   const files = listImportGraphFilesForCwd(cwd, { tooling });
   const fileSet = new Set(files);
-  if (!fileSet.has(normalized)) {
+  if (!fileSet.has(changedPath)) {
     return [];
   }
 
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
-  let frontier = [normalized];
+  let frontier = [changedPath];
   const seen = new Set(frontier);
   const targets = [];
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
@@ -1836,7 +1856,6 @@ function getImportGraph(cwd: string) {
   const files = listImportGraphFilesForCwd(cwd);
   const fileSet = new Set(files);
   const reverseImports = new Map<string, string[]>();
-  const reverseReexports = new Map<string, string[]>();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
@@ -1847,53 +1866,62 @@ function getImportGraph(cwd: string) {
     if (!edges) {
       continue;
     }
-    for (const [imports, reverse] of [
-      [edges.imports, reverseImports],
-      [edges.reexports, reverseReexports],
-    ] as const) {
-      for (const imported of imports) {
-        const importers = reverse.get(imported) ?? [];
-        importers.push(file);
-        reverse.set(imported, importers);
-      }
+    for (const imported of edges.imports) {
+      const importers = reverseImports.get(imported) ?? [];
+      importers.push(file);
+      reverseImports.set(imported, importers);
     }
   }
 
-  cachedImportGraph = { reverseImports, reverseReexports, testFiles };
+  cachedImportGraph = { reverseImports, testFiles };
   cachedImportGraphCwd = cwd;
   return cachedImportGraph;
 }
 
-/** Returns whether any changed path reaches one of the requested import-graph targets. */
+/** Query relative imports/re-exports from targets without scanning unrelated source bodies. */
 export function hasImportGraphImpactOnTargets(
   changedPaths: string[],
-  targetPaths: string[],
+  targetPaths: string[] | ((file: string) => boolean),
   cwd = process.cwd(),
+  options: ImportGraphOptions = {},
 ) {
-  const targets = new Set(targetPaths.map(normalizePathPattern));
-  if (targets.size === 0) {
+  const changed = new Set(changedPaths);
+  if (changed.size === 0) {
     return false;
   }
-
-  const { reverseImports, reverseReexports } = getImportGraph(cwd);
-  for (const changedPath of changedPaths) {
-    const queue = [normalizePathPattern(changedPath)];
-    const seen = new Set(queue);
-    for (const current of queue) {
-      if (targets.has(current)) {
-        return true;
-      }
-      const importers = [
-        ...(reverseImports.get(current) ?? []),
-        ...(reverseReexports.get(current) ?? []),
-      ];
-      for (const importer of importers) {
-        if (!seen.has(importer)) {
-          seen.add(importer);
-          queue.push(importer);
+  const files = listImportGraphFilesForCwd(cwd, options);
+  const targets = Array.isArray(targetPaths) ? targetPaths : files.filter(targetPaths);
+  if (targets.some((file) => changed.has(file))) {
+    return true;
+  }
+  // Staged deletions have left the index, but surviving importers still own their edges.
+  const fileSet = new Set([...files, ...changed]);
+  const extensions = options.tooling
+    ? TOOLING_IMPORTABLE_FILE_EXTENSIONS
+    : IMPORTABLE_FILE_EXTENSIONS;
+  const seen = new Set(targets);
+  let frontier = targets;
+  while (frontier.length > 0) {
+    readImportGraphEdges(cwd, frontier, fileSet, options.tooling);
+    const next: string[] = [];
+    for (const file of frontier) {
+      const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
+      // Resolve raw cached facts against this query's deleted-path identities too.
+      for (const specifier of edges?.specifiers ?? []) {
+        const dependency = resolveImportSpecifier(file, specifier, fileSet, extensions);
+        if (!dependency) {
+          continue;
+        }
+        if (changed.has(dependency)) {
+          return true;
+        }
+        if (!seen.has(dependency)) {
+          seen.add(dependency);
+          next.push(dependency);
         }
       }
     }
+    frontier = next;
   }
   return false;
 }
@@ -1903,16 +1931,15 @@ function resolveAffectedTestsFromImportGraph(
   cwd: string,
   options: { forceFull?: boolean } = {},
 ) {
-  const normalized = normalizePathPattern(changedPath);
   if (options.forceFull !== true) {
-    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(normalized, cwd);
+    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(changedPath, cwd);
     if (targetedTargets !== null) {
       return targetedTargets;
     }
   }
 
   const { reverseImports, testFiles } = getImportGraph(cwd);
-  const queue = [normalized];
+  const queue = [changedPath];
   const seen = new Set(queue);
   const targets = [];
 
@@ -1955,7 +1982,7 @@ function isControlUiE2eTarget(relative: string) {
     relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
     relative === "ui/src/e2e" ||
     relative.startsWith("ui/src/e2e/") ||
-    (relative.startsWith("ui/src/") && relative.endsWith(".e2e.test.ts"))
+    (isControlUiSourcePath(relative) && relative.endsWith(".e2e.test.ts"))
   );
 }
 
@@ -2208,9 +2235,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["install-trufflehog", packageAcceptance, workflowGuards],
+    ["install-trufflehog", "setup-node-env-bun", packageAcceptance, workflowGuards],
   ],
   [".github/actions/setup-node-env/dependency-fingerprint.mjs", [workflowGuards]],
+  [".github/actions/setup-node-env/seed-bun-from-image.mjs", ["setup-node-env-bun"]],
   [".github/actions/setup-pnpm-store-cache/action.yml", [packageAcceptance, workflowGuards]],
   [".github/actions/setup-pnpm-store-cache/ensure-node.sh", ["setup-pnpm-store-cache-ensure-node"]],
   ["test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts", [dockerE2e, pluginPrerelease]],
@@ -2284,6 +2312,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],
   ["scripts/openclaw-npm-prepublish-verify.ts", ["test/openclaw-npm-prepublish-verify.test.ts"]],
   ["scripts/lib/docker-e2e-scenarios.mts", [dockerE2e, pluginPrerelease]],
+  ["scripts/lib/upgrade-survivor-policy.mjs", [dockerE2e]],
   ["scripts/e2e/kitchen-sink-rpc-walk.mts", ["kitchen-sink-rpc-walk", pluginPrerelease]],
   [
     "scripts/e2e/agents-delete-shared-workspace-docker.sh",
@@ -2316,13 +2345,27 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       packageAcceptance,
       "upgrade-survivor-probe-gateway",
       "upgrade-survivor-assertions",
+      "upgrade-survivor-mobile-pairing",
       "upgrade-survivor-recovery-cleanup",
       "openclaw-test-state",
     ],
   ],
   [
     "scripts/e2e/lib/upgrade-survivor/run.sh",
-    ["upgrade-survivor-assertions", "upgrade-survivor-recovery-cleanup"],
+    [
+      "upgrade-survivor-assertions",
+      "upgrade-survivor-mobile-pairing",
+      "upgrade-survivor-recovery-cleanup",
+      "upgrade-survivor-watchos-direct-node",
+    ],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs",
+    ["upgrade-survivor-watchos-direct-node"],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts",
+    ["upgrade-survivor-mobile-pairing"],
   ],
   [
     "scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs",
@@ -2522,7 +2565,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/ci-changed-scope\.mjs$/u, [...changedScopeTests, "control-ui-i18n"]],
   [/^scripts\/check-changed\.(?:mjs|mts)$/u, ["changed-lanes"]],
   [/^scripts\/changed-lanes\.(?:mjs|mts)$/u, ["changed-lanes"]],
-  [/^scripts\/(?:lib\/tsx-cli-shim|tsx)\.mjs$/u, ["direct-run-entrypoints", "lint-status"]],
+  [
+    /^scripts\/(?:lib\/tsx-cli-shim|tsx)\.mjs$/u,
+    ["direct-run-entrypoints", "lint-status", "local-check-runtime"],
+  ],
   [
     new RegExp(
       [
@@ -2716,6 +2762,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/lib\/swift-toolchain\.sh$/u, ["package-mac-app", "package-mac-dist"]],
   [/^scripts\/stage-cua-driver-macos\.sh$/u, ["package-mac-app"]],
   [
+    /^scripts\/(stage-cloudflared-macos\.sh|lib\/cloudflared-macos\.json)$/u,
+    ["stage-cloudflared-macos", "package-mac-app"],
+  ],
+  [
     /^scripts\/lib\/npm-publish-plan\.mjs$/u,
     [
       "test/npm-publish-plan.test.ts",
@@ -2828,6 +2878,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^test\/vitest\/vitest\.contracts-paths\.mjs$/u,
     [
       "test-projects",
+      "test/vitest-projects-config.test.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
       "test/vitest/vitest.contracts-channel-config.config.ts",
       "test/vitest/vitest.contracts-channel-registry.config.ts",
@@ -3103,10 +3154,9 @@ function resolveGithubYamlGuardTargets(changedPath: string) {
 }
 
 function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
-  const normalized = normalizePathPattern(changedPath);
   return (
-    listImportGraphGrepMatches(cwd, [normalized], { tooling: true, testFilesOnly: true }).get(
-      normalized,
+    listImportGraphGrepMatches(cwd, [changedPath], { tooling: true, testFilesOnly: true }).get(
+      changedPath,
     ) ?? []
   )
     .filter(
@@ -3114,14 +3164,14 @@ function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
         file !== "test/scripts/test-projects.test.ts" &&
         !file.endsWith(".live.test.ts") &&
         isTestFileTarget(file) &&
-        references.has(normalized),
+        references.has(changedPath),
     )
     .map(({ file }) => file);
 }
 
 function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
   if (
-    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-(?:checkout-auth|windows-process-census)\.py))$/u.test(
+    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout|windows-process-census)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-checkout-auth\.py|ci-windows-process-census\.(?:mjs|py)))$/u.test(
       changedPath,
     )
   ) {
@@ -3267,7 +3317,7 @@ function shouldCombineSiblingTestWithImportGraph(changedPath: string) {
 }
 
 function shouldRouteChangedTargetWithoutImportGraph(changedPath: string) {
-  return changedPath.endsWith(".live.test.ts") || changedPath.startsWith("ui/src/");
+  return changedPath.endsWith(".live.test.ts") || isControlUiSourcePath(changedPath);
 }
 
 function resolvePromptSnapshotFixtureTargets(changedPath: string) {
@@ -3323,7 +3373,7 @@ function resolvePreciseChangedTestTargets(
     return [siblingTest];
   }
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
-    return changedPath.startsWith("ui/src/") ? [changedPath] : null;
+    return isControlUiSourcePath(changedPath) ? [changedPath] : null;
   }
   if (options.skipImportGraph === true) {
     return null;
@@ -3469,11 +3519,14 @@ function classifyTarget(arg: string, cwd: string) {
   if (isAgentsCoreIsolatedTestFile(relative)) {
     return agentVitestProjectOwners.coreIsolated.kind;
   }
+  if (isAgentsSpawnProductionBoundaryTestFile(relative)) {
+    return agentVitestProjectOwners.spawnProductionBoundary.kind;
+  }
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
-  if (relative === PACKAGE_DOCKER_TEST_TARGET) {
-    return "packageDocker";
+  if (packageContractTestFiles.includes(relative)) {
+    return "packageContract";
   }
   if (isUiIsolatedTestFile(relative)) {
     return "uiIsolated";
@@ -3481,7 +3534,7 @@ function classifyTarget(arg: string, cwd: string) {
   if (isUiBrowserTestFile(relative)) {
     return "uiBrowser";
   }
-  if (isPathAtOrUnder(relative, "ui")) {
+  if (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) {
     return "ui";
   }
   if (relative.startsWith("src/tui/tui-pty-") || tuiPtyTestFiles.includes(relative)) {
@@ -3492,8 +3545,7 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (
     relative === "src/gateway/gateway.test.ts" ||
-    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts" ||
-    relative === "src/gateway/sessions-history-http.test.ts"
+    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts"
   ) {
     return "e2e";
   }
@@ -3528,71 +3580,7 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (getChangedPathFacts(relative).surface === "extension") {
     const extensionRoot = relative.split("/").slice(0, 2).join("/");
-    const splitChannelShard = resolveSplitChannelExtensionShard(extensionRoot);
-    if (splitChannelShard) {
-      return splitChannelShard.kind;
-    }
-    if (isProviderOpenAiExtensionRoot(extensionRoot)) {
-      return "extensionProviderOpenAi";
-    }
-    if (isQaExtensionRoot(extensionRoot)) {
-      return "extensionQa";
-    }
-    if (isAcpxExtensionRoot(extensionRoot)) {
-      return "extensionAcpx";
-    }
-    if (isActiveMemoryExtensionRoot(extensionRoot)) {
-      return "extensionActiveMemory";
-    }
-    if (isCodexExtensionRoot(extensionRoot)) {
-      return "extensionCodex";
-    }
-    if (isDiffsExtensionRoot(extensionRoot)) {
-      return "extensionDiffs";
-    }
-    if (isBrowserExtensionRoot(extensionRoot)) {
-      return "extensionBrowser";
-    }
-    if (isFeishuExtensionRoot(extensionRoot)) {
-      return "extensionFeishu";
-    }
-    if (isIrcExtensionRoot(extensionRoot)) {
-      return "extensionIrc";
-    }
-    if (isMattermostExtensionRoot(extensionRoot)) {
-      return "extensionMattermost";
-    }
-    if (isTelegramExtensionRoot(extensionRoot)) {
-      return "extensionTelegram";
-    }
-    if (isVoiceCallExtensionRoot(extensionRoot)) {
-      return "extensionVoiceCall";
-    }
-    if (isWhatsAppExtensionRoot(extensionRoot)) {
-      return "extensionWhatsApp";
-    }
-    if (isZaloExtensionRoot(extensionRoot)) {
-      return "extensionZalo";
-    }
-    if (isMatrixExtensionRoot(extensionRoot)) {
-      return "extensionMatrix";
-    }
-    if (isMediaExtensionRoot(extensionRoot)) {
-      return "extensionMedia";
-    }
-    if (isMemoryExtensionRoot(extensionRoot)) {
-      return "extensionMemory";
-    }
-    if (isMsTeamsExtensionRoot(extensionRoot)) {
-      return "extensionMsTeams";
-    }
-    if (isMessagingExtensionRoot(extensionRoot)) {
-      return "extensionMessaging";
-    }
-    if (isMiscExtensionRoot(extensionRoot)) {
-      return "extensionMisc";
-    }
-    return isProviderExtensionRoot(extensionRoot) ? "extensionProvider" : "extension";
+    return VITEST_CONFIG_TARGET_KIND_BY_PATH.get(resolveExtensionTestConfig(extensionRoot))!;
   }
   if (isChannelSurfaceTestFile(relative)) {
     return "channel";
@@ -3772,7 +3760,10 @@ function shouldUseWholeConfigTarget(kind: string, targetArg: string, cwd: string
   if (isTestFileTarget(relative) || isExistingDirectoryTarget(targetArg, cwd)) {
     return false;
   }
-  return relative.startsWith("ui/src/");
+  if (isPluginControlUiPath(relative) && !isLikelyFileTarget(relative)) {
+    return false;
+  }
+  return isControlUiSourcePath(relative);
 }
 
 function createVitestArgs(
@@ -3801,36 +3792,42 @@ export function createVitestPreflightPnpmArgs(config: string) {
 }
 
 export function parseTestProjectsArgs(args: string[], cwd = process.cwd()) {
-  const forwardedArgs = [];
-  const targetArgs = [];
+  const forwardedArgs: string[] = [];
+  const nonTargetArgs: string[] = [];
+  const targetArgs: string[] = [];
   let watchMode = false;
   let passthrough = false;
 
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
     if (arg === "--") {
-      if (targetArgs.length > 0) {
-        passthrough = true;
-      }
+      // The project wrapper consumes separators; direct native and batch calls retain theirs.
+      passthrough = targetArgs.length > 0;
       continue;
     }
-    if (passthrough) {
-      if (arg === "--watch") {
-        watchMode = true;
-      }
-      forwardedArgs.push(arg);
-      continue;
+    const watch = resolveBooleanModeFlag(args, index, "watch", "-w");
+    if (watch) {
+      watchMode = watch.value;
     }
-    if (arg === "--watch") {
-      watchMode = true;
+    // Preserve bare wrapper --watch's existing omission of the named run command.
+    const next = args[index + 1];
+    if (!passthrough && arg === "--watch" && next !== "true" && next !== "false") {
       continue;
-    }
-    if (isPathLikeTargetArg(arg, cwd)) {
-      targetArgs.push(arg);
     }
     forwardedArgs.push(arg);
+    if (vitestOptionConsumesNextArg(arg, next)) {
+      forwardedArgs.push(next!);
+      // Preserve operand occurrences even when their value also names a target.
+      nonTargetArgs.push(arg, next!);
+      index++;
+    } else if (!passthrough && isPathLikeTargetArg(arg, cwd)) {
+      targetArgs.push(arg);
+    } else {
+      nonTargetArgs.push(arg);
+    }
   }
 
-  return { forwardedArgs, targetArgs, watchMode };
+  return { forwardedArgs, nonTargetArgs, targetArgs, watchMode };
 }
 
 export function buildVitestRunPlans(
@@ -3839,15 +3836,24 @@ export function buildVitestRunPlans(
   listChangedPaths: (baseRef: string, cwd: string) => string[] = listChangedPathsFromGit,
   options: ChangedTestTargetOptions = {},
 ) {
-  const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
+  const {
+    forwardedArgs,
+    nonTargetArgs: remainingArgs,
+    targetArgs,
+    watchMode,
+  } = parseTestProjectsArgs(args, cwd);
   const changedTargetArgs =
     targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
   if (
     watchMode &&
-    requestedTargetArgs.some(
-      (target) => isPathAtOrUnder(toRepoRelativeTarget(target, cwd), "ui") && isGlobTarget(target),
-    )
+    requestedTargetArgs.some((target) => {
+      const relative = toRepoRelativeTarget(target, cwd);
+      return (
+        (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) &&
+        isGlobTarget(relative)
+      );
+    })
   ) {
     throw new Error(
       "watch mode with UI glob targets is not supported; use a literal test path, directory, or dedicated UI suite",
@@ -3874,32 +3880,48 @@ export function buildVitestRunPlans(
     ];
   }
 
-  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
-  const explicitConfigTargets = activeTargetArgs.map((targetArg) =>
-    toRepoRelativeTarget(targetArg, cwd),
+  const nonTargetArgs = changedTargetArgs !== null ? activeForwardedArgs : remainingArgs;
+  const classifiedTargets = activeTargetArgs.map((targetArg) => ({
+    targetArg,
+    relative: toRepoRelativeTarget(targetArg, cwd),
+    kind: classifyTarget(targetArg, cwd),
+  }));
+  const explicitConfigTargets = classifiedTargets.map(({ relative }) => relative);
+  const hasPackageFileTarget = classifiedTargets.some(
+    ({ kind, relative }) =>
+      kind === "packageContract" && relative !== PACKAGE_CONTRACT_VITEST_CONFIG,
   );
+  // The wrapper removes its separator; remaining positional filters can widen
+  // a package file run beyond the package inventory. Option operands cannot.
+  const hasE2eTarget =
+    classifiedTargets.some(({ kind }) => kind === "e2e") ||
+    (!explicitConfigTargets.includes(PACKAGE_CONTRACT_VITEST_CONFIG) &&
+      hasPackageFileTarget &&
+      collectVitestFileFilters(["run", ...nonTargetArgs]).length > 0);
   if (explicitConfigTargets.every(isVitestConfigFileTarget)) {
     if (watchMode && explicitConfigTargets.length > 1) {
       throw new Error(
         "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
       );
     }
-    return explicitConfigTargets.flatMap((config) =>
-      createBoundedExtensionPlans(
-        {
-          config,
-          forwardedArgs: nonTargetArgs,
-          includePatterns: null,
-          watchMode,
-        },
-        options.env,
-      ),
-    );
+    return explicitConfigTargets
+      .filter((config) => !hasE2eTarget || config !== PACKAGE_CONTRACT_VITEST_CONFIG)
+      .flatMap((config) =>
+        createBoundedExtensionPlans(
+          {
+            config,
+            forwardedArgs: nonTargetArgs,
+            includePatterns: null,
+            watchMode,
+          },
+          options.env,
+        ),
+      );
   }
 
   const groupedTargets = new Map<string, string[]>();
-  for (const targetArg of activeTargetArgs) {
-    if (!watchMode && toRepoRelativeTarget(targetArg, cwd) === AGENTS_EMBEDDED_AGENT_TEST_ROOT) {
+  for (const { targetArg, relative, kind: targetKind } of classifiedTargets) {
+    if (!watchMode && relative === AGENTS_EMBEDDED_AGENT_TEST_ROOT) {
       // The recursive parent spans four harness owners; keep every isolated project intact.
       for (const { kind, include: targets } of embeddedAgentVitestProjectOwners) {
         const current = groupedTargets.get(kind) ?? [];
@@ -3913,9 +3935,15 @@ export function buildVitestRunPlans(
       continue;
     }
 
-    const kind = classifyTarget(targetArg, cwd);
+    // Package builds clean shared outputs. Mixed E2E selections keep their
+    // original serial owner instead of introducing a concurrent artifact writer.
+    const kind = hasE2eTarget && targetKind === "packageContract" ? "e2e" : targetKind;
     const current = groupedTargets.get(kind) ?? [];
-    current.push(targetArg);
+    current.push(
+      ...(hasE2eTarget && relative === PACKAGE_CONTRACT_VITEST_CONFIG
+        ? packageContractTestFiles
+        : [targetArg]),
+    );
     groupedTargets.set(kind, current);
   }
   const toolingTargets = groupedTargets.get("tooling") ?? [];
@@ -4031,33 +4059,28 @@ export function buildVitestRunPlans(
     const config = VITEST_CONFIG_BY_KIND[kind] ?? DEFAULT_VITEST_CONFIG;
     const useCliTargetArgs =
       kind === "e2e" ||
-      kind === "packageDocker" ||
+      kind === "packageContract" ||
       grouped.every((targetArg) => isCanonicalAgentOwnerDirectoryTarget(targetArg, cwd)) ||
       (kind === "default" &&
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
     const useWholeConfigTarget = grouped.some((targetArg) =>
       shouldUseWholeConfigTarget(kind, targetArg, cwd),
     );
-    const scopedTargetArgs = useCliTargetArgs ? uniqueOrdered(grouped) : [];
+    const scopedTargetArgs =
+      useCliTargetArgs && !useWholeConfigTarget ? uniqueOrdered(grouped) : [];
     const forwardedPlanArgs = [...nonTargetArgs, ...scopedTargetArgs];
     const unitCliIncludes =
       kind === "default" &&
       useCliTargetArgs &&
       !watchMode &&
-      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim()
-        ? narrowIncludePatternsForCli(unitTestIncludePatterns, [
-            "node",
-            "vitest",
-            ...forwardedPlanArgs,
-          ])
+      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim() &&
+      grouped.every((targetArg) => !path.isAbsolute(targetArg))
+        ? uniqueOrdered(grouped.map((targetArg) => toRepoRelativeTarget(targetArg, cwd)))
         : null;
     // CI needs explicit selection metadata. Keep the CLI filters too: the unit
     // config and runner use them for exclude and empty-selection policy.
     const scopedUnitIncludes =
       unitCliIncludes?.length &&
-      grouped.every((targetArg) =>
-        unitCliIncludes.includes(toRepoRelativeTarget(targetArg, cwd)),
-      ) &&
       unitCliIncludes.every(
         (file) =>
           !isGlobTarget(file) && isUnitConfigTestFile(file) && isExistingFileTarget(file, cwd),
@@ -4124,7 +4147,7 @@ export function buildVitestRunPlans(
   return plans;
 }
 
-export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()) {
+export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()): VitestRunPlan[] {
   const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
   if (watchMode) {
     return [
@@ -4196,6 +4219,7 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
           return chunks.map((targets) => ({
             config,
             forwardedArgs: [...forwardedArgs, ...targets],
+            timingTargets: targets,
             includePatterns: null,
             watchMode: false,
           }));
@@ -4335,7 +4359,7 @@ function sanitizeVitestCachePathSegment(value: string) {
 export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }> {
+): Array<CacheAssignedSpec<T>> {
   const baseEnv = params.env ?? process.env;
   const cwd = params.cwd ?? process.cwd();
   const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
@@ -4345,11 +4369,12 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   return specs.map((spec, index) => {
     const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
     if (specCachePath && specCachePath !== configuredCacheRoot) {
-      return spec;
+      return { ...spec, cacheAssignment: spec.cacheAssignment ?? { kind: "caller" } };
     }
     const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
     return {
       ...spec,
+      cacheAssignment: { kind: "scheduler", root: cacheRoot },
       env: {
         ...spec.env,
         [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(cacheRoot, cacheSegment),
@@ -4361,7 +4386,7 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
 export function applyDefaultMultiSpecVitestCachePaths<T extends WatchableVitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }> {
+): Array<CacheAssignedSpec<T>> {
   if (specs.length <= 1 || specs.some((spec) => spec.watchMode)) {
     return specs;
   }
@@ -4458,6 +4483,7 @@ export function createVitestRunSpecs(
       : null;
     return {
       config: plan.config,
+      timingTargets: plan.timingTargets,
       env: includeFilePath
         ? {
             ...baseEnv,
@@ -4509,7 +4535,7 @@ function filterPlansForContractIncludeFile(plans: VitestRunPlan[], env: NodeJS.P
 
 function expandVitestIncludePatterns(includePatterns: string[], cwd: string) {
   const candidateFiles = includePatterns.some(isGlobTarget)
-    ? listExplicitTestTargetFilesForCwd(cwd)
+    ? listExplicitTestTargetFilesForCwd(cwd).toSorted()
     : [];
   return uniqueOrdered(
     includePatterns.flatMap((pattern) => {

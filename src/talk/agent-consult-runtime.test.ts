@@ -81,6 +81,8 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       forkedFromParent?: boolean;
       totalTokens?: number;
       delivery?: SessionEntry["delivery"];
+      permissionMode?: SessionEntry["permissionMode"];
+      toolOverrides?: SessionEntry["toolOverrides"];
     }
   > = {};
   const runEmbeddedAgent = vi.fn(async (_params?: RunEmbeddedAgentParams) => ({
@@ -393,6 +395,35 @@ describe("realtime voice agent consult runtime", () => {
     );
   });
 
+  it("carries current voice session permissions without enabling owner trace", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:voice"] = {
+      sessionId: "voice-session",
+      permissionMode: "workspace",
+      toolOverrides: { webSearch: false },
+    };
+    await consultRealtimeVoiceAgent({
+      cfg: {},
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      agentId: "main",
+      sessionKey: "agent:main:voice",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-permissions",
+      args: { question: "Read the report" },
+      transcript: [],
+      surface: "a phone call",
+      userLabel: "Caller",
+      senderIsOwner: true,
+    });
+    expect(requireEmbeddedAgentCall(runEmbeddedAgent)).toMatchObject({
+      permissionMode: "workspace",
+      toolOverrides: { webSearch: false },
+      traceAuthorized: false,
+    });
+  });
+
   it.each(["main", "other"])(
     "inherits an isolated consult's required parent from agent %s without current role config",
     async (parentAgentId) => {
@@ -530,6 +561,37 @@ describe("realtime voice agent consult runtime", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it("allows an independent consult when only the requester session is locked", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:main"] = {
+      sessionId: "locked-requester",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {} as never,
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        agentId: "meet-consult",
+        sessionKey: "agent:meet-consult:subagent:google-meet:meet-independent",
+        spawnedBy: "agent:main:main",
+        contextMode: "fork",
+        messageProvider: "google-meet",
+        lane: "google-meet",
+        runIdPrefix: "google-meet:meet-independent",
+        args: { question: "Check the meeting." },
+        transcript: [],
+        surface: "a private Google Meet",
+        userLabel: "Participant",
+      }),
+    ).resolves.toEqual({ text: "Speak this." });
+    expect(sessionForkMocks.forkSessionEntryFromParent).not.toHaveBeenCalled();
+    expect(requireEmbeddedAgentCall(runEmbeddedAgent).agentId).toBe("meet-consult");
+  });
+
   it("fresh-checks archive state after a queued lifecycle mutation", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     const sessionKey = "voice:archive-race";
@@ -603,6 +665,42 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.agentId).toBe("voice");
   });
 
+  it.each([
+    { label: "cancellation", meta: { aborted: true }, errorName: "AbortError" },
+    {
+      label: "timeout",
+      meta: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      errorName: "TimeoutError",
+    },
+  ])("preserves $label instead of speaking a partial result", async ({ meta, errorName }) => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    const cleanup = vi.fn();
+    runEmbeddedAgent.mockResolvedValueOnce({ payloads: [{ text: "Partial answer." }], meta });
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {},
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        sessionKey: "agent:main:voice-interruption",
+        messageProvider: "voice",
+        lane: "voice",
+        runIdPrefix: "voice-interruption",
+        args: { question: "Read the project." },
+        transcript: [],
+        surface: "a live voice session",
+        userLabel: "User",
+        onRunStarted: () => ({ cleanup }),
+      }),
+    ).rejects.toMatchObject({ name: errorName });
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
   it("returns a speakable fallback when the embedded agent has no visible text", async () => {
     const warn = vi.fn();
     const { runtime } = createAgentRuntime([{ text: "hidden", isReasoning: true }]);
@@ -628,11 +726,42 @@ describe("realtime voice agent consult runtime", () => {
     );
   });
 
+  it("returns a yielded acknowledgement immediately without waiting for a visible final", async () => {
+    const warn = vi.fn();
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    runEmbeddedAgent.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "  Working on it.   I will report back.  ",
+      },
+    });
+
+    const result = await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn },
+      sessionKey: "voice:yielded",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice:yielded",
+      args: { question: "Investigate this" },
+      transcript: [],
+      surface: "a live voice session",
+      userLabel: "Caller",
+    });
+
+    expect(result).toEqual({
+      text: "Working on it. I will report back.",
+      yielded: true,
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("forks requester context and inherits its required creator isolation", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     sessionStore["agent:main:main"] = {
       sessionId: "parent-session",
-      sessionFile: testTempPath("parent.jsonl"),
       totalTokens: 100,
       createdActor: { type: "human", source: "profile", id: "profile-required" },
       sandbox: "required",
@@ -670,7 +799,6 @@ describe("realtime voice agent consult runtime", () => {
           ...entry,
           ...params.patch?.({ entry, parentEntry: typedParentEntry, fork, decision }),
           sessionId: fork.sessionId,
-          sessionFile: fork.sessionFile,
           forkedFromParent: true,
         };
         sessionStore[params.sessionKey] = sessionEntry;
@@ -717,7 +845,6 @@ describe("realtime voice agent consult runtime", () => {
     }
     expect(forkedEntry).toStrictEqual({
       sessionId: "forked-session",
-      sessionFile: testTempPath("forked.jsonl"),
       spawnedBy: "agent:main:main",
       forkedFromParent: true,
       createdVia: "talk",

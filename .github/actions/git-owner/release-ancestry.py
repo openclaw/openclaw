@@ -8,6 +8,7 @@ from ci_git_owner import FetchTimeout, GitFailure, backoff, cleanup_seconds, git
 
 
 source_local_ref = "refs/remotes/origin/release-ancestry-source"
+target_hydration_local_ref = "refs/remotes/origin/release-ancestry-target-hydration"
 deepen_chunks = (128, 256, 512, 1024, 2048)
 max_total_seconds = 120
 max_fetch_seconds = 30
@@ -55,7 +56,7 @@ def resolve_commit(ref):
     return value
 
 
-def fetch_history(source_sha, target, depth_argument):
+def fetch_history(depth_argument, *refspecs):
     for attempt in range(1, max_fetch_attempts + 1):
         try:
             run_git(
@@ -67,10 +68,10 @@ def fetch_history(source_sha, target, depth_argument):
                 "--no-tags",
                 "--no-recurse-submodules",
                 "--filter=blob:none",
+                "--refmap=",
                 depth_argument,
                 "origin",
-                f"+{source_sha}:{source_local_ref}",
-                target,
+                *refspecs,
                 timeout=operation_timeout(max_fetch_seconds),
                 reclaim_locks=True,
             )
@@ -171,6 +172,7 @@ def relation_result(mode, source_sha, target_sha):
 
 def establish_ancestry():
     mode = os.environ.get("RELEASE_ANCESTRY_MODE", "")
+    source_ref = os.environ.get("RELEASE_ANCESTRY_SOURCE_REF", "")
     target_ref = os.environ.get("RELEASE_ANCESTRY_TARGET_REF", "")
     if mode not in ("merge-base", "ancestor"):
         print("::error::Release ancestry mode must be merge-base or ancestor.", flush=True)
@@ -178,23 +180,42 @@ def establish_ancestry():
     if not target_ref.startswith("refs/heads/") or not git_test("check-ref-format", target_ref):
         print("::error::Release ancestry target must be a valid branch ref.", flush=True)
         return 2
+    if source_ref and (
+        not source_ref.startswith("refs/heads/") or not git_test("check-ref-format", source_ref)
+    ):
+        print("::error::Release ancestry source must be a valid branch ref.", flush=True)
+        return 2
     target_local_ref = f"refs/remotes/origin/{target_ref[len('refs/heads/') :]}"
     source_sha = resolve_commit("HEAD")
-    fetch_history(source_sha, f"+{target_ref}:{target_local_ref}", "--depth=64")
-    # Freeze the branch after the first fetch; every deepen hydrates this exact target.
+    source = source_ref or source_sha
+    fetch_history(
+        "--depth=64",
+        f"+{source}:{source_local_ref}",
+        f"+{target_ref}:{target_local_ref}",
+    )
+    # Freeze the branch after the first fetch. Later requests hydrate the live
+    # branch into a separate ref: Git may not deepen a detached SHA want, while
+    # every ancestry decision below remains bound to this immutable target.
     target_sha = resolve_commit(target_local_ref)
     result, previous_boundaries = relation_result(mode, source_sha, target_sha)
     if result is not None:
         return result
 
     previous_count = reachable_commit_count(source_sha, target_sha)
+    # Seed the separate destination: Git may only create a new ref on the first
+    # deepen, leaving existing shallow edges unchanged until the next fetch.
+    run_git(workspace, "update-ref", target_hydration_local_ref, target_sha, timeout=operation_timeout())
     chunk_index = 0
     while True:
         chunk = deepen_chunks[min(chunk_index, len(deepen_chunks) - 1)]
-        fetch_history(source_sha, f"+{target_sha}:{target_local_ref}", f"--deepen={chunk}")
-        result, current_boundaries = relation_result(mode, source_sha, target_sha)
-        if result is not None:
-            return result
+        for refspec in (
+            f"+{source}:{source_local_ref}",
+            f"+{target_ref}:{target_hydration_local_ref}",
+        ):
+            fetch_history(f"--deepen={chunk}", refspec)
+            result, current_boundaries = relation_result(mode, source_sha, target_sha)
+            if result is not None:
+                return result
         current_count = reachable_commit_count(source_sha, target_sha)
         if current_count < previous_count or (
             current_count == previous_count and current_boundaries == previous_boundaries

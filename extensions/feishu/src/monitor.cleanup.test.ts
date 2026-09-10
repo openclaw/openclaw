@@ -20,6 +20,7 @@ vi.mock("./client.js", () => ({
   createFeishuWSClient: createFeishuWSClientMock,
 }));
 
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { monitorWebSocket } from "./monitor.transport.js";
 
 type MockWsClient = {
@@ -27,7 +28,7 @@ type MockWsClient = {
   close: ReturnType<typeof vi.fn>;
 };
 
-type MockRuntime = ReturnType<typeof createRuntime>;
+type MockRuntime = ReturnType<typeof createRuntimeSpies>;
 
 function createAccount(accountId: string): ResolvedFeishuAccount {
   return {
@@ -51,15 +52,7 @@ function createWsClient(): MockWsClient {
   };
 }
 
-function createRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
-function startWebSocketMonitor(accountId: string, runtime: MockRuntime = createRuntime()) {
+function startWebSocketMonitor(accountId: string, runtime: MockRuntime = createRuntimeSpies()) {
   const abortController = new AbortController();
   return {
     abortController,

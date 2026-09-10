@@ -25,7 +25,7 @@ navigation. In-call state uses Zoom's Leave control.
 
 Zoom can disable browser join or require authentication, email verification, a
 passcode, CAPTCHA completion, host admission, or browser device permissions.
-The plugin reports these as `manualAction`; complete the requested step in the
+The plugin reports these as `manualAction`. Complete the requested step in the
 same OpenClaw Chrome profile, then retry status or speech. It does not bypass
 Zoom policy.
 
@@ -38,7 +38,7 @@ DOM identifier is available.
 ## Tool and Gateway surface
 
 The `zoom_meetings` tool supports `join`, `leave`, `status`, `transcript`, and
-`speak`. Gateway methods use `zoommeetings.*`; the node command is
+`speak`. Gateway methods use `zoommeetings.*`. The node command is
 `zoommeetings.chrome`.
 
 ## Related

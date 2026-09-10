@@ -1,7 +1,9 @@
 /** Owns side-effect-sensitive retry and silent-reply recovery policy. */
+import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
+import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
-import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
+import { isPreDispatchToolCallRejectionMessage } from "../../failover/message-patterns.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
@@ -36,7 +38,7 @@ const REASONING_ONLY_RETRY_INSTRUCTION =
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 
 export function shouldRetrySilentErrorAssistantTurn(params: {
   attempt: Pick<
@@ -79,7 +81,12 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     return false;
   }
   if (content.length === 0) {
-    return !hasPositiveOutputTokenUsage(assistant);
+    // Rejected arguments can consume tokens without output; the preceding guards own replay safety.
+    return (
+      !hasPositiveOutputTokenUsage(assistant) ||
+      assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
+      isPreDispatchToolCallRejectionMessage(assistant.errorMessage)
+    );
   }
 
   return hasOnlyAssistantReasoningContent(assistant);
@@ -269,10 +276,19 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
       id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
     ),
   );
+  const hasStaleToolError = Boolean(
+    attempt.lastToolError &&
+    assistant?.stopReason === "toolUse" &&
+    allToolsProvenSettled &&
+    failedToolNames.size === 0,
+  );
   // ToolErrorSummary has no call id: its owner must match a failed result in the
   // proven terminal batch, or a stale/unrelated error could authorize continuation.
+  // A fully settled successful batch proves that a retained error belongs to an
+  // earlier tool and cannot block text-only finalization of the current batch.
   const hasUnsettledToolError = Boolean(
     attempt.lastToolError &&
+    !hasStaleToolError &&
     (assistant?.stopReason !== "toolUse" ||
       !allToolsProvenSettled ||
       !failedToolNames.has(attempt.lastToolError.toolName)),
@@ -281,7 +297,7 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
     allToolsProvenSettled &&
     assistant?.stopReason === "toolUse" &&
     failedToolNames.size === 0 &&
-    !attempt.lastToolError &&
+    !hasUnsettledToolError &&
     !hasAsyncActivity(attempt.toolMetas) &&
     requestedToolCalls.every(({ id, name }) => {
       const metadata = attempt.toolMetas.findLast(
@@ -295,6 +311,7 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
     allToolsProvenSettled,
     parkedCodeModeRun,
     failedToolNames,
+    hasStaleToolError,
     hasUnsettledToolError,
     intentionalTermination,
   };

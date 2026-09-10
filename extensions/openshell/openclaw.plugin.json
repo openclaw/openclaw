@@ -1,5 +1,6 @@
 {
   "id": "openshell",
+  "categories": ["security", "runtime"],
   "activation": {
     "onStartup": true
   },

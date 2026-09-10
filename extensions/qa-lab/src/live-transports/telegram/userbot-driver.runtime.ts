@@ -14,6 +14,7 @@ export type TelegramUserbotUpdate = {
   botApiMessageId?: number;
   chatId: number;
   contentType?: string;
+  richMessage?: Record<string, unknown>;
   kind: "edit" | "message";
   messageId: number;
   replyToMessageId?: number;
@@ -79,6 +80,16 @@ function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
   if (typeof value.text !== "string") {
     throw new Error("Telegram userbot update has invalid text.");
   }
+  const richMessage = value.contentType === "messageRichMessage" ? value.richMessage : undefined;
+  if (
+    value.contentType === "messageRichMessage" &&
+    (!isRecord(richMessage) ||
+      !Array.isArray(richMessage.blocks) ||
+      typeof richMessage.is_full !== "boolean" ||
+      typeof richMessage.is_rtl !== "boolean")
+  ) {
+    throw new Error("Telegram userbot update has an invalid rich message.");
+  }
   return {
     kind,
     chatId,
@@ -87,6 +98,8 @@ function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
     timestamp,
     text: value.text,
     entities: parseTextEntities(value.entities, value.text),
+    // Keep TDLib's observed tree and completeness flag; text alone loses URL/style evidence.
+    ...(isRecord(richMessage) ? { richMessage } : {}),
     ...(typeof value.contentType === "string" ? { contentType: value.contentType } : {}),
     ...(typeof value.botApiMessageId === "number"
       ? { botApiMessageId: value.botApiMessageId }
@@ -117,6 +130,7 @@ function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: numb
 }
 
 export class TelegramUserbotDriver {
+  private activeChatId: number | undefined;
   private closing = false;
   private commandId = 0;
   private readonly pending = new Map<
@@ -211,6 +225,12 @@ export class TelegramUserbotDriver {
       return;
     }
     if (message.type === "ready") {
+      const chatId = message.chatId;
+      if (typeof chatId !== "number" || !Number.isInteger(chatId) || chatId === 0) {
+        this.fail(new Error("Telegram userbot emitted an invalid ready chat id."));
+        return;
+      }
+      this.activeChatId = chatId;
       this.readyResolve();
       return;
     }
@@ -269,6 +289,13 @@ export class TelegramUserbotDriver {
     if (this.terminalError) {
       throw this.terminalError;
     }
+  }
+
+  get chatId(): number {
+    if (this.activeChatId === undefined) {
+      throw new Error("Telegram userbot chat id is unavailable before readiness.");
+    }
+    return this.activeChatId;
   }
 
   async send(params: { replyToMessageId?: number; text: string }): Promise<TelegramUserbotUpdate> {

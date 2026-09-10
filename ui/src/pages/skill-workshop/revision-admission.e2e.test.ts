@@ -73,7 +73,7 @@ function params(request: MockGatewayRequest): Record<string, unknown> {
 }
 
 async function openRevision(page: Page, instructions: string): Promise<void> {
-  const board = page.locator("#skill-workshop-mode-tab-board");
+  const board = page.locator("#skill-workshop-mode-tab-suggestions");
   await board.waitFor();
   await board.click();
   const revise = page.getByRole("button", { name: "Revise", exact: true });
@@ -85,7 +85,7 @@ async function openRevision(page: Page, instructions: string): Promise<void> {
 }
 
 async function enterWorkshop(page: Page): Promise<void> {
-  await page.locator("#plugins-tab-workshop").click();
+  await page.getByRole("tab", { name: "Skill workshop", exact: true }).click();
   await waitForControlUiRoute(page, {
     pathname: "/skills/workshop",
     routeId: "skill-workshop",
@@ -125,6 +125,7 @@ function gatewayScenario() {
       "skills.proposals.list": {
         proposals: [proposal()],
         schema: "openclaw.skill-workshop.proposals-manifest.v1",
+        installedSkills: [],
         updatedAt: ISO_NOW,
       },
       "skills.proposals.requestRevision": {

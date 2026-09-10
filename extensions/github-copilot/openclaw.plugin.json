@@ -1,5 +1,6 @@
 {
   "id": "github-copilot",
+  "categories": ["models", "memory"],
   "activation": {
     "onStartup": false
   },
@@ -99,6 +100,7 @@
             "name": "Gemini 3.6 Flash",
             "api": "openai-completions",
             "compat": {
+              "codeMode": "capable",
               "supportsStore": false,
               "supportsDeveloperRole": false,
               "supportsUsageInStreaming": false,
@@ -114,6 +116,7 @@
             "name": "Gemini 3.1 Pro Preview",
             "api": "openai-completions",
             "compat": {
+              "codeMode": "capable",
               "supportsStore": false,
               "supportsDeveloperRole": false,
               "supportsUsageInStreaming": false,
@@ -129,6 +132,7 @@
             "name": "Gemini 3.5 Flash",
             "api": "openai-completions",
             "compat": {
+              "codeMode": "capable",
               "supportsStore": false,
               "supportsDeveloperRole": false,
               "supportsUsageInStreaming": false,

@@ -20,6 +20,7 @@ import {
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("openai transport stream", () => {
   it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
@@ -247,14 +248,7 @@ describe("openai transport stream", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: Date.now(),
     };
@@ -1447,28 +1441,36 @@ describe("openai transport stream", () => {
     );
   });
 
-  it("uses an OpenAI-compatible client for Foundry Azure Responses base URLs", () => {
+  it.each([
+    {
+      baseUrl: "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
+      clientName: "OpenAI",
+    },
+    { baseUrl: "https://example.openai.azure.com", clientName: "AzureOpenAI" },
+  ])("preserves $clientName routing and prepared headers", async ({ baseUrl, clientName }) => {
     const model = {
       ...createAzureResponsesModel(),
-      baseUrl: "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
+      baseUrl,
     };
+    const requests: Request[] = [];
     const client = testing.createAzureOpenAIClient(
       model,
-      { systemPrompt: "system", messages: [], tools: [] } as never,
       "test-key",
+      { session_id: "prepared-affinity" },
+      async (input, init) => {
+        requests.push(new Request(input, init));
+        return Response.json({
+          id: "resp_fixture",
+          object: "response",
+          status: "completed",
+          output: [],
+        });
+      },
     );
-
-    expect(client.constructor.name).toBe("OpenAI");
-  });
-
-  it("keeps traditional Azure Responses hosts on the AzureOpenAI client", () => {
-    const client = testing.createAzureOpenAIClient(
-      createAzureResponsesModel(),
-      { systemPrompt: "system", messages: [], tools: [] } as never,
-      "test-key",
-    );
-
-    expect(client.constructor.name).toBe("AzureOpenAI");
+    await client.responses.create({ model: model.id, input: "hello" });
+    expect(client.constructor.name).toBe(clientName);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.headers.get("session_id")).toBe("prepared-affinity");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

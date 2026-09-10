@@ -5,7 +5,7 @@ import {
   installChannelStatusContractSuite,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mattermostPlugin, mattermostSetupPlugin } from "../channel-plugin-api.js";
 
 describe("mattermost actions contract", () => {
@@ -138,5 +138,31 @@ describe("mattermost status contract", () => {
         },
       },
     ],
+  });
+});
+
+describe.each([
+  ["runtime", mattermostPlugin],
+  ["setup", mattermostSetupPlugin],
+] as const)("mattermost %s account inspection", (_name, plugin) => {
+  it("inspects source SecretRefs while strict account resolution rejects them", () => {
+    const cfg = {
+      channels: {
+        mattermost: {
+          baseUrl: "https://chat.example.com",
+          accounts: {
+            alpha: { botToken: { source: "env", provider: "default", id: "BOT_TOKEN" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(plugin.config.listAccountIds(cfg)).toContain("alpha");
+    expect(plugin.config.inspectAccount?.(cfg, "alpha")).toMatchObject({
+      accountId: "alpha",
+      configured: true,
+      botTokenStatus: "configured_unavailable",
+      botToken: undefined,
+    });
+    expect(() => plugin.config.resolveAccount(cfg, "alpha")).toThrow();
   });
 });

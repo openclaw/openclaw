@@ -28,7 +28,7 @@ describe("Control UI build chunking", () => {
       controlUiStableChunkName(
         "/tmp/openclaw-pnpm-node-modules/libphonenumber-js/max/exports/parsePhoneNumber.js",
       ),
-    ).toBe("config-runtime");
+    ).toBe("phone-runtime");
     expect(
       controlUiStableChunkName("/repo/ui/src/components/config-form.shared.ts"),
     ).toBeUndefined();
@@ -40,6 +40,10 @@ describe("Control UI build chunking", () => {
     ).toBe("gateway-runtime");
     expect(controlUiStableChunkName("/repo/ui/src/lib/gateway-methods.ts")).toBe("gateway-runtime");
     expect(controlUiStableChunkName("/repo/ui/src/app/app-host.ts")).toBeUndefined();
+    expect(controlUiStableChunkName("\0virtual:openclaw-control-ui-locale-config-hints/ru")).toBe(
+      "locale-config-hints-ru",
+    );
+    expect(controlUiStableChunkName("\0virtual:openclaw-control-ui-locale/ru")).toBeUndefined();
   });
 
   it("bounds only the initial module graph without recursively absorbing dependencies", () => {
@@ -66,6 +70,7 @@ describe("Control UI build chunking", () => {
     // keep its own chunk (terminal runtime is not part of the default boot).
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar.ts`)).toBe(true);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/node_modules/ghostty-web/dist/index.js`)).toBe(false);
   });

@@ -21,8 +21,14 @@ The [Control UI](/web/control-ui) already highlights inline tool diffs and sessi
 <Steps>
   <Step title="Install the plugin">
     ```bash
-    openclaw plugins install diffs
+    openclaw plugins install clawhub:@openclaw/diffs
     ```
+
+    `diffs` and its language pack ship as separate packages rather than with
+    OpenClaw, so the install needs a scoped locator. The `clawhub:` prefix
+    selects the ClawHub copy of `@openclaw/diffs`. Use
+    `npm:@openclaw/diffs` to install from npm instead.
+
   </Step>
   <Step title="Enable the plugin">
     ```json5
@@ -159,11 +165,11 @@ Install the Diff Viewer Language Pack plugin for more languages (Astro, Vue, Sve
 openclaw plugins install clawhub:@openclaw/diffs-language-pack
 ```
 
-Without the pack, unsupported languages still render as readable plain text. See [Diffs Language Pack plugin](/plugins/reference/diffs-language-pack) and [Shiki languages](https://shiki.style/languages) for the upstream catalog.
+Without the pack, unsupported languages still render as readable plain text. See [Diff Viewer Language Pack plugin](/plugins/reference/diffs-language-pack) and [Shiki languages](https://shiki.style/languages) for the upstream catalog.
 
 ## Output details contract
 
-All successful results include `changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.
+All successful results include `changed`: identical before/after input returns `false` without creating an artifact. Rendered results return `true`.
 
 <AccordionGroup>
   <Accordion title="Viewer fields (view and both modes)">
@@ -206,7 +212,14 @@ The viewer shows rows like `N unmodified lines`. Expand controls only appear whe
 
 ### Multi-file navigation
 
-Patches that touch more than one file start with a changed-files summary card: total `+N` / `-N` counts, per-file counts, added/deleted/renamed badges, and anchor links that jump to each file. Rendered PNG/PDF files keep the per-file header counts but drop the interactive view toggles, since those are dead controls in a static file.
+Patches that touch more than one file start with a changed-files summary card. The card shows:
+
+- total `+N` / `-N` counts
+- per-file counts
+- added, deleted, and renamed badges
+- anchor links that jump to each file
+
+Rendered PNG/PDF files keep the per-file header counts but drop the interactive view toggles, since those are dead controls in a static file.
 
 ## Plugin defaults
 
@@ -291,8 +304,8 @@ Supported `defaults` keys: `fontFamily`, `fontSize`, `lineSpacing`, `layout`, `s
 
 ## Artifact lifecycle and storage
 
-- Viewer HTML and metadata live in the shared `state/openclaw.sqlite` database under the Diffs plugin blob namespace. HTML is gzip-compressed; SQLite stores only a SHA-256 hash of the random URL token, not the token itself.
-- Rendered PNG/PDF files remain temporary materializations under `$TMPDIR/openclaw-diffs` because channel delivery requires a file path. SQLite owns their expiry metadata; no JSON sidecars are written.
+- Viewer HTML and metadata live in the shared `state/openclaw.sqlite` database under the Diffs plugin blob namespace. HTML is gzip-compressed. SQLite stores only a SHA-256 hash of the random URL token, not the token itself.
+- Rendered PNG/PDF files remain temporary materializations under `$TMPDIR/openclaw-diffs` because channel delivery requires a file path. SQLite owns their expiry metadata. OpenClaw writes no JSON sidecars.
 - Default artifact TTL: 30 minutes. Maximum accepted TTL: 6 hours.
 - Cleanup runs opportunistically after each artifact create call. Expired SQLite rows are deleted first, followed by any corresponding PNG/PDF directory.
 - A fallback sweep removes rowless temporary folders older than 24 hours. Legacy `meta.json`, `file-meta.json`, and `viewer.html` caches are not imported or read.
@@ -311,7 +324,11 @@ The viewer document resolves these assets relative to the viewer URL, so an opti
 
 URL resolution order: tool-call `baseUrl` (after strict validation) -> plugin `viewerBaseUrl` -> `gateway.publicOrigin` -> the existing bind-aware Gateway fallback.
 
-`baseUrl` rules: must be `http://` or `https://`; query and hash are rejected; origin plus optional base path is allowed.
+`baseUrl` rules:
+
+- The scheme must be `http://` or `https://`.
+- A `baseUrl` that carries a query string or a hash is rejected.
+- An origin plus an optional base path is allowed.
 
 ## Security model
 
@@ -319,7 +336,7 @@ URL resolution order: tool-call `baseUrl` (after strict validation) -> plugin `v
   <Accordion title="Viewer hardening">
     - Loopback-only by default.
     - Tokenized viewer paths with strict ID and token pattern validation.
-    - Viewer response CSP: `default-src 'none'`; scripts/assets only from self; no outbound `connect-src`.
+    - Viewer response CSP: `default-src 'none'`. Scripts and assets load only from self. The viewer makes no outbound `connect-src` requests.
     - Remote miss throttling when remote access is enabled: 40 failures per 60 seconds triggers a 60-second lockout (`429 Too Many Requests`).
 
   </Accordion>
@@ -374,7 +391,7 @@ Common failure text: `Diff PNG/PDF rendering requires a Chromium-compatible brow
 
   </Accordion>
   <Accordion title="Unmodified-lines row has no expand button">
-    Expected for patch input that lacks expandable context; not a viewer failure.
+    Expected for patch input that lacks expandable context. This is not a viewer failure.
   </Accordion>
   <Accordion title="Artifact not found">
     - Artifact expired due to TTL.
@@ -402,3 +419,4 @@ Diff rendering engine powered by [Diffs](https://diffs.com).
 - [Browser](/tools/browser)
 - [Plugins](/tools/plugin)
 - [Tools overview](/tools)
+- [`apply_patch`](/tools/apply-patch) — the tool that produces these edits

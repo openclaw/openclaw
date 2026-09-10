@@ -2,7 +2,12 @@
 // tool-call/result sequencing before messages are sent back to transports.
 import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
+
+const EXPECTED_FAILURE_MARKER =
+  "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
+const NO_CONTENT_PLACEHOLDER = "[assistant turn failed before producing content]";
 
 function makeModel(api: Api, provider: string, id: string, canonicalModelId?: string): Model {
   return {
@@ -166,6 +171,28 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
         canonicalModelId: "claude-fable-5",
       },
     },
+    // Fable 5.1 binding is one-way: nothing else reads its blocks (live: model_binding_mismatch).
+    {
+      source: { provider: "anthropic", model: "claude-fable-5-1" },
+      target: { provider: "anthropic", model: "claude-opus-5" },
+    },
+    {
+      source: { provider: "anthropic", model: "claude-fable-5-1" },
+      target: { provider: "anthropic", model: "claude-sonnet-5" },
+    },
+    {
+      source: { provider: "anthropic", model: "claude-fable-5-1" },
+      target: { provider: "anthropic", model: "claude-fable-5" },
+    },
+    {
+      source: { provider: "anthropic", model: "claude-opus-5" },
+      target: { provider: "anthropic", model: "claude-sonnet-5" },
+    },
+    // Non-Claude Anthropic-compatible sources never ride the Fable 5.1 read path.
+    {
+      source: { provider: "kimi-coding", model: "kimi-k2-thinking" },
+      target: { provider: "anthropic", model: "claude-fable-5-1" },
+    },
   ])("drops model-bound thinking for Fable/Mythos switches", ({ source, target }) => {
     const result = transformTransportMessages(
       [
@@ -193,6 +220,53 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(result[0]).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "visible answer" }],
+    });
+  });
+
+  // Live-verified 2026-09-02 with thinking-binding-controls: these replays return
+  // input_transformations: [] on claude-fable-5-1, so the earlier reasoning stays usable.
+  it.each([
+    { source: { provider: "anthropic", model: "claude-opus-5" } },
+    { source: { provider: "anthropic", model: "claude-sonnet-5" } },
+    { source: { provider: "anthropic", model: "claude-opus-4-8" } },
+    { source: { provider: "anthropic", model: "claude-fable-5" } },
+    {
+      source: {
+        provider: "microsoft-foundry",
+        model: "prod-primary",
+        responseModel: "claude-opus-5",
+      },
+    },
+  ])("keeps readable Claude thinking when moving onto Fable 5.1", ({ source }) => {
+    const result = transformTransportMessages(
+      [
+        {
+          role: "assistant",
+          provider: source.provider,
+          api: "anthropic-messages",
+          model: source.model,
+          responseModel: source.responseModel,
+          stopReason: "stop",
+          timestamp: Date.now(),
+          content: [
+            {
+              type: "thinking",
+              thinking: "earlier reasoning",
+              thinkingSignature: "sig_readable",
+            },
+            { type: "text", text: "visible answer" },
+          ],
+        },
+      ] as Context["messages"],
+      makeModel("anthropic-messages", "anthropic", "claude-fable-5-1"),
+    );
+
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "earlier reasoning", thinkingSignature: "sig_readable" },
+        { type: "text", text: "visible answer" },
+      ],
     });
   });
 
@@ -473,7 +547,13 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
 
   it("drops aborted OpenAI transport assistant tool calls before replay", () => {
     const messages: Context["messages"] = [
-      assistantToolCall("call_aborted", "exec", "aborted"),
+      {
+        ...assistantToolCall("call_aborted", "exec", "aborted"),
+        content: [
+          { type: "text", text: "Starting the command" },
+          { type: "toolCall", id: "call_aborted", name: "exec", arguments: {} },
+        ],
+      },
       { role: "user", content: "retry after abort", timestamp: Date.now() },
     ];
 
@@ -486,37 +566,88 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(JSON.stringify(result)).not.toContain("call_aborted");
   });
 
-  it("drops text-only aborted and errored transport assistant turns before replay", () => {
-    const messages: Context["messages"] = [
-      {
-        role: "assistant",
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.4",
-        stopReason: "aborted",
-        timestamp: Date.now(),
-        content: [{ type: "text", text: "partial aborted output" }],
-      } as Extract<Context["messages"][number], { role: "assistant" }>,
-      {
-        role: "assistant",
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.4",
-        stopReason: "error",
-        timestamp: Date.now(),
-        content: [{ type: "text", text: "partial error output" }],
-      } as Extract<Context["messages"][number], { role: "assistant" }>,
-      { role: "user", content: "retry after failed text turns", timestamp: Date.now() },
-    ];
+  it.each([
+    { api: "openai-responses", provider: "openai", model: "gpt-5.4", stopReason: "error" },
+    { api: "openai-responses", provider: "openai", model: "gpt-5.4", stopReason: "aborted" },
+    { api: "openai-completions", provider: "openai", model: "gpt-5.4", stopReason: "error" },
+    {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      stopReason: "error",
+    },
+  ] as const)(
+    "replaces partial $stopReason text with one marker on $api",
+    ({ api, provider, model, stopReason }) => {
+      const before: Context["messages"][number] = {
+        role: "user",
+        content: "summarize the incident",
+        timestamp: 1,
+      };
+      const after: Context["messages"][number] = {
+        role: "user",
+        content: "what is the weather?",
+        timestamp: 3,
+      };
+      const failed = makeAssistantMessageFixture({
+        api,
+        provider,
+        model,
+        stopReason,
+        content: [{ type: "text", text: "Starting the incident summary" }],
+        timestamp: 2,
+      });
 
-    const result = transformTransportMessages(
-      messages,
-      makeModel("openai-responses", "openai", "gpt-5.4"),
-    );
+      const result = transformTransportMessages(
+        [before, failed, after],
+        makeModel(api, provider, model),
+      );
 
-    expect(result.map((msg) => msg.role)).toEqual(["user"]);
-    expect(JSON.stringify(result)).not.toContain("partial aborted output");
-    expect(JSON.stringify(result)).not.toContain("partial error output");
+      expect(result).toEqual([
+        before,
+        { ...failed, content: [{ type: "text", text: EXPECTED_FAILURE_MARKER }] },
+        after,
+      ]);
+      expect(failed.content).toEqual([{ type: "text", text: "Starting the incident summary" }]);
+    },
+  );
+
+  describe.each(["error", "aborted"] as const)("%s replay without visible output", (stopReason) => {
+    it.each([
+      { name: "empty content", content: [] },
+      {
+        name: "hidden reasoning",
+        content: [{ type: "thinking", thinking: "hidden partial reasoning" }],
+      },
+      {
+        name: "the no-content placeholder",
+        content: [{ type: "text", text: NO_CONTENT_PLACEHOLDER }],
+      },
+      {
+        name: "the no-content placeholder with hidden reasoning",
+        content: [
+          { type: "text", text: NO_CONTENT_PLACEHOLDER },
+          { type: "thinking", thinking: "hidden partial reasoning" },
+        ],
+      },
+    ] satisfies Array<{
+      name: string;
+      content: Extract<Context["messages"][number], { role: "assistant" }>["content"];
+    }>)("drops $name across a model change without inventing a visible turn", ({ content }) => {
+      const failed = makeAssistantMessageFixture({ model: "source-model", stopReason, content });
+      const user: Context["messages"][number] = {
+        role: "user",
+        content: "what is the weather?",
+        timestamp: 3,
+      };
+
+      expect(
+        transformTransportMessages(
+          [failed, user],
+          makeModel("openai-responses", "openai", "gpt-5.4"),
+        ),
+      ).toEqual([user]);
+    });
   });
 
   it("drops max-token reasoning-only transport assistant turns before replay", () => {

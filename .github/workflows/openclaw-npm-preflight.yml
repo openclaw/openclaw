@@ -63,7 +63,7 @@ jobs:
     if: ${{ inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '') }}
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
     steps:
@@ -177,6 +177,7 @@ jobs:
       - name: Establish source ancestry with main
         env:
           RELEASE_ANCESTRY_MODE: merge-base
+          RELEASE_ANCESTRY_SOURCE_REF: ${{ inputs.release_candidate_branch != '' && format('refs/heads/{0}', inputs.release_candidate_branch) || '' }}
           RELEASE_ANCESTRY_TARGET_REF: refs/heads/main
         run: |
           exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
@@ -205,7 +206,7 @@ jobs:
     if: ${{ inputs.preflight_phase == 'prepare' || inputs.preflight_phase == 'all' }}
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       prepared_bundle_json: ${{ steps.describe.outputs.bundle_json }}
     steps:
@@ -377,7 +378,7 @@ jobs:
   check_sdk_npm:
     name: Check npm Plugin SDK
     if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -506,7 +507,7 @@ jobs:
   check_dependencies_npm:
     name: Check npm dependencies
     if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -596,7 +597,7 @@ jobs:
             scripts
 
       - name: Install trusted qualification dependencies
-        run: pnpm --dir .artifacts/plugin-sdk-release-tooling install --frozen-lockfile --ignore-scripts --filter openclaw
+        run: (cd .artifacts/plugin-sdk-release-tooling && pnpm install --frozen-lockfile --ignore-scripts --filter openclaw)
 
       - name: Generate dependency release evidence
         id: dependency_evidence
@@ -651,7 +652,7 @@ jobs:
     if: >-
       ${{ !cancelled() && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
           (needs.prepare_openclaw_npm.result == 'success' || inputs.preflight_phase == 'verify') }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -709,7 +710,7 @@ jobs:
             scripts
 
       - name: Install trusted qualification dependencies
-        run: pnpm --dir .artifacts/plugin-sdk-release-tooling install --frozen-lockfile --ignore-scripts --filter openclaw
+        run: (cd .artifacts/plugin-sdk-release-tooling && pnpm install --frozen-lockfile --ignore-scripts --filter openclaw)
 
       - name: Verify final npm package bytes and lifecycle
         env:
@@ -728,7 +729,8 @@ jobs:
             node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/release-check.ts" --tarball "$PREPARED_TARBALL_PATH"
           # Older packages without the separate AI dependency use the global-install contract.
           if ! node -e 'process.exit(require("./package.json").dependencies?.["@openclaw/ai"] ? 0 : 1)'; then
-            node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/openclaw-npm-prepublish-verify.ts" \
+            TSX_TSCONFIG_PATH="$tooling_dir/tsconfig.json" \
+              node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/openclaw-npm-prepublish-verify.ts" \
               "$PREPARED_TARBALL_PATH" "$(node -p 'require("./package.json").version')"
           fi
 
@@ -743,7 +745,9 @@ jobs:
           artifact_dir="$RUNNER_TEMP/openclaw-plugin-npm-preflight"
           rm -rf "$artifact_dir"
           mkdir -p "$artifact_dir"
-          node --import tsx scripts/plugin-npm-release-plan.ts \
+          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
+          TSX_TSCONFIG_PATH="$tooling_dir/tsconfig.json" \
+            node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/plugin-npm-release-plan.ts" \
             --selection-mode all-publishable \
             --npm-dist-tag extended-stable > "$plan"
           cp "$plan" "$artifact_dir/plugin-npm-release-plan.json"
@@ -758,7 +762,8 @@ jobs:
           for package_dir in "${package_dirs[@]}"; do
             runtime_args+=(--package "$package_dir")
           done
-          node --import tsx scripts/check-plugin-npm-runtime-builds.mts "${runtime_args[@]}"
+          TSX_TSCONFIG_PATH="$tooling_dir/tsconfig.json" \
+            node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/check-plugin-npm-runtime-builds.mts" "${runtime_args[@]}"
 
           for package_dir in "${package_dirs[@]}"; do
             OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0 \
@@ -814,7 +819,7 @@ jobs:
           (needs.check_openclaw_npm.result == 'success' || inputs.source_check_json != '') &&
           needs.check_sdk_npm.result == 'success' && needs.check_dependencies_npm.result == 'success' &&
           needs.check_contents_npm.result == 'success' }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       qualified_preflight_bundle_json: ${{ steps.qualified_bundle.outputs.bundle_json }}
     steps:

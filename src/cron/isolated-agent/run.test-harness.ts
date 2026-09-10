@@ -3,7 +3,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 
@@ -15,6 +17,7 @@ type CronSessionEntry = {
   skillsSnapshot: unknown;
   model?: string;
   modelProvider?: string;
+  cliSessionBindings?: SessionEntry["cliSessionBindings"];
   [key: string]: unknown;
 };
 
@@ -74,9 +77,6 @@ export const runEmbeddedAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const resolveContextTokensForModelMock = createMock();
 export const getCliSessionBindingMock = createMock();
-const getCliSessionIdMock = createMock();
-export const clearCliSessionMock = createMock();
-export const setCliSessionBindingMock = createMock();
 export const loadSessionEntryMock = createMock();
 const replaceSessionEntryMock = createMock();
 export const patchSessionEntryMock = createMock();
@@ -100,8 +100,6 @@ export const removeCronRunContinuationSessionIfIdleMock = createMock();
 export const callGatewayMock = createMock();
 export const hasUsableWebSearchProviderMock = createMock();
 export const readSessionMessagesAsyncMock = createMock();
-export const classifyEmbeddedAgentRunResultForModelFallbackMock = createMock();
-export const mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -165,7 +163,6 @@ vi.mock("./run.runtime.js", async () => ({
   supportsXHighThinking: supportsXHighThinkingMock,
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   setSessionRuntimeModel: setSessionRuntimeModelMock,
-  setCliSessionId: vi.fn(),
   logWarn: (...args: unknown[]) => logWarnMock(...args),
   normalizeAgentId: vi.fn((id: string) => id),
   mapHookExternalContentSource: mapHookExternalContentSourceMock,
@@ -263,12 +260,16 @@ vi.mock("./run-model-selection.runtime.js", () => ({
   },
 }));
 
+vi.mock("../../agents/model-fallback-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-fallback-runner.js")>()),
+  runWithModelFallback: runWithModelFallbackMock,
+}));
+
 vi.mock("./run-execution.runtime.js", () => ({
   resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveSubagentModelFallbacksOverride: resolveSubagentModelFallbacksOverrideMock,
   resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
   getCliSessionBinding: getCliSessionBindingMock,
-  getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
   resolveCandidateThinkingLevel: (params: {
@@ -293,7 +294,6 @@ vi.mock("./run-execution.runtime.js", () => ({
   },
   resolveCronAgentLane: resolveCronAgentLaneMock,
   LiveSessionModelSwitchError,
-  runWithModelFallback: runWithModelFallbackMock,
   isCliProvider: isCliProviderMock,
   runEmbeddedAgent: runEmbeddedAgentMock,
   countActiveDescendantRuns: countActiveDescendantRunsMock,
@@ -302,10 +302,6 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
-  classifyEmbeddedAgentRunResultForModelFallback:
-    classifyEmbeddedAgentRunResultForModelFallbackMock,
-  mergeEmbeddedAgentRunResultForModelFallbackExhaustion:
-    mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
 }));
 
 vi.mock("../../agents/model-runtime-aliases.js", async (importOriginal) => ({
@@ -346,12 +342,6 @@ vi.mock("./run-embedded.runtime.js", () => ({
 vi.mock("./run-subagent-registry.runtime.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
   listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
-}));
-
-vi.mock("../../agents/cli-runner.runtime.js", () => ({
-  clearCliSession: clearCliSessionMock,
-  setCliSessionBinding: setCliSessionBindingMock,
-  setCliSessionId: vi.fn(),
 }));
 
 vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
@@ -416,6 +406,7 @@ vi.mock("./helpers.js", () => ({
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: getChannelPluginMock,
+  getLoadedChannelPlugin: getChannelPluginMock,
 }));
 
 vi.mock("./session.js", () => ({
@@ -456,11 +447,14 @@ export function makeCronSession(overrides?: Record<string, unknown>): CronSessio
 function makeDefaultModelFallbackResult() {
   return {
     result: {
-      payloads: [{ text: "test output" }],
-      meta: { agentMeta: {} },
+      result: {
+        payloads: [{ text: "test output" }],
+        meta: { agentMeta: {} },
+      },
     },
     provider: "openai",
     model: "gpt-5.4",
+    attempts: [],
   };
 }
 
@@ -472,10 +466,12 @@ function makeDefaultEmbeddedResult() {
 }
 
 export function mockRunCronFallbackPassthrough(): void {
-  runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-    const result = await run(provider, model);
-    return { result, provider, model, attempts: [] };
-  });
+  runWithModelFallbackMock.mockImplementation(async (params) => ({
+    result: await runInitialModelFallbackAttempt(params),
+    provider: params.provider,
+    model: params.model,
+    attempts: [],
+  }));
 }
 
 function resetRunConfigMocks(): void {
@@ -632,19 +628,10 @@ function resetRunExecutionMocks(): void {
   registerAgentRunContextMock.mockReturnValue(undefined);
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
-  classifyEmbeddedAgentRunResultForModelFallbackMock.mockReset();
-  classifyEmbeddedAgentRunResultForModelFallbackMock.mockReturnValue(null);
-  mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock.mockReset();
-  mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock.mockImplementation(
-    (params: { latestResult: unknown }) => params.latestResult,
-  );
   runEmbeddedAgentMock.mockReset();
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
-  clearCliSessionMock.mockReset();
-  setCliSessionBindingMock.mockReset();
   getCliSessionBindingMock.mockReturnValue(undefined);
-  getCliSessionIdMock.mockReturnValue(undefined);
   countActiveDescendantRunsMock.mockReset();
   countActiveDescendantRunsMock.mockReturnValue(0);
   listDescendantRunsForRequesterMock.mockReset();

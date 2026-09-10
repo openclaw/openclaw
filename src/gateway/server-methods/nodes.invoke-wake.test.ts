@@ -6,6 +6,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import * as nodeInvokePluginPolicy from "../node-invoke-plugin-policy.js";
 import { NodeRegistry, type NodeInvokeResult } from "../node-registry.js";
@@ -87,7 +88,8 @@ vi.mock("../../infra/device-pairing-node-state.js", () => ({
   isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
 }));
 
-vi.mock("../node-command-policy.js", () => ({
+vi.mock("../node-command-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../node-command-policy.js")>()),
   DEFAULT_DANGEROUS_NODE_COMMANDS: ["sms.send", "sms.search"],
   resolveNodeCommandAllowlist: mocks.resolveNodeCommandAllowlist,
   isNodeCommandAllowed: mocks.isNodeCommandAllowed,
@@ -871,6 +873,7 @@ describe("node.invoke APNs wake path", () => {
         allowlist.has(candidate) ? { ok: true } : { ok: false, reason: "command not allowlisted" },
       );
       registry = new NodeRegistry({
+        getConfig: mocks.getRuntimeConfig,
         resolveCurrentPairingState: async () => {
           if (pairingDelayMs > 0) {
             await new Promise((resolve) => {
@@ -907,6 +910,51 @@ describe("node.invoke APNs wake path", () => {
         undefined,
       ]);
       expect(requests).toHaveLength(2);
+    });
+
+    it("retains the public deadline when less than one millisecond remains before registry admission", async () => {
+      let now = 1_000;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+      mocks.captureNodePairingGeneration.mockImplementationOnce(async () => {
+        now = 1_099.5;
+        return { nodeId, key: initialGeneration };
+      });
+      const originalInvoke = registry.invoke.bind(registry);
+      const admission = vi.spyOn(registry, "invoke").mockImplementation((params) => {
+        now = 1_099.75;
+        return originalInvoke(params);
+      });
+      const invocation = start({ timeoutMs: 100 });
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.timeoutMs).toBe(1);
+
+        // The response arrives at the original deadline before a timer callback runs.
+        now = 1_100;
+        const request = expectDefined(requests[0], "expected node transport request");
+        expect(
+          registry.handleInvokeResult({
+            id: request.id,
+            nodeId,
+            connId: request.connId,
+            ok: true,
+          }),
+        ).toBe(false);
+        expect(firstRespondCall(await invocation)).toMatchObject([
+          false,
+          undefined,
+          { details: { nodeError: { code: "TIMEOUT" } } },
+        ]);
+        expect(requests).toHaveLength(1);
+      } finally {
+        controller.abort();
+        registry.unregister(connId);
+        await vi.advanceTimersByTimeAsync(0);
+        await invocation;
+        admission.mockRestore();
+        clock.mockRestore();
+      }
     });
 
     it.each(["command denial", "cancellation", "connection replacement", "pairing replacement"])(
@@ -977,6 +1025,26 @@ describe("node.invoke APNs wake path", () => {
         { details: { nodeError: { code: "TIMEOUT" } } },
       ]);
     });
+
+    it.each([-10_000, 10_000])(
+      "keeps the invoke deadline stable across a %i ms wall-clock change",
+      async (clockChange) => {
+        const invocation = start({ timeoutMs: 500 });
+        await vi.advanceTimersByTimeAsync(0);
+        vi.setSystemTime(clockChange);
+        await vi.advanceTimersByTimeAsync(499);
+        expect(requests).toHaveLength(1);
+        vi.setSystemTime(clockChange + 1);
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(firstRespondCall(await invocation)).toMatchObject([
+          false,
+          undefined,
+          { details: { nodeError: { code: "TIMEOUT" } } },
+        ]);
+        expect(requests).toHaveLength(1);
+      },
+    );
 
     it("returns the final readiness rejection after exhausting bounded retries", async () => {
       const invocation = start({ timeoutMs: 0 });
@@ -1714,9 +1782,12 @@ describe("node.invoke APNs wake path", () => {
   it("rejects wake results that resolve after the absolute invoke deadline", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     const nodeId = "ios-node-late-apns-wake-result";
     mockDirectWakeConfig(nodeId);
     mocks.sendApnsBackgroundWake.mockImplementation(async () => {
+      now = 101;
       vi.setSystemTime(101);
       return {
         ok: true,
@@ -1729,20 +1800,24 @@ describe("node.invoke APNs wake path", () => {
     });
     const nodeRegistry = createMissingNodeRegistry();
 
-    const respond = await invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId, idempotencyKey: "idem-late-apns-wake-result", timeoutMs: 100 },
-    });
+    try {
+      const respond = await invokeNode({
+        nodeRegistry,
+        requestParams: { nodeId, idempotencyKey: "idem-late-apns-wake-result", timeoutMs: 100 },
+      });
 
-    expect(firstRespondCall(respond)).toMatchObject([
-      false,
-      undefined,
-      {
-        message: "TIMEOUT: node invoke timed out",
-        details: { nodeError: { code: "TIMEOUT" } },
-      },
-    ]);
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+      expect(firstRespondCall(respond)).toMatchObject([
+        false,
+        undefined,
+        {
+          message: "TIMEOUT: node invoke timed out",
+          details: { nodeError: { code: "TIMEOUT" } },
+        },
+      ]);
+      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("preserves invoke deadlines beyond the maximum Node.js timer delay", async () => {
@@ -1884,63 +1959,65 @@ describe("node.invoke APNs wake path", () => {
       allowlist.has(command) ? { ok: true } : { ok: false, reason: "command not allowlisted" },
     );
 
+    const nodeId = "mac-node-final-policy-reload";
+    const connId = `conn:${nodeId}`;
     const dispatch = vi.fn();
-    let releasePairingValidation!: () => void;
-    const nodeRegistry = {
-      get: vi.fn(() => ({
-        nodeId: "mac-node-final-policy-reload",
-        connId: "mac-node-final-policy-connection",
-        commands: ["system.which"],
-        platform: "macOS 26.0.0",
-      })),
-      invoke: vi.fn(
-        async (params: {
-          nodeId: string;
-          command: string;
-          isDispatchAuthorized?: () => boolean;
-        }) => {
-          await new Promise<void>((resolve) => {
-            releasePairingValidation = resolve;
-          });
-          if (!params.isDispatchAuthorized?.()) {
-            return {
-              ok: false,
-              error: {
-                code: "APPROVAL_AUTHORITY_CLOSED",
-                message: "runtime authority closed before node dispatch",
-              },
-            };
-          }
-          dispatch();
-          return { ok: true, payload: { path: "/usr/bin/git" } };
-        },
-      ),
-    };
-
-    const invocation = invokeNode({
-      nodeRegistry,
-      requestParams: {
-        nodeId: "mac-node-final-policy-reload",
-        command: "system.which",
-        params: { bins: ["git"] },
-        idempotencyKey: "idem-final-policy-reload",
+    const pairingEntered = createDeferred();
+    const pairingReleased = createDeferred();
+    const registry = new NodeRegistry({
+      getConfig: () => runtimeConfig,
+      resolveCurrentPairingState: async () => {
+        pairingEntered.resolve();
+        await pairingReleased.promise;
+        return { identity: "identity", generation: `generation:${nodeId}:1` };
       },
     });
-    await vi.waitFor(() => expect(nodeRegistry.invoke).toHaveBeenCalledOnce());
-    runtimeConfig = { gateway: { nodes: { commands: { deny: ["system.which"] } } } };
-    releasePairingValidation();
-
-    expect(firstRespondCall(await invocation)).toMatchObject([
-      false,
-      undefined,
+    registry.register(
       {
-        details: {
-          nodeError: { code: "APPROVAL_AUTHORITY_CLOSED" },
-          nodeCommandDispatched: false,
+        ...createNodeClient(nodeId, ["system.which"]),
+        usesSharedGatewayAuth: false,
+        socket: {
+          readyState: WebSocket.OPEN,
+          bufferedAmount: 0,
+          close: vi.fn(),
+          send: dispatch,
         },
-      },
-    ]);
-    expect(dispatch).not.toHaveBeenCalled();
+      } as never,
+      { pairingIdentity: "identity", pairingGeneration: `generation:${nodeId}:1` },
+    );
+    try {
+      const invocation = invokeNode({
+        nodeRegistry: {
+          get: registry.get.bind(registry),
+          getForPairingGeneration: registry.getForPairingGeneration.bind(registry),
+          invoke: registry.invoke.bind(registry),
+        },
+        requestParams: {
+          nodeId,
+          command: "system.which",
+          params: { bins: ["git"] },
+          idempotencyKey: "idem-final-policy-reload",
+        },
+      });
+      await pairingEntered.promise;
+      runtimeConfig = { gateway: { nodes: { commands: { deny: ["system.which"] } } } };
+      pairingReleased.resolve();
+
+      expect(firstRespondCall(await invocation)).toMatchObject([
+        false,
+        undefined,
+        {
+          details: {
+            nodeError: { code: "POLICY_CHANGED" },
+            nodeCommandDispatched: false,
+          },
+        },
+      ]);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      pairingReleased.resolve();
+      registry.unregister(connId);
+    }
   });
 
   it("does not retroactively grant a command enabled while waiting for reconnect", async () => {
@@ -2689,6 +2766,120 @@ describe("node.invoke APNs wake path", () => {
       throttled: false,
     });
   });
+
+  it.each([
+    { priorIdempotencyKey: "idem-foreground-deadline", heldActionCount: 1 },
+    { priorIdempotencyKey: "idem-prior-foreground-action", heldActionCount: 2 },
+  ])(
+    "expires a held foreground wake and preserves the prior action with key $priorIdempotencyKey",
+    async ({ priorIdempotencyKey, heldActionCount }) => {
+      vi.useFakeTimers();
+      const nodeId = `ios-node-foreground-deadline-${priorIdempotencyKey}`;
+      const nodeRegistry = createForegroundUnavailableNodeRegistry({
+        nodeId,
+        commands: ["canvas.navigate"],
+        platform: "iOS 26.4.0",
+      });
+      const requestParams = {
+        nodeId,
+        command: "canvas.navigate",
+        params: { url: "https://example.com/foreground" },
+        idempotencyKey: "idem-foreground-deadline",
+        timeoutMs: 100,
+      };
+      mocks.loadApnsRegistration.mockResolvedValue(null);
+      await invokeNode({
+        nodeRegistry,
+        requestParams: { ...requestParams, idempotencyKey: priorIdempotencyKey },
+      });
+      const original = requireRespondPayload(
+        firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+        "original pending action",
+      );
+      const originalActionId = requireString(
+        expectQueuedAction(original, { command: "canvas.navigate" }).id,
+        "original pending action id",
+      );
+      mockDirectWakeConfig(nodeId);
+      const wake = createDeferred<{
+        ok: boolean;
+        status: number;
+        tokenSuffix: string;
+        topic: string;
+        environment: "sandbox";
+        transport: "direct";
+      }>();
+      mocks.sendApnsBackgroundWake.mockReturnValue(wake.promise);
+      const invocation = invokeNode({ nodeRegistry, requestParams });
+      let respond: Awaited<typeof invocation> | undefined;
+      void invocation.then((value) => {
+        respond = value;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledOnce();
+        const queued = requireRespondPayload(
+          firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+          "pending action while wake is held",
+        );
+        expect(queued.actions).toHaveLength(heldActionCount);
+        expect(queued.actions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: originalActionId, command: "canvas.navigate" }),
+          ]),
+        );
+
+        await vi.advanceTimersByTimeAsync(100);
+        expect(
+          respond,
+          "foreground wake must not hold the invocation past its deadline",
+        ).toBeDefined();
+        const completed = expectDefined(respond, "completed invocation response");
+        expect(firstRespondCall(completed)).toMatchObject([
+          false,
+          undefined,
+          {
+            message: "TIMEOUT: node invoke timed out",
+            details: { nodeError: { code: "TIMEOUT" } },
+          },
+        ]);
+        expect(completed).toHaveBeenCalledOnce();
+        const afterTimeout = requireRespondPayload(
+          firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+          "pending actions after timeout",
+        );
+        expectQueuedAction(afterTimeout, { id: originalActionId, command: "canvas.navigate" });
+
+        wake.resolve({
+          ok: true,
+          status: 200,
+          tokenSuffix: "1234abcd",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+          transport: "direct",
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await invocation;
+        expect(completed).toHaveBeenCalledOnce();
+        const afterWake = requireRespondPayload(
+          firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+          "pending actions after late wake",
+        );
+        expect(afterWake.actions).toEqual(afterTimeout.actions);
+      } finally {
+        wake.resolve({
+          ok: true,
+          status: 200,
+          tokenSuffix: "1234abcd",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+          transport: "direct",
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await invocation;
+      }
+    },
+  );
 
   it("queues iOS foreground-only command failures and keeps them until acked", async () => {
     mocks.loadApnsRegistration.mockResolvedValue(null);

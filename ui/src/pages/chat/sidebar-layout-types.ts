@@ -1,15 +1,17 @@
 export type SidebarSlotId =
   | "browser"
-  | "chat"
   | "companion"
+  | "conversation"
+  | "dashboard"
   | "desktop"
   | "detail"
   | "discussion"
   | "tasks"
   | "terminal"
-  | "workspace";
+  | "workspace"
+  | `plugin:${string}/${string}`;
 export type SidebarPanel = { id: string; slot: SidebarSlotId };
-export type SidebarDock = "bottom" | "right";
+export type SidebarDock = "bottom" | "left" | "right";
 export type SidebarColumn = {
   id: string;
   side: "right";
@@ -20,7 +22,10 @@ export type SidebarColumn = {
 };
 export type SidebarLayout = {
   columns: SidebarColumn[];
+  mainPanelId?: string;
   dock?: SidebarDock;
   open?: boolean;
   expanded?: boolean;
+  /** Focus the active side panel without swapping its saved main/side placement. */
+  expandedSide?: boolean;
 };

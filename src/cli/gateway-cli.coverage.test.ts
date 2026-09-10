@@ -3,8 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnvOverride } from "../config/test-helpers.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { CostUsageSummary } from "../infra/session-cost-usage.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
@@ -123,6 +125,8 @@ function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown
 }
 
 describe("gateway-cli coverage", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
     callGateway.mockReset();
@@ -282,26 +286,85 @@ describe("gateway-cli coverage", () => {
     );
   });
 
-  it.each(["refreshing", "partial", "stale"] as const)(
-    "returns the first usage-cost RPC result when the cache is %s",
-    async (status) => {
-      const summary = {
-        totals: { totalTokens: 100, totalCost: 0.1 },
-        cacheStatus: { status, cachedFiles: 0, pendingFiles: 2 },
-      };
-      callGateway.mockResolvedValue(summary);
+  describe.each([false, true])("usage-cost completeness (json=%s)", (json) => {
+    it.each([
+      ["cold", "refreshing", 0, 2],
+      ["refreshing", "refreshing", 100, 2],
+      ["refreshing-current", "refreshing", 100, 0],
+      ["partial", "partial", 100, 2],
+      ["stale", "stale", 0, 2],
+      ["empty", "fresh", 0, 0],
+      ["fresh", "fresh", 100, 0],
+      ["legacy", undefined, 100, 0],
+    ] as const)(
+      "preserves the first %s result",
+      async (_name, status, totalTokens, pendingFiles) => {
+        const totalCost = totalTokens === 0 ? 0 : 0.1;
+        const totals = {
+          input: totalTokens,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens,
+          totalCost,
+          inputCost: totalCost,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        };
+        const summary: CostUsageSummary = {
+          updatedAt: 1,
+          days: 7,
+          daily: [{ date: "2026-09-01", ...totals }],
+          totals,
+          ...(status
+            ? {
+                cacheStatus: {
+                  status,
+                  cachedFiles: totalTokens === 0 ? 0 : 1,
+                  pendingFiles,
+                  staleFiles: pendingFiles,
+                },
+              }
+            : {}),
+        };
+        callGateway.mockResolvedValue(summary);
 
-      await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
+        await runGatewayCommand([
+          "gateway",
+          "usage-cost",
+          "--all-agents",
+          "--days",
+          "7",
+          ...(json ? ["--json"] : []),
+        ]);
 
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(firstMockArg(callGateway)).toMatchObject({
-        method: "usage.cost",
-        params: { days: 7, agentScope: "all" },
-        timeoutMs: 10_000,
-      });
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(summary);
-    },
-  );
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(firstMockArg(callGateway)).toMatchObject({
+          method: "usage.cost",
+          params: { days: 7, agentScope: "all" },
+          timeoutMs: 10_000,
+        });
+        if (json) {
+          expect(defaultRuntime.writeJson).toHaveBeenCalledWith(summary);
+          return;
+        }
+        const output = runtimeLogs.join("\n");
+        const costLabel = totalTokens === 0 ? "$0.0000" : "$0.10";
+        expect(output).toContain(`Total: ${costLabel} · ${totalTokens} tokens`);
+        expect(output).toContain(`Latest day: 2026-09-01 · ${costLabel} · ${totalTokens} tokens`);
+        if (status && status !== "fresh") {
+          expect(output).toContain(
+            `Usage totals may be incomplete (${status}). Run this command again later.\nTotal: ${costLabel} · ${totalTokens} tokens`,
+          );
+        } else {
+          expect(output).not.toContain("incomplete");
+          expect(output).not.toContain("Run this command again later.");
+        }
+      },
+    );
+  });
 
   it("rejects combining --agent with --all-agents for usage-cost", async () => {
     callGateway.mockClear();
@@ -563,7 +626,7 @@ describe("gateway-cli coverage", () => {
       fs.mkdirSync(bundleDir, { recursive: true });
       fs.writeFileSync(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
 
-      await withEnvOverride({ OPENCLAW_STATE_DIR: tempDir }, async () => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         await runGatewayCommand([
           "gateway",
           "--port",
@@ -607,7 +670,7 @@ describe("gateway-cli coverage", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-support-"));
     try {
       const outputPath = path.join(tempDir, "diagnostics.zip");
-      await withEnvOverride(
+      await withEnvAsync(
         { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
         async () => {
           await runGatewayCommand([...args, "--output", outputPath, "--json"]);
@@ -649,31 +712,55 @@ describe("gateway-cli coverage", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("registers gateway discover and prints json output", async () => {
-    discoverGatewayBeacons.mockClear();
-    discoverGatewayBeacons.mockResolvedValueOnce([
-      {
-        instanceName: "Studio (OpenClaw)",
+  it.each(["--log-lines", "--log-bytes"])(
+    "rejects an explicitly empty gateway diagnostics export %s",
+    async (flag) => {
+      callGateway.mockClear();
+      const tempDir = tempDirs.make("openclaw-gateway-cli-empty-");
+      const outputPath = path.join(tempDir, "diagnostics.zip");
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
+        async () => {
+          await expectGatewayExit([
+            "gateway",
+            "diagnostics",
+            "export",
+            flag,
+            "",
+            "--output",
+            outputPath,
+            "--json",
+          ]);
+        },
+      );
+
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+        ok: false,
+        error: { type: "cli_error", message: `${flag} must be a positive integer.` },
+      });
+      expect(runtimeErrors).toHaveLength(0);
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(fs.existsSync(outputPath)).toBe(false);
+    },
+  );
+
+  it.each([
+    {
+      name: "prefers the resolved service address over TXT hints",
+      beacon: {
+        instanceName: "Studio gateway",
         displayName: "Studio",
         domain: "openclaw.internal.",
         host: "studio.openclaw.internal",
         port: 18789,
-        lanHost: "studio.local",
-        tailnetDns: "studio.tailnet.ts.net",
-        gatewayPort: 18789,
+        lanHost: "untrusted.example.test",
+        tailnetDns: "untrusted.tailnet.test",
+        gatewayPort: 12345,
         sshPort: 22,
-      },
-    ]);
-
-    await runGatewayCommand(["gateway", "discover", "--json"]);
-
-    expect(discoverGatewayBeacons).toHaveBeenCalledTimes(1);
-    const out = runtimeLogs.join("\n");
-    expect(out).toContain('"beacons"');
-    expect(out).toContain("ws://");
-  });
-
-  it.each([
+        txt: { gatewayPort: "12345" },
+      } satisfies DiscoveredBeacon,
+      wsUrl: "ws://studio.openclaw.internal:18789",
+    },
     {
       name: "uses the secure scheme advertised by a TLS gateway",
       beacon: {
@@ -701,7 +788,7 @@ describe("gateway-cli coverage", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         count: 1,
-        beacons: [expect.objectContaining({ wsUrl })],
+        beacons: [{ ...beacon, wsUrl }],
       }),
     );
   });

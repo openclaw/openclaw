@@ -73,11 +73,51 @@ describe("renderPanelTabStrip", () => {
     expect(container.querySelector(".tabstrip-new")?.getAttribute("slot")).toBe("nav");
   });
 
+  it("reports user selection without echoing controlled selection changes", () => {
+    const onSelect = vi.fn();
+    const tabs = [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2" }];
+    const container = renderStrip({ tabs, onSelect });
+    const group = container.querySelector("wa-tab-group")!;
+    const show = (name: string) =>
+      group.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name } }));
+
+    show(TAB.id);
+    expect(onSelect).not.toHaveBeenCalled();
+    show("tab-2");
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("tab-2");
+    renderStrip({ tabs, onSelect, container, activeId: "tab-2" });
+    show("tab-2");
+    expect(onSelect).toHaveBeenCalledOnce();
+  });
+
+  it("keeps explicit tab activation separate from selection, key repeats, and close", () => {
+    const onActivate = vi.fn();
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    const container = renderStrip({ tabs: [{ ...TAB, onActivate }], onSelect, onClose });
+    const tab = container.querySelector("wa-tab")!;
+    tab.click();
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    for (const key of ["Enter", " "]) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      tab.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      tab.dispatchEvent(new KeyboardEvent("keydown", { key, repeat: true, bubbles: true }));
+    }
+    expect(onActivate).toHaveBeenCalledTimes(3);
+    tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    container.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+    expect(onClose).toHaveBeenCalledExactlyOnceWith(TAB.id);
+    expect(onActivate).toHaveBeenCalledTimes(3);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it("closes the requested tab from its labeled close button", () => {
     const onClose = vi.fn();
     const container = renderStrip({ tabs: [TAB], onClose });
     const closeButton = container.querySelector<HTMLButtonElement>(".tabstrip-tab__close");
 
+    expect(closeButton?.hasAttribute("title")).toBe(false);
     expect(closeButton?.getAttribute("aria-label")).toBe(TAB.closeLabel);
     closeButton?.click();
     expect(onClose).toHaveBeenCalledWith(TAB.id);

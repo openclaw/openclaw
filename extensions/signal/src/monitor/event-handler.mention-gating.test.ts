@@ -54,47 +54,17 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
     "openclaw/plugin-sdk/channel-inbound",
   );
-  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
   return {
     ...actual,
-    runChannelInboundEvent: async (params: RunParams) => {
-      const input = await params.adapter.ingest(params.raw);
-      if (!input) {
-        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
-      }
-      const eventClass = (await params.adapter.classify?.(input)) ?? {
-        kind: "message" as const,
-        canStartAgentTurn: true,
-      };
-      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
-      const resolved = await params.adapter.resolveTurn(
-        input,
-        eventClass,
-        "kind" in preflight ? { admission: preflight } : preflight,
-      );
-      if (!("route" in resolved) || !("delivery" in resolved)) {
-        throw new Error("expected assembled Signal channel turn plan");
-      }
-      const result = await actual.runPreparedInboundReply({
-        channel: resolved.channel,
-        accountId: resolved.accountId,
-        routeSessionKey: resolved.route.sessionKey,
-        storePath: "/tmp/openclaw/signal-sessions.json",
-        ctxPayload: resolved.ctxPayload,
-        recordInboundSession: async () => {},
-        afterRecord: resolved.afterRecord,
-        record: resolved.record,
-        history: resolved.history,
-        admission: resolved.admission,
-        botLoopProtection: resolved.botLoopProtection,
-        runDispatch: async () => {
-          capturedCtx = resolved.ctxPayload as SignalMsgContext;
-          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-        },
-      });
-      await params.adapter.onFinalize?.(result);
-      return result;
-    },
+    runChannelInboundEvent: createSignalPreparedDispatchRunner(
+      actual.runChannelInboundEvent,
+      async () => {},
+      async (resolved) => {
+        capturedCtx = resolved.ctxPayload as SignalMsgContext;
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
+    ),
   };
 });
 
@@ -200,11 +170,41 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
   });
 
-  it("drops group messages without mention when requireMention is configured", async () => {
-    const handler = createMentionHandler({ requireMention: true });
+  it("logs identity-derived mention drops once per account and group while preserving history", async () => {
+    const log = vi.fn();
+    const groupHistories = new Map();
+    const createHandler = (accountId: string) =>
+      createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          accountId,
+          runtime: { log, error: vi.fn(), exit: vi.fn() },
+          groupHistories,
+          cfg: { agents: { list: [{ id: "main", identity: { name: "Claw" } }] } },
+        }),
+      );
+    const event = (groupId: string) =>
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "What up",
+          groupInfo: { groupId },
+        },
+      });
+    const handler = createHandler("mention-primary");
 
-    await handler(makeGroupEvent({ message: "hello everyone" }));
+    await handler(event("mention-g1"));
+    await handler(event("mention-g1"));
+    await handler(event("mention-g2"));
+    await createHandler("mention-secondary")(event("mention-g1"));
+
     expect(capturedCtx).toBeUndefined();
+    expect(groupHistories.get("mention-g1")).toHaveLength(3);
+    expect(log).toHaveBeenCalledTimes(3);
+    expect(log.mock.calls[0]?.[0]).toContain("mention-g1");
+    expect(log.mock.calls[1]?.[0]).toContain("mention-g2");
+    expect(log.mock.calls[0]?.[0]).toContain("requireMention");
+    expect(log.mock.calls[0]?.[0]).toContain("false");
+    expect(log.mock.calls.flat().join(" ")).not.toContain("What up");
+    expect(log.mock.calls.flat().join(" ")).not.toContain("+15550001111");
   });
 
   it("allows group messages with mention when requireMention is configured", async () => {

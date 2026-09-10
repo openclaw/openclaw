@@ -127,28 +127,26 @@ function createRuntime() {
     path: "direct" | "steered" | "none";
     error?: string;
   };
-  const createRunningTaskRun = vi.fn(
-    (params): AgentHarnessTaskRecord => ({
-      taskId: params.sourceId ?? params.runId,
-      runtime: "subagent",
-      taskKind: "codex-native",
-      sourceId: params.sourceId,
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      agentId: params.agentId,
-      runId: params.runId,
-      label: params.label,
-      task: params.task,
-      status: "running",
-      deliveryStatus: params.deliveryStatus ?? "not_applicable",
-      notifyPolicy: params.notifyPolicy ?? "silent",
-      createdAt: params.startedAt ?? Date.now(),
-      startedAt: params.startedAt,
-      lastEventAt: params.lastEventAt,
-      progressSummary: params.progressSummary,
-    }),
-  );
+  const createRunningTaskRun = vi.fn((params): AgentHarnessTaskRecord => ({
+    taskId: params.sourceId ?? params.runId,
+    runtime: "subagent",
+    taskKind: "codex-native",
+    sourceId: params.sourceId,
+    requesterSessionKey: "agent:main:main",
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    agentId: params.agentId,
+    runId: params.runId,
+    label: params.label,
+    task: params.task,
+    status: "running",
+    deliveryStatus: params.deliveryStatus ?? "not_applicable",
+    notifyPolicy: params.notifyPolicy ?? "silent",
+    createdAt: params.startedAt ?? Date.now(),
+    startedAt: params.startedAt,
+    lastEventAt: params.lastEventAt,
+    progressSummary: params.progressSummary,
+  }));
   const taskRuntime = {
     createRunningTaskRun,
     tryCreateRunningTaskRun: vi.fn((params) => createRunningTaskRun(params)),
@@ -162,9 +160,10 @@ function createRuntime() {
   return {
     ...taskRuntime,
     createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
-    deliverAgentHarnessTaskCompletion: vi.fn(
-      async (): Promise<DeliveryResult> => ({ delivered: true, path: "direct" }),
-    ),
+    deliverAgentHarnessTaskCompletion: vi.fn(async (): Promise<DeliveryResult> => ({
+      delivered: true,
+      path: "direct",
+    })),
   };
 }
 
@@ -894,7 +893,7 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "codex-thread:child-thread",
-        progressSummary: "Codex native subagent is idle.",
+        progressSummary: "Subagent is idle.",
       }),
     );
     expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
@@ -955,7 +954,7 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(runtime.createRunningTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "codex-thread:child-v2",
-        task: "Codex native subagent /root/researcher",
+        task: "Subagent /root/researcher",
       }),
     );
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
@@ -1803,7 +1802,7 @@ describe("CodexNativeSubagentMonitor", () => {
       expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
         expect.objectContaining({
           statusLabel: "completed_without_final_message",
-          result: "Codex native subagent completed without a final assistant message.",
+          result: "Subagent completed without a final assistant message.",
         }),
       );
       client.close();
@@ -2102,7 +2101,7 @@ describe("CodexNativeSubagentMonitor", () => {
       expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "failed",
-          result: "Codex app-server reported a system error for the native subagent thread.",
+          result: "Subagent runtime reported a system error.",
         }),
       );
       expect(releaseClient).toHaveBeenCalledTimes(1);

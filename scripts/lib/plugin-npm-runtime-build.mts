@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isTypeScriptPackageEntry } from "../../src/plugins/package-entrypoints.ts";
 import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
@@ -9,12 +10,8 @@ import {
   resolvePluginRuntimeFormat,
 } from "./bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
-import {
-  listMissingPackageStaticAssetSources,
-  runPackageAssetBuild,
-} from "./plugin-npm-runtime-assets.mts";
+import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
 import { isRecord } from "./record-shared.mjs";
-import { copyStaticExtensionAssetsForPackage } from "./static-extension-assets.mts";
 
 const env = {
   NODE_ENV: "production",
@@ -62,11 +59,7 @@ function normalizePackageEntry(value: unknown) {
   return typeof value === "string" ? value.trim().replaceAll("\\", "/") : "";
 }
 
-function isTypeScriptEntry(entry: string) {
-  return /\.(?:c|m)?ts$/u.test(entry);
-}
-
-function toPackageRuntimeEntry(entry: string, runtimeFormat: RuntimeBuildFormat = "esm") {
+export function toPackageRuntimeEntry(entry: string, runtimeFormat: RuntimeBuildFormat = "esm") {
   const normalized = normalizePackageEntry(entry).replace(/^\.\//u, "");
   return `./dist/${normalized.replace(/\.[^.]+$/u, pluginRuntimeExtension(runtimeFormat))}`;
 }
@@ -329,8 +322,12 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
   }
 
   const runtimeFormat = resolvePluginRuntimeFormat(packageJson);
-  const packageEntries = collectPluginSourceEntries(packageJson).map(normalizePackageEntry);
-  const requiresRuntimeBuild = packageEntries.some(isTypeScriptEntry);
+  const manifestPath = path.join(packageDir, "openclaw.plugin.json");
+  const manifest = fs.existsSync(manifestPath) ? readJsonFile(manifestPath) : {};
+  const packageEntries = collectPluginSourceEntries(packageJson, manifest).map(
+    normalizePackageEntry,
+  );
+  const requiresRuntimeBuild = packageEntries.some(isTypeScriptPackageEntry);
   if (!requiresRuntimeBuild) {
     return null;
   }
@@ -416,21 +413,9 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     );
   }
   rewriteCommonJsRuntimeSpecifiers(plan);
-  const assetBuildCommand = runPackageAssetBuild(plan);
-  const missingStaticAssets = listMissingPackageStaticAssetSources(plan);
-  if (missingStaticAssets.length > 0) {
-    throw new Error(
-      `${plan.pluginDir} missing static asset source(s): ${missingStaticAssets.join(", ")}`,
-    );
-  }
-  const copiedStaticAssets = copyStaticExtensionAssetsForPackage({
-    rootDir: plan.repoRoot,
-    pluginDir: plan.pluginDir,
-  });
   return {
     ...plan,
-    assetBuildCommand,
-    copiedStaticAssets,
+    ...preparePackageRuntimeAssets(plan),
   };
 }
 

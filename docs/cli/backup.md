@@ -46,7 +46,10 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 - Default output is a timestamped `.tar.gz` archive in the current working directory. Timestamped filenames use your machine's local timezone and include the UTC offset. If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths, unsafe symbolic links, and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
-- `openclaw backup create --only-config` backs up just the active JSON config file.
+- Full archives include the active config and its required `$include` files, including dependencies outside the state directory. They preserve authored bytes, comments, and environment placeholders; resolved secrets are not written into the config copy. These additional files may contain sensitive data, so protect the archive accordingly.
+- Full archives refuse unresolved include graphs, files that change during config capture, and include aliases that cannot be represented safely. Fix missing or unreadable files, use regular-file include paths, or pause concurrent edits and retry. `--no-include-workspace` still includes required config dependencies, even within an excluded workspace.
+- `openclaw backup create --only-config` backs up just the active JSON config file, **not** its `$include` dependencies. It is a root-file export, not a complete modular-config recovery point.
+- Config files are pinned before database capture. SQLite snapshots retain their existing per-database consistency and sanitization; the archive is not one atomic snapshot across config and all databases. Later writes remain live and may not appear in the archive.
 
 ## Restore a full archive
 
@@ -214,6 +217,11 @@ openclaw backup git verify --repository ~/Backups/openclaw-git --ref <commit> --
 openclaw backup git verify --repository ~/Backups/openclaw-git --ref <commit> --agent main
 ```
 
+Git history output must fit within a 16 MiB read. If a log request reports an
+output-limit error, retry with a smaller `--limit`. An oversized commit subject
+can exceed the limit even with `--limit 1`; inspect that history directly with
+Git. OpenClaw reports the failure without returning partial history entries.
+
 Verification restores the selected snapshot into private scratch space, checks each table's row count and SHA-256, runs `PRAGMA integrity_check` and `PRAGMA foreign_key_check`, and removes the scratch copy. Restore writes only to a fresh target and refuses existing `-wal`, `-shm`, and `-journal` sidecars:
 
 ```bash
@@ -221,6 +229,11 @@ openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> -
 ```
 
 Restore rebuilds content-backed FTS5 indexes after loading their content tables. It deliberately omits the derived `session_transcript_index_state` projection so Gateway startup reconciliation rebuilds transcript search. `vec0` virtual tables are not materialized because the extension is unavailable in the restore process; memory indexing recreates them and schedules a full reindex.
+
+Git backup creation, restore, and verification stream table data instead of
+retaining complete table dumps in memory. Restores still require space for the
+materialized Git files and the private SQLite staging copy; verification does
+not write a second set of table dumps.
 
 ## Schedule backups
 
@@ -285,6 +298,8 @@ During archive creation, OpenClaw excludes known live-mutation paths before `tar
 | `sandbox/skills-workspaces/**`               | All entries                                           |
 | Any path under the backed-up state directory | `.sock`, `.pid`, `.tmp`                               |
 
+The active config file remains included even when its name or location matches a rule above. This exception keeps only the selected config file; neighboring files under excluded directories stay out of the archive.
+
 These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports intentionally omitted volatile entries; regenerable agent temporary roots are listed separately in `skipped` and are not included in that count.
 
 Chromium singleton entries coordinate one running browser on one host and are recreated when that profile starts; the rest of the profile's `user-data/` remains in the archive. Sandbox skills workspaces are generated copies of current skill sources and are materialized again when OpenClaw prepares the next sandbox context after restore; adjacent sandbox registry and other durable state remain included.
@@ -306,7 +321,7 @@ The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symli
 
 Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are also omitted and reported as regenerable. This includes temporary files directly below an agent directory and temporary trees inside agent runtime homes; durable sibling directories remain included. An explicitly configured config file, credentials directory, or workspace nested below an omitted temporary root remains included.
 
-Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. Absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
+Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. An absolute link whose real target is contained by a declared asset, such as a Nix-managed config or credentials link, is rewritten to a portable relative archive link. Other absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
 
 Installer-managed and rebuildable runtime roots under the state directory are
 also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and
@@ -315,7 +330,7 @@ temporary files, and downloaded runtimes rather than authoritative user state;
 reinstall or update the corresponding runtime or plugin after restore.
 Effectively activated, loadable plugins can declare additional durable or
 regenerable state- or agent-relative roots through
-[`backupResources`](/plugins/manifest#backupresources-reference). Disabled or
+[`backupResources`](/plugins/manifest/surfaces#backupresources-reference). Disabled or
 unloadable plugins cannot exclude data. Explicit config, credentials, workspace,
 agent, and plugin-included paths override exclusions, and any excluded parent
 remains traversable to reach those protected descendants. Names such as `tmp`

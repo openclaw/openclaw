@@ -1,14 +1,18 @@
 // Config snapshots and pre/post-update config restoration.
 import fs from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import {
+  createConfigIO,
   mutateConfigFileWithRetry,
   parseConfigJson5,
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import { resolveConfigEnvVars } from "../../config/env-substitution.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
+import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { resolveIncludeRoots } from "../../config/paths.js";
 import { parsePluginInstallRecordMap } from "../../config/plugin-install-record-map.js";
@@ -93,7 +97,7 @@ function restorePreUpdateChannelModelOverrides(params: {
     : { channels: params.channels, changed: false };
 }
 
-export function restoreDroppedPreUpdateChannels(
+function restoreDroppedPreUpdateChannels(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   preUpdateConfig: PreUpdateConfigRestoreInput | undefined,
 ): {
@@ -272,6 +276,35 @@ export async function persistRequestedUpdateChannel(params: {
   return createUpdatedConfigSnapshot(mutation.snapshot, mutation.nextConfig);
 }
 
+/** Capture write provenance in the process that will converge plugins, after any channel write. */
+export async function preparePostCorePluginConfig(params: {
+  requestedChannel: UpdateChannel | null;
+  preUpdateConfig?: PreUpdateConfigRestoreInput;
+  suppressFutureVersionWarning?: boolean;
+  observe?: boolean;
+}) {
+  const io = createConfigIO({
+    pluginValidation: "skip",
+    suppressFutureVersionWarning: params.suppressFutureVersionWarning,
+    observe: params.observe,
+  });
+  let prepared = await io.readConfigFileSnapshotForWrite();
+  const channelSnapshot = await persistRequestedUpdateChannel({
+    configSnapshot: prepared.snapshot,
+    requestedChannel: params.requestedChannel,
+  });
+  if (channelSnapshot !== prepared.snapshot) {
+    prepared = await io.readConfigFileSnapshotForWrite();
+  }
+  const restored = restoreDroppedPreUpdateChannels(prepared.snapshot, params.preUpdateConfig);
+  return {
+    configSnapshot: restored.snapshot,
+    configWriteOptions: prepared.writeOptions,
+    configChanged: restored.changed,
+    restoredAuthoredChannels: restored.authoredChannels,
+  };
+}
+
 function createUpdatedConfigSnapshot(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   next: OpenClawConfig,
@@ -290,11 +323,68 @@ function createUpdatedConfigSnapshot(
   };
 }
 
+/** Read-only startup configuration, retaining the authored snapshot alongside any projection. */
+export async function readUpdateChannelConfig(channelRequested: boolean) {
+  const configSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: true,
+    observe: false,
+  });
+  const legacyConfigPlan = channelRequested
+    ? await planUpdateChannelLegacyConfig(configSnapshot)
+    : undefined;
+  const plannedConfig =
+    legacyConfigPlan?.config ?? (configSnapshot.valid ? configSnapshot.config : undefined);
+  return {
+    configSnapshot,
+    legacyConfigPlan,
+    storedChannel: normalizeUpdateChannel(plannedConfig?.update?.channel),
+  };
+}
+
+/** Preserve authored bytes during target admission; the projection grants no write authority. */
+async function planUpdateChannelLegacyConfig(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+): Promise<LegacyConfigUpdatePlan | undefined> {
+  if (snapshot.valid || snapshot.legacyIssues.length === 0) {
+    return undefined;
+  }
+  const { planLegacyConfigForUpdateChannel } =
+    await import("../../commands/doctor/legacy-config-repair.js");
+  const plan = planLegacyConfigForUpdateChannel(snapshot);
+  if (!plan || !snapshot.includedPaths?.length) {
+    return plan;
+  }
+  const current = await createConfigIO({
+    observe: false,
+    pluginValidation: "skip",
+  }).readConfigFileSnapshotForWrite();
+  const keys = [
+    "path",
+    "exists",
+    "raw",
+    "hash",
+    "includedPaths",
+    "includeProvenance",
+    "sourceConfig",
+  ] as const;
+  if (keys.some((key) => !isDeepStrictEqual(snapshot[key], current.snapshot[key]))) {
+    throw new Error(
+      "Legacy configuration changed during update planning; retry against the current source.",
+    );
+  }
+  return planLegacyConfigForUpdateChannel(snapshot, current.writeOptions);
+}
+
 export async function maybeRepairLegacyConfigForUpdateChannel(params: {
+  plan?: LegacyConfigUpdatePlan;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  configWriteOptions?: ConfigWriteOptions;
   jsonMode: boolean;
 }): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
-  if (params.configSnapshot.valid || params.configSnapshot.legacyIssues.length === 0) {
+  if (
+    !params.plan &&
+    (params.configSnapshot.valid || params.configSnapshot.legacyIssues.length === 0)
+  ) {
     return params.configSnapshot;
   }
 

@@ -123,6 +123,7 @@ type SpawnedProcessResult = {
   exitSignal: NodeJS.Signals | null;
   forwardedSignal: NodeJS.Signals | null;
 };
+type RunNodeExit = number | NodeJS.Signals;
 
 function asRunNodeChild(value: unknown): RunNodeChild {
   if (!value || typeof value !== "object" || !("on" in value) || typeof value.on !== "function") {
@@ -176,7 +177,8 @@ const resolvePrivateQaRequiredDistEntries = (distRoot: string) => [
 ];
 const isExcludedSource = (filePath: string, sourceRoot: string, sourceRootName: string) => {
   const relativePath = normalizePath(path.relative(sourceRoot, filePath));
-  if (relativePath.startsWith("..")) {
+  // A basename starting with ".." still belongs to the source root.
+  if (relativePath === ".." || relativePath.startsWith("../")) {
     return false;
   }
   return !isBuildRelevantRunNodePath(path.posix.join(sourceRootName, relativePath));
@@ -228,7 +230,16 @@ const readGitStatus = (deps: RunNodeRequirementDeps, paths: string[] = runNodeWa
   try {
     const result = deps.spawnSync(
       "git",
-      ["status", "--porcelain", "--untracked-files=normal", "--", ...paths],
+      // NUL framing preserves filenames; separate delete/add records keep both rename sides.
+      [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--no-renames",
+        "--untracked-files=normal",
+        "--",
+        ...paths,
+      ],
       {
         cwd: deps.cwd,
         encoding: "utf8",
@@ -246,9 +257,8 @@ const readGitStatus = (deps: RunNodeRequirementDeps, paths: string[] = runNodeWa
 
 const parseGitStatusPaths = (output: string) =>
   output
-    .split("\n")
-    .flatMap((line) => line.slice(3).split(" -> "))
-    .map((entry) => normalizePath(entry.trim()))
+    .split("\0")
+    .map((entry) => entry.slice(3))
     .filter(Boolean);
 
 const hasDirtySourceTree = (deps: RunNodeRequirementDeps) => {
@@ -256,17 +266,15 @@ const hasDirtySourceTree = (deps: RunNodeRequirementDeps) => {
   if (output === null) {
     return null;
   }
-  return parseGitStatusPaths(output).some((repoPath) => {
-    const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-    return (
-      isBuildRelevantRunNodePath(normalizedPath) ||
-      isDirtyBundledPluginPackageEntryChangeWithoutBuiltOutputs(normalizedPath, deps)
-    );
-  });
+  return parseGitStatusPaths(output).some(
+    (repoPath) =>
+      isBuildRelevantRunNodePath(repoPath) ||
+      isDirtyBundledPluginPackageEntryChangeWithoutBuiltOutputs(repoPath, deps),
+  );
 };
 
 const isRuntimePostBuildRelevantPath = (repoPath: string) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  const normalizedPath = normalizePath(repoPath);
   if (runtimePostBuildStaticAssetPaths.has(normalizedPath)) {
     return true;
   }
@@ -662,13 +670,6 @@ export const resolveBuildRequirement = (deps: RunNodeRequirementDeps): BuildRequ
     return { shouldBuild: true, reason: "missing_dist_entry" };
   }
 
-  for (const filePath of deps.configFiles) {
-    const mtime = statMtime(filePath, deps.fs);
-    if (mtime != null && mtime > stamp.mtime) {
-      return { shouldBuild: true, reason: "config_newer" };
-    }
-  }
-
   const currentHead = resolveGitHead(deps);
   if (currentHead && !stamp.head) {
     return { shouldBuild: true, reason: "build_stamp_missing_head" };
@@ -686,6 +687,13 @@ export const resolveBuildRequirement = (deps: RunNodeRequirementDeps): BuildRequ
         return { shouldBuild: true, reason: "missing_bundled_plugin_dist_entry" };
       }
       return { shouldBuild: false, reason: "clean" };
+    }
+  }
+
+  for (const filePath of deps.configFiles) {
+    const mtime = statMtime(filePath, deps.fs);
+    if (mtime != null && mtime > stamp.mtime) {
+      return { shouldBuild: true, reason: "config_newer" };
     }
   }
 
@@ -796,9 +804,11 @@ const refuseImmutableDeploymentMutation = async (
 };
 
 const SIGNAL_EXIT_CODES = {
+  SIGHUP: 129,
   SIGINT: 130,
   SIGTERM: 143,
 };
+const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 const isSignalKey = (signal: NodeJS.Signals): signal is keyof typeof SIGNAL_EXIT_CODES =>
   Object.hasOwn(SIGNAL_EXIT_CODES, signal);
@@ -1126,11 +1136,8 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
     if (forceKillTimer) {
       clearTimeout(forceKillTimer);
     }
-    if (onSigInt) {
-      deps.process.off("SIGINT", onSigInt);
-    }
-    if (onSigTerm) {
-      deps.process.off("SIGTERM", onSigTerm);
+    for (const [signal, handler] of signalHandlers) {
+      deps.process.off(signal, handler);
     }
   };
 
@@ -1146,15 +1153,12 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
     }, RUN_NODE_SIGNAL_FORCE_KILL_AFTER_MS);
   };
 
-  const onSigInt = () => {
-    forwardSignal("SIGINT");
-  };
-  const onSigTerm = () => {
-    forwardSignal("SIGTERM");
-  };
-
-  deps.process.on("SIGINT", onSigInt);
-  deps.process.on("SIGTERM", onSigTerm);
+  const signalHandlers = FORWARDED_SIGNALS.map(
+    (signal) => [signal, () => forwardSignal(signal)] as const,
+  );
+  for (const [signal, handler] of signalHandlers) {
+    deps.process.on(signal, handler);
+  }
 
   try {
     return await new Promise<SpawnedProcessResult>((resolve) => {
@@ -1171,7 +1175,7 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
         settle({ exitCode: 1, exitSignal: null, forwardedSignal });
       };
       const handleExit = (exitCode: number | null, exitSignal: NodeJS.Signals | null) => {
-        if (forwardedSignal && !cleanedForwardedSignalGroup) {
+        if ((forwardedSignal || exitSignal) && !cleanedForwardedSignalGroup) {
           cleanedForwardedSignalGroup = true;
           signalSpawnedProcess(childProcess, "SIGKILL", useProcessGroup, deps);
         }
@@ -1190,9 +1194,14 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
   }
 };
 
-const getInterruptedSpawnExitCode = (res: SpawnedProcessResult) => {
+const getInterruptedSpawnOutcome = (
+  res: SpawnedProcessResult,
+  platform: NodeJS.Platform,
+): RunNodeExit | null => {
   if (res.exitSignal) {
-    return getSignalExitCode(res.exitSignal);
+    // The child did not acknowledge completion. A numeric exit could let the
+    // watch parent retry after the owner of detached workers has disappeared.
+    return platform === "win32" ? getSignalExitCode(res.exitSignal) : res.exitSignal;
   }
   if (res.forwardedSignal) {
     return getSignalExitCode(res.forwardedSignal);
@@ -1212,9 +1221,9 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
   );
   pipeSpawnedOutput(nodeProcess, deps);
   const res = await waitForSpawnedProcess(nodeProcess, deps);
-  const interruptedExitCode = getInterruptedSpawnExitCode(res);
-  if (interruptedExitCode !== null) {
-    return interruptedExitCode;
+  const interrupted = getInterruptedSpawnOutcome(res, deps.platform);
+  if (interrupted !== null) {
+    return interrupted;
   }
   return res.exitCode ?? 1;
 };
@@ -1310,7 +1319,7 @@ const createSyncIoTraceStderrFilter = (deps: RunNodeDeps) => {
   };
 };
 
-const closeRunNodeOutputTee = async (deps: RunNodeDeps, exitCode: number) => {
+const closeRunNodeOutputTee = async (deps: RunNodeDeps, exitCode: RunNodeExit) => {
   if (!deps.outputTee) {
     return exitCode;
   }
@@ -1420,12 +1429,14 @@ export const acquireRunNodeBuildLock = async (deps: RunNodeLockDeps): Promise<()
       };
       const onSignal = () => removeLockDir();
       const onExit = () => removeLockDir();
-      deps.process.on("SIGINT", onSignal);
-      deps.process.on("SIGTERM", onSignal);
+      for (const signal of FORWARDED_SIGNALS) {
+        deps.process.on(signal, onSignal);
+      }
       deps.process.on("exit", onExit);
       return () => {
-        deps.process.off("SIGINT", onSignal);
-        deps.process.off("SIGTERM", onSignal);
+        for (const signal of FORWARDED_SIGNALS) {
+          deps.process.off(signal, onSignal);
+        }
         deps.process.off("exit", onExit);
         removeLockDir();
       };
@@ -1594,7 +1605,7 @@ function createRunNodeDeps(params: RunNodeMainParams) {
 }
 
 /** Runs the dev build/watch loop and keeps the child CLI in sync with changes. */
-export async function runNodeMain(params: RunNodeMainParams = {}): Promise<number> {
+export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNodeExit> {
   const deps = createRunNodeDeps(params);
   if (deps.args[0] === "qa") {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
@@ -1604,7 +1615,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
   deps.outputTee = createRunNodeOutputTee(deps);
 
   try {
-    let exitCode = 1;
+    let exitCode: RunNodeExit = 1;
     if (shouldFastPathExistingDistForGatewayClient(deps)) {
       exitCode = await runOpenClaw(deps);
       return await closeRunNodeOutputTee(deps, exitCode);
@@ -1695,7 +1706,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
         );
         pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
         const result = await waitForSpawnedProcess(build, deps);
-        return getInterruptedSpawnExitCode(result) ?? result.exitCode ?? 1;
+        return getInterruptedSpawnOutcome(result, deps.platform) ?? result.exitCode ?? 1;
       });
     });
     if (buildExitCode !== 0) {
@@ -1711,7 +1722,13 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runNodeMain()
-    .then((code) => process.exit(code))
+    .then((outcome) => {
+      if (typeof outcome === "string") {
+        process.kill(process.pid, outcome);
+        return;
+      }
+      process.exit(outcome);
+    })
     .catch((err: unknown) => {
       console.error(err);
       process.exit(1);

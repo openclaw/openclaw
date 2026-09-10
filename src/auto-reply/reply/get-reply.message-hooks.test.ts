@@ -35,7 +35,8 @@ const mocks = vi.hoisted(() => ({
   resolveReplySessionPreprocessingState: vi.fn(),
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../globals.js")>()),
   logVerbose: vi.fn(),
 }));
 vi.mock("../../hooks/internal-hooks.js", () => ({
@@ -337,55 +338,73 @@ describe("getReplyFromConfig message hooks", () => {
     );
   });
 
-  it("runs configured audio transcription for a model-locked harness voice note", async () => {
-    const sessionKey = "agent:main:harness:claude-cli:locked-audio";
-    const sessionEntry = {
-      sessionId: "locked-session",
-      updatedAt: 1,
-      agentHarnessId: "claude-cli",
-      modelSelectionLocked: true,
-    };
-    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
-      sessionEntry,
-      sessionKey,
-      storePath: "/tmp/sessions.json",
-    });
-    mocks.initSessionState.mockResolvedValueOnce(
-      createGetReplySessionState({
-        sessionCtx: {
-          BodyForAgent: "<media:audio>",
-          SessionKey: sessionKey,
-        },
+  it.each([
+    {
+      label: "configured audio",
+      harness: "claude-cli",
+      mime: "audio/ogg",
+      configuredAudio: true,
+      mode: "audio-and-files",
+    },
+    {
+      label: "unconfigured audio",
+      harness: "claude-cli",
+      mime: "audio/ogg",
+      configuredAudio: false,
+      mode: "files-only",
+    },
+    {
+      label: "pasted text",
+      harness: "codex",
+      mime: "text/plain",
+      configuredAudio: false,
+      mode: "files-only",
+    },
+  ])(
+    "preprocesses model-locked $label before dispatch",
+    async ({ harness, mime, configuredAudio, mode }) => {
+      const sessionKey = `agent:main:harness:${harness}:locked-media`;
+      const sessionEntry = {
+        sessionId: "locked-session",
+        updatedAt: 1,
+        agentHarnessId: harness,
+        modelSelectionLocked: true,
+      };
+      const preparedText =
+        mime === "text/plain"
+          ? "Pasted diagnostic: synthetic connection refused"
+          : "voice transcript";
+      mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
         sessionEntry,
         sessionKey,
-      }),
-    );
-
-    await getReplyFromConfig(
-      buildCtx({ SessionKey: sessionKey }),
-      undefined,
-      buildConfiguredAudioCfg(),
-    );
-
-    expect(mocks.resolveReplySessionPreprocessingState).toHaveBeenCalledOnce();
-    expect(mocks.initSessionState).toHaveBeenCalledOnce();
-    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledOnce();
-    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ processingMode: "audio-only" }),
-    );
-    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          agentHarnessId: "claude-cli",
-          modelSelectionLocked: true,
-        }),
-        ctx: expect.objectContaining({
-          BodyForAgent: "[Audio]\nTranscript:\nvoice transcript",
+        storePath: "/tmp/sessions.json",
+      });
+      mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+        const { ctx } = args[0] as { ctx: MsgContext };
+        ctx.agentText = preparedText;
+        ctx.BodyForAgent = preparedText;
+      });
+      await getReplyFromConfig(
+        buildCtx({
           SessionKey: sessionKey,
+          media: [
+            {
+              path: mime === "text/plain" ? "/tmp/pasted-text-123.txt" : "/tmp/voice.ogg",
+              contentType: mime,
+            },
+          ],
         }),
-      }),
-    );
-  });
+        undefined,
+        configuredAudio ? buildConfiguredAudioCfg() : withFastReplyConfig({}),
+      );
+      expect(mocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+        expect.objectContaining({ processingMode: mode }),
+      );
+      expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ ctx: expect.objectContaining({ agentText: preparedText }) }),
+      );
+    },
+  );
 
   it("does not infer locked-harness audio from its filename when MIME metadata is missing", async () => {
     const sessionKey = "agent:main:harness:claude-cli:locked-audio-filename";
@@ -414,7 +433,9 @@ describe("getReplyFromConfig message hooks", () => {
       buildConfiguredAudioCfg(),
     );
 
-    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+      expect.objectContaining({ processingMode: "files-only" }),
+    );
   });
 
   it("runs normal media understanding for an unlocked voice note", async () => {
@@ -572,29 +593,6 @@ describe("getReplyFromConfig message hooks", () => {
       senderIsOwner: true,
     });
     expect(owner).toHaveBeenCalledOnce();
-  });
-
-  it("keeps unconfigured audio with a model-locked harness", async () => {
-    const sessionKey = "agent:main:harness:claude-cli:locked-unconfigured-audio";
-    const sessionEntry = {
-      sessionId: "locked-unconfigured-session",
-      updatedAt: 1,
-      agentHarnessId: "claude-cli",
-      modelSelectionLocked: true,
-    };
-    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
-      sessionEntry,
-      sessionKey,
-      storePath: "/tmp/sessions.json",
-    });
-
-    await getReplyFromConfig(
-      buildCtx({ SessionKey: sessionKey }),
-      undefined,
-      withFastReplyConfig({}),
-    );
-
-    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
 
   it("skips utility link understanding for a model-locked harness session", async () => {
@@ -1064,16 +1062,15 @@ describe("getReplyFromConfig message hooks", () => {
     expect.soft(mocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 
-  it("continues dispatching URL messages when link understanding fails before reply routing", async () => {
+  it.each([false, true])("keeps URL input after link failure (literal: %s)", async (suppressed) => {
+    const ctx = buildTextCtx("read https://example.test/page", {
+      CommandInterpretationSuppressed: suppressed,
+    });
     mocks.applyLinkUnderstanding.mockRejectedValueOnce(
       new Error("Cannot find module '/tmp/openclaw/dist/link-understanding/apply.runtime-old.js'"),
     );
 
-    const reply = await getReplyFromConfig(
-      buildTextCtx("read https://example.test/page"),
-      undefined,
-      withFastReplyConfig({}),
-    );
+    const reply = await getReplyFromConfig(ctx, undefined, withFastReplyConfig({}));
 
     expect(reply).toEqual({ text: "ok" });
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();

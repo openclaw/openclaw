@@ -1,7 +1,5 @@
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
-import type { renderSkills } from "./view.ts";
-
-type SkillsProps = Parameters<typeof renderSkills>[0];
+import type { SkillsProps } from "./view-types.ts";
 
 export function normalizeText(node: Element | DocumentFragment): string {
   return node.textContent?.replace(/\s+/g, " ").trim() ?? "";
@@ -24,6 +22,10 @@ export function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillSta
     blockedByAllowlist: false,
     blockedByAgentFilter: false,
     eligible: true,
+    platformIncompatible: false,
+    modelVisible: true,
+    userInvocable: true,
+    commandVisible: true,
     requirements: {
       anyBins: [],
       bins: [],

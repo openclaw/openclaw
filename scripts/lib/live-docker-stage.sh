@@ -174,17 +174,11 @@ NODE
   )" || return $?
 
   if [[ "$capability" == "missing-export" ]]; then
-    local authorization_status
-    if openclaw_frozen_target_omissions_authorized; then
+    if [[ "${OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE:-current}" == "legacy" ]]; then
       echo "Staged target does not export resolveCliBackendDockerPackages; preserving historical no-package-setup behavior."
       return 0
-    else
-      authorization_status=$?
     fi
-    if ((authorization_status == 2)); then
-      return "$authorization_status"
-    fi
-    echo "staged target does not export resolveCliBackendDockerPackages and frozen-target omissions are not authorized" >&2
+    echo "staged target does not export resolveCliBackendDockerPackages" >&2
     return 1
   fi
 
@@ -317,6 +311,16 @@ openclaw_live_stage_node_modules() {
 
   mkdir -p "$target_dir"
   cp -aRs /app/node_modules/. "$target_dir"
+  local source_modules staged_modules
+  # Source staging excludes node_modules everywhere. Restore each workspace's
+  # dependency links too, or package-local imports cannot reach the pnpm store.
+  for source_modules in /app/packages/*/node_modules /app/extensions/*/node_modules /app/ui/node_modules; do
+    [ -d "$source_modules" ] || continue
+    staged_modules="$dest_dir/${source_modules#/app/}"
+    [ -d "$(dirname "$staged_modules")" ] || continue
+    mkdir -p "$staged_modules"
+    cp -aRs "$source_modules/." "$staged_modules"
+  done
   rm -rf "$target_dir/.vite-temp"
   mkdir -p "$target_dir/.vite-temp"
 }

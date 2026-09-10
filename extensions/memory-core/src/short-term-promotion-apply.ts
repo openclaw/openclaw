@@ -26,13 +26,13 @@ import { pruneMemoryEntryOrigins, reserveMemoryEntryOrigins } from "./memory-ent
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   buildPromotionMarker,
+  commitMemoryContent,
   extractPromotionKeys,
   hashMemoryContent,
   isAtomicReplacePermissionError,
   MemoryWriteConflictError,
   readMemoryContent,
   resolveMemoryWritePath,
-  writeMemoryContent,
 } from "./short-term-promotion-memory-write.js";
 import {
   buildPromotionRecallAnnotations,
@@ -278,7 +278,6 @@ export async function applyShortTermPromotions(
   const rejectionReasons = new Map<string, string>();
   const eligible = currentCandidates.filter((candidate) => {
     const latest = store.entries[candidate.key];
-    const queryCount = Math.max(candidate.uniqueQueries, candidate.recallDays.length);
     // Explicit untrusted/system origins never promote on ANY path (append or
     // consolidation): recall frequency must never launder externally-derived
     // content into MEMORY.md. Workspace memory files index as 'agent', so
@@ -295,8 +294,8 @@ export async function applyShortTermPromotions(
               ? `score threshold (${candidate.score.toFixed(3)} < ${minScore})`
               : candidate.signalCount < minRecallCount
                 ? `signal threshold (${candidate.signalCount} < ${minRecallCount})`
-                : queryCount < minUniqueQueries
-                  ? `query threshold (${queryCount} < ${minUniqueQueries})`
+                : candidate.uniqueQueries < minUniqueQueries
+                  ? `query threshold (${candidate.uniqueQueries} < ${minUniqueQueries})`
                   : maxAgeDays >= 0 && candidate.ageDays > maxAgeDays
                     ? `age threshold (${candidate.ageDays.toFixed(1)}d > ${maxAgeDays}d)`
                     : undefined;
@@ -389,7 +388,6 @@ export async function applyShortTermPromotions(
       ? await consolidateMemory({
           agentId: options.agentId,
           subagent: options.consolidation.subagent,
-          workspaceDir,
           existingMemory,
           candidates: toAppend,
           ...(options.consolidation.model ? { model: options.consolidation.model } : {}),
@@ -526,9 +524,9 @@ export async function applyShortTermPromotions(
           operations: consolidationPlan.operations,
         });
         try {
-          await writeMemoryContent({
-            memoryPath,
-            memoryWritePath,
+          await commitMemoryContent({
+            filePath: memoryWritePath,
+            tempPrefix: `${path.basename(memoryPath)}.promotion`,
             expectedHash: consolidationBaseMemoryHash,
             content: consolidationResult.content,
           });
@@ -590,9 +588,9 @@ export async function applyShortTermPromotions(
           const content = `${header}${withTrailingNewline(baseMemory)}${section}`;
           // Append fallback keeps the historical read-modify-replace contract. Policy accepts
           // its external-editor race because OpenClaw writers remain serialized by this sweep lock.
-          await writeMemoryContent({
-            memoryPath,
-            memoryWritePath,
+          await commitMemoryContent({
+            filePath: memoryWritePath,
+            tempPrefix: `${path.basename(memoryPath)}.promotion`,
             expectedHash: hashMemoryContent(existingMemory),
             expectedContent: existingMemory,
             allowInPlaceFallback: true,

@@ -13,6 +13,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -29,6 +30,7 @@ import {
   isPrivateQaPluginSdkBuild,
 } from "./lib/plugin-sdk-declaration-budget.mts";
 import { publicPluginSdkEntrypoints, publicPluginSdkSubpaths } from "./lib/plugin-sdk-entries.mts";
+import { findUndeclaredBundlerHelperDtsExports } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
@@ -60,6 +62,20 @@ const requiredSubpathExports: Record<string, string[]> = {
   ],
 };
 
+// This private runtime facade has declarations only in the private-QA profile.
+// Do not require its types from ordinary public-package builds.
+const privateSessionManagerConsumer = isPrivateQaPluginSdkBuild(process.env)
+  ? `import { SessionManager, type SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
+
+// Private facade declarations must preserve callable access to persist.
+declare const sessionManager: SessionManager;
+declare const sessionEntry: SessionEntry;
+sessionManager.persist(sessionEntry);
+sessionManager.persist(sessionEntry, {});
+// @ts-expect-error Persist still requires a complete session entry.
+sessionManager.persist({});`
+  : "";
+
 let missing = 0;
 
 {
@@ -71,6 +87,7 @@ let missing = 0;
       join(consumerRoot, "index.ts"),
       `import { buildChannelConfigSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { identityEntryAuthenticationClassifier, meetsIdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type {
   ChannelIngressIdentitySubjectInput,
@@ -86,6 +103,7 @@ import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sd
 import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import type { buildModelsProviderData as buildCommandAuthModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import { z } from "zod";
+${privateSessionManagerConsumer}
 
 // Stable v2026.7.1-2 consumers construct these results and supply typed adapters.
 const legacyModelsData = {
@@ -105,6 +123,7 @@ void preparedCatalog;
 // @ts-expect-error Prepared selections require their typed catalog metadata.
 const incompletePrepared: typeof preparedModelsData = legacyModelsData;
 void incompletePrepared;
+void defineToolPlugin;
 
 const identifierAuthentication: IdentifierAuthentication = "verified";
 const meetsMinimum: boolean = meetsIdentifierAuthentication(identifierAuthentication, "asserted");
@@ -139,6 +158,10 @@ export default defineChannelPluginEntry({
 `,
     );
     writeFileSync(join(consumerRoot, "package.json"), '{"private":true,"type":"module"}\n');
+    // Keep skipLibCheck on for this in-tree consumer: workspace @openclaw/ai
+    // declaration caches can omit .d.mts while still shipping .mjs, which makes
+    // skipLibCheck:false fail with TS7016 before the helper scan below. Packed
+    // release-check still uses skipLibCheck:false against a complete tarball.
     writeFileSync(
       join(consumerRoot, "tsconfig.json"),
       `{
@@ -296,6 +319,41 @@ if (declarationBudget.shouldFail) {
   console.log(
     `Public plugin SDK declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance).`,
   );
+}
+
+{
+  const rootDist = resolve(scriptDir, "..", "dist");
+  if (!existsSync(rootDist)) {
+    console.error("UNDECLARED BUNDLER HELPER DTS EXPORT: missing dist/ for helper export scan");
+    missing += 1;
+  } else {
+    const queue = [rootDist];
+    const visitedDirs = new Set<string>();
+    while (queue.length > 0) {
+      const dir = queue.pop()!;
+      if (visitedDirs.has(dir)) {
+        continue;
+      }
+      visitedDirs.add(dir);
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          queue.push(fullPath);
+          continue;
+        }
+        if (!entry.isFile() || !/\.d\.(?:ts|mts|cts)$/u.test(entry.name)) {
+          continue;
+        }
+        const sourceText = readFileSync(fullPath, "utf8");
+        for (const finding of findUndeclaredBundlerHelperDtsExports(sourceText, fullPath)) {
+          console.error(
+            `UNDECLARED BUNDLER HELPER DTS EXPORT: ${relative(resolve(scriptDir, ".."), fullPath)}:${finding.line} exports ${finding.name} without a local declaration`,
+          );
+          missing += 1;
+        }
+      }
+    }
+  }
 }
 
 if (missing > 0) {

@@ -40,6 +40,7 @@ import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { listAgentProvenance } from "../state/agent-provenance.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 import type { GatewayAgentOwnership } from "./agent-list.js";
+import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import {
@@ -181,6 +182,7 @@ function loadSessionEntryWithMode(
     agentId: target.agentId,
     storePath,
     store,
+    ...(target.readSource ? { readSource: target.readSource } : {}),
     entry,
     canonicalKey: target.canonicalKey,
     storeKeys: target.storeKeys,
@@ -198,11 +200,9 @@ export function loadGatewaySessionEntry(
 export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: {
-    agentId?: string;
-    clone?: boolean;
     includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-  },
+  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
@@ -343,6 +343,7 @@ export function listAgentsForGateway(
   options?: {
     modelCatalogByAgentId?: SessionListModelCatalog;
     includeSystem?: boolean;
+    httpAvatarBasePath?: string;
   },
 ): {
   defaultId: string;
@@ -361,13 +362,21 @@ export function listAgentsForGateway(
     }
     const agentId = normalizeAgentId(entry.id);
     const avatar = normalizeOptionalString(entry.identity?.avatar);
-    const avatarUrl = resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
+    const httpAvatar =
+      avatar && options?.httpAvatarBasePath !== undefined
+        ? resolveGatewayAssistantAvatar({
+            cfg,
+            identity: { agentId, avatar },
+            httpBasePath: options.httpAvatarBasePath,
+          }).avatar
+        : undefined;
+    const avatarUrl = httpAvatar ?? resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),
           theme: normalizeOptionalString(entry.identity.theme),
           emoji: normalizeOptionalString(entry.identity.emoji),
-          avatar,
+          avatar: httpAvatar ?? avatar,
           avatarUrl,
         }
       : undefined;

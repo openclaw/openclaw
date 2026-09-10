@@ -95,6 +95,8 @@ export const HelloOkSchema = closedObject({
     capabilities: Type.Optional(Type.Array(NonEmptyString)),
   }),
   snapshot: SnapshotSchema,
+  // Public Control UI origin and mount path, independent of local SSH tunnels.
+  controlUiUrl: Type.Optional(NonEmptyString),
   // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).
   controlUiTabs: Type.Optional(
     Type.Array(
@@ -106,6 +108,7 @@ export const HelloOkSchema = closedObject({
         icon: Type.Optional(Type.String()),
         path: Type.Optional(Type.String()),
         placement: Type.Optional(Type.String()),
+        slug: Type.Optional(Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", maxLength: 64 })),
         requiresGatewayAuth: Type.Optional(Type.Boolean()),
         group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
         order: Type.Optional(Type.Number()),
@@ -124,6 +127,17 @@ export const HelloOkSchema = closedObject({
   ),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
   auth: closedObject({
+    method: Type.Optional(
+      Type.Union([
+        Type.Literal("none"),
+        Type.Literal("token"),
+        Type.Literal("password"),
+        Type.Literal("tailscale"),
+        Type.Literal("device-token"),
+        Type.Literal("bootstrap-token"),
+        Type.Literal("trusted-proxy"),
+      ]),
+    ),
     deviceToken: Type.Optional(NonEmptyString),
     recoveryMigrationAllowed: Type.Optional(Type.Literal(true)),
     recoveryScope: Type.Optional(NonEmptyString),

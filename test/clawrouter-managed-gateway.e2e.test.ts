@@ -133,7 +133,7 @@ describe("ClawRouter managed gateway contract", () => {
     expect(gatewayReadiness).toMatchObject({ ready: true, failing: [] });
 
     const catalog = await instance.cli(
-      ["models", "list", "--all", "--provider", "clawrouter", "--json"],
+      ["models", "list", "--all", "--provider", "clawrouter", "--refresh", "--json"],
       { timeoutMs: 120_000 },
     );
     expect(catalog.code, catalog.stderr).toBe(0);

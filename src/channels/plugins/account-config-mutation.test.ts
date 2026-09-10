@@ -7,6 +7,7 @@ import {
   prepareChannelAccountConfiguration,
   prepareChannelAccountRemoval,
 } from "./account-config-mutation.js";
+import { setAccountEnabledInConfigSection } from "./config-helpers.js";
 import { defineChannelSetupContract } from "./setup-contract.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
@@ -235,7 +236,7 @@ describe("channel account config mutations", () => {
     expect(resolveInput).not.toHaveBeenCalled();
   });
 
-  it("deletes an account and runs its owner lifecycle hook", async () => {
+  it("deletes a normalized listed account and runs its owner lifecycle hook", async () => {
     const onAccountRemoved = vi.fn();
     const cfg = {
       channels: {
@@ -251,6 +252,7 @@ describe("channel account config mutations", () => {
       ...createChannelTestPluginBase({
         id: "test-chat",
         config: {
+          listAccountIds: () => ["Default", "Work"],
           deleteAccount: ({ cfg: inputCfg, accountId }) => {
             const channel = inputCfg.channels?.["test-chat"] as {
               accounts?: Record<string, Record<string, unknown>>;
@@ -298,6 +300,102 @@ describe("channel account config mutations", () => {
       accountId: "work",
       runtime,
     });
+  });
+
+  it.each(["delete", "disable"] as const)(
+    "rejects unknown accounts without lifecycle effects for %s",
+    async (action) => {
+      const cfg = {};
+      const onAccountRemoved = vi.fn();
+      const onAccountConfigChanged = vi.fn();
+      const plugin = {
+        ...createChannelTestPluginBase({
+          id: "test-chat",
+          config: {
+            listAccountIds: () => ["work"],
+            deleteAccount: () => cfg,
+            setAccountEnabled: () => cfg,
+          },
+        }),
+        lifecycle: { onAccountRemoved, onAccountConfigChanged },
+      };
+      const result = await applyPreparedChannelAccountRemoval({
+        cfg,
+        prepared: prepareChannelAccountRemoval({ plugin, accountId: "wrok", action }),
+        runtime,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error: { kind: "unknown-account", action, accountIds: ["work"] },
+      });
+      expect(onAccountRemoved).not.toHaveBeenCalled();
+      expect(onAccountConfigChanged).not.toHaveBeenCalled();
+    },
+  );
+
+  it("disables a listed account that has no separately authored config", async () => {
+    const cfg = {
+      channels: { "test-chat": { accounts: { work: { token: "work-token" } } } },
+    } satisfies OpenClawConfig;
+    const onAccountConfigChanged = vi.fn();
+    const plugin = {
+      ...createChannelTestPluginBase({
+        id: "test-chat",
+        config: {
+          listAccountIds: () => ["default", "work"],
+          deleteAccount: () => cfg,
+          setAccountEnabled: (params) =>
+            setAccountEnabledInConfigSection({
+              ...params,
+              sectionKey: "test-chat",
+              allowTopLevel: true,
+            }),
+        },
+      }),
+      lifecycle: { onAccountConfigChanged },
+    };
+    const result = await applyPreparedChannelAccountRemoval({
+      cfg,
+      prepared: prepareChannelAccountRemoval({ plugin, action: "disable" }),
+      runtime,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        nextConfig: {
+          channels: {
+            "test-chat": {
+              accounts: { work: { token: "work-token" }, default: { enabled: false } },
+            },
+          },
+        },
+      },
+    });
+    expect(onAccountConfigChanged).toHaveBeenCalledOnce();
+  });
+
+  it("reports a listed account with no config to delete without removal lifecycle effects", async () => {
+    const onAccountRemoved = vi.fn();
+    const plugin = {
+      ...createChannelTestPluginBase({
+        id: "test-chat",
+        config: { deleteAccount: () => ({ channels: undefined }) },
+      }),
+      lifecycle: { onAccountRemoved },
+    };
+    const result = await applyPreparedChannelAccountRemoval({
+      cfg: {},
+      prepared: prepareChannelAccountRemoval({ plugin, action: "delete" }),
+      runtime,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "nothing-to-remove", action: "delete", accountIds: ["default"] },
+    });
+    expect(onAccountRemoved).not.toHaveBeenCalled();
   });
 
   it("reports unsupported removal actions without running lifecycle hooks", async () => {

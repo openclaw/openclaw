@@ -1,8 +1,13 @@
 import {
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../infra/diagnostic-trace-context.js";
+import {
   captureGatewayRootWorkAdmissionContinuationScope,
-  isGatewayRestartDraining,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 
 /** A node may emit this only before invoking a handler or sending any progress. */
@@ -27,8 +32,9 @@ export type PendingInvoke = {
   }) => void;
   reject: (err: Error) => void;
   deadlineAtMs?: number;
-  hardTimer?: ReturnType<typeof setTimeout>;
+  cancelHardDeadline?: () => void;
   idleTimer?: ReturnType<typeof setTimeout>;
+  idleTraceContext?: DiagnosticTraceContext;
   idleTimeoutMs?: number;
   onProgress?: (chunk: string) => void;
   receivedProgress?: boolean;
@@ -67,6 +73,7 @@ export class NodeInvokeStreamController {
       pendingInvokes: Map<string, PendingInvoke>;
       sendCancel: (requestId: string, pending: PendingInvoke) => void;
       isConnectionActive: (pending: PendingInvoke) => boolean;
+      isCommandAllowed: (nodeId: string, command: string) => boolean;
       sendInput: (
         invokeId: string,
         pending: PendingInvoke,
@@ -93,16 +100,21 @@ export class NodeInvokeStreamController {
     if (Buffer.byteLength(payloadJSON, "utf8") > MAX_INVOKE_INPUT_BYTES) {
       throw new Error("node invoke input exceeds 16 KiB");
     }
-    if (this.settleIfExpired(invokeId, pending)) {
+    if (!this.getPending(invokeId, pending.nodeId, pending.connId)) {
       throw new Error("node invoke is not pending");
-    }
-    if (!this.options.isConnectionActive(pending)) {
-      throw new Error("node invoke connection or pairing generation is unavailable");
     }
     if (!this.options.sendInput(invokeId, pending, pending.nextInputSeq, payloadJSON)) {
       throw new Error("failed to send node invoke input");
     }
     pending.nextInputSeq += 1;
+  }
+
+  reconcileRuntimePolicy(): void {
+    for (const [id, pending] of this.options.pendingInvokes) {
+      if (!this.settleIfExpired(id, pending)) {
+        this.settleIfPolicyChanged(id, pending);
+      }
+    }
   }
 
   handleDisconnect(connId: string): void {
@@ -147,6 +159,7 @@ export class NodeInvokeStreamController {
     requestId: string;
     pending: PendingInvoke;
     timeoutMs: number;
+    deadlineAtMs?: number;
     idleTimeoutMs: number;
     signal?: AbortSignal;
   }): void {
@@ -154,14 +167,20 @@ export class NodeInvokeStreamController {
     if (continuation) {
       params.pending.admissionContinuation = continuation;
     }
-    if (params.timeoutMs > 0) {
-      params.pending.deadlineAtMs = Date.now() + params.timeoutMs;
-    }
+    params.pending.deadlineAtMs =
+      params.deadlineAtMs ??
+      (params.timeoutMs > 0 ? performance.now() + params.timeoutMs : undefined);
     this.options.pendingInvokes.set(params.requestId, params.pending);
-    if (params.timeoutMs > 0) {
-      params.pending.hardTimer = setTimeout(() => {
-        this.settleTimeout(params.requestId, params.pending);
-      }, params.timeoutMs);
+    if (params.pending.deadlineAtMs !== undefined) {
+      params.pending.cancelHardDeadline = scheduleAbsoluteDeadline(
+        params.pending.deadlineAtMs,
+        () => this.settleTimeout(params.requestId, params.pending),
+        () => performance.now(),
+      );
+      // Arming an already elapsed deadline can settle and release this owner synchronously.
+      if (this.options.pendingInvokes.get(params.requestId) !== params.pending) {
+        return;
+      }
     }
     if (params.pending.onProgress && params.idleTimeoutMs > 0) {
       params.pending.idleTimeoutMs = params.idleTimeoutMs;
@@ -171,18 +190,14 @@ export class NodeInvokeStreamController {
         if (this.settleIfExpired(params.requestId, params.pending)) {
           return;
         }
-        if (!this.takePending(params.requestId, params.pending)) {
-          return;
-        }
-        this.sendInvokeCancel(params.requestId, params.pending);
-        this.options.onFailedResult(params.pending);
         const pairingChanged = params.signal?.reason === NODE_INVOKE_PAIRING_CHANGED_ABORT;
-        params.pending.resolve({
-          ok: false,
-          error: pairingChanged
+        this.cancelPending(
+          params.requestId,
+          params.pending,
+          pairingChanged
             ? { code: "PAIRING_CHANGED", message: "node pairing changed after dispatch" }
             : { code: "ABORTED", message: "node invoke cancelled" },
-        });
+        );
       };
       params.signal.addEventListener("abort", onAbort, { once: true });
       params.pending.removeAbortListener = () =>
@@ -268,7 +283,7 @@ export class NodeInvokeStreamController {
     }
     // Shutdown cleanup has no request root. Its live private owner grants only
     // settlement; do not mint admission or revive a released captured root.
-    return isGatewayRestartDraining() && pending.isCompletionAuthorized ? params.run() : null;
+    return pending.isCompletionAuthorized ? params.run() : null;
   }
 
   isPending(invokeId: string, nodeId: string, connId: string): boolean {
@@ -282,7 +297,8 @@ export class NodeInvokeStreamController {
       pending.nodeId !== nodeId ||
       pending.connId !== connId ||
       !this.options.isConnectionActive(pending) ||
-      this.settleIfExpired(id, pending)
+      this.settleIfExpired(id, pending) ||
+      this.settleIfPolicyChanged(id, pending)
     ) {
       return undefined;
     }
@@ -296,39 +312,39 @@ export class NodeInvokeStreamController {
   }
 
   clearTimers(pending: PendingInvoke): void {
-    if (pending.hardTimer) {
-      clearTimeout(pending.hardTimer);
-    }
+    pending.cancelHardDeadline?.();
+    pending.cancelHardDeadline = undefined;
     if (pending.idleTimer) {
       clearTimeout(pending.idleTimer);
     }
+    pending.idleTraceContext = undefined;
     pending.removeAbortListener?.();
     pending.removeAbortListener = undefined;
     pending.admissionContinuation?.release();
     pending.admissionContinuation = undefined;
   }
 
-  private createIdleTimer(requestId: string, pending: PendingInvoke) {
-    return setTimeout(() => {
-      if (!this.takePending(requestId, pending)) {
-        return;
-      }
-      this.sendInvokeCancel(requestId, pending);
-      pending.resolve({
-        ok: false,
-        error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
-      });
-    }, pending.idleTimeoutMs);
-  }
-
   private resetIdleTimer(requestId: string, pending: PendingInvoke): void {
     if (!pending.idleTimeoutMs) {
       return;
     }
-    if (pending.idleTimer) {
-      clearTimeout(pending.idleTimer);
-    }
-    pending.idleTimer = this.createIdleTimer(requestId, pending);
+    // Refresh retains the timer's first async scope; cancellation diagnostics
+    // must still belong to the latest progress frame that renewed its deadline.
+    pending.idleTraceContext = getActiveDiagnosticTraceContext();
+    pending.idleTimer =
+      pending.idleTimer?.refresh() ??
+      setTimeout(() => {
+        runWithDiagnosticTraceContext(pending.idleTraceContext, () => {
+          if (!this.takePending(requestId, pending)) {
+            return;
+          }
+          this.sendInvokeCancel(requestId, pending);
+          pending.resolve({
+            ok: false,
+            error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
+          });
+        });
+      }, pending.idleTimeoutMs);
   }
 
   private sendInvokeCancel(requestId: string, pending: PendingInvoke): void {
@@ -336,7 +352,7 @@ export class NodeInvokeStreamController {
   }
 
   private settleIfExpired(requestId: string, pending: PendingInvoke): boolean {
-    if (pending.deadlineAtMs === undefined || Date.now() < pending.deadlineAtMs) {
+    if (pending.deadlineAtMs === undefined || performance.now() < pending.deadlineAtMs) {
       return false;
     }
     this.settleTimeout(requestId, pending);
@@ -352,6 +368,29 @@ export class NodeInvokeStreamController {
       ok: false,
       error: { code: "TIMEOUT", message: "node invoke timed out" },
     });
+  }
+
+  private settleIfPolicyChanged(requestId: string, pending: PendingInvoke): boolean {
+    if (this.options.isCommandAllowed(pending.nodeId, pending.command)) {
+      return false;
+    }
+    this.cancelPending(requestId, pending, {
+      code: "POLICY_CHANGED",
+      message: "node command is no longer allowed",
+    });
+    return true;
+  }
+
+  private cancelPending(
+    requestId: string,
+    pending: PendingInvoke,
+    error: { code: string; message: string },
+  ): void {
+    if (this.takePending(requestId, pending)) {
+      this.sendInvokeCancel(requestId, pending);
+      this.options.onFailedResult(pending);
+      pending.resolve({ ok: false, error });
+    }
   }
 
   private takePending(requestId: string, pending: PendingInvoke): boolean {

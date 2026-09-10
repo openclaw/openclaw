@@ -1,8 +1,13 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Headers as UndiciHeaders } from "undici";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
 import {
   captureHttpExchange,
@@ -11,6 +16,7 @@ import {
   initializeDebugProxyCapture,
   type DebugProxyCaptureRuntimeDeps,
 } from "./runtime.js";
+import { DebugProxyCaptureStore, persistEventPayload } from "./store.sqlite.js";
 
 type StoreCall = { name: string; args: unknown[] };
 
@@ -100,10 +106,147 @@ async function waitForResponseSettled(): Promise<void> {
 describe("debug proxy runtime", () => {
   beforeEach(() => {
     finalizeDebugProxyCapture(settings, deps);
+    // Each test owns a fresh injected store binding, including its admission.
+    deps.getStore = () => store;
     events.length = 0;
     calls.length = 0;
     resetSecretRedactionRegistryForTest();
     fetchTarget.fetch = async () => new Response("{}", { status: 200 });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("settles a pending response capture before finalization closes its store", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "capture-finalize-test-"));
+    const realStore = new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
+    const readStarted = createDeferredCore();
+    const terminalRecorded = createDeferredCore();
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let lateWrites = 0;
+    const record = realStore.recordEvent.bind(realStore);
+    const recording = vi.spyOn(realStore, "recordEvent").mockImplementation((event) => {
+      if (realStore.isClosed) {
+        lateWrites += 1;
+      }
+      record(event);
+      if (event.kind === "response" || event.kind === "error") {
+        terminalRecorded.resolve();
+      }
+    });
+    const realDeps: DebugProxyCaptureRuntimeDeps = {
+      fetchTarget,
+      getStore: () => realStore,
+      closeStore: () => realStore.close(),
+      persistEventPayload: (_store, payload) => persistEventPayload(realStore, payload),
+    };
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(value) {
+          controller = value;
+        },
+        pull() {
+          readStarted.resolve();
+        },
+      }),
+      { headers: { "content-type": "text/plain" } },
+    );
+    try {
+      captureHttpExchange(
+        { url: "https://example.test/pending", method: "GET", response },
+        settings,
+        realDeps,
+      );
+      await readStarted.promise;
+      expect(realStore.getSessionEvents(settings.sessionId)).toHaveLength(1);
+      const finalizing = Promise.resolve(finalizeDebugProxyCapture(settings, realDeps));
+      controller!.enqueue(new TextEncoder().encode("complete"));
+      controller!.close();
+      expect(await response.text()).toBe("complete");
+      await terminalRecorded.promise;
+      await finalizing;
+      expect(realStore.isClosed).toBe(true);
+      expect(lateWrites).toBe(0);
+    } finally {
+      recording.mockRestore();
+      realStore.close();
+      closeOpenClawStateDatabaseByPath(realStore.dbPath);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["initialization", () => initializeDebugProxyCapture("test", undefined, deps)],
+    ["finalization", () => finalizeDebugProxyCapture(undefined, deps)],
+    [
+      "HTTP exchange",
+      () =>
+        captureHttpExchange(
+          { url: "https://example.test", method: "GET", response: new Response(null) },
+          undefined,
+          deps,
+        ),
+    ],
+    [
+      "WebSocket frame",
+      () =>
+        captureWsEvent(
+          {
+            url: "wss://example.test",
+            direction: "outbound",
+            kind: "ws-frame",
+            flowId: "disabled-capture",
+            payload: "{}",
+          },
+          undefined,
+          deps,
+        ),
+    ],
+  ] as const)("does not discover capture paths for disabled %s", (_name, capture) => {
+    // Exercise production path discovery rather than the test-only state-dir shortcut.
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", undefined);
+    const existsSync = vi.spyOn(fs, "existsSync");
+    const originalFetch = fetchTarget.fetch;
+
+    capture();
+
+    expect(existsSync).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    expect(events).toEqual([]);
+    expect(fetchTarget.fetch).toBe(originalFetch);
+  });
+
+  it("observes environment changes while explicit capture settings remain authoritative", () => {
+    const frame = {
+      url: "wss://example.test",
+      direction: "outbound",
+      kind: "ws-frame",
+      flowId: "capture-toggle",
+      payload: "{}",
+    } as const;
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", "ambient-capture");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
+    captureWsEvent(frame, undefined, deps);
+    expect(events).toEqual([]);
+
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+    captureWsEvent(frame, undefined, deps);
+    expect(events.map((event) => event.sessionId)).toEqual(["ambient-capture"]);
+    captureWsEvent(frame, { ...settings, enabled: false }, deps);
+    expect(events).toHaveLength(1);
+
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
+    captureWsEvent(frame, undefined, deps);
+    expect(events).toHaveLength(1);
+    captureWsEvent(frame, settings, deps);
+    expect(events.map((event) => event.sessionId)).toEqual([
+      "ambient-capture",
+      "runtime-test-session",
+    ]);
   });
 
   it("captures ambient global fetch calls when debug proxy mode is enabled", async () => {
@@ -460,7 +603,7 @@ describe("debug proxy runtime", () => {
       const response = events.find((event) => event.kind === "response");
       expect(response?.status).toBe(200);
       expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "stalled" });
-      expect(response).not.toHaveProperty("dataText");
+      expect(response?.dataText).toBe("partial");
       expect(events.some((event) => event.kind === "error")).toBe(false);
     } finally {
       vi.useRealTimers();

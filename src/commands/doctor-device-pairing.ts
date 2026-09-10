@@ -361,13 +361,14 @@ function collectPairedRecordIssues(snapshot: DoctorPairingSnapshot): PairedRecor
           allowedScopes: approvedScopes,
         })
       ) {
+        const recoveryCommand = role === "node" ? `${rotateCommand} --no-scopes` : rotateCommand;
         issues.push({
           kind: "token-outside-approved-scope",
           deviceId: device.deviceId,
           deviceLabel,
           role,
-          message: `Paired device ${deviceLabel} has a ${role} token outside the approved scope baseline [${formatScopes(approvedScopes)}]. Rotate it with ${rotateCommand}.`,
-          fixHint: `Rotate it with ${rotateCommand}.`,
+          message: `Paired device ${deviceLabel} has a ${role} token outside the approved scope baseline [${formatScopes(approvedScopes)}]. Rotate it with ${recoveryCommand}.`,
+          fixHint: `Rotate it with ${recoveryCommand}.`,
         });
       }
     }
@@ -474,17 +475,15 @@ async function collectLegacyPairingStoreFindings(cfg: OpenClawConfig): Promise<H
   // Lazy import keeps the migration module a startup-only boundary.
   const { listLegacyDevicePairingStoreFiles } =
     await import("../infra/device-pairing-migration.js");
-  return (await listLegacyDevicePairingStoreFiles()).map(
-    (filePath): HealthFinding => ({
-      checkId: DEVICE_PAIRING_CHECK_ID,
-      severity: "warning",
-      message: `Legacy device pairing store ${filePath} has not been imported into the SQLite state store yet. The gateway imports and archives it at startup, so restart the gateway. If the file persists across restarts it is likely unreadable; OpenClaw refused to treat it as empty to avoid dropping approved pairings, so fix or move it aside, then restart.`,
-      path: "devices.legacy-store",
-      requirement: "pairing-store-legacy-file",
-      fixHint:
-        "Restart the gateway so it imports the legacy store; if the file persists, fix or move it aside first.",
-    }),
-  );
+  return (await listLegacyDevicePairingStoreFiles()).map((filePath): HealthFinding => ({
+    checkId: DEVICE_PAIRING_CHECK_ID,
+    severity: "warning",
+    message: `Legacy device pairing store ${filePath} has not been imported into the SQLite state store yet. The gateway imports and archives it at startup, so restart the gateway. If the file persists across restarts it is likely unreadable; OpenClaw refused to treat it as empty to avoid dropping approved pairings, so fix or move it aside, then restart.`,
+    path: "devices.legacy-store",
+    requirement: "pairing-store-legacy-file",
+    fixHint:
+      "Restart the gateway so it imports the legacy store; if the file persists, fix or move it aside first.",
+  }));
 }
 
 function stripListMarker(message: string): string {

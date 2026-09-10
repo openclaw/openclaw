@@ -16,6 +16,8 @@ import {
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { jsonResult } from "../tools/common.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import * as compactionQualityModule from "./compaction-safeguard-quality.js";
@@ -1113,17 +1115,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("preserves the most recent user/assistant messages", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "older ask", timestamp: 1 },
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "older answer" }],
-        timestamp: 2,
-      }),
+      castAgentMessage(timestampedTextAssistant("older answer", 2)),
       { role: "user", content: "recent ask", timestamp: 3 },
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "recent answer" }],
-        timestamp: 4,
-      }),
+      castAgentMessage(timestampedTextAssistant("recent answer", 4)),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -1166,11 +1160,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         content: [{ type: "text", text: "recent result" }],
         timestamp: 6,
       }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "recent final answer" }],
-        timestamp: 7,
-      }),
+      castAgentMessage(timestampedTextAssistant("recent final answer", 7)),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -1202,11 +1192,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const split = splitPreservedRecentTurns({
       messages: [
         { role: "user", content: "older ask", timestamp: 1 },
-        castAgentMessage({
-          role: "assistant",
-          content: [{ type: "text", text: "older answer" }],
-          timestamp: 2,
-        }),
+        castAgentMessage(timestampedTextAssistant("older answer", 2)),
         { role: "user", content: "recent ask", timestamp: 3 },
         castAgentMessage({
           role: "assistant",
@@ -1220,11 +1206,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           content: [{ type: "text", text: "recent raw output" }],
           timestamp: 5,
         }),
-        castAgentMessage({
-          role: "assistant",
-          content: [{ type: "text", text: "recent final answer" }],
-          timestamp: 6,
-        }),
+        castAgentMessage(timestampedTextAssistant("recent final answer", 6)),
       ],
       recentTurnsPreserve: 1,
     });
@@ -1259,11 +1241,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
             timestamp: index + 3,
           }),
         ),
-        castAgentMessage({
-          role: "assistant",
-          content: [{ type: "text", text: "terminal answer survives" }],
-          timestamp: 33,
-        }),
+        castAgentMessage(timestampedTextAssistant("terminal answer survives", 33)),
       ],
       recentTurnsPreserve: 1,
     });
@@ -1327,11 +1305,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("does not add non-text placeholders for text-only content blocks", () => {
     const section = preservedTurnsText([
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "plain text reply" }],
-        timestamp: 1,
-      }),
+      castAgentMessage(timestampedTextAssistant("plain text reply", 1)),
     ]);
 
     expect(section).toContain("- Assistant: plain text reply");
@@ -1341,46 +1315,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("caps preserved tail when user turns are below preserve target", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "single user prompt", timestamp: 1 },
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-1" }],
-        timestamp: 2,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-2" }],
-        timestamp: 3,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-3" }],
-        timestamp: 4,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-4" }],
-        timestamp: 5,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-5" }],
-        timestamp: 6,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-6" }],
-        timestamp: 7,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-7" }],
-        timestamp: 8,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-8" }],
-        timestamp: 9,
-      }),
+      castAgentMessage(timestampedTextAssistant("assistant-1", 2)),
+      castAgentMessage(timestampedTextAssistant("assistant-2", 3)),
+      castAgentMessage(timestampedTextAssistant("assistant-3", 4)),
+      castAgentMessage(timestampedTextAssistant("assistant-4", 5)),
+      castAgentMessage(timestampedTextAssistant("assistant-5", 6)),
+      castAgentMessage(timestampedTextAssistant("assistant-6", 7)),
+      castAgentMessage(timestampedTextAssistant("assistant-7", 8)),
+      castAgentMessage(timestampedTextAssistant("assistant-8", 9)),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -2017,14 +1959,70 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.compaction?.firstKeptEntryId).toBe("entry-1");
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
     const droppedCall = requireRecord(mockCallArg(mockSummarizeInStages));
-    expect(droppedCall?.customInstructions).toContain(
+    const droppedPrompt = requireRecord(droppedCall.summaryPrompt).instructions;
+    expect(droppedPrompt).toContain(
       "Produce a compact, factual summary with these exact section headings:",
     );
-    expect(droppedCall?.customInstructions).toContain("## Decisions");
-    expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
+    expect(droppedPrompt).toContain("## Decisions");
+    expect(droppedPrompt).toContain("Keep security caveats.");
     const mainCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
     expect(JSON.stringify(mainCall?.messages)).toContain("dropped history summary");
     expect(messagesToSummarize).toStrictEqual(transcriptBefore);
+  });
+
+  it("sends pairing-discarded retained results to the dropped-history summary", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult("dropped history summary"))
+      .mockResolvedValueOnce(summaryResult("main history summary"));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({ contextWindow: 2_000 });
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      maxHistoryShare: 0.5,
+      recentTurnsPreserve: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const messagesToSummarize: AgentMessage[] = [
+      { role: "user", content: "x".repeat(4_000), timestamp: 1 },
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "missing-call",
+        toolName: "test_tool",
+        content: [{ type: "text", text: "orphan-result ".repeat(500) }],
+        isError: false,
+        timestamp: 2,
+      }),
+      { role: "user", content: "x".repeat(4_000), timestamp: 3 },
+    ];
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 10_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = await compactionHandler(event, mockContext);
+
+    expectCompactionResult(result as Parameters<typeof expectCompactionResult>[0]);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const droppedCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const droppedMessages = requireArray(droppedCall.messages) as AgentMessage[];
+    expect(droppedMessages.map((message) => message.timestamp)).toEqual([1, 2]);
   });
 
   it("propagates caller abort while summarizing dropped history", async () => {
@@ -2172,69 +2170,91 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summaryCall.headers?.["x-initiator"]).toBe("user");
   });
 
-  it("sends safeguard summaries through the prepared model execution context", async () => {
-    testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
-    const sessionManager = stubSessionManager();
-    const model = createAnthropicModelFixture({
-      api: "test-api" as never,
-      baseUrl: "",
-      reasoning: true,
-    });
-    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
-
-    const providerPrompts: string[] = [];
-    const streamFn: StreamFn = (_activeModel, context, options) => {
-      expect(options?.reasoning).toBe("high");
-      providerPrompts.push(JSON.stringify(context));
-      const stream = createAssistantMessageEventStream();
-      stream.push({
-        type: "done",
-        reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "provider summary" }],
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "stop",
-          timestamp: 1,
-        },
+  it.each([false, true])(
+    "sends one authoritative safeguard summary format (prefix=%s)",
+    async (prefix) => {
+      testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
+      const sessionManager = stubSessionManager();
+      const model = createAnthropicModelFixture({
+        api: "test-api" as never,
+        baseUrl: "",
+        reasoning: true,
       });
-      stream.end();
-      return stream;
-    };
-    const mockContext = createCompactionContext({
-      sessionManager,
-      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }),
-    });
-    const compactionHandler = createCompactionHandler();
-    const event = {
-      ...createCompactionEvent({ messageText: "summarize me", tokensBefore: 1_000 }),
-      thinkingLevel: "high" as const,
-      streamFn,
-    };
-    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
-      reserveTokens: 4_000,
-    };
+      setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
 
-    const result = (await compactionHandler(event, mockContext)) as {
-      cancel?: boolean;
-      compaction?: { summary?: string };
-    };
+      const providerPrompts: string[] = [];
+      const providerBudgets: Array<number | undefined> = [];
+      const streamFn: StreamFn = (_activeModel, context, options) => {
+        expect(options?.reasoning).toBe("high");
+        providerPrompts.push(JSON.stringify(context));
+        providerBudgets.push(options?.maxTokens);
+        const stream = createAssistantMessageEventStream();
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "provider summary" }],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: createZeroUsageFixture(),
+            stopReason: "stop",
+            timestamp: 1,
+          },
+        });
+        stream.end();
+        return stream;
+      };
+      const mockContext = createCompactionContext({
+        sessionManager,
+        getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }),
+      });
+      const compactionHandler = createCompactionHandler();
+      const event = {
+        ...createCompactionEvent({
+          messageText: "summarize me: receipt_90210",
+          tokensBefore: 1_000,
+        }),
+        customInstructions: "Keep the deployment decision.",
+        thinkingLevel: "high" as const,
+        streamFn,
+      };
+      (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+        reserveTokens: 4_000,
+      };
+      const preparation = {
+        ...event.preparation,
+        isSplitTurn: prefix,
+        messagesToSummarize: prefix ? [] : event.preparation.messagesToSummarize,
+        turnPrefixMessages: prefix ? event.preparation.messagesToSummarize : [],
+        previousSummary: prefix ? undefined : "Earlier deployment decision: use canary staging.",
+      };
 
-    expect(result.cancel).not.toBe(true);
-    expect(result.compaction?.summary).toContain("provider summary");
-    expect(providerPrompts).toHaveLength(1);
-    expect(providerPrompts[0]).toContain("[User]: summarize me");
-  });
+      const result = (await compactionHandler({ ...event, preparation }, mockContext)) as {
+        cancel?: boolean;
+        compaction?: { summary?: string };
+      };
+
+      expect(result.cancel).not.toBe(true);
+      expect(result.compaction?.summary).toContain("provider summary");
+      expect(providerPrompts).toHaveLength(1);
+      expect(providerPrompts[0]).toContain("[User]: summarize me");
+      expect(providerPrompts[0]).toContain("receipt_90210");
+      expect(providerPrompts[0]).toContain("Keep the deployment decision.");
+      expect(providerPrompts[0]).toContain("Preserve all opaque identifiers exactly");
+      expect(providerPrompts[0]).not.toContain("## Goal");
+      expect(providerPrompts[0]).not.toContain("## Constraints & Preferences");
+      expect(providerPrompts[0]).toContain(prefix ? "## Original Request" : "## Pending user asks");
+      expect(providerPrompts[0]).not.toContain(
+        prefix ? "## Pending user asks" : "## Original Request",
+      );
+      expect(providerBudgets).toEqual([prefix ? 2_000 : 3_200]);
+      if (!prefix) {
+        expect(providerPrompts[0]).toContain("Earlier deployment decision: use canary staging.");
+      }
+    },
+  );
 
   it("surfaces a total provider failure and leaves the safeguard transcript unchanged", async () => {
     testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
@@ -2256,14 +2276,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           api: model.api,
           provider: model.provider,
           model: model.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
           stopReason: "error",
           errorMessage: "Cannot convert undefined or null to object",
           timestamp: 1,
@@ -2910,13 +2923,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
       }).ok,
     ).toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    const historyCall = requireRecord(mockCallArg(mockSummarizeInStages));
-    expect(historyCall.customInstructions).not.toContain("belongs to a split turn");
-    const prefixCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
-    expect(prefixCall.customInstructions).toContain("## Original Request");
-    expect(prefixCall.customInstructions).not.toContain(
-      "Produce a compact, factual summary with these exact section headings",
-    );
 
     const redistillMessages = prependPreviousSummaryForRedistill({
       messages: [{ role: "user", content: "continue", timestamp: 3 }],
@@ -3577,11 +3583,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         ],
         timestamp: 3,
       }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "metric checked" }],
-        timestamp: 4,
-      }),
+      castAgentMessage(timestampedTextAssistant("metric checked", 4)),
     ];
     const event = {
       preparation: {
@@ -3887,11 +3889,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           { role: "user", content: "older context", timestamp: 1 },
           castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: "latest ask status", timestamp: 3 },
-          castAgentMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "latest assistant reply" }],
-            timestamp: 4,
-          }),
+          castAgentMessage(timestampedTextAssistant("latest assistant reply", 4)),
         ],
         turnPrefixMessages: [
           { role: "user", content: "prefix request that was split out", timestamp: 0 },
@@ -3918,9 +3916,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result).toEqual({ cancel: true });
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
-    expect(requireRecord(mockCallArg(mockSummarizeInStages, 1)).customInstructions).toContain(
-      "## Original Request",
-    );
     expect(requireRecord(mockCallArg(mockSummarizeInStages, 2)).customInstructions).toContain(
       "Quality check feedback",
     );
@@ -3953,11 +3948,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "latest user ask", timestamp: 1 },
-          castAgentMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "latest assistant reply" }],
-            timestamp: 2,
-          }),
+          castAgentMessage(timestampedTextAssistant("latest assistant reply", 2)),
         ],
         turnPrefixMessages: [],
         firstKeptEntryId: "entry-1",
@@ -4210,11 +4201,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           { role: "user", content: "older context", timestamp: 1 },
           castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: "latest ask status", timestamp: 3 },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "latest assistant reply" }],
-            timestamp: 4,
-          } as AgentMessage,
+          timestampedTextAssistant("latest assistant reply", 4) as AgentMessage,
         ],
         turnPrefixMessages: [
           { role: "user", content: "prefix request that was split out", timestamp: 0 },
@@ -5013,88 +5000,6 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
-  });
-
-  it("treats tool results as real conversation only when linked to a meaningful user ask", () => {
-    expect(
-      testing.isRealConversationMessage(
-        {
-          role: "toolResult",
-          toolCallId: "t1",
-          toolName: "exec",
-          content: [{ type: "text", text: "done" }],
-        } as AgentMessage,
-        [
-          { role: "user", content: "<b>HEARTBEAT_OK</b>" } as AgentMessage,
-          {
-            role: "toolResult",
-            toolCallId: "t1",
-            toolName: "exec",
-            content: [{ type: "text", text: "done" }],
-          } as AgentMessage,
-        ],
-        1,
-      ),
-    ).toBe(false);
-
-    expect(
-      testing.isRealConversationMessage(
-        {
-          role: "toolResult",
-          toolCallId: "t2",
-          toolName: "exec",
-          content: [{ type: "text", text: "done" }],
-        } as AgentMessage,
-        [
-          { role: "user", content: "please inspect the repo" } as AgentMessage,
-          {
-            role: "toolResult",
-            toolCallId: "t2",
-            toolName: "exec",
-            content: [{ type: "text", text: "done" }],
-          } as AgentMessage,
-        ],
-        1,
-      ),
-    ).toBe(true);
-  });
-
-  it("does not treat assistant-only tool calls as meaningful conversation", () => {
-    expect(
-      testing.hasMeaningfulConversationContent({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-      } as AgentMessage),
-    ).toBe(false);
-  });
-
-  it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
-    expect(
-      testing.hasMeaningfulConversationContent({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "checking" }],
-      } as AgentMessage),
-    ).toBe(false);
-
-    expect(
-      testing.hasMeaningfulConversationContent(
-        castAgentMessage({
-          role: "assistant",
-          content: [{ type: "reasoning", summary: [] }],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
-    expect(
-      testing.hasMeaningfulConversationContent(
-        castAgentMessage({
-          role: "assistant",
-          content: "<b>HEARTBEAT_OK</b>",
-        }),
-      ),
-    ).toBe(false);
   });
 });
 

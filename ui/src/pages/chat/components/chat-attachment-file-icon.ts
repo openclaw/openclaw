@@ -269,6 +269,7 @@ export function renderAttachmentFileIcon(options: {
   mimeType?: string;
   mode: AttachmentFileVisualMode;
   unavailable?: boolean;
+  loading?: boolean;
 }) {
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
   const large = options.mode === "large-placeholder";
@@ -284,9 +285,9 @@ export function renderAttachmentFileIcon(options: {
       ? fileIconAssetPath(`compact/dark/${resolved.compact}`)
       : fileIconAssetPath("compact/unknown-dark");
   return html`<span
-    class="chat-attachment-file-icon ${options.unavailable
-      ? "chat-attachment-file-icon--unavailable"
-      : ""}"
+    class="chat-attachment-file-icon ${
+      options.unavailable ? "chat-attachment-file-icon--unavailable" : ""
+    } ${options.loading ? "skeleton" : ""}"
     data-family=${resolved.family}
     data-mode=${options.mode}
     aria-hidden="true"

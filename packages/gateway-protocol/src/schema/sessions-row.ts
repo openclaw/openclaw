@@ -4,6 +4,8 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionClassificationSchema, SessionPeerKindSchema } from "./session-classification.js";
 import {
+  SESSION_EXPANDED_PARTICIPANT_LIMIT,
+  SESSION_PARTICIPANT_LIMIT,
   SessionParticipantSchema,
   SessionParticipantIdentitySchema,
 } from "./session-participant.js";
@@ -16,6 +18,11 @@ export const SessionPermissionModeSchema = Type.Union([
   Type.Literal("full"),
 ]);
 
+export const SessionRepositorySourceSchema = closedObject({
+  url: Type.String({ minLength: 1, maxLength: 2048 }),
+  ref: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+});
+
 export const SessionRunStatusSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
@@ -23,6 +30,14 @@ export const SessionRunStatusSchema = Type.Union([
   Type.Literal("failed"),
   Type.Literal("killed"),
   Type.Literal("timeout"),
+]);
+
+export const SessionEntryArchiveReasonSchema = Type.Union([
+  Type.Literal("manual"),
+  Type.Literal("active-session-cap"),
+  Type.Literal("age-retention"),
+  Type.Literal("stale-dashboard"),
+  Type.Literal("restart-recovery"),
 ]);
 
 export const SessionToolOverridesSchema = closedObject({
@@ -52,6 +67,35 @@ export const SessionOwnerSchema = closedObject({
   assignedAt: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
+const SessionSwarmSummarySchema = closedObject({
+  groups: Type.Array(
+    closedObject({
+      groupId: NonEmptyString,
+      createdAt: Type.Number({ minimum: 0 }),
+      children: Type.Optional(
+        Type.Array(
+          closedObject({
+            sessionKey: NonEmptyString,
+            status: Type.Union([
+              Type.Literal("queued"),
+              Type.Literal("running"),
+              Type.Literal("done"),
+              Type.Literal("failed"),
+            ]),
+          }),
+          { maxItems: 64 },
+        ),
+      ),
+      queued: Type.Integer({ minimum: 0 }),
+      running: Type.Integer({ minimum: 0 }),
+      done: Type.Integer({ minimum: 0 }),
+      failed: Type.Integer({ minimum: 0 }),
+    }),
+    { maxItems: 5 },
+  ),
+  otherActiveGroups: Type.Integer({ minimum: 0 }),
+});
+
 /** Stable Gateway session row fields; mutation envelopes may add null tombstones. */
 export const SessionRowSchema = Type.Object(
   {
@@ -65,6 +109,7 @@ export const SessionRowSchema = Type.Object(
       Type.Literal("unknown"),
     ]),
     label: Type.Optional(Type.String()),
+    autoLabel: Type.Optional(Type.String()),
     icon: Type.Optional(Type.String()),
     /** Named sidebar tint from SESSION_COLOR_IDS; clients map names to theme hues. */
     color: Type.Optional(Type.String()),
@@ -88,6 +133,7 @@ export const SessionRowSchema = Type.Object(
     archived: Type.Optional(Type.Boolean()),
     archivedAt: Type.Optional(Type.Number()),
     archivedBy: Type.Optional(SessionCreatedActorSchema),
+    archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
     unread: Type.Optional(Type.Boolean()),
@@ -112,11 +158,20 @@ export const SessionRowSchema = Type.Object(
       Type.Union([Type.Literal("children"), Type.Literal("none")]),
     ),
     swarmGroupId: Type.Optional(Type.String()),
+    /** Requester-owned execution counts; never child content or parent synthesis status. */
+    swarm: Type.Optional(SessionSwarmSummarySchema),
     worktree: Type.Optional(
       Type.Object({
         id: Type.String(),
         branch: Type.String(),
         repoRoot: Type.String(),
+      }),
+    ),
+    repositoryWorkspaceId: Type.Optional(NonEmptyString),
+    repository: Type.Optional(
+      closedObject({
+        ...SessionRepositorySourceSchema.properties,
+        branch: NonEmptyString,
       }),
     ),
     execNode: Type.Optional(Type.String()),
@@ -140,7 +195,12 @@ export const SessionRowSchema = Type.Object(
     ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
-    participants: Type.Optional(Type.Array(SessionParticipantSchema, { maxItems: 4 })),
+    participants: Type.Optional(
+      Type.Array(SessionParticipantSchema, { maxItems: SESSION_PARTICIPANT_LIMIT }),
+    ),
+    expandedParticipants: Type.Optional(
+      Type.Array(SessionParticipantSchema, { maxItems: SESSION_EXPANDED_PARTICIPANT_LIMIT }),
+    ),
     participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
@@ -161,9 +221,17 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
-    /** Persisted override provenance; null means inherited, omission means not projected. */
+    /** Runtime model serving this session while it differs from the selected model. */
+    activeModel: Type.Optional(Type.String()),
+    activeModelProvider: Type.Optional(Type.String()),
+    /** Effective override provenance; null means configured default, omission means not projected. */
     modelOverrideSource: Type.Optional(
-      Type.Union([Type.Literal("user"), Type.Literal("auto"), Type.Null()]),
+      Type.Union([
+        Type.Literal("user"),
+        Type.Literal("auto"),
+        Type.Literal("inherited"),
+        Type.Null(),
+      ]),
     ),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },
@@ -176,3 +244,4 @@ export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionEntryArchiveReason = Static<typeof SessionEntryArchiveReasonSchema>;

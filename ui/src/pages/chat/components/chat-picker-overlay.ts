@@ -1,5 +1,6 @@
 import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
+import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
 
 const MOBILE_COMPOSER_OVERLAY_QUERY =
   "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
@@ -45,6 +46,13 @@ function pickerTrigger(picker: HTMLElement): HTMLElement | null {
     : picker.querySelector<HTMLElement>("[slot=trigger]");
 }
 
+function clearPointerFocus(this: HTMLElement): void {
+  // Blur and keyboard takeover complete the same pointer-focus lifetime.
+  this.removeEventListener("blur", clearPointerFocus);
+  this.removeEventListener("keydown", clearPointerFocus);
+  this.removeAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE);
+}
+
 function dismissChatComposerPickersOutside(event: PointerEvent): void {
   const path = event.composedPath();
   for (const picker of openChatComposerPickers()) {
@@ -72,6 +80,9 @@ function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
   ) {
     return;
   }
+  if (clearChatModelSearchOnEscape(event)) {
+    return;
+  }
   const pickers = openChatComposerPickers();
   const invocationComposer = document
     .querySelector<HTMLElement>(".agent-chat__input > :is(.slash-menu, .skill-menu)")
@@ -81,8 +92,12 @@ function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
   }
   event.preventDefault();
   event.stopPropagation();
-  const lastPicker = pickers.at(-1);
-  pickers.forEach(closeComposerPicker);
+  // A nested menu restores focus inside its still-open parent picker.
+  const deepestPickers = pickers.filter(
+    (picker) => !pickers.some((other) => other !== picker && picker.contains(other)),
+  );
+  const lastPicker = deepestPickers.at(-1);
+  deepestPickers.forEach(closeComposerPicker);
   invocationComposer?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
   invocationComposer
     ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
@@ -125,7 +140,7 @@ function closeOtherChatComposerPickers(source: HTMLElement): void {
     return;
   }
   for (const picker of openChatComposerPickers(composer)) {
-    if (picker !== source) {
+    if (picker !== source && !picker.contains(source)) {
       closeComposerPicker(picker);
     }
   }
@@ -178,7 +193,6 @@ export function restorePointerOpenedChatComposerTrigger(event: Event): void {
       return;
     }
     trigger.setAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE, "");
-    const clearPointerFocus = () => trigger.removeAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE);
     trigger.addEventListener("blur", clearPointerFocus, { once: true });
     trigger.addEventListener("keydown", clearPointerFocus, { once: true });
     trigger.focus({ preventScroll: true });

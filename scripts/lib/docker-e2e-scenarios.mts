@@ -14,6 +14,7 @@ export type DockerE2eLane = {
   estimateSeconds?: number;
   live: boolean;
   name: string;
+  needsPackage?: boolean;
   needsLiveImage?: boolean;
   noOutputTimeoutMs?: number;
   prepublishPluginPackages?: string[];
@@ -63,6 +64,8 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
 );
 const updateRunPackageSelfUpgradeCommand =
   "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
+const updateFirstHopCompatCommand =
+  "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat";
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
 const npmOnboardLaneOptions = {
   prepublishPluginPackages: ["@openclaw/codex"],
@@ -112,6 +115,7 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     live: options.live === true,
     noOutputTimeoutMs: options.noOutputTimeoutMs,
     name,
+    ...(options.needsPackage ? { needsPackage: true } : {}),
     needsLiveImage: options.needsLiveImage,
     prepublishPluginPackages: options.prepublishPluginPackages,
     retryPatterns: options.retryPatterns ?? [],
@@ -242,6 +246,12 @@ function createPackageUpdateMaintenanceLanes() {
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),
+    npmLane("update-first-hop-compat", updateFirstHopCompatCommand, {
+      resources: ["service"],
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    }),
     npmLane("update-run-package-self-upgrade", updateRunPackageSelfUpgradeCommand, {
       resources: ["service"],
       stateScenario: "upgrade-survivor",
@@ -356,6 +366,14 @@ function kitchenSinkRpcLane() {
   );
 }
 
+export const fleetCacheLane = lane("fleet-cache", "pnpm test:docker:fleet-cache", {
+  e2eImageKind: false,
+  needsPackage: true,
+  resources: ["docker", "service", "npm"],
+  timeoutMs: 30 * 60 * 1000,
+  weight: 4,
+});
+
 export const mainLanes: DockerE2eLane[] = [
   lane(
     "docker-selected-plugins",
@@ -384,8 +402,10 @@ export const mainLanes: DockerE2eLane[] = [
   ),
   npmLane(
     "docker-package-install",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:package-install",
     {
+      e2eImageKind: false,
+      needsPackage: true,
       stateScenario: "empty",
       timeoutMs: 20 * 60 * 1000,
       weight: 3,
@@ -395,6 +415,14 @@ export const mainLanes: DockerE2eLane[] = [
     providers: ["claude-cli", "google-gemini-cli"],
     timeoutMs: LIVE_PROFILE_TIMEOUT_MS,
     weight: 4,
+  }),
+  liveLane("live-anthropic-cache", liveDockerScriptCommand("e2e/anthropic-cache-live-docker.sh"), {
+    e2eImageKind: "functional",
+    provider: "claude",
+    retries: 0,
+    retryPatterns: [],
+    timeoutMs: 15 * 60 * 1000,
+    weight: 2,
   }),
   liveLane(
     "live-gateway",
@@ -895,6 +923,7 @@ const releasePathPackageMigrationLanes = scheduledLaneList(
 );
 const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
   "upgrade-survivor",
+  "update-first-hop-compat",
   "update-run-package-self-upgrade",
 );
 const releasePathPackageUpdateCoreLanes = [
@@ -911,6 +940,7 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
       "gateway-network",
       "config-reload",
       "session-runtime-context",
+      "live-anthropic-cache",
       "plugin-binding-command-escape",
       "agent-bundle-mcp-tools",
       "mcp-channels",

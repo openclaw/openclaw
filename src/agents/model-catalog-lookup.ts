@@ -9,8 +9,14 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";
+import {
+  resolveProviderModelCatalogId,
+  resolveProviderModelPolicySurface,
+} from "../plugins/provider-model-routes.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import { canonicalizeProviderModelId } from "./provider-model-route.js";
 
 type ModelThinkingCompat = {
@@ -140,19 +146,38 @@ export function modelSupportsInput(
   return entry?.input?.includes(input) ?? false;
 }
 
-/** Finds a provider-qualified model entry in a catalog. */
+/** Prefers canonical identity; the shipped SDK's case-insensitive fallback must be unique. */
 export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" | "id">>(
   catalog: readonly T[],
   provider: string,
   modelId: string,
 ): T | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  return catalog.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider &&
-      normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
+  const providerCatalog = catalog.filter(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider,
   );
+  const literal = providerCatalog.find((entry) => entry.id === modelId.trim());
+  if (literal) {
+    return literal;
+  }
+  // One synchronous lookup uses one policy owner instead of reloading it for every row.
+  const surface = resolveProviderModelPolicySurface(normalizedProvider);
+  const identityOf = (id: string) =>
+    resolveProviderModelCatalogId({
+      provider: normalizedProvider,
+      modelId: splitTrailingAuthProfile(id).model,
+      surface,
+    }) ?? id;
+  const identity = identityOf(modelId.trim());
+  const exact = providerCatalog.find((entry) => identityOf(entry.id) === identity);
+  if (exact) {
+    return exact;
+  }
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const matches = providerCatalog.filter(
+    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /** Finds a model entry, requiring uniqueness when provider is omitted. */
@@ -170,9 +195,14 @@ export function findModelCatalogEntry(
     return findModelInCatalog(catalog, provider, modelId);
   }
 
-  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  const matches = catalog.filter(
-    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
+  const exact = catalog.filter(
+    (entry) =>
+      resolveModelCatalogIdentityKey(entry) ===
+      resolveModelCatalogIdentityKey({ provider: entry.provider, id: modelId }),
   );
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const matches = exact.length
+    ? exact
+    : catalog.filter((entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId);
   return matches.length === 1 ? matches[0] : undefined;
 }

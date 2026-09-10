@@ -32,6 +32,7 @@ vi.mock("../../plugins/providers.js", () => ({
 }));
 vi.mock("../../plugins/provider-model-routes.js", () => ({
   resolveProviderModelCatalogId: () => null,
+  resolveProviderModelPolicySurface: () => null,
   resolveProviderModelRoutes: () => null,
 }));
 

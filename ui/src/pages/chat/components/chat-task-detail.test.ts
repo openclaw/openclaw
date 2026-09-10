@@ -58,6 +58,7 @@ describe("task detail panel", () => {
       runtime: "cli",
       agentId: "main",
       title: "Current-session command",
+      hasTranscript: true,
       sessionKey: "agent:main:main",
       terminalSummary: "Command complete",
       createdAt: 1_000,
@@ -140,6 +141,97 @@ describe("task detail panel", () => {
     expect(panel?.textContent).toContain("Inspect the current task.");
     expect(panel?.textContent).not.toContain("Loading task transcript");
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "native subagent", hasTranscript: true },
+    { name: "child session", childSessionKey: "agent:main:subagent:child" },
+  ])("renders and pages the $name transcript through the task API", async (source) => {
+    const task: TaskSummary = {
+      id: "task-child",
+      taskId: "task-child",
+      status: "completed",
+      runtime: "subagent",
+      agentId: "main",
+      title: "Investigate rendering",
+      sessionKey: "agent:main:main",
+      ...source,
+    };
+    const currentMessage = {
+      role: "assistant",
+      messageId: "answer",
+      content: "The rendering issue is fixed.",
+    };
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("history unavailable"))
+      .mockResolvedValueOnce({ messages: [currentMessage], nextCursor: "previous-page" })
+      .mockResolvedValueOnce({
+        messages: [
+          { role: "user", messageId: "prompt", content: "Inspect the renderer." },
+          currentMessage,
+        ],
+      });
+    const host: TaskDetailHost = {
+      sessionKey: "agent:main:main",
+      client: createGatewayBrowserClientFixture({ request }),
+      connected: true,
+      hello: null,
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(
+        html`${renderTaskDetailPanel({
+          backgroundTasks: backgroundTasks(task),
+          chat: threadProps("pane-1", host.sessionKey),
+          host,
+          task,
+          transcript,
+        })}`,
+        container,
+      );
+      transcript.hostUpdated();
+    };
+    const button = (label: string) =>
+      Array.from(container.querySelectorAll("button")).find((element) =>
+        element.textContent?.includes(label),
+      );
+    rerender();
+    await vi.waitFor(() => expect(host.taskDetailState?.load.status).toBe("error"));
+    rerender();
+    expect(button("Retry")).toBeDefined();
+    button("Retry")?.click();
+    await vi.waitFor(() => expect(host.taskDetailState?.load.status).toBe("loaded"));
+    rerender();
+    transcript.hostConnected();
+    await flushDeferredRowPrune();
+
+    expect(container.textContent).toContain("The rendering issue is fixed.");
+    expect(container.textContent).not.toContain("Inspect the current task.");
+    expect(request).toHaveBeenLastCalledWith("tasks.history", { taskId: task.id, limit: 100 });
+    expect(button("Show earlier")).toBeDefined();
+    button("Show earlier")?.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(host.taskDetailState?.load).toMatchObject({
+        status: "loaded",
+        loading: false,
+        nextCursor: undefined,
+      }),
+    );
+    rerender();
+    await flushDeferredRowPrune();
+
+    expect(request).toHaveBeenLastCalledWith("tasks.history", {
+      taskId: task.id,
+      limit: 100,
+      cursor: "previous-page",
+    });
+    expect(container.textContent).toContain("Inspect the renderer.");
+    expect(container.textContent?.split("The rendering issue is fixed.")).toHaveLength(2);
+    expect(button("Show earlier")).toBeUndefined();
+    transcript.hostDisconnected();
   });
 
   it.each([
@@ -248,6 +340,8 @@ describe("task detail panel", () => {
     const chat = {
       ...threadProps("pane-1", host.sessionKey),
       selectedSession: parentRow,
+      userId: "viewer",
+      userName: "Example User",
       sessions,
     };
     const transcript = createTestTranscript();
@@ -274,6 +368,8 @@ describe("task detail panel", () => {
     await flushDeferredRowPrune();
 
     expect(container.textContent).not.toContain("Archived by Parent Owner");
+    expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
+    expect(container.querySelector(".chat-sender-name")?.textContent).toContain("Example User");
     if (expected) {
       expect(container.textContent).toContain(expected);
     } else {

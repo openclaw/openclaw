@@ -1,3 +1,5 @@
+// Harness contracts depend on the model-ref data shape, not its runtime normalization.
+import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /**
@@ -13,6 +15,14 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
+
+/** Private native ownership, not execution authority or credential readiness. */
+export type AgentHarnessSessionRuntimeOwnership = {
+  model: "native";
+  auth: "native" | "host";
+  /** Actual native selection, only when both facts are known from the same binding. */
+  modelRef?: ModelRef;
+};
 
 export type AgentHarnessPreparedAuthSupport = {
   source: "profile" | "direct" | "harness" | "none";
@@ -97,7 +107,7 @@ type AgentHarnessLegacyAttemptResult = Omit<
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "admittedRunContext"
-  | "codeModeRecovery"
+  | "assistantErrorTranscript"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
@@ -160,6 +170,8 @@ type AgentHarnessIsolatedCompletionParams = {
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
+  /** Revalidate after preparation and before credential or inference I/O, including retries. */
+  assertCurrent?: () => void;
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
   outputTextPolicy?: "strict-visible";
@@ -270,6 +282,8 @@ export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & 
 };
 export type AgentHarnessSideQuestionResult = {
   text: string;
+  /** Aggregate billed usage for the side question, including native tool-loop calls. */
+  usage?: import("../usage.js").NormalizedUsage;
 };
 export type AgentHarnessCompactParams =
   import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
@@ -387,6 +401,17 @@ type AgentHarnessRunCapability<
    */
   conversationToolPolicySafeDenyTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
+  /** Synchronous private ownership read; no discovery, auth loading, or native connection setup. */
+  resolveSessionRuntimeOwnership?(params: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionId: string;
+    sessionKey?: string;
+    storePath?: string;
+    /** Latest predecessor of this exact physical session; valid only during this invocation. */
+    readPreviousSessionId?: () => string | undefined;
+    assertCurrent: () => void;
+  }): AgentHarnessSessionRuntimeOwnership | undefined;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   runAttempt(params: TAttemptParams): Promise<AgentHarnessAttemptResult>;
@@ -516,7 +541,7 @@ export type AgentHarnessModelCatalogParams = {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  configuredModelRefs?: readonly import("../model-ref-shared.js").ModelRef[];
+  configuredModelRefs?: readonly ModelRef[];
 };
 
 type AgentHarnessModelCatalogCapability = {
@@ -534,6 +559,23 @@ type AgentHarnessModelCatalogCapability = {
   ): { accountType: string } | undefined;
 };
 
+type AgentHarnessTaskHistoryCapability = {
+  /** Reads native task history without creating an OpenClaw child session. */
+  taskHistory?: {
+    taskKinds: readonly string[];
+    read(params: {
+      task: Readonly<import("../../tasks/task-registry.types.js").TaskRecord>;
+      cfg: OpenClawConfig;
+      cursor?: string;
+      limit: number;
+      /** Revalidate the task, requester access, and registered owner after awaited work. */
+      assertCurrent: () => void;
+    }): Promise<
+      import("../../../packages/gateway-protocol/src/schema/tasks.js").TasksHistoryResult
+    >;
+  };
+};
+
 /**
  * @deprecated Implement AgentHarnessV2. This registration contract remains
  * source-compatible for existing plugins through 2026-10-12.
@@ -548,6 +590,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
+  AgentHarnessTaskHistoryCapability &
   AgentHarnessSessionLifecycleCapability;
 
 /** Current harness contract for hosts that always supply versioned capabilities. */
@@ -561,6 +604,7 @@ export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParams
   AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
+  AgentHarnessTaskHistoryCapability &
   AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {

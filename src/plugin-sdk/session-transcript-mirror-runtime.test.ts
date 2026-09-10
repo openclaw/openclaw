@@ -131,15 +131,19 @@ describe("private session transcript mirror runtime", () => {
     });
     await waitForSessionTranscriptProjection(scope);
 
-    await runExclusiveSqliteSessionWrite(resolvedScope, async () => {
-      runOpenClawAgentWriteTransaction((database) => {
-        database.db
-          .prepare(
-            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-          )
-          .run(scope.sessionId);
-      }, toDatabaseOptions(resolvedScope));
-    });
+    await runExclusiveSqliteSessionWrite(
+      resolvedScope,
+      async () => {
+        runOpenClawAgentWriteTransaction((database) => {
+          database.db
+            .prepare(
+              "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+            )
+            .run(scope.sessionId);
+        }, toDatabaseOptions(resolvedScope));
+      },
+      "session.transcript.batch",
+    );
 
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
       expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject({

@@ -1,9 +1,4 @@
 // Runtime LLM helpers adapt plugin provider hooks into the core model runtime.
-import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import {
-  normalizeBuiltInProviderModelId,
-  stripSelfProviderModelPrefix,
-} from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -16,6 +11,8 @@ import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugi
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { modelKey } from "../../shared/model-key.js";
 import {
   estimateAggregateUsageCost,
@@ -23,6 +20,7 @@ import {
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
+import { compileModelAllowlist, type CompiledModelAllowlist } from "../model-allowlist.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { createLlmCompleteError as completionError } from "./runtime-llm-error.js";
 import {
@@ -62,18 +60,12 @@ export type CreateRuntimeLlmOptions = {
   logger?: RuntimeLogger;
 };
 
-type RuntimeModelAllowlist = {
-  configured: boolean;
-  allowAny: boolean;
-  models: Set<string>;
-};
-
 type RuntimeLlmPolicy = {
   allowAgentIdOverride: boolean;
   allowModelOverride: boolean;
   allowAuthProfileOverride: boolean;
-  overrideModels: RuntimeModelAllowlist;
-  completionModels: RuntimeModelAllowlist;
+  overrideModels: CompiledModelAllowlist;
+  completionModels: CompiledModelAllowlist;
 };
 
 const defaultLogger = getChildLogger({ capability: "runtime.llm" });
@@ -223,12 +215,12 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
   );
 }
 
-function finalizeCompletion(params: {
+export function finalizePluginLlmCompletion(params: {
   cfg: OpenClawConfig;
   hostPluginId?: string;
   suppressUsage?: boolean;
   rawUsage: unknown;
-  logger: RuntimeLogger;
+  logger?: RuntimeLogger;
   result: Omit<LlmCompleteResult, "usage">;
 }): LlmCompleteResult {
   const normalized = normalizeUsage(params.rawUsage as UsageLike | undefined);
@@ -252,7 +244,8 @@ function finalizeCompletion(params: {
     ...(normalized?.total !== undefined ? { totalTokens: normalized.total } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
-  params.logger.info("plugin llm completion", {
+  const logger = params.logger ?? toRuntimeLogger(defaultLogger);
+  logger.info("plugin llm completion", {
     caller: params.result.audit.caller,
     purpose: params.result.audit.purpose,
     sessionKey: params.result.audit.sessionKey,
@@ -298,47 +291,6 @@ function finalizeCompletion(params: {
   return { ...params.result, usage };
 }
 
-function normalizeAllowedModelRef(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed === "*") {
-    return "*";
-  }
-  const parsed = parseModelCatalogRef(trimmed);
-  if (!parsed) {
-    return null;
-  }
-  // Operator allowlists already name canonical targets; keep policy checks independent
-  // of plugin metadata and provider-runtime discovery.
-  const modelId = normalizeBuiltInProviderModelId(
-    parsed.provider,
-    stripSelfProviderModelPrefix(parsed.provider, parsed.modelId),
-  );
-  return modelKey(parsed.provider, modelId);
-}
-
-function normalizeModelAllowlist(params: {
-  configured: boolean;
-  values?: readonly string[];
-}): RuntimeModelAllowlist {
-  const models = new Set<string>();
-  let allowAny = false;
-  for (const modelRef of params.values ?? []) {
-    const normalizedModelRef = normalizeAllowedModelRef(modelRef);
-    if (!normalizedModelRef) {
-      continue;
-    }
-    if (normalizedModelRef === "*") {
-      allowAny = true;
-      continue;
-    }
-    models.add(normalizedModelRef);
-  }
-  return { configured: params.configured, allowAny, models };
-}
-
 function buildPolicyFromEntry(entry: {
   allowAgentIdOverride?: boolean;
   allowModelOverride?: boolean;
@@ -352,13 +304,15 @@ function buildPolicyFromEntry(entry: {
     allowAgentIdOverride: entry.allowAgentIdOverride === true,
     allowModelOverride: entry.allowModelOverride === true,
     allowAuthProfileOverride: entry.allowAuthProfileOverride === true,
-    overrideModels: normalizeModelAllowlist({
+    overrideModels: compileModelAllowlist({
       configured: entry.hasAllowedModelsConfig === true,
       values: entry.allowedModels,
+      formatKey: modelKey,
     }),
-    completionModels: normalizeModelAllowlist({
+    completionModels: compileModelAllowlist({
       configured: entry.hasAllowedCompletionModelsConfig === true,
       values: entry.allowedCompletionModels,
+      formatKey: modelKey,
     }),
   };
 }
@@ -432,35 +386,36 @@ function assertAllowedAuthProfileOverride(params: {
   );
 }
 
-function assertOverrideModelAllowed(params: {
+function assertModelAllowed(params: {
+  kind: "override" | "completion";
   resolvedModelRef: string | null;
   policy: RuntimeLlmPolicy | undefined;
   policyOwnerPluginId?: string;
 }): void {
-  const allowlist = params.policy?.overrideModels;
-  if (!allowlist?.configured) {
+  const allowlist =
+    params.kind === "override" ? params.policy?.overrideModels : params.policy?.completionModels;
+  if (!allowlist?.configured || allowlist.allowAny) {
     return;
   }
-  if (allowlist.allowAny) {
-    return;
-  }
+  const target = params.kind === "override" ? "model override" : "model";
   if (allowlist.models.size === 0) {
     throw completionError(
       "LLM_COMPLETION_NOT_AUTHORIZED",
-      "Plugin LLM completion model override allowlist has no valid models.",
+      `Plugin LLM completion ${target} allowlist has no valid models.`,
     );
   }
   if (!params.resolvedModelRef) {
     throw completionError(
       "LLM_COMPLETION_NOT_AUTHORIZED",
-      "Plugin LLM completion model override allowlist requires a resolvable provider/model target.",
+      `Plugin LLM completion ${target} allowlist requires a resolvable provider/model target.`,
     );
   }
   if (!allowlist.models.has(params.resolvedModelRef)) {
     const owner = params.policyOwnerPluginId ? ` for plugin "${params.policyOwnerPluginId}"` : "";
+    const usage = params.kind === "completion" ? " for completions" : "";
     throw completionError(
       "LLM_COMPLETION_NOT_AUTHORIZED",
-      `Plugin LLM completion model override "${params.resolvedModelRef}" is not allowlisted${owner}.`,
+      `Plugin LLM completion ${target} "${params.resolvedModelRef}" is not allowlisted${usage}${owner}.`,
     );
   }
 }
@@ -482,49 +437,17 @@ function assertAllowedModelOverride(params: {
   }
   // Host and operator policy are independent trust boundaries. When both
   // configure a restriction, an override must satisfy their intersection.
-  assertOverrideModelAllowed({
+  assertModelAllowed({
+    kind: "override",
     resolvedModelRef: params.resolvedModelRef,
     policy: params.authorityPolicy,
   });
-  assertOverrideModelAllowed({
+  assertModelAllowed({
+    kind: "override",
     resolvedModelRef: params.resolvedModelRef,
     policy: params.pluginPolicy,
     policyOwnerPluginId: params.pluginPolicyId,
   });
-}
-
-function assertCompletionModelAllowed(params: {
-  resolvedModelRef: string | null;
-  policy: RuntimeLlmPolicy | undefined;
-  policyOwnerPluginId?: string;
-}): void {
-  const policy = params.policy;
-  const allowlist = policy?.completionModels;
-  if (!allowlist?.configured) {
-    return;
-  }
-  if (allowlist.allowAny) {
-    return;
-  }
-  if (allowlist.models.size === 0) {
-    throw completionError(
-      "LLM_COMPLETION_NOT_AUTHORIZED",
-      "Plugin LLM completion model allowlist has no valid models.",
-    );
-  }
-  if (!params.resolvedModelRef) {
-    throw completionError(
-      "LLM_COMPLETION_NOT_AUTHORIZED",
-      "Plugin LLM completion model allowlist requires a resolvable provider/model target.",
-    );
-  }
-  if (!allowlist.models.has(params.resolvedModelRef)) {
-    const owner = params.policyOwnerPluginId ? ` for plugin "${params.policyOwnerPluginId}"` : "";
-    throw completionError(
-      "LLM_COMPLETION_NOT_AUTHORIZED",
-      `Plugin LLM completion model "${params.resolvedModelRef}" is not allowlisted for completions${owner}.`,
-    );
-  }
 }
 
 /**
@@ -553,7 +476,7 @@ export function createRuntimeLlm(
 
       const [
         {
-          prepareSimpleCompletionModelForAgent,
+          acquireSimpleCompletionModelForAgent,
           completeWithPreparedSimpleCompletionModel,
           resolveSimpleCompletionSelectionForAgent,
         },
@@ -595,8 +518,9 @@ export function createRuntimeLlm(
       }
       const normalizedSelection = normalizeModelRef(selection.provider, selection.modelId);
       const resolvedModelRef = modelKey(normalizedSelection.provider, normalizedSelection.model);
-      assertCompletionModelAllowed({ resolvedModelRef, policy: authorityPolicy });
-      assertCompletionModelAllowed({
+      assertModelAllowed({ kind: "completion", resolvedModelRef, policy: authorityPolicy });
+      assertModelAllowed({
+        kind: "completion",
         resolvedModelRef,
         policy: pluginPolicy,
         policyOwnerPluginId: pluginPolicyId,
@@ -641,7 +565,7 @@ export function createRuntimeLlm(
           authProfileId:
             executionProfile ?? requestedModelProfile ?? preferredProfile ?? modelProfile,
         });
-        return finalizeCompletion({
+        return finalizePluginLlmCompletion({
           cfg,
           hostPluginId: pluginPolicyId,
           rawUsage: result.usage,
@@ -657,66 +581,85 @@ export function createRuntimeLlm(
         });
       }
 
-      const prepared = await prepareSimpleCompletionModelForAgent({
-        cfg,
-        agentId,
-        modelRef: params.model,
-        preferredProfile,
-        allowBundledStaticCatalogFallback: true,
-        allowMissingApiKeyModes: ["aws-sdk"],
-        skipAgentDiscovery: true,
-      });
-
-      if ("error" in prepared) {
-        throw new Error(`Plugin LLM completion failed: ${prepared.error}`);
-      }
-
-      const context = {
-        systemPrompt: buildSystemPrompt(params),
-        messages: buildMessages({
-          request: params,
-          provider: prepared.model.provider,
-          model: prepared.model.id,
-          api: prepared.model.api,
-        }),
-      };
-
-      const result = await completeWithPreparedSimpleCompletionModel({
-        model: prepared.model,
-        auth: prepared.auth,
-        cfg,
-        context,
-        options: {
-          maxTokens: asFiniteNumber(params.maxTokens),
-          temperature: asFiniteNumber(params.temperature),
-          ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
-          signal: params.signal,
-        },
-      });
-
-      const text = result.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text)
-        .join("");
-      return finalizeCompletion({
-        cfg,
-        hostPluginId: pluginPolicyId,
-        // Provider failures resolve as messages; only visible successful output owns usage.
-        suppressUsage: !text.trim() || !["stop", "length", "toolUse"].includes(result.stopReason),
-        rawUsage: result.usage,
-        logger,
-        result: {
-          text,
-          provider: prepared.selection.provider,
-          model: prepared.selection.modelId,
+      const callerResult = createDeferredCore<LlmCompleteResult>();
+      const trackOwner = captureAsyncWorkTracker();
+      // Admit drainage with the parent before acquisition; the caller only waits for its result.
+      void trackOwner(async () => {
+        const prepared = await acquireSimpleCompletionModelForAgent({
+          cfg,
           agentId,
-          execution: {
-            mode: "direct-provider",
-            owner: { kind: "provider", id: prepared.selection.provider },
-          },
-          audit,
-        },
-      });
+          modelRef: params.model,
+          preferredProfile,
+          allowBundledStaticCatalogFallback: true,
+          allowMissingApiKeyModes: ["aws-sdk"],
+          skipAgentDiscovery: true,
+        });
+
+        if ("error" in prepared) {
+          throw new Error(`Plugin LLM completion failed: ${prepared.error}`);
+        }
+
+        const work = new AsyncWorkScope();
+        try {
+          callerResult.resolve(
+            await work.track(async () => {
+              const context = {
+                systemPrompt: buildSystemPrompt(params),
+                messages: buildMessages({
+                  request: params,
+                  provider: prepared.model.provider,
+                  model: prepared.model.id,
+                  api: prepared.model.api,
+                }),
+              };
+
+              const result = await completeWithPreparedSimpleCompletionModel({
+                model: prepared.model,
+                auth: prepared.auth,
+                cfg,
+                context,
+                options: {
+                  maxTokens: asFiniteNumber(params.maxTokens),
+                  temperature: asFiniteNumber(params.temperature),
+                  ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
+                  signal: params.signal,
+                },
+              });
+
+              const text = result.content
+                .filter((c): c is { type: "text"; text: string } => c.type === "text")
+                .map((c) => c.text)
+                .join("");
+              return finalizePluginLlmCompletion({
+                cfg,
+                hostPluginId: pluginPolicyId,
+                // Provider failures resolve as messages; only visible successful output owns usage.
+                suppressUsage:
+                  !text.trim() || !["stop", "length", "toolUse"].includes(result.stopReason),
+                rawUsage: result.usage,
+                logger,
+                result: {
+                  text,
+                  provider: prepared.selection.provider,
+                  model: prepared.selection.modelId,
+                  agentId,
+                  execution: {
+                    mode: "direct-provider",
+                    owner: { kind: "provider", id: prepared.selection.provider },
+                  },
+                  audit,
+                },
+              });
+            }),
+          );
+        } catch (error) {
+          callerResult.reject(error);
+        } finally {
+          await work.drain();
+          prepared.release();
+        }
+      }).catch((error: unknown) => callerResult.reject(error));
+      return await callerResult.promise;
     },
   };
 }

@@ -14,6 +14,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-move",
@@ -65,6 +66,11 @@ describe("worker session placement moves", () => {
         remoteWorkspaceDir: "/workspace/move",
       },
     });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-move",
+      sessionId: SESSION.sessionId,
+      ownerEpoch: 7,
+    });
     const active = store.transition({
       sessionId: SESSION.sessionId,
       from: "starting",
@@ -84,24 +90,7 @@ describe("worker session placement moves", () => {
     ownerEpoch: number;
     profileId?: string;
   }): void {
-    database.db
-      .prepare(
-        `INSERT INTO worker_environments (
-          environment_id, provider_id, profile_id, profile_snapshot_json,
-          provision_operation_id, lease_id, state, owner_epoch,
-          attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-        ) VALUES (?, 'test', ?, '{}', ?, 'lease-test', 'attached', ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        input.environmentId,
-        input.profileId ?? "profile-source",
-        `provision:${input.environmentId}`,
-        input.ownerEpoch,
-        JSON.stringify([input.sessionId]),
-        nowMs,
-        nowMs,
-        nowMs,
-      );
+    seedAttachedPlacementEnvironment(database, input);
   }
 
   it("lazily begins one exact-source move in the drain transaction", () => {
@@ -239,72 +228,140 @@ describe("worker session placement moves", () => {
     expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
   });
 
-  it("persists a profile machine class and joins only the exact target", () => {
-    const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
-    const source = {
-      generation: active.generation,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-    };
-    const target = {
-      kind: "profile",
-      profileId: "profile-destination",
-      machineClass: "beast",
-    } as const;
-    const begun = store.beginPlacementMove({
-      sessionId: SESSION.sessionId,
-      source,
-      target: { ...target, machineClass: " beast " },
-    });
-
-    expect(store.getPlacementMove(SESSION.sessionId)).toMatchObject({ target });
-    expect(
-      store.beginPlacementMove({ sessionId: SESSION.sessionId, source, target }),
-    ).toMatchObject({ joined: true, intent: { operationId: begun.intent.operationId, target } });
-    expect(() =>
-      store.beginPlacementMove({
-        sessionId: SESSION.sessionId,
-        source,
-        target: { ...target, machineClass: "fast" },
-      }),
-    ).toThrow("already has a conflicting placement move");
-  });
-
-  it("rejects a machine class stored for a non-profile target", () => {
-    const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
-    store.beginPlacementMove({
-      sessionId: SESSION.sessionId,
-      source: {
+  it.each([undefined, "os-a"])(
+    "persists profile choices with OS %s and joins only the exact target",
+    (targetOs) => {
+      const active = advanceToActive();
+      seedAttachedEnvironment({
+        environmentId: active.environmentId,
+        sessionId: active.sessionId,
+        ownerEpoch: active.activeOwnerEpoch,
+      });
+      const source = {
         generation: active.generation,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
-      },
-      target: { kind: "gateway" },
-    });
-    database.db
-      .prepare(
-        "UPDATE worker_session_placement_moves SET target_machine_class = 'beast' WHERE session_id = ?",
-      )
-      .run(SESSION.sessionId);
+      };
+      const target = {
+        kind: "profile",
+        profileId: "profile-destination",
+        machineClass: "beast",
+        ...(targetOs ? { os: targetOs } : {}),
+      } as const;
+      const begun = store.beginPlacementMove({
+        sessionId: SESSION.sessionId,
+        source,
+        target: {
+          ...target,
+          machineClass: " beast ",
+          ...(targetOs ? { os: ` ${targetOs} ` } : {}),
+        },
+      });
 
-    expect(() => store.getPlacementMove(SESSION.sessionId)).toThrow(
-      "Invalid worker placement move target: gateway",
-    );
-  });
+      expect(store.getPlacementMove(SESSION.sessionId)).toMatchObject({ target });
+      expect(
+        database.db
+          .prepare("SELECT target_os FROM worker_session_placement_moves WHERE session_id = ?")
+          .get(SESSION.sessionId),
+      ).toEqual({ target_os: targetOs ?? null });
+      if (targetOs === undefined) {
+        expect(store.getPlacementMove(SESSION.sessionId)?.target).not.toHaveProperty("os");
+      }
+      expect(
+        store.beginPlacementMove({ sessionId: SESSION.sessionId, source, target }),
+      ).toMatchObject({ joined: true, intent: { operationId: begun.intent.operationId, target } });
+      expect(() =>
+        store.beginPlacementMove({
+          sessionId: SESSION.sessionId,
+          source,
+          target: { ...target, machineClass: "fast" },
+        }),
+      ).toThrow("already has a conflicting placement move");
+      expect(() =>
+        store.beginPlacementMove({
+          sessionId: SESSION.sessionId,
+          source,
+          target: { ...target, os: "os-b" },
+        }),
+      ).toThrow("already has a conflicting placement move");
+    },
+  );
+
+  it.each(["target_machine_class", "target_os"])(
+    "rejects %s stored for a non-profile target",
+    (column) => {
+      const active = advanceToActive();
+      seedAttachedEnvironment({
+        environmentId: active.environmentId,
+        sessionId: active.sessionId,
+        ownerEpoch: active.activeOwnerEpoch,
+      });
+      store.beginPlacementMove({
+        sessionId: SESSION.sessionId,
+        source: {
+          generation: active.generation,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+        target: { kind: "gateway" },
+      });
+      database.db
+        .prepare(
+          `UPDATE worker_session_placement_moves SET ${column} = 'override' WHERE session_id = ?`,
+        )
+        .run(SESSION.sessionId);
+
+      expect(() => store.getPlacementMove(SESSION.sessionId)).toThrow(
+        "Invalid worker placement move target: gateway",
+      );
+    },
+  );
+
+  it.each([{ kind: "gateway" }, { kind: "device", deviceId: "device-1" }] as const)(
+    "rejects OS on a $kind move before creating storage",
+    (target) => {
+      const invalidTarget = { ...target, os: "os-a" };
+      database.db.exec("DROP TABLE worker_session_placement_moves");
+      expect(() =>
+        store.beginPlacementMove({
+          sessionId: SESSION.sessionId,
+          source: { generation: 1, environmentId: "source", ownerEpoch: 1 },
+          target: invalidTarget,
+        }),
+      ).toThrow("operating system requires a profile target");
+      expect(
+        database.db
+          .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'worker_session_placement_moves'")
+          .get(),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["", " ", "a".repeat(65)])(
+    "rejects an invalid move OS %j before creating storage",
+    (targetOs) => {
+      database.db.exec("DROP TABLE worker_session_placement_moves");
+      expect(() =>
+        store.beginPlacementMove({
+          sessionId: SESSION.sessionId,
+          source: { generation: 1, environmentId: "source", ownerEpoch: 1 },
+          target: { kind: "profile", profileId: "cloud", os: targetOs },
+        }),
+      ).toThrow(/move operating system/u);
+      expect(
+        database.db
+          .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'worker_session_placement_moves'")
+          .get(),
+      ).toBeUndefined();
+    },
+  );
 
   it("keeps invalid move attempts from creating optional storage", () => {
     database.db.exec("DROP TABLE worker_session_placement_moves");
     const active = advanceToActive();
+    database.db
+      .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
+      .run(active.environmentId);
 
     expect(() =>
       store.beginPlacementMove({
@@ -401,7 +458,12 @@ describe("worker session placement moves", () => {
         environmentId: source.environmentId,
         ownerEpoch: source.activeOwnerEpoch,
       },
-      target: { kind: "profile", profileId: "profile-destination", machineClass: "beast" },
+      target: {
+        kind: "profile",
+        profileId: "profile-destination",
+        machineClass: "beast",
+        os: "os-a",
+      },
     });
     const reconciling = store.startReconcile({
       sessionId: SESSION.sessionId,
@@ -571,7 +633,12 @@ describe("worker session placement moves", () => {
         environmentId: source.environmentId,
         ownerEpoch: source.activeOwnerEpoch,
       },
-      target: { kind: "profile", profileId: "profile-destination", machineClass: "beast" },
+      target: {
+        kind: "profile",
+        profileId: "profile-destination",
+        machineClass: "beast",
+        os: "os-a",
+      },
     });
     const reconciling = store.startReconcile({
       sessionId: source.sessionId,
@@ -607,6 +674,7 @@ describe("worker session placement moves", () => {
           profileId: target.profileId,
           executionMode: "worker-turn",
           machineClass: target.machineClass,
+          os: target.os,
         };
       },
     });

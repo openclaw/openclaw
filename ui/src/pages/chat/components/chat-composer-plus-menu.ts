@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
-import { pathForPluginsHubTab, pathForRoute } from "../../../app-route-paths.ts";
+import { pathForRoute } from "../../../app-route-paths.ts";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import { icons } from "../../../components/icons.ts";
@@ -152,77 +152,83 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
         title: toggle.title,
       }),
     )}
-    ${props.showCapabilities
-      ? html`<wa-dropdown-item class="agent-chat__capability-menu-item" value="open-skills">
-            <span slot="icon" aria-hidden="true">${icons.book}</span>
-            <span>${t("chat.composer.menu.skills")}</span>
-            <span slot="details" class="agent-chat__capability-menu-details">
-              ${hasSkillOverrides
-                ? html`<span class="agent-chat__capability-menu-badge"
-                    >${t("chat.composer.menu.enabledCount", {
-                      count: String(enabledSkillCount),
-                    })}</span
-                  >`
-                : nothing}
-              <span class="agent-chat__capability-menu-chevron" aria-hidden="true"
-                >${icons.chevronRight}</span
-              >
-            </span>
-          </wa-dropdown-item>
-          <wa-dropdown-item class="agent-chat__capability-menu-item" value="open-connectors">
-            <span slot="icon" aria-hidden="true">${icons.puzzle}</span>
-            <span>${t("chat.composer.menu.connectors")}</span>
-            <span slot="details" class="agent-chat__capability-menu-details">
-              <span class="agent-chat__capability-menu-badge">${connectorCount}</span>
-              <span class="agent-chat__capability-menu-chevron" aria-hidden="true"
-                >${icons.chevronRight}</span
-              >
-            </span>
-          </wa-dropdown-item>
-          ${renderCapabilityToggleRow({
-            value: "toggle-web-search",
-            label: t("chat.composer.menu.webSearch"),
-            checked: webSearchEnabled,
-            disabled: props.mutationBlockedReason !== null,
-            title: props.mutationBlockedReason,
-            icon: icons.globe,
-            checkbox: true,
-          })}
-          ${menuDivider()}
-          <wa-dropdown-item class="agent-chat__capability-menu-item" value="manage-plugins">
-            <span slot="icon" aria-hidden="true">${icons.puzzle}</span>
-            ${internalLink(
-              pathForRoute("plugins", props.basePath),
-              t("chat.composer.menu.managePlugins"),
-            )}
-          </wa-dropdown-item>
-          ${overrideCount > 0
-            ? html`
-                <wa-dropdown-item
-                  class="agent-chat__capability-menu-item agent-chat__capability-menu-overrides"
-                  value="clear-overrides"
-                  ?disabled=${props.mutationBlockedReason !== null}
-                  title=${props.mutationBlockedReason ?? ""}
+    ${
+      props.showCapabilities
+        ? html`<wa-dropdown-item class="agent-chat__capability-menu-item" value="open-skills">
+              <span slot="icon" aria-hidden="true">${icons.book}</span>
+              <span>${t("chat.composer.menu.skills")}</span>
+              <span slot="details" class="agent-chat__capability-menu-details">
+                ${
+                  hasSkillOverrides
+                    ? html`<span class="agent-chat__capability-menu-badge"
+                        >${t("chat.composer.menu.enabledCount", {
+                          count: String(enabledSkillCount),
+                        })}</span
+                      >`
+                    : nothing
+                }
+                <span class="agent-chat__capability-menu-chevron" aria-hidden="true"
+                  >${icons.chevronRight}</span
                 >
-                  <span slot="icon" aria-hidden="true">${icons.settings}</span>
-                  <span
-                    >${t(
-                      overrideCount === 1
-                        ? "chat.composer.overrides.countOne"
-                        : "chat.composer.overrides.count",
-                      { count: String(overrideCount) },
-                    )}</span
-                  >
-                  <span
-                    slot="details"
-                    class="agent-chat__capability-menu-clear-overrides"
-                    aria-hidden="true"
-                    >${icons.x}</span
-                  >
-                </wa-dropdown-item>
-              `
-            : nothing}`
-      : nothing}
+              </span>
+            </wa-dropdown-item>
+            <wa-dropdown-item class="agent-chat__capability-menu-item" value="open-connectors">
+              <span slot="icon" aria-hidden="true">${icons.plug}</span>
+              <span>${t("chat.composer.menu.connectors")}</span>
+              <span slot="details" class="agent-chat__capability-menu-details">
+                <span class="agent-chat__capability-menu-badge">${connectorCount}</span>
+                <span class="agent-chat__capability-menu-chevron" aria-hidden="true"
+                  >${icons.chevronRight}</span
+                >
+              </span>
+            </wa-dropdown-item>
+            ${renderCapabilityToggleRow({
+              value: "toggle-web-search",
+              label: t("chat.composer.menu.webSearch"),
+              checked: webSearchEnabled,
+              disabled: props.mutationBlockedReason !== null,
+              title: props.mutationBlockedReason,
+              icon: icons.globe,
+              checkbox: true,
+            })}
+            ${menuDivider()}
+            <wa-dropdown-item class="agent-chat__capability-menu-item" value="manage-plugins">
+              <span slot="icon" aria-hidden="true">${icons.plug}</span>
+              ${internalLink(
+                pathForRoute("plugins", props.basePath),
+                t("chat.composer.menu.managePlugins"),
+              )}
+            </wa-dropdown-item>
+            ${
+              overrideCount > 0
+                ? html`
+                    <wa-dropdown-item
+                      class="agent-chat__capability-menu-item agent-chat__capability-menu-overrides"
+                      value="clear-overrides"
+                      ?disabled=${props.mutationBlockedReason !== null}
+                      title=${props.mutationBlockedReason ?? ""}
+                    >
+                      <span slot="icon" aria-hidden="true">${icons.settings}</span>
+                      <span
+                        >${t(
+                          overrideCount === 1
+                            ? "chat.composer.overrides.countOne"
+                            : "chat.composer.overrides.count",
+                          { count: String(overrideCount) },
+                        )}</span
+                      >
+                      <span
+                        slot="details"
+                        class="agent-chat__capability-menu-clear-overrides"
+                        aria-hidden="true"
+                        >${icons.x}</span
+                      >
+                    </wa-dropdown-item>
+                  `
+                : nothing
+            }`
+        : nothing
+    }
   `;
 }
 
@@ -285,50 +291,44 @@ function renderConnectorView(props: ChatComposerPlusMenuProps) {
               title: disabledReason,
               note: html`<span class="agent-chat__capability-menu-note">
                 ${enabled ? t("common.enabled") : t("common.disabled")}
-                ${override !== undefined
-                  ? html`<span class="agent-chat__capability-menu-session-tag"
-                      >${t("chat.composer.menu.sessionTag")}</span
-                    >`
-                  : nothing}
+                ${
+                  override !== undefined
+                    ? html`<span class="agent-chat__capability-menu-session-tag"
+                        >${t("chat.composer.menu.sessionTag")}</span
+                      >`
+                    : nothing
+                }
               </span>`,
             })}
-            ${props.onOpenToolAccess
-              ? html`<wa-dropdown-item
-                  class="agent-chat__capability-menu-item agent-chat__capability-menu-subrow"
-                  value=${`tools:${index}`}
-                >
-                  <span slot="icon" aria-hidden="true">${icons.wrench}</span>
-                  <span>${t("chat.composer.menu.toolAccess.label")}</span>
-                </wa-dropdown-item>`
-              : nothing}
+            ${
+              props.onOpenToolAccess
+                ? html`<wa-dropdown-item
+                    class="agent-chat__capability-menu-item agent-chat__capability-menu-subrow"
+                    value=${`tools:${index}`}
+                  >
+                    <span slot="icon" aria-hidden="true">${icons.wrench}</span>
+                    <span>${t("chat.composer.menu.toolAccess.label")}</span>
+                  </wa-dropdown-item>`
+                : nothing
+            }
           `;
         });
   const adminDisabled = !props.canAdmin;
   return html`
     ${renderBackRow()} ${rows} ${menuDivider()}
-    ${props.onAddServer
-      ? html`<wa-dropdown-item
-          class="agent-chat__capability-menu-item"
-          value="add-server"
-          ?disabled=${adminDisabled}
-          title=${adminDisabled ? (props.adminBlockedReason ?? "") : ""}
-        >
-          <span slot="icon" aria-hidden="true">${icons.plus}</span>
-          <span>${t("chat.composer.menu.addMcpServer")}</span>
-        </wa-dropdown-item>`
-      : nothing}
-    <wa-dropdown-item
-      class="agent-chat__capability-menu-item"
-      value="browse-connectors"
-      ?disabled=${adminDisabled}
-      title=${adminDisabled ? (props.adminBlockedReason ?? "") : ""}
-    >
-      <span slot="icon" aria-hidden="true">${icons.search}</span>
-      ${internalLink(
-        pathForPluginsHubTab("discover", props.basePath),
-        t("chat.composer.menu.browseConnectors"),
-      )}
-    </wa-dropdown-item>
+    ${
+      props.onAddServer
+        ? html`<wa-dropdown-item
+            class="agent-chat__capability-menu-item"
+            value="add-server"
+            ?disabled=${adminDisabled}
+            title=${adminDisabled ? (props.adminBlockedReason ?? "") : ""}
+          >
+            <span slot="icon" aria-hidden="true">${icons.plus}</span>
+            <span>${t("chat.composer.menu.addMcpServer")}</span>
+          </wa-dropdown-item>`
+        : nothing
+    }
   `;
 }
 
@@ -419,9 +419,11 @@ function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: stri
     <div class="agent-chat__capability-menu-state">
       <span class="agent-chat__capability-menu-label">
         <strong translate="no">${serverName}</strong>
-        ${tools.length > 0
-          ? html`<span class="agent-chat__capability-menu-note">${summary}</span>`
-          : nothing}
+        ${
+          tools.length > 0
+            ? html`<span class="agent-chat__capability-menu-note">${summary}</span>`
+            : nothing
+        }
       </span>
     </div>
     ${rows}
@@ -566,10 +568,6 @@ function handleMenuSelection(
     props.onNavigate("skills");
   } else if (value === "manage-plugins") {
     props.onNavigate("plugins");
-  } else if (value === "browse-connectors") {
-    props.onNavigate("plugins", {
-      pathname: pathForPluginsHubTab("discover", props.basePath),
-    });
   }
 }
 

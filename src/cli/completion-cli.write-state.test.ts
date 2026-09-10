@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   COMPLETION_SHELLS,
@@ -21,8 +22,7 @@ const outputFileMocks = vi.hoisted(() => ({
   publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
 }));
 const stderrWrites = vi.hoisted(() => vi.fn());
-const getCoreCliCommandNamesMock = vi.hoisted(() => vi.fn(() => []));
-const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
+const getCoreCliCompletionGroupsMock = vi.hoisted(() => vi.fn(() => []));
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const getSubCliEntriesMock = vi.hoisted(() =>
   vi.fn(() => [
@@ -39,7 +39,7 @@ const registerSubCliByNameMock = vi.hoisted(() =>
     return true;
   }),
 );
-const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => null));
+const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock("./output-file.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
@@ -55,8 +55,7 @@ vi.mock("./output-file.runtime.js", async () => {
 });
 
 vi.mock("./program/command-registry-core.js", () => ({
-  getCoreCliCommandNames: getCoreCliCommandNamesMock,
-  registerCoreCliByName: registerCoreCliByNameMock,
+  getCoreCliCompletionGroups: getCoreCliCompletionGroupsMock,
 }));
 
 vi.mock("./program/program-context.js", () => ({
@@ -109,8 +108,7 @@ async function writeCompletionCacheForShell(shell: CompletionShell): Promise<str
 
 function expectCompletionInstallationToSkipRegistration(): void {
   expect(getProgramContextMock).not.toHaveBeenCalled();
-  expect(getCoreCliCommandNamesMock).not.toHaveBeenCalled();
-  expect(registerCoreCliByNameMock).not.toHaveBeenCalled();
+  expect(getCoreCliCompletionGroupsMock).not.toHaveBeenCalled();
   expect(getSubCliEntriesMock).not.toHaveBeenCalled();
   expect(registerSubCliByNameMock).not.toHaveBeenCalled();
   expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
@@ -129,8 +127,7 @@ describe("completion-cli write-state", () => {
       actual.publishOutputFileAtomically,
     );
     stderrWrites.mockReset();
-    getCoreCliCommandNamesMock.mockClear();
-    registerCoreCliByNameMock.mockClear();
+    getCoreCliCompletionGroupsMock.mockClear();
     getProgramContextMock.mockClear();
     getSubCliEntriesMock.mockClear();
     registerSubCliByNameMock.mockClear();
@@ -442,6 +439,34 @@ describe("completion-cli write-state", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
       await fs.rm(homeDir, { recursive: true, force: true });
     }
+  });
+
+  it("writes core completion with a warning when invalid config prevents plugin discovery", async () => {
+    await withIsolatedCompletionState(async () => {
+      registerPluginCliCommandsFromValidatedConfigMock.mockRejectedValueOnce(
+        createInvalidConfigError("/tmp/openclaw.json", "- gateway.port: Expected a number"),
+      );
+
+      await writeCompletionCacheForShell("zsh");
+
+      await expect(
+        fs.readFile(resolveCompletionCachePath("zsh", "openclaw"), "utf8"),
+      ).resolves.toContain("#compdef openclaw");
+      expect(stderrWrites).toHaveBeenCalledWith(
+        expect.stringContaining("skipping plugin commands: Invalid config"),
+      );
+    });
+  });
+
+  it("does not publish completion after an unrelated plugin registration failure", async () => {
+    await withIsolatedCompletionState(async () => {
+      const error = new Error("plugin registrar failed");
+      registerPluginCliCommandsFromValidatedConfigMock.mockRejectedValueOnce(error);
+
+      await expect(writeCompletionCacheForShell("zsh")).rejects.toBe(error);
+
+      expect(outputFileMocks.publishOutputFileAtomically).not.toHaveBeenCalled();
+    });
   });
 
   it("structures completion registration warnings for JSON console output", async () => {

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Installs OpenClaw from a prepared package tarball, installs @openclaw/codex
 # from a registry/git/tarball spec, and verifies a live Codex app-server turn.
 set -Eeuo pipefail
@@ -204,6 +208,7 @@ echo "Running Codex npm plugin live Docker E2E..."
 echo "Profile file: $PROFILE_STATUS"
 echo "Codex plugin spec: $CODEX_PLUGIN_SPEC"
 if ! docker_e2e_run_with_harness \
+  -v "$CANDIDATE_ROOT/extensions/codex/package.json:/tmp/openclaw-candidate-codex-package.json:ro" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS="${OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS:-0}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-1}" \
@@ -226,8 +231,8 @@ if ! docker_e2e_run_with_harness \
   -e OPENAI_BASE_URL \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${CODEX_PLUGIN_MOUNT[@]}" \
-  "${PROFILE_MOUNT[@]}" \
+  ${CODEX_PLUGIN_MOUNT[@]+"${CODEX_PLUGIN_MOUNT[@]}"} \
+  ${PROFILE_MOUNT[@]+"${PROFILE_MOUNT[@]}"} \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -Eeuo pipefail
 

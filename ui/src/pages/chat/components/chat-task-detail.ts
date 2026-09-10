@@ -25,10 +25,13 @@ import {
 } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
+import { renderChatHistoryBoundary } from "./chat-history-boundary.ts";
 import { renderReadOnlyTranscript } from "./chat-read-only-transcript.ts";
 import {
+  loadOlderTaskTranscript,
   readTaskTranscript,
   resetTaskDetail,
+  retryTaskTranscript,
   type TaskDetailHost,
 } from "./chat-task-detail-state.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -55,25 +58,26 @@ export function renderTaskDetailPanel(params: {
   }
   const detailedTask = backgroundTasks.taskDetails.get(task.id);
   const currentTask = newestTaskSnapshot(task, detailedTask);
-  // A subagent's sessionKey is its requester's conversation, never its own
-  // work; only the child session is that task's transcript.
+  // A subagent's sessionKey names its requester. Only a child session can supply
+  // session metadata; harness-owned transcripts are addressed by task ID.
   const transcriptSessionKey = normalizeOptionalString(
     currentTask.runtime === "subagent"
       ? currentTask.childSessionKey
       : (currentTask.childSessionKey ?? currentTask.sessionKey),
   );
-  // A task pointing at this pane's canonical session uses the inspector. Mirroring
-  // the current conversation into its own detail sidebar would duplicate the chat.
-  const content =
-    transcriptSessionKey &&
-    !uiConversationMatches(
-      params.host,
-      params.host.sessionKey,
-      transcriptSessionKey,
-      currentTask.agentId,
-    )
-      ? renderTaskTranscript({ ...params, task: currentTask, sessionKey: transcriptSessionKey })
-      : renderTaskFallback(currentTask, backgroundTasks, params.host);
+  // Preserve child-session previews while allowing the task owner to advertise
+  // transcript history without creating an OpenClaw session.
+  const hasTranscript = transcriptSessionKey
+    ? !uiConversationMatches(
+        params.host,
+        params.host.sessionKey,
+        transcriptSessionKey,
+        currentTask.agentId,
+      )
+    : currentTask.hasTranscript === true;
+  const content = hasTranscript
+    ? renderTaskTranscript({ ...params, task: currentTask, sessionKey: transcriptSessionKey })
+    : renderTaskFallback(currentTask, backgroundTasks, params.host);
   return html`
     <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
       ${renderTaskHeader(taskTitle(currentTask), currentTask, backgroundTasks)} ${content}
@@ -96,44 +100,54 @@ function renderTaskHeader(
     <div class="sidebar-header chat-task-detail__header">
       <div class="chat-task-detail__heading">
         <div class="sidebar-title" title=${title}>${title}</div>
-        ${task
-          ? html`<div class="chat-task-detail__meta">
-              ${task.status === "running"
-                ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
-                : nothing}
-              <span
-                class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${STATUS_TONES[
-                  task.status
-                ]}"
-                >${backgroundTaskStatusLabel(task)}</span
-              >
-              <span aria-hidden="true">·</span>
-              <span>${taskRuntimeLabel(task)}</span>
-              ${active && startedMs > 0
-                ? html`<span aria-hidden="true">·</span>
-                    <openclaw-elapsed-time .startMs=${startedMs}></openclaw-elapsed-time>`
-                : nothing}
-              ${task.lastToolName
-                ? html`<span aria-hidden="true">·</span>
-                    <span class="chat-task-detail__tool">${task.lastToolName}</span>`
-                : nothing}
-              ${task.diffStat ? renderDiffStatChips(task.diffStat) : nothing}
-            </div>`
-          : nothing}
+        ${
+          task
+            ? html`<div class="chat-task-detail__meta">
+                ${
+                  task.status === "running"
+                    ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
+                    : nothing
+                }
+                <span
+                  class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${
+                    STATUS_TONES[task.status]
+                  }"
+                  >${backgroundTaskStatusLabel(task)}</span
+                >
+                <span aria-hidden="true">·</span>
+                <span>${taskRuntimeLabel(task)}</span>
+                ${
+                  active && startedMs > 0
+                    ? html`<span aria-hidden="true">·</span>
+                        <openclaw-elapsed-time .startMs=${startedMs}></openclaw-elapsed-time>`
+                    : nothing
+                }
+                ${
+                  task.lastToolName
+                    ? html`<span aria-hidden="true">·</span>
+                        <span class="chat-task-detail__tool">${task.lastToolName}</span>`
+                    : nothing
+                }
+                ${task.diffStat ? renderDiffStatChips(task.diffStat) : nothing}
+              </div>`
+            : nothing
+        }
       </div>
-      ${task && active && backgroundTasks?.canCancel
-        ? html`<div class="sidebar-header__actions">
-            <button
-              class="btn btn--ghost btn--sm"
-              type="button"
-              aria-label=${t("chat.backgroundTasks.stopTask", { title })}
-              ?disabled=${cancelling || !backgroundTasks.connected}
-              @click=${() => backgroundTasks.onCancel(task.id)}
-            >
-              ${cancelling ? icons.loader : icons.stop} ${t("chat.runControls.stop")}
-            </button>
-          </div>`
-        : nothing}
+      ${
+        task && active && backgroundTasks?.canCancel
+          ? html`<div class="sidebar-header__actions">
+              <button
+                class="btn btn--ghost btn--sm"
+                type="button"
+                aria-label=${t("chat.backgroundTasks.stopTask", { title })}
+                ?disabled=${cancelling || !backgroundTasks.connected}
+                @click=${() => backgroundTasks.onCancel(task.id)}
+              >
+                ${cancelling ? icons.loader : icons.stop} ${t("chat.runControls.stop")}
+              </button>
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -141,13 +155,12 @@ function renderTaskHeader(
 function renderTaskTranscript(params: {
   chat: ChatThreadProps;
   host: TaskDetailHost;
-  sessionKey: string;
+  sessionKey: string | undefined;
   task: TaskSummary;
   transcript: ChatTranscriptController;
 }): TemplateResult {
   const load = readTaskTranscript(params.host, {
     taskId: params.task.id,
-    sessionKey: params.sessionKey,
   });
   if (load.status === "loading") {
     return renderPanelLoadingSkeleton("review", t("chat.backgroundTasks.transcriptLoading"));
@@ -155,28 +168,62 @@ function renderTaskTranscript(params: {
   if (load.status === "error") {
     return html`<div class="sidebar-content chat-task-detail__state chat-task-detail__state--error">
       ${t("chat.backgroundTasks.transcriptFailed")}
+      <button class="btn btn--sm" type="button" @click=${() => retryTaskTranscript(params.host)}>
+        ${t("common.retry")}
+      </button>
     </div>`;
   }
-  if (load.messages.length === 0) {
+  if (load.messages.length === 0 && !load.nextCursor && !load.error) {
     return html`<div class="sidebar-content chat-task-detail__state">
       ${t("chat.backgroundTasks.transcriptEmpty")}
     </div>`;
   }
-  const selectedSession = params.chat.sessions?.sessions.find(
-    (row) =>
-      (row.key !== "global" ||
-        (isUiGlobalScopeConfigured(params.host) &&
-          normalizeAgentId(params.host.sessionsResultAgentId ?? "") ===
-            normalizeAgentId(params.task.agentId))) &&
-      uiSessionRowMatchesSelectedChat(params.host, row.key, params.sessionKey),
-  );
+  const sessionKey = params.sessionKey;
+  const selectedSession = sessionKey
+    ? params.chat.sessions?.sessions.find(
+        (row) =>
+          (row.key !== "global" ||
+            (isUiGlobalScopeConfigured(params.host) &&
+              normalizeAgentId(params.host.sessionsResultAgentId ?? "") ===
+                normalizeAgentId(params.task.agentId))) &&
+          uiSessionRowMatchesSelectedChat(params.host, row.key, sessionKey),
+      )
+    : undefined;
   return html`<div class="sidebar-content chat-task-detail__content">
+    ${
+      load.error
+        ? html`<div class="chat-task-detail__state chat-task-detail__state--error" role="status">
+            ${t("chat.backgroundTasks.transcriptFailed")}
+            <button
+              class="btn btn--sm"
+              type="button"
+              ?disabled=${load.loading}
+              @click=${() => retryTaskTranscript(params.host)}
+            >
+              ${t("common.retry")}
+            </button>
+          </div>`
+        : nothing
+    }
+    ${
+      load.nextCursor
+        ? renderChatHistoryBoundary({
+            hasMore: true,
+            loading: load.loading,
+            onShowEarlier: () => loadOlderTaskTranscript(params.host),
+          })
+        : nothing
+    }
     <div class="chat-task-detail__transcript">
       ${renderReadOnlyTranscript({
-        chat: { ...params.chat, selectedSession },
+        chat: {
+          ...params.chat,
+          selectedSession,
+          avatarPlacement: params.task.runtime === "subagent" ? "none" : undefined,
+        },
         messages: load.messages,
         paneId: `${params.chat.paneId}:task-sidebar`,
-        sessionKey: params.sessionKey,
+        sessionKey: params.sessionKey ?? `task:${params.task.id}`,
         transcript: params.transcript,
       })}
     </div>
@@ -211,24 +258,26 @@ function renderTaskInspector(task: TaskSummary, props: BackgroundTasksProps): Te
     return renderPanelLoadingSkeleton("review", t("chat.backgroundTasks.detailLoading"));
   }
   return html`
-    ${detailError
-      ? html`<div
-          class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
-        >
-          ${detailError}
-          <!-- The render-driven load skips errored tasks to avoid a per-paint
+    ${
+      detailError
+        ? html`<div
+            class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
+          >
+            ${detailError}
+            <!-- The render-driven load skips errored tasks to avoid a per-paint
                retry loop, so without this the panel dead-ends whenever the task
                row that could re-open it is not on screen. -->
-          <button
-            class="chat-tasks-rail__task-inspector-retry"
-            type="button"
-            ?disabled=${detailLoading}
-            @click=${() => props.onLoadDetail?.(task)}
-          >
-            ${t("chat.backgroundTasks.detailRetry")}
-          </button>
-        </div>`
-      : nothing}
+            <button
+              class="chat-tasks-rail__task-inspector-retry"
+              type="button"
+              ?disabled=${detailLoading}
+              @click=${() => props.onLoadDetail?.(task)}
+            >
+              ${t("chat.backgroundTasks.detailRetry")}
+            </button>
+          </div>`
+        : nothing
+    }
     <div class="chat-tasks-rail__detail-blocks">
       <section class="chat-tasks-rail__task-inspector-block">
         <div class="chat-tasks-rail__task-inspector-label">${t("chat.backgroundTasks.prompt")}</div>

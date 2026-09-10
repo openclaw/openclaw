@@ -10,6 +10,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
+import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-support.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -39,6 +40,22 @@ afterEach(() => {
 });
 
 describe("method scope resolution", () => {
+  it.each(["openclaw", " "])(
+    "authorizes runtime-aware inventory %j with write scope",
+    (runtimeId) => {
+      const params = { runtimeId };
+      expect(
+        authorizeOperatorScopesForMethod("environments.list", ["operator.read"], params),
+      ).toEqual({
+        allowed: false,
+        missingScope: "operator.write",
+      });
+      expect(
+        authorizeOperatorScopesForMethod("environments.list", ["operator.write"], params),
+      ).toEqual({ allowed: true });
+    },
+  );
+
   it("requires write scope before sessions.assignOwner visibility is considered", () => {
     const params = {
       key: "agent:main:shared",
@@ -61,17 +78,19 @@ describe("method scope resolution", () => {
   });
 
   it.each([
+    ["canvas.document.view", ["operator.read"]],
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
     ["audit.activity.list", ["operator.read"]],
     ["audit.run.inspect", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["users.list", ["operator.read"]],
-    ["users.self", ["operator.write"]],
+    ["users.self", ["operator.read"]],
     ["users.linkEmail", ["operator.admin"]],
     ["users.setDisplayName", ["operator.write"]],
     ["users.setAvatar", ["operator.write"]],
     ["tasks.get", ["operator.read"]],
+    ["tasks.history", ["operator.read"]],
     ["taskSuggestions.list", ["operator.read"]],
     ["taskSuggestions.create", ["operator.write"]],
     ["taskSuggestions.accept", ["operator.admin"]],
@@ -140,6 +159,8 @@ describe("method scope resolution", () => {
     ["talk.session.steer", ["operator.talk"]],
     ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
+    ["update.runs.get", ["operator.admin"]],
+    ["update.runs.list", ["operator.admin"]],
     ["update.hold", ["operator.admin"]],
     ["secrets.store.list", ["operator.admin"]],
     ["secrets.store.set", ["operator.admin"]],
@@ -334,15 +355,7 @@ describe("method scope resolution", () => {
         pluginId: "scope-plugin",
         actionId: "missing",
       }),
-    ).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    ).toEqual(createExpectedBroadOperatorScopes());
     expect(
       authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], {
         pluginId: "scope-plugin",
@@ -772,15 +785,7 @@ describe("method scope resolution", () => {
         pluginId: "remote-plugin",
         actionId: "approve",
       }),
-    ).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    ).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("returns empty scopes for unknown methods", () => {
@@ -978,19 +983,14 @@ describe("operator scope authorization", () => {
 });
 
 describe("plugin approval method registration", () => {
-  it("lists all plugin approval methods", () => {
-    const methods = listGatewayMethods();
-    expect(methods).toContain("plugin.approval.list");
-    expect(methods).toContain("plugin.approval.request");
-    expect(methods).toContain("plugin.approval.waitDecision");
-    expect(methods).toContain("plugin.approval.resolve");
-  });
-
-  it("classifies plugin approval methods", () => {
-    expect(isGatewayMethodClassified("plugin.approval.list")).toBe(true);
-    expect(isGatewayMethodClassified("plugin.approval.request")).toBe(true);
-    expect(isGatewayMethodClassified("plugin.approval.waitDecision")).toBe(true);
-    expect(isGatewayMethodClassified("plugin.approval.resolve")).toBe(true);
+  it.each([
+    "plugin.approval.list",
+    "plugin.approval.request",
+    "plugin.approval.waitDecision",
+    "plugin.approval.resolve",
+  ])("lists and classifies %s", (method) => {
+    expect(listGatewayMethods()).toContain(method);
+    expect(isGatewayMethodClassified(method)).toBe(true);
   });
 });
 

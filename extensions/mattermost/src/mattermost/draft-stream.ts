@@ -41,6 +41,7 @@ type MattermostDraftStream = {
   flush: () => Promise<void>;
   postId: () => string | undefined;
   clear: () => Promise<void>;
+  deleteCurrentMessage: () => Promise<void>;
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
   stop: () => Promise<void>;
@@ -388,6 +389,30 @@ export function createMattermostDraftStream(params: {
     await clearWithStop(discardPending);
     assertNoAcceptedDeliveryFailure();
   };
+  const deleteCurrentMessage = async () => {
+    assertNoAcceptedDeliveryFailure();
+    const retiring = currentGeneration;
+    loop.resetPending();
+    const inFlight = loop.waitForInFlight();
+    const retirement = clearWithStop(
+      async () => {
+        await retiring.ready;
+        await inFlight;
+        assertNoAcceptedDeliveryFailure();
+      },
+      {
+        readMessageId: () => retiring.postId,
+        clearMessageId: () => {
+          retiring.postId = undefined;
+        },
+      },
+    );
+    // Claim retirement before yielding; replacement sends wait without reusing the deleted post.
+    currentGeneration = { lastSentText: "", latestSourceText: "", ready: retirement };
+    loop.resetThrottleWindow();
+    await retirement;
+    assertNoAcceptedDeliveryFailure();
+  };
   const seal = async () => {
     assertNoAcceptedDeliveryFailure();
     await sealLifecycle();
@@ -453,6 +478,7 @@ export function createMattermostDraftStream(params: {
     flush,
     postId: () => currentGeneration.postId,
     clear,
+    deleteCurrentMessage,
     discardPending,
     seal,
     stop,

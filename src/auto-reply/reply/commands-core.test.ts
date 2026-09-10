@@ -1,7 +1,11 @@
 // Tests core command dispatch, reset hooks, authorization, and send policy.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
-import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import type {
+  CommandDispatchParams,
+  CommandHandler,
+  HandleCommandsParams,
+} from "./commands-types.js";
 
 // Tests core command dispatch, aliases, authorization, and handler outcomes.
 
@@ -220,8 +224,8 @@ describe("emitResetCommandHooks", () => {
 
 // Tests command send policy behavior for visible replies and message-tool routing.
 
-const loadCommandHandlersMock = vi.hoisted(
-  (): ReturnType<typeof vi.fn<() => CommandHandler[]>> => vi.fn<() => CommandHandler[]>(() => []),
+const loadCommandHandlersMock = vi.hoisted((): ReturnType<typeof vi.fn<() => CommandHandler[]>> =>
+  vi.fn<() => CommandHandler[]>(() => []),
 );
 
 vi.mock("./commands-handlers.runtime.js", () => ({
@@ -236,7 +240,7 @@ vi.mock("../commands-registry.js", () => ({
   shouldHandleTextCommands: vi.fn(() => true),
 }));
 
-function makeParams(): HandleCommandsParams {
+function makeParams(): CommandDispatchParams {
   return {
     cfg: {
       commands: { text: true },
@@ -286,13 +290,16 @@ function makeParams(): HandleCommandsParams {
     workspaceDir: "/tmp/workspace",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
+    resolveModelLevels: async () => ({
+      resolvedThinkLevel: undefined,
+      resolvedReasoningLevel: "off",
+    }),
     resolveDefaultThinkingLevel: async () => undefined,
     provider: "openai",
     model: "gpt-5.4",
     contextTokens: 0,
     isGroup: false,
-  } as unknown as HandleCommandsParams;
+  } as unknown as CommandDispatchParams;
 }
 
 describe("handleCommands send policy", () => {

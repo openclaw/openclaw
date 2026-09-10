@@ -657,6 +657,8 @@ describe("collectForbiddenPackedPathErrors", () => {
   it("rejects private qa artifacts in npm pack output", () => {
     expect(
       collectForbiddenPackedPathErrors([
+        "dist-runtime/extensions/example/runtime.js",
+        "dist/OpenClaw.app/Contents/MacOS/OpenClaw",
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-channel/package.json",
         "dist/extensions/qa-lab/runtime-api.js",
@@ -665,11 +667,15 @@ describe("collectForbiddenPackedPathErrors", () => {
         "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
         "dist/plugin-sdk/qa-channel.js",
         "dist/plugin-sdk/qa-channel-protocol.d.ts",
+        "dist/plugin-sdk/qa-lab.js",
+        "dist/plugin-sdk/qa-runtime.d.ts",
         "dist/qa-runtime-B9LDtssJ.js",
         "docs/channels/qa-channel.md",
         "qa/scenarios/index.yaml",
       ]),
     ).toEqual([
+      'npm package must not include local application build output "dist/OpenClaw.app/Contents/MacOS/OpenClaw".',
+      'npm package must not include local runtime build output "dist-runtime/extensions/example/runtime.js".',
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
       'npm package must not include private QA channel docs "docs/channels/qa-channel.md".',
@@ -678,8 +684,10 @@ describe("collectForbiddenPackedPathErrors", () => {
       'npm package must not include private QA channel type artifact "dist/plugin-sdk/extensions/qa-channel/api.d.ts".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
+      'npm package must not include private QA lab SDK artifact "dist/plugin-sdk/qa-lab.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
       'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
+      'npm package must not include private QA runtime SDK artifact "dist/plugin-sdk/qa-runtime.d.ts".',
       'npm package must not include private QA suite artifact "qa/scenarios/index.yaml".',
     ]);
   });
@@ -754,14 +762,29 @@ describe("collectPackedTestCargoErrors", () => {
     ]);
   });
 
-  it("allows normal runtime files", () => {
+  it("allows normal runtime files and shipped Markdown reference guides", () => {
     expect(
       collectPackedTestCargoErrors([
         "dist/index.js",
         "dist/extensions/whatsapp/node_modules/pino/lib/proto.js",
         "dist/extensions/webhooks/node_modules/zod/v4/core/api.js",
+        "docs/reference/test/local.md",
+        "docs/reference/tests/guide.md",
+        String.raw`docs\reference\test\docker.md`,
       ]),
     ).toStrictEqual([]);
+  });
+
+  it("still rejects test code in docs and Markdown fixtures outside root docs", () => {
+    const paths = [
+      "dist/node_modules/example/docs/test/fixture.md",
+      "docs/reference/example.test.ts",
+      "docs/reference/test/example.js",
+      "test/fixtures/docs/guide.md",
+    ];
+    expect(collectPackedTestCargoErrors(paths)).toEqual(
+      paths.map((path) => `npm package must not include test cargo "${path}".`),
+    );
   });
 
   it("allows legitimate package roots named test under node_modules", () => {

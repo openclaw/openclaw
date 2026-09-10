@@ -1,10 +1,12 @@
 // Role allowlist update tests cover operator-driven gateway updates, node lists,
 // device/node pairing state, restart sentinels, and runtime plugin visibility.
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { readConfigFileSnapshot } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
@@ -12,7 +14,13 @@ import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  isOpenClawStateDatabaseOpen,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -21,6 +29,73 @@ import {
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 import type { HealthSummary } from "./health/types.js";
+import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
+
+const readonlyPreparation = vi.hoisted(() => ({
+  prepared: [] as Array<{ pathname: string; location?: string; progressed: boolean }>,
+  turns: [] as Promise<void>[],
+}));
+
+vi.mock("../infra/sqlite-readonly-location.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/sqlite-readonly-location.js")>();
+  const observe = (pathname: string) => {
+    let progressed = false;
+    readonlyPreparation.turns.push(
+      new Promise<void>((resolve) => {
+        setImmediate(() => {
+          progressed = true;
+          resolve();
+        });
+      }),
+    );
+    return (prepared?: { location: string }) =>
+      readonlyPreparation.prepared.push({
+        pathname,
+        location: prepared?.location,
+        progressed,
+      });
+  };
+  return {
+    ...actual,
+    prepareSqliteReadOnlyLocationSync(pathname: string) {
+      const finish = observe(pathname);
+      let prepared: ReturnType<typeof actual.prepareSqliteReadOnlyLocationSync> | undefined;
+      try {
+        prepared = actual.prepareSqliteReadOnlyLocationSync(pathname);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    },
+    async prepareSqliteReadOnlyLocation(
+      ...args: Parameters<typeof actual.prepareSqliteReadOnlyLocation>
+    ) {
+      const finish = observe(args[0]);
+      let prepared: Awaited<ReturnType<typeof actual.prepareSqliteReadOnlyLocation>> | undefined;
+      try {
+        prepared = await actual.prepareSqliteReadOnlyLocation(...args);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    },
+  };
+});
+
+const reloadFixture = vi.hoisted<{
+  reconcileRuntimePolicy?: ManagedGatewayConfigReloaderParams["reconcileRuntimePolicy"];
+}>(() => ({}));
+
+vi.mock("./server-reload-managed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-reload-managed.js")>();
+  return {
+    ...actual,
+    startManagedGatewayConfigReloader: (params: ManagedGatewayConfigReloaderParams) => {
+      reloadFixture.reconcileRuntimePolicy = params.reconcileRuntimePolicy;
+      return actual.startManagedGatewayConfigReloader(params);
+    },
+  };
+});
 
 vi.mock("../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: vi.fn(async () => ({
@@ -398,6 +473,55 @@ describe("gateway role enforcement", () => {
   });
 });
 
+describe("gateway update history", () => {
+  test("keeps authenticated update history reads responsive after closing shared state", async () => {
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: "secret",
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      clientVersion: "1.0.0",
+      scopes: ["operator.admin"],
+    });
+    try {
+      const run = createUpdateRun({ trigger: "api" });
+      const databasePath = openOpenClawStateDatabase().path;
+      for (const method of ["update.runs.get", "update.runs.list"] as const) {
+        for (const cache of ["warm", "closed"] as const) {
+          openOpenClawStateDatabase();
+          if (cache === "closed") {
+            expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+          }
+          expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(cache === "warm");
+          const before = readonlyPreparation.prepared.length;
+          const result = await client.request(
+            method,
+            method === "update.runs.get" ? { runId: run.runId } : { limit: 1 },
+          );
+          await Promise.all(readonlyPreparation.turns);
+          expect(result).toEqual(method === "update.runs.get" ? { run } : { runs: [run] });
+          const prepared = readonlyPreparation.prepared
+            .slice(before)
+            .filter((entry) => entry.pathname === databasePath);
+          if (cache === "warm") {
+            expect(prepared).toEqual([]);
+          } else {
+            expect(prepared).toHaveLength(1);
+            expect(
+              prepared[0]?.progressed,
+              "the Gateway isolate must progress while its snapshot child runs",
+            ).toBe(true);
+            expect(prepared[0]?.location).toBeDefined();
+            expect(existsSync(prepared[0]!.location!)).toBe(false);
+          }
+        }
+      }
+    } finally {
+      await client.stopAndWait();
+    }
+  });
+});
+
 describe("gateway update.run", () => {
   test("writes sentinel and schedules restart", async () => {
     await withoutSupervisorHints(async () => {
@@ -702,7 +826,11 @@ describe("gateway node command allowlist", () => {
   test("rechecks current allowlist before exposing approved live commands", async () => {
     const displayName = "node-approve-live-commands-current-allowlist";
     let nodeClient: GatewayClient | undefined;
-    let configPath: string | undefined;
+    let originalConfig: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
+    const reconcileRuntimePolicy = reloadFixture.reconcileRuntimePolicy;
+    if (!reconcileRuntimePolicy) {
+      throw new Error("gateway runtime policy reconciliation is required");
+    }
 
     try {
       const deviceIdentity = createDeviceIdentityForTest("openclaw-node-current-allowlist");
@@ -720,16 +848,17 @@ describe("gateway node command allowlist", () => {
 
       const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
-      configPath = getGatewayTestConfigPath();
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      originalConfig = await readConfigFileSnapshot();
       await fs.writeFile(
-        configPath,
+        originalConfig.path,
         JSON.stringify(
           { gateway: { nodes: { commands: { deny: ["canvas.snapshot"] } } } },
           null,
           2,
         ),
       );
+      // The shared minimal Gateway skips file watching; drive its real commit hook.
+      await reconcileRuntimePolicy((await readConfigFileSnapshot()).config, "committed");
 
       await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);
 
@@ -737,10 +866,11 @@ describe("gateway node command allowlist", () => {
 
       await expectCanvasSnapshotDenied(nodeId, "stale-allowlist-canvas-snapshot");
     } finally {
-      if (configPath) {
-        await fs.writeFile(configPath, "{}\n");
-      }
       await nodeClient?.stopAndWait();
+      if (originalConfig) {
+        await fs.writeFile(originalConfig.path, originalConfig.raw ?? "{}\n");
+        await reconcileRuntimePolicy(originalConfig.config, "committed");
+      }
     }
   });
 

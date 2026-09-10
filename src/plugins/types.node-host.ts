@@ -39,6 +39,8 @@ export type OpenClawPluginNodeHostCommandContext = {
   /** Protect one exact node-owned placement workspace for this invocation's lifetime. */
   acquireManagedWorkspace?: (request: OpenClawPluginNodeWorkspace) => {
     workspaceDir: string;
+    /** Stable HOME owned and validated by this exact prepared workspace binding. */
+    homeDir?: string;
     release: () => void;
   };
 };

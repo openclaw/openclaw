@@ -143,11 +143,12 @@ describe("Crabbox plugin generation lifecycle", () => {
       };
       try {
         // Classless profiles reserve placement-enabled preparation/capture and the
-        // complete diagnostics, Stop and child-settlement cleanup envelope.
+        // complete diagnostics, Stop and child-settlement cleanup envelope. Native
+        // capture adds 45m plus seven 10s command settlements to the former budgets.
         expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
-          158 * 60_000 + 30_000,
+          216 * 60_000 + 25_000,
         );
-        expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(16 * 60_000 + 20_000);
+        expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(74 * 60_000 + 15_000);
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
         const waitForDeviceId = vi.fn(async () => "device-classless");
         const lease = await generation.provider.provision(profile, "classless-operation", {
@@ -194,7 +195,7 @@ describe("Crabbox plugin generation lifecycle", () => {
           lease.leaseId,
         ]);
         expect(runCommand.mock.lastCall?.[1]).toMatchObject({
-          timeoutMs: 310_000,
+          timeoutMs: 1_005_000,
           killProcessTree: true,
         });
       } finally {
@@ -240,21 +241,38 @@ describe("Crabbox plugin generation lifecycle", () => {
         });
       });
     const generation = registerCrabboxGeneration();
+    let stopping: Promise<void> | undefined;
+    let stopped = false;
+    try {
+      for (const leaseId of ["cbx_first", "cbx_second"]) {
+        await generation.provider.inspect({ leaseId, profile: PROFILE });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(signals).toHaveLength(2);
 
-    for (const leaseId of ["cbx_first", "cbx_second"]) {
-      await generation.provider.inspect({ leaseId, profile: PROFILE });
+      stopping = Promise.resolve(stopGeneration(generation.services)).then(() => {
+        stopped = true;
+      });
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
+      finishHeartbeats[0]!();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
+      finishHeartbeats[1]!();
+      await stopping;
+      expect(stopped).toBe(true);
+
+      await generation.provider.inspect({ leaseId: "cbx_late", profile: PROFILE });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(runCommand.mock.calls.filter(([argv]) => argv[1] === "heartbeat")).toHaveLength(2);
+    } finally {
+      for (const finish of finishHeartbeats) {
+        finish();
+      }
+      await stopping;
+      await stopGeneration(generation.services);
     }
-    await vi.advanceTimersByTimeAsync(0);
-    expect(signals).toHaveLength(2);
-
-    await stopGeneration(generation.services);
-    expect(signals.every((signal) => signal.aborted)).toBe(true);
-    for (const finish of finishHeartbeats) {
-      finish();
-    }
-    await vi.advanceTimersByTimeAsync(15_000);
-
-    expect(runCommand.mock.calls.filter(([argv]) => argv[1] === "heartbeat")).toHaveLength(2);
   });
 
   it("keeps a replacement provider generation independently usable", async () => {
@@ -289,14 +307,17 @@ describe("Crabbox plugin generation lifecycle", () => {
     });
     const old = Date.now() - 14 * 24 * 60 * 60 * 1_000;
     store.register("expired", {
-      version: 2,
+      version: 3,
       allocations: {},
       image: {
         checkpointId: "chk_expired",
         kind: "aws-ebs-snapshot",
         state: "available",
         createdAtMs: old,
-        lastUsedAtMs: old,
+        preparationKey: null,
+        cacheKey: null,
+        purpose: null,
+        lastDemandAtMs: old,
       },
     });
     const started = createDeferred<AbortSignal>();

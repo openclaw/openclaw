@@ -12,6 +12,8 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../infra/push-apns.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "./device-pairing-prune.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "./node-pending-work.js";
@@ -27,6 +29,7 @@ import {
 } from "./node-wake-state.test-support.js";
 import { bindDeviceWorkerReconciliation } from "./worker-environments/device-provider.js";
 
+const pairingStateDirs: string[] = [];
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-pairing-prune-" });
 
 type BroadcastCall = { event: string; payload: Record<string, unknown> };
@@ -136,6 +139,11 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
   });
 
   afterAll(async () => {
+    for (const stateDir of pairingStateDirs) {
+      closeOpenClawStateDatabaseByPath(
+        resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateDir }),
+      );
+    }
     await suiteRootTracker.cleanup();
   });
 
@@ -145,6 +153,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
 
   test("retires stale node siblings across both pairing stores", async () => {
     const baseDir = await suiteRootTracker.make("case");
+    pairingStateDirs.push(baseDir);
     await pairSilentDevice({
       baseDir,
       deviceId: "node-stale",
@@ -242,6 +251,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
 
   test("keeps connected siblings and clears APNs for operator-only full prunes", async () => {
     const baseDir = await suiteRootTracker.make("case");
+    pairingStateDirs.push(baseDir);
     await pairSilentDevice({
       baseDir,
       deviceId: "cli-stale",

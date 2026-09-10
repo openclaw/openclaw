@@ -12,6 +12,7 @@ import { isErrno } from "../infra/errors.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import { pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
+import { quotePowerShellArg } from "./quote-cli-arg.js";
 
 export const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
@@ -111,7 +112,7 @@ export async function completionCacheExists(
 
 function quoteCompletionPath(shell: CompletionShell, value: string): string {
   if (shell === "powershell") {
-    return `'${value.replace(/'/g, "''")}'`;
+    return quotePowerShellArg(value);
   }
   // Single quotes also keep pasted reload hints literal when interactive history expansion is on.
   const escaped =
@@ -141,16 +142,16 @@ function appendCompletionProfilePath(
   return `${nativeDirectory}${separator}${segments.join(pathApi.sep)}`;
 }
 
-/** Formats the command users can run to reload the shell profile after installation. */
-export function formatCompletionReloadCommand(shell: CompletionShell, profilePath: string): string {
+/** Formats a current-shell command to load a profile or cached completion script. */
+export function formatCompletionReloadCommand(shell: CompletionShell, scriptPath: string): string {
   if (shell === "powershell") {
-    return `. ${quoteCompletionPath(shell, profilePath)}`;
+    return `. ${quoteCompletionPath(shell, scriptPath)}`;
   }
-  if (/^[a-zA-Z0-9_./~+-]+$/u.test(profilePath)) {
-    return `source ${profilePath}`;
+  if (/^[a-zA-Z0-9_./~+-]+$/u.test(scriptPath)) {
+    return `source ${scriptPath}`;
   }
-  const homePrefix = profilePath.startsWith("~/") ? "~/" : "";
-  const value = profilePath.slice(homePrefix.length);
+  const homePrefix = scriptPath.startsWith("~/") ? "~/" : "";
+  const value = scriptPath.slice(homePrefix.length);
   return `source ${homePrefix}${quoteCompletionPath(shell, value)}`;
 }
 
@@ -195,18 +196,111 @@ function isPreviousCompletionSourceLine(
   const sourcePath =
     legacyPath ??
     (quoteShell === "powershell"
-      ? escapedPath.replaceAll("''", "'")
+      ? escapedPath.replace(/(['‘-‛])\1/gu, "$1")
       : quoteShell === "fish"
         ? escapedPath.replace(/\\([\\'])/gu, "$1")
         : escapedPath.replaceAll("'\\''", "'"));
+  // v2026.8.2 escaped only ASCII quotes in PowerShell profiles. Recognize those
+  // owned lines during replacement, while new writes use the complete literal rule.
+  const matchesLegacyPowerShellLiteral =
+    quoteShell === "powershell" && `'${sourcePath.replaceAll("'", "''")}'` === quotedPath;
   // Only our complete literal operand is owned; never consume compound profile commands.
-  if (!legacyPath && quoteCompletionPath(quoteShell, sourcePath) !== quotedPath) {
+  if (
+    !legacyPath &&
+    !matchesLegacyPowerShellLiteral &&
+    quoteCompletionPath(quoteShell, sourcePath) !== quotedPath
+  ) {
     return false;
   }
   const sourcePaths = sourcePath.includes("\\") ? path.win32 : path;
   return (
+    sourcePaths.isAbsolute(sourcePath) &&
     sourcePaths.basename(sourcePaths.dirname(sourcePath)) === "completions" &&
     sourcePaths.basename(sourcePath) === path.basename(currentCachePath)
+  );
+}
+
+const PORTABLE_HOOK_SHELLS: ReadonlySet<CompletionShell> = new Set(["bash", "zsh", "fish"]);
+
+/** Characters that would change meaning if a literal shell operand were expanded or globbed. */
+const PORTABLE_PATH_UNSAFE = /[\s"'`$\\|&;<>()*?[\]{}]/u;
+
+/**
+ * Expands a guarded-source operand that is a portable `$HOME`-rooted path, or returns undefined
+ * when the operand is not one of the supported safe forms. The operand may be double-quoted or
+ * unquoted; single quotes prevent expansion and are never treated as portable. Expansion is
+ * purely textual (`${HOME}`/`$HOME` token + literal suffix); nothing is evaluated.
+ */
+function expandPortableHomeOperand(
+  operand: string,
+  homeDir: string,
+  shell: CompletionShell,
+): string | undefined {
+  const doubleQuoted = operand.length >= 2 && operand.startsWith('"') && operand.endsWith('"');
+  const inner = doubleQuoted ? operand.slice(1, -1) : operand;
+  if (doubleQuoted ? inner.includes('"') : /["'`]/u.test(inner)) {
+    return undefined;
+  }
+  if (!doubleQuoted && PORTABLE_PATH_UNSAFE.test(homeDir)) {
+    // An unquoted ${HOME} prefix would be split or globbed for such homes.
+    return undefined;
+  }
+  const token = shell === "fish" ? "$HOME" : inner.startsWith("${HOME}") ? "${HOME}" : "$HOME";
+  if (!inner.startsWith(token)) {
+    return undefined;
+  }
+  const suffix = inner.slice(token.length);
+  if (PORTABLE_PATH_UNSAFE.test(suffix)) {
+    return undefined;
+  }
+  return suffix.startsWith("/") ? `${homeDir}${suffix}` : undefined;
+}
+
+/**
+ * Recognizes a user-managed portable completion hook such as
+ * `[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"`.
+ * Dotfile managers own these lines, so recognition is kept separate from rewrite ownership:
+ * portable hooks are never deleted or rewritten by the installer. The anchored parser only
+ * accepts guarded forms whose guard and source operands both expand to the current cache path;
+ * compound commands and mismatched paths are left alone.
+ */
+function isPortableCompletionSourceLine(
+  line: string,
+  shell: CompletionShell,
+  cachePath: string,
+  homeDir: string,
+): boolean {
+  if (!PORTABLE_HOOK_SHELLS.has(shell)) {
+    return false;
+  }
+  const homePrefix = homeDir.endsWith(path.sep) ? homeDir : `${homeDir}${path.sep}`;
+  if (!cachePath.startsWith(homePrefix)) {
+    return false;
+  }
+  const suffix = cachePath.slice(homePrefix.length);
+  if (PORTABLE_PATH_UNSAFE.test(suffix) || suffix === "") {
+    return false;
+  }
+  const trimmed = line.replace(/^[ \t]+|[ \t]+$/gu, "");
+  let guardOperand: string | undefined;
+  let sourceOperand: string | undefined;
+  if (shell === "fish") {
+    const hook = /^test[ \t]+-f[ \t]+(.+?)[ \t]*;[ \t]*and[ \t]+source[ \t]+(.+)$/u.exec(trimmed);
+    guardOperand = hook?.[1];
+    sourceOperand = hook?.[2];
+  } else {
+    // Shell token separators are spaces and tabs, not JavaScript's Unicode whitespace.
+    const hook =
+      /^\[[ \t]+-f[ \t]+(.+?)[ \t]+\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed) ??
+      /^\[\[[ \t]+-f[ \t]+(.+?)[ \t]+\]\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed);
+    guardOperand = hook?.[1];
+    sourceOperand = hook?.[2];
+  }
+  return (
+    guardOperand !== undefined &&
+    sourceOperand !== undefined &&
+    expandPortableHomeOperand(guardOperand, homeDir, shell) === cachePath &&
+    expandPortableHomeOperand(sourceOperand, homeDir, shell) === cachePath
   );
 }
 
@@ -272,18 +366,25 @@ function updateCompletionProfile(
   binName: string,
   cachePath: string,
   shell: CompletionShell,
+  homeDir: string,
 ): { next: string; changed: boolean; hadExisting: boolean } {
-  // Remove both cached and old dynamic blocks so installs converge to one fast source line.
+  // Remove both cached and old dynamic blocks so installs converge to one fast source line,
+  // while preserving user-managed portable hooks byte-for-byte.
   const lines = content.split("\n");
   const filtered: string[] = [];
   let hadExisting = false;
+  let portableCoversCurrent = false;
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     if (isCompletionProfileHeader(line)) {
+      const following = lines[i + 1] ?? "";
+      if (isPortableCompletionSourceLine(following, shell, cachePath, homeDir)) {
+        filtered.push(line);
+        continue;
+      }
       hadExisting = true;
       // An orphaned marker owns no following user line; remove only a recognized source line.
-      const following = lines[i + 1] ?? "";
       if (
         isCompletionProfileLine(following, binName, cachePath) ||
         isPreviousCompletionSourceLine(following, cachePath, shell)
@@ -296,9 +397,20 @@ function updateCompletionProfile(
       hadExisting = true;
       continue;
     }
+    if (isPortableCompletionSourceLine(line, shell, cachePath, homeDir)) {
+      // A portable hook for the current cache counts as configured and stays untouched.
+      hadExisting = true;
+      portableCoversCurrent = true;
+      filtered.push(line);
+      continue;
+    }
     filtered.push(line);
   }
 
+  if (portableCoversCurrent) {
+    const next = filtered.join("\n");
+    return { next, changed: next !== content, hadExisting };
+  }
   const trimmed = filtered.join("\n").trimEnd();
   const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
@@ -420,10 +532,16 @@ export async function isCompletionInstalled(
     return false;
   }
   const cachePath = resolveCompletionCachePath(shell, binName);
+  const homeDir = process.env.HOME || os.homedir();
   const { content } = await readCompletionProfile(profilePath, shell);
   const lines = content.split("\n");
   // A marker does not install completion; retain missing-cache source lines for doctor repair.
-  return lines.some((line) => isCompletionProfileLine(line, binName, cachePath));
+  // Managed portable hooks for the same cache script count as installed but are never rewritten.
+  return lines.some(
+    (line) =>
+      isCompletionProfileLine(line, binName, cachePath) ||
+      isPortableCompletionSourceLine(line, shell, cachePath, homeDir),
+  );
 }
 
 /**
@@ -470,6 +588,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   }
 
   const profilePath = resolveCompletionProfilePath(shell);
+  const homeDir = process.env.HOME || os.homedir();
 
   try {
     let content: string;
@@ -486,7 +605,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       content = "";
     }
 
-    const update = updateCompletionProfile(content, binName, cachePath, shell);
+    const update = updateCompletionProfile(content, binName, cachePath, shell, homeDir);
     if (!update.changed) {
       if (!yes) {
         console.log(`Completion already installed in ${profilePath}`);

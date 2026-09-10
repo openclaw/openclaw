@@ -21,6 +21,9 @@ export async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<
 }
 
 export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  // Stray jobs can disrupt admitted maintenance; managed-service repair stays below the fence.
+  const { noteMacForeignLaunchdJobs } = await import("../commands/doctor-foreign-launchd-jobs.js");
+  await noteMacForeignLaunchdJobs(ctx.options, ctx.runtime, ctx.env ?? process.env);
   if (ctx.gatewayMaintenanceActive) {
     return;
   }
@@ -121,10 +124,9 @@ export async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Pro
 export async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteWhatsappResponsivenessHealth } =
     await import("../commands/doctor-whatsapp-responsiveness.js");
-  await noteWhatsappResponsivenessHealth({
+  noteWhatsappResponsivenessHealth({
     cfg: ctx.cfg,
     status: ctx.gatewayStatus,
-    shouldRepair: ctx.prompter.shouldRepair,
   });
 }
 
@@ -134,7 +136,15 @@ export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (ctx.gatewayMaintenanceActive || !isDefaultInstallIdentity(ctx.env ?? process.env)) {
+  if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
+    return;
+  }
+  if (ctx.cfg.gateway?.mode !== "remote") {
+    const { noteMacDisabledGatewayLaunchAgent } =
+      await import("../commands/doctor-platform-notes.js");
+    await noteMacDisabledGatewayLaunchAgent(ctx.env ?? process.env);
+  }
+  if (ctx.gatewayMaintenanceActive) {
     return;
   }
   const { maybeRepairGatewayDaemon } = await import("../commands/doctor-gateway-daemon-flow.js");

@@ -11,6 +11,10 @@ on:
         description: Successful OpenClaw NPM Release preflight run id, required for OpenClaw npm or all-publishable plugin publication
         required: false
         type: string
+      prepared_plugins:
+        description: Exact npm and ClawHub artifact descriptors supplied by OpenClaw Release Button; empty preserves the existing release/repair path
+        required: false
+        type: string
       plugin_sdk_api_acknowledgement:
         description: 8-character digest from the Plugin SDK API diff report when the release changes the SDK
         required: false
@@ -41,11 +45,11 @@ on:
         required: false
         type: string
       windows_node_tag:
-        description: Exact openclaw-windows-node release tag, required for stable OpenClaw publish
+        description: Optional exact openclaw-windows-node release tag to attach Windows assets after publication
         required: false
         type: string
       windows_node_installer_digests:
-        description: Candidate-approved compact JSON map of Windows installer names to pinned sha256 digests
+        description: Optional candidate-approved installer digest map; supply with windows_node_tag
         required: false
         type: string
       npm_telegram_run_id:
@@ -131,12 +135,15 @@ jobs:
       focused_release_evidence_run_attempt: ${{ steps.focused_run.outputs.attempt }}
       focused_release_evidence_workflow_full_ref: ${{ steps.focused_run.outputs.workflow_full_ref }}
       focused_release_evidence_workflow_sha: ${{ steps.focused_run.outputs.workflow_sha }}
-      windows_node_installer_digests: ${{ steps.windows_source.outputs.installer_digests }}
       prepared_docker_run_id: ${{ steps.full_manifest.outputs.prepared_docker_run_id }}
       prepared_docker_run_attempt: ${{ steps.full_manifest.outputs.prepared_docker_run_attempt }}
       prepared_docker_artifact_name: ${{ steps.full_manifest.outputs.prepared_docker_artifact_name }}
       prepared_docker_manifest_sha256: ${{ steps.full_manifest.outputs.prepared_docker_manifest_sha256 }}
       coverage_policy: ${{ steps.full_manifest.outputs.coverage_policy }}
+      release_profile: ${{ steps.full_manifest.outputs.release_profile }}
+      android_pin_version: ${{ steps.ref.outputs.android_pin_version }}
+      android_pin_matches: ${{ steps.ref.outputs.android_pin_matches }}
+      android_release_note: ${{ steps.ref.outputs.android_release_note }}
     steps:
       - name: Validate inputs
         env:
@@ -149,8 +156,6 @@ jobs:
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
           OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
-          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
-          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
           PUBLISH_DOCKER_ONLY: ${{ inputs.publish_docker_only && 'true' || 'false' }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
@@ -259,22 +264,6 @@ jobs:
             echo "Extended-stable core npm publication stays on the canonical extended-stable release flow; use publish_docker_only=true only after its registry readback." >&2
             exit 1
           fi
-          stable_release=true
-          if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
-            stable_release=false
-          fi
-          if [[ -n "${WINDOWS_NODE_TAG}" && ! "${WINDOWS_NODE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
-            echo "windows_node_tag must be an explicit openclaw-windows-node release tag, not latest: ${WINDOWS_NODE_TAG}" >&2
-            exit 1
-          fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${stable_release}" == "true" && -z "${WINDOWS_NODE_TAG}" ]]; then
-            echo "Stable OpenClaw publish requires an explicit windows_node_tag." >&2
-            exit 1
-          fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${stable_release}" == "true" && -z "${WINDOWS_NODE_INSTALLER_DIGESTS}" ]]; then
-            echo "Stable OpenClaw publish requires candidate-approved windows_node_installer_digests." >&2
-            exit 1
-          fi
           tideclaw_alpha_publish=false
           if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha_publish=true
@@ -296,8 +285,12 @@ jobs:
             fi
             sha_pinned_release_publish=true
           fi
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" && "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" ]]; then
-            echo "OpenClaw Release Publish must use trusted main workflow tooling, a protected SHA-pinned release-publish tag, or a matching Tideclaw alpha branch." >&2
+          # Docker-only recovery dispatches no publishing children and may use main.
+          if [[ "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" && ! ( "${PUBLISH_DOCKER_ONLY}" == "true" && "${WORKFLOW_REF}" == "refs/heads/main" ) ]]; then
+            publish_tag="release-publish/${WORKFLOW_SHA:0:12}-$(date +%s)"
+            echo "Publishing children requires the parent to run from a protected release-publish tag (or a matching Tideclaw alpha branch), so parent approval and child provenance use the same ref." >&2
+            echo "Mint the tooling tag: git tag ${publish_tag} ${WORKFLOW_SHA} && git push origin refs/tags/${publish_tag}" >&2
+            echo "Then dispatch: gh workflow run openclaw-release-publish.yml --ref ${publish_tag} (with the same release inputs)." >&2
             exit 1
           fi
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PLUGIN_PUBLISH_SCOPE}" != "all-publishable" ]]; then
@@ -320,82 +313,48 @@ jobs:
               ;;
           esac
 
-      - name: Validate stable Windows source release
-        id: windows_source
-        if: ${{ inputs.publish_openclaw_npm }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
-          APPROVED_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
-        run: |
-          set -euo pipefail
-          if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
-            exit 0
-          fi
-
-          source_json="$(gh release view "${WINDOWS_NODE_TAG}" \
-            --repo openclaw/openclaw-windows-node \
-            --json tagName,isDraft,isPrerelease,assets,url)"
-          if [[ "$(printf '%s' "${source_json}" | jq -r '.tagName')" != "${WINDOWS_NODE_TAG}" ]]; then
-            echo "Windows source release tag does not match ${WINDOWS_NODE_TAG}." >&2
-            exit 1
-          fi
-          if [[ "$(printf '%s' "${source_json}" | jq -r '.isDraft')" == "true" ]]; then
-            echo "Stable OpenClaw publish requires a published Windows source release." >&2
-            exit 1
-          fi
-          if [[ "$(printf '%s' "${source_json}" | jq -r '.isPrerelease')" == "true" ]]; then
-            echo "Stable OpenClaw publish requires a non-prerelease Windows source release." >&2
-            exit 1
-          fi
-
-          required_assets=(
-            "OpenClawCompanion-Setup-x64.exe"
-            "OpenClawCompanion-Setup-arm64.exe"
-          )
-          required_assets_json="$(printf '%s\n' "${required_assets[@]}" | jq -R . | jq -sc .)"
-          if ! approved_installer_digests="$(printf '%s' "${APPROVED_INSTALLER_DIGESTS}" | jq -ce --argjson names "${required_assets_json}" '
-            if type == "object" and
-              (keys | sort) == ($names | sort) and
-              all(.[]; type == "string" and test("^sha256:[a-f0-9]{64}$"))
-            then .
-            else error("invalid candidate-approved Windows installer digest map")
-            end
-          ')"; then
-            echo "windows_node_installer_digests must contain exactly the candidate-approved current installer asset contract." >&2
-            exit 1
-          fi
-          for asset_name in "${required_assets[@]}"; do
-            asset_matches="$(printf '%s' "${source_json}" | jq -c --arg name "${asset_name}" '[.assets[]? | select(.name == $name)]')"
-            asset_match_count="$(printf '%s' "${asset_matches}" | jq 'length')"
-            if [[ "${asset_match_count}" != "1" ]]; then
-              echo "Windows source release ${WINDOWS_NODE_TAG} must contain exactly one required asset ${asset_name}; found ${asset_match_count}." >&2
-              exit 1
-            fi
-            asset_digest="$(printf '%s' "${asset_matches}" | jq -r '.[0].digest // empty')"
-            if [[ ! "${asset_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
-              echo "Windows source release ${WINDOWS_NODE_TAG} asset ${asset_name} is missing its immutable SHA-256 digest." >&2
-              exit 1
-            fi
-            approved_digest="$(printf '%s' "${approved_installer_digests}" | jq -r --arg name "${asset_name}" '.[$name]')"
-            if [[ "${asset_digest}" != "${approved_digest}" ]]; then
-              echo "Windows source release ${WINDOWS_NODE_TAG} asset ${asset_name} no longer matches its candidate-approved digest." >&2
-              exit 1
-            fi
-          done
-          echo "installer_digests=${approved_installer_digests}" >> "$GITHUB_OUTPUT"
-          echo "- Windows Node source release: prevalidated \`${WINDOWS_NODE_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 1
           filter: blob:none
-          sparse-checkout: package.json
+          sparse-checkout: |
+            package.json
+            apps/android/version.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Resolve checked-out release ref
+        id: ref
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          PUBLISH_DOCKER_ONLY: ${{ inputs.publish_docker_only && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG#v}"
+          # The pin comes from the release checkout and is echoed into GITHUB_OUTPUT;
+          # only an exact YYYY.M.PATCH string may pass so it cannot inject output records.
+          android_pin_version="$(jq -r '.version // empty' apps/android/version.json)"
+          if [[ ! "${android_pin_version}" =~ ^[0-9]{4}\.([1-9]|1[0-2])\.[0-9]{1,3}$ ]]; then
+            echo "apps/android/version.json must pin an exact YYYY.M.PATCH Android version, got: ${android_pin_version@Q}" >&2
+            exit 1
+          fi
+          android_pin_matches=false
+          android_release_note=""
+          if [[ "${android_pin_version}" == "${release_version%%-*}" ]]; then
+            android_pin_matches=true
+          elif [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PUBLISH_DOCKER_ONLY}" != "true" && "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]; then
+            android_release_note="- Android APK: skipped — apps/android/version.json is ${android_pin_version}, release train is ${release_version%%-*}; run the shared mobile cutter (scripts/mobile-release-version.ts --prepare) before the next tag."
+            echo "${android_release_note}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo "sha=$(git rev-parse HEAD)"
+            echo "android_pin_version=${android_pin_version}"
+            echo "android_pin_matches=${android_pin_matches}"
+            echo "android_release_note=${android_release_note}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Fetch exact release and trusted tooling ancestry
         env:
@@ -451,10 +410,6 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.full_release_validation_run_id }}
           github-token: ${{ github.token }}
-
-      - name: Resolve checked-out release ref
-        id: ref
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Validate full release validation manifest
         id: full_manifest
@@ -547,19 +502,6 @@ jobs:
           }
           NODE
 
-      - name: Verify Android approval consumer capability
-        if: ${{ !inputs.publish_docker_only && inputs.publish_openclaw_npm && steps.full_manifest.outputs.coverage_policy == 'npm-stable-v1' }}
-        env:
-          EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
-        run: |
-          set -euo pipefail
-          # Frozen tags execute their own Android approval consumer. Reject an
-          # unsupported native proof contract before any core publication.
-          if ! git cat-file -e "${EXPECTED_SHA}:scripts/android-native-ci.mjs"; then
-            echo "The frozen Android publisher cannot consume native-CI-bound approval. Qualify this source with release_profile=full before publication." >&2
-            exit 1
-          fi
-
       - name: Download OpenClaw npm preflight manifest
         id: preflight_artifact
         if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
@@ -575,29 +517,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
-          preflight_dir="${RUNNER_TEMP}/openclaw-npm-preflight-manifest"
-          rm -rf "${preflight_dir}"
-          mkdir -p "${preflight_dir}"
-
-          download_named_artifact() {
-            local artifact_name="$1"
-            local artifact_dir="${2:-$preflight_dir}"
-            for attempt in 1 2 3; do
-              if gh run download "${PREFLIGHT_RUN_ID}" \
-                --repo "${GITHUB_REPOSITORY}" \
-                --name "${artifact_name}" \
-                --dir "${artifact_dir}"; then
-                return 0
-              fi
-              if [[ "$attempt" != "3" ]]; then
-                echo "::warning::Artifact download for ${artifact_name} failed on attempt ${attempt}; retrying."
-                sleep $((attempt * 10))
-              fi
-            done
-            return 1
-          }
-
+          resolution=""
           full_release_preflight=false
           if [[ "$PREFLIGHT_RUN_ID" == "$FULL_RELEASE_VALIDATION_RUN_ID" ]]; then
             full_manifest="${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json"
@@ -605,30 +525,11 @@ jobs:
               --resolve-full-release-manifest "$full_manifest" \
               --repository "$GITHUB_REPOSITORY" --run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
               --run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" --source-sha "$EXPECTED_SHA" \
-              --workflow-sha "$(jq -r .workflowSha "$full_manifest")" --output-dir "$preflight_dir")"
+              --workflow-sha "$(jq -r .workflowSha "$full_manifest")")"
             PREFLIGHT_RUN_ID="$(jq -r .producer.runId <<<"$resolution")"
             preflight_run="$(jq -c .run <<<"$resolution")"
-            resolved_name="$(jq -r .artifact.name <<<"$resolution")"
             full_release_preflight=true
-          elif download_named_artifact "${preferred_name}"; then
-            resolved_name="${preferred_name}"
           else
-            echo "::warning::${preferred_name} not found; checking run artifacts for a single compatible preflight artifact."
-            mapfile -t matches < <(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts" \
-              --jq '.artifacts[] | select(.expired != true) | .name' |
-              grep '^openclaw-npm-preflight-' || true)
-            if [[ "${#matches[@]}" != "1" ]]; then
-              echo "Expected ${preferred_name}, or exactly one openclaw-npm-preflight-* fallback artifact in run ${PREFLIGHT_RUN_ID}." >&2
-              printf 'Available preflight candidates:\n' >&2
-              printf -- '- %s\n' "${matches[@]:-<none>}" >&2
-              exit 1
-            fi
-            resolved_name="${matches[0]}"
-            download_named_artifact "${resolved_name}"
-          fi
-          echo "name=${resolved_name}" >> "$GITHUB_OUTPUT"
-
-          if [[ "$full_release_preflight" != "true" ]]; then
             preflight_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}")"
           fi
           preflight_attempt="$(jq -r '.run_attempt // ""' <<<"$preflight_run")"
@@ -681,12 +582,102 @@ jobs:
           echo "run_id=${PREFLIGHT_RUN_ID}" >> "$GITHUB_OUTPUT"
           echo "run_attempt=${preflight_attempt}" >> "$GITHUB_OUTPUT"
           echo "workflow_path=${preflight_path}" >> "$GITHUB_OUTPUT"
-          sdk_evidence_dir="${RUNNER_TEMP}/openclaw-plugin-sdk-api-evidence"
-          rm -rf "$sdk_evidence_dir"
-          mkdir -p "$sdk_evidence_dir"
-          download_named_artifact \
-            "plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${preflight_attempt}" \
-            "$sdk_evidence_dir"
+          node --input-type=module - "$preflight_run" "$resolution" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+          import { dirname, join } from 'node:path';
+          import { downloadExactActionsArtifactArchive, inspectActionsArtifactZipWithPolicy, readPublicationArtifactArchive } from './.release-validation-tooling/scripts/lib/actions-artifact-archive.mjs';
+          import { downloadFullReleaseNpmPreflight } from './.release-validation-tooling/scripts/npm-preflight-tooling-identity.mjs';
+
+          const env = process.env;
+          const producer = JSON.parse(process.argv[2]);
+          const qualified = process.argv[3] ? JSON.parse(process.argv[3]) : null;
+          const deadlineMs = Date.now() + 4 * 60_000;
+          const pages = JSON.parse(execFileSync('gh', [
+            'api', `repos/${env.GITHUB_REPOSITORY}/actions/runs/${producer.id}/artifacts?per_page=100`,
+            '--paginate', '--slurp',
+          ], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, timeout: 60_000 }));
+          const artifacts = pages.flatMap((page) => page.artifacts);
+          if (pages.length === 0 || pages.some((page) => page.total_count !== artifacts.length)) {
+            throw new Error('Preflight artifact inventory is incomplete or changed during selection.');
+          }
+          const preferredName = `openclaw-npm-preflight-${env.RELEASE_TAG}`;
+          const candidates = artifacts.filter((artifact) => artifact.expired === false && artifact.name.startsWith('openclaw-npm-preflight-'));
+          const preferred = candidates.filter((artifact) => artifact.name === preferredName);
+          // FRV records the exact independent producer and artifact. Historical
+          // aliases are discovery-only; a failed transfer never selects other bytes.
+          const preflight = qualified ? [qualified.artifact] : preferred.length > 0 ? preferred : candidates;
+          const sdkName = `plugin-sdk-api-release-diff-${producer.id}-${producer.run_attempt}`;
+          const sdk = artifacts.filter((artifact) => artifact.expired === false && artifact.name === sdkName);
+          if (preflight.length !== 1 || sdk.length !== 1) {
+            throw new Error(`Expected ${preferredName} or one historical preflight, and exactly one ${sdkName}.`);
+          }
+          const archivesDir = join(env.RUNNER_TEMP, 'openclaw-npm-preflight-archives');
+          mkdirSync(archivesDir, { recursive: true });
+          for (const [artifact, directory, expectedEntries] of [
+            [preflight[0], 'openclaw-npm-preflight-manifest', undefined],
+            [sdk[0], 'openclaw-plugin-sdk-api-evidence', ['plugin-sdk-api-release-diff.json', 'plugin-sdk-api-release-evidence.json']],
+          ]) {
+            const outputDir = join(env.RUNNER_TEMP, directory);
+            const archivePath = join(archivesDir, `${artifact.id}.zip`);
+            if (qualified && artifact === preflight[0]) {
+              rmSync(outputDir, { recursive: true, force: true });
+              await downloadFullReleaseNpmPreflight({
+                manifest: JSON.parse(readFileSync(join(env.RUNNER_TEMP, 'full-release-validation-manifest/full-release-validation-manifest.json'), 'utf8')),
+                repository: env.GITHUB_REPOSITORY,
+                runId: env.FULL_RELEASE_VALIDATION_RUN_ID,
+                runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
+                sourceSha: env.EXPECTED_SHA,
+                toolingSha: producer.head_sha,
+                outputDir,
+                token: env.GH_TOKEN,
+                archivePath,
+                deadlineMs,
+              });
+              continue;
+            }
+            const download = {
+              token: env.GH_TOKEN,
+              deadlineMs,
+              archivePath,
+              expected: {
+                artifactId: artifact.id,
+                artifactName: artifact.name,
+                artifactDigest: artifact.digest,
+                artifactSizeBytes: artifact.size_in_bytes,
+                artifactExpiresAt: artifact.expires_at,
+                repository: env.GITHUB_REPOSITORY,
+                runId: producer.id,
+                runAttempt: producer.run_attempt,
+                workflowSha: producer.head_sha,
+                workflowPath: producer.path.split('@')[0],
+                workflowEvent: 'workflow_dispatch',
+                workflowHeadBranch: producer.head_branch,
+                runStatePolicy: 'completed-success',
+              },
+              archivePolicy: {
+                expectedEntries,
+                minEntries: 1,
+                maxEntries: 1024,
+                allowPath: () => true,
+                maxEntryBytes: () => 256 * 1024 * 1024,
+              },
+            };
+            // The FRV owner above verifies the exact producer attempt and qualified
+            // workflow ref. SDK bytes share that producer and retain their own tuple.
+            const files = qualified
+              ? inspectActionsArtifactZipWithPolicy((await downloadExactActionsArtifactArchive(download)).archiveBytes, download.archivePolicy)
+              : (await readPublicationArtifactArchive(download)).files;
+            rmSync(outputDir, { recursive: true, force: true });
+            mkdirSync(outputDir, { recursive: true });
+            for (const [name, bytes] of files) {
+              const file = join(outputDir, name);
+              mkdirSync(dirname(file), { recursive: true });
+              writeFileSync(file, bytes, { flag: 'wx' });
+            }
+          }
+          appendFileSync(env.GITHUB_OUTPUT, `name=${preflight[0].name}\n`);
+          NODE
 
       - name: Validate OpenClaw npm preflight manifest
         id: manifest
@@ -941,7 +932,6 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 'beta' || (steps.full_manifest.outputs.release_profile || inputs.release_profile) }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
-          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
         run: |
           {
             echo "### Release target"
@@ -954,9 +944,6 @@ jobs:
             fi
             if [[ -n "${FOCUSED_RELEASE_EVIDENCE_RUN_ID// }" ]]; then
               echo "- Authorized focused validation: \`${FOCUSED_RELEASE_EVIDENCE_RUN_ID}\`"
-            fi
-            if [[ -n "${WINDOWS_NODE_TAG// }" ]]; then
-              echo "- Windows Node source release: \`${WINDOWS_NODE_TAG}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -997,7 +984,7 @@ jobs:
   qualify_android_native:
     name: Qualify native Android release source
     needs: [resolve_release_target]
-    if: ${{ !inputs.publish_docker_only && inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.outputs.coverage_policy == 'npm-stable-v1' }}
+    if: ${{ !inputs.publish_docker_only && inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.outputs.android_pin_matches == 'true' && needs.resolve_release_target.outputs.coverage_policy == 'npm-stable-v1' }}
     # Native failure blocks its approval receipt, while core publication proceeds.
     continue-on-error: true
     permissions:
@@ -1019,6 +1006,20 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Verify Android approval consumer capability
+        working-directory: .release-harness
+        env:
+          EXPECTED_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Frozen tags execute their own Android approval consumer. This gate
+          # belongs to native qualification and must never block npm publication.
+          git fetch --no-tags --depth=1 origin "${EXPECTED_SHA}"
+          if ! git cat-file -e "${EXPECTED_SHA}:scripts/android-native-ci.mjs"; then
+            echo "The frozen Android publisher cannot consume native-CI-bound approval. Use a compatible Android publication workflow for this source." >&2
+            exit 1
+          fi
+
       - name: Dispatch and await exact-source native CI
         id: dispatch
         env:
@@ -1030,7 +1031,7 @@ jobs:
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
-          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "${WORKFLOW_FULL_REF}" "${PARENT_WORKFLOW_SHA}")"
+          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "${WORKFLOW_FULL_REF}")"
           dispatch_id="release-native-android-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_SHA}"
           run_id="$(dispatch_workflow ci.yml \
             -f target_ref="${TARGET_SHA}" \
@@ -1073,7 +1074,7 @@ jobs:
   publish_android:
     name: Approve and dispatch qualified Android
     needs: [resolve_release_target, publish, qualify_android_native]
-    if: ${{ always() && !cancelled() && !inputs.publish_docker_only && inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.result == 'success' && needs.publish.result == 'success' && (needs.resolve_release_target.outputs.coverage_policy != 'npm-stable-v1' || needs.qualify_android_native.outputs.qualified == 'true') }}
+    if: ${{ always() && !cancelled() && !inputs.publish_docker_only && inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.outputs.android_pin_matches == 'true' && needs.resolve_release_target.result == 'success' && needs.publish.result == 'success' && (needs.resolve_release_target.outputs.coverage_policy != 'npm-stable-v1' || needs.qualify_android_native.outputs.qualified == 'true') }}
     continue-on-error: true
     permissions:
       actions: write
@@ -1179,6 +1180,19 @@ jobs:
     env:
       # Artifact bytes may belong to an FRV child; the input run still authorizes npm dispatch.
       PREFLIGHT_ARTIFACT_RUN_ID: ${{ needs.resolve_release_target.outputs.preflight_artifact_run_id }}
+      ANDROID_RELEASE_NOTE: ${{ needs.resolve_release_target.outputs.android_release_note }}
+      TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+      PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+      PLUGINS: ${{ inputs.plugins }}
+      WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
+      NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
+      RELEASE_EVIDENCE_MODE: ${{ inputs.release_evidence_mode }}
+      FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
+      FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+      FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
     permissions:
       actions: write
       attestations: write
@@ -1264,7 +1278,6 @@ jobs:
         run: |
           set -euo pipefail
           install_args=(
-            --dir .release-harness
             install
             --frozen-lockfile
             --prefer-offline
@@ -1272,10 +1285,42 @@ jobs:
             --config.enable-pre-post-scripts=true
             --config.side-effects-cache=true
           )
-          pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+          # Corepack selects packageManager before pnpm processes its arguments.
+          (cd .release-harness && { pnpm "${install_args[@]}" || pnpm "${install_args[@]}"; })
           # Node resolves --import tsx from the process cwd. Point that root at
           # the trusted harness install instead of the frozen target checkout.
           ln -s .release-harness/node_modules node_modules
+
+      - name: Initialize postpublish diagnostics
+        env:
+          POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
+        run: |
+          set -euo pipefail
+          source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
+          record_postpublish_diagnostics initialize
+
+      - name: Verify all prepared plugin bytes before publication
+        if: inputs.prepared_plugins != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PLUGINS: ${{ inputs.plugins }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { prefetchPreparedPlugins } from './.release-harness/scripts/openclaw-release-ready.mjs';
+          const env = process.env;
+          if (env.PLUGIN_PUBLISH_SCOPE !== 'all-publishable' || env.PLUGINS) {
+            throw new Error('Prepared publication must retain the complete selected roster.');
+          }
+          await prefetchPreparedPlugins({
+            plugins: JSON.parse(env.PREPARED_PLUGINS), inputs: { npm_dist_tag: env.RELEASE_NPM_DIST_TAG },
+            sourceSha: env.TARGET_SHA, toolingSha: env.GITHUB_WORKFLOW_SHA, sourceRoot: process.cwd(),
+            outputDir: `${env.RUNNER_TEMP}/prepared-release-packages`, token: env.GH_TOKEN,
+          });
+          NODE
 
       - name: Resolve ClawHub release plan
         id: clawhub_plan
@@ -1289,6 +1334,7 @@ jobs:
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
+          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
@@ -1296,7 +1342,7 @@ jobs:
           # Regular publication binds every child to the exact parent revision.
           # Tideclaw retains its validated branch child and main bootstrap split.
           CHILD_WORKFLOW_REF="$(
-            resolve_child_workflow_ref "${WORKFLOW_FULL_REF}" "${GITHUB_SHA}"
+            resolve_child_workflow_ref "${WORKFLOW_FULL_REF}"
           )"
           if [[ "${WORKFLOW_FULL_REF}" == refs/heads/tideclaw/alpha/* ]]; then
             BOOTSTRAP_WORKFLOW_REF="main"
@@ -1325,12 +1371,16 @@ jobs:
           if [[ -n "${PLUGINS// }" ]]; then
             plan_args+=(--plugins "${PLUGINS}")
           fi
+          if [[ -n "${PREPARED_PLUGINS}" ]]; then
+            plan_args+=(--prepared-artifact "$(jq -cer '.clawhub' <<< "$PREPARED_PLUGINS")")
+          fi
 
           CLAWHUB_REGISTRY="${CLAWHUB_REGISTRY:-https://clawhub.ai}" \
             node --import tsx \
               "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-plan.ts" \
               "${plan_args[@]}" > "${plan_path}"
           cat "${plan_path}"
+          jq -r '.warnings[]? | "- Warning: \(.)"' "${plan_path}" >> "$GITHUB_STEP_SUMMARY"
 
           bootstrap_should_dispatch="$(
             jq -er '.bootstrap.shouldDispatch | select(type == "boolean") | tostring' "${plan_path}"
@@ -1400,6 +1450,66 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Prepare stable npm bootstrap approval
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          RELEASE_PROFILE: ${{ needs.resolve_release_target.outputs.release_profile }}
+          VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PLUGINS: ${{ inputs.plugins }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/npm-stable-bootstrap-approval"
+          node --import tsx --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs";
+          import { collectPublishablePluginPackages, resolveSelectedPublishablePluginPackages } from "./.release-harness/scripts/lib/plugin-npm-release.ts";
+          import { createStablePluginNpmBootstrapApproval } from "./.release-harness/scripts/plugin-npm-bootstrap-approval.mjs";
+
+          const plugins = collectPublishablePluginPackages();
+          const selection = (process.env.PLUGINS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+          const scope = process.env.PLUGIN_PUBLISH_SCOPE;
+          if ((scope !== "selected" && scope !== "all-publishable") ||
+              (scope === "selected" && selection.length === 0) ||
+              (scope === "all-publishable" && selection.length > 0)) {
+            throw new Error("Stable npm bootstrap requires an explicit complete plugin selection.");
+          }
+          const packages = resolveSelectedPublishablePluginPackages({ plugins, selection });
+          const approval = createStablePluginNpmBootstrapApproval({
+            repository: process.env.GITHUB_REPOSITORY,
+            parentRunId: process.env.GITHUB_RUN_ID,
+            parentRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            workflowBranch: process.env.GITHUB_REF_NAME,
+            workflowFullRef: process.env.GITHUB_REF,
+            parentWorkflowSha: process.env.GITHUB_SHA,
+            releaseTag: process.env.RELEASE_TAG,
+            targetSha: process.env.TARGET_SHA,
+            publishTag: "latest",
+            releaseProfile: process.env.RELEASE_PROFILE,
+            validationRunId: process.env.VALIDATION_RUN_ID,
+            validationRunAttempt: Number(process.env.VALIDATION_RUN_ATTEMPT),
+            packages: packages.map((plugin) => plugin.packageName),
+          });
+          writeFileSync(`${process.env.RUNNER_TEMP}/npm-stable-bootstrap-approval/approval.json`, `${JSON.stringify(approval, null, 2)}\n`);
+          NODE
+
+      - name: Attest stable npm bootstrap approval
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/npm-stable-bootstrap-approval/approval.json
+
+      - name: Upload stable npm bootstrap approval
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: npm-stable-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/npm-stable-bootstrap-approval/approval.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Prepare GitHub release notes
         if: ${{ inputs.publish_openclaw_npm }}
         env:
@@ -1443,12 +1553,11 @@ jobs:
           PREFLIGHT_ARTIFACT_NAME: ${{ needs.resolve_release_target.outputs.preflight_artifact_name }}
           NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
           OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
-          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
-          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ needs.resolve_release_target.outputs.windows_node_installer_digests }}
           POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
           FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
           FOCUSED_RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/authorized-beta-focused-evidence
           CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
+          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
@@ -1470,10 +1579,10 @@ jobs:
               echo "- OpenClaw npm publish: skipped by input"
             fi
             if is_android_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- Android APK: a separate native job qualifies the source before approval and dispatch; core publication does not wait for native qualification"
+              echo "${ANDROID_RELEASE_NOTE:-- Android APK: a separate native job qualifies the source before approval and dispatch; core publication does not wait for native qualification}"
             fi
             if is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- Windows Hub promotion: starts after the ClawHub receipt without waiting for core npm completion; required before the GitHub release can be published"
+              echo "- Windows Hub promotion: optional detached child after GitHub publication"
             fi
             if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
               echo "- Workflow completion waits for ClawHub"
@@ -1501,6 +1610,12 @@ jobs:
           fi
 
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}")
+          if [[ -n "${PREPARED_PLUGINS}" ]]; then
+            npm_args+=(-f prepared_artifact="$(jq -cer '.npm' <<< "$PREPARED_PLUGINS")")
+          fi
+          if [[ "${RELEASE_NPM_DIST_TAG}" == extended-stable ]]; then
+            npm_args+=(-f npm_dist_tag=extended-stable)
+          fi
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
           fi
@@ -1676,6 +1791,7 @@ jobs:
           retention-days: 30
 
       - name: Complete publish workflows
+        id: complete
         if: ${{ always() && !cancelled() && steps.core_start.outputs.plugin_npm_completed == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1700,8 +1816,6 @@ jobs:
           PREFLIGHT_ARTIFACT_NAME: ${{ needs.resolve_release_target.outputs.preflight_artifact_name }}
           NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
           OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
-          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
-          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ needs.resolve_release_target.outputs.windows_node_installer_digests }}
           POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
           FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
           FOCUSED_RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/authorized-beta-focused-evidence
@@ -1803,24 +1917,10 @@ jobs:
           fi
 
           # Native qualification and APK dispatch belong to separate jobs.
-          android_release_note=""
-          if is_android_release; then
+          android_release_note="${ANDROID_RELEASE_NOTE:-}"
+          if is_android_release && [[ -z "${android_release_note}" ]]; then
             android_release_note="- Android APK: monitor the native qualification and publication jobs at https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           fi
-          windows_promote_result=""
-          windows_promote_pid=""
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${failed}" == "0" ]]; then
-            windows_promote_result="$RUNNER_TEMP/windows-promote-result.txt"
-            (
-              if promote_windows_release_assets; then
-                echo "success" > "${windows_promote_result}"
-              else
-                echo "failed" > "${windows_promote_result}"
-              fi
-            ) &
-            windows_promote_pid=$!
-          fi
-
           openclaw_failed=0
           if [[ -n "${openclaw_pid}" ]] && { ! wait "${openclaw_pid}" || [[ ! -f "${openclaw_result}" || "$(cat "${openclaw_result}")" != "success" ]]; }; then
             failed=1
@@ -1840,19 +1940,13 @@ jobs:
             fi
           fi
 
-          if [[ -n "${windows_promote_pid}" ]]; then
-            wait "${windows_promote_pid}" || true
-            if [[ ! -f "${windows_promote_result}" || "$(cat "${windows_promote_result}")" != "success" ]]; then
-              failed=1
-            fi
-          fi
-          windows_node_run_id="$(cat "${RUNNER_TEMP}/windows-node-run-id.txt" 2>/dev/null || true)"
-
           if [[ "${release_target_current}" == "true" && ( ( -n "${openclaw_npm_run_id}" && "${openclaw_failed}" == "0" ) || "${openclaw_npm_already_published}" == "true" ) ]]; then
             verify_published_release
+            record_postpublish_diagnostics assets-start
             upload_dependency_evidence_release_asset
             upload_release_evidence_assets
             append_release_proof_to_github_release
+            record_postpublish_diagnostics assets-success
             if [[ "${failed}" == "0" ]]; then
               echo "- GitHub release: kept draft until required publication checks complete" >> "$GITHUB_STEP_SUMMARY"
             else
@@ -1863,12 +1957,39 @@ jobs:
             exit 1
           fi
 
+      - name: Record postpublish outcome
+        if: ${{ always() }}
+        env:
+          POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
+          CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.children.outputs.plugin_npm_run_id }}
+          CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_run_id }}
+          CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
+          CHILD_OPENCLAW_NPM_RUN_ID: ${{ steps.core_start.outputs.openclaw_npm_run_id }}
+          CORE_START_OUTCOME: ${{ steps.core_start.outcome }}
+          COMPLETION_OUTCOME: ${{ steps.complete.outcome }}
+          PUBLISH_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          if [[ -f "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh" ]]; then
+            source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
+            record_postpublish_diagnostics terminal
+          fi
+
+      - name: Upload postpublish diagnostics
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-release-postpublish-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-diagnostics.json
+          if-no-files-found: warn
+
       - name: Upload postpublish evidence
-        if: ${{ always() && inputs.publish_openclaw_npm }}
+        if: ${{ always() && inputs.publish_openclaw_npm && (steps.complete.outcome == 'success' || steps.complete.outputs.postpublish_evidence_ready == 'true') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-postpublish-evidence-${{ inputs.tag }}
-          path: ${{ runner.temp }}/openclaw-release-postpublish-evidence
+          path: ${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-evidence.json
           if-no-files-found: error
 
   verify_core_npm_registry:
@@ -1945,8 +2066,11 @@ jobs:
 
   finalize_github_release:
     name: Finalize GitHub release
+    # Apps attach independently after npm and Gateway Docker evidence is complete.
     needs: [publish, publish_docker]
-    if: ${{ always() && inputs.publish_openclaw_npm && needs.publish.result == 'success' && (needs.publish_docker.result == 'success' || (contains(inputs.tag, '-alpha.') && needs.publish_docker.result == 'skipped')) }}
+    # Prepared releases become visible in the outer button workflow, after this
+    # parent succeeds and ClawHub's terminal publication can be verified.
+    if: ${{ always() && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && (needs.publish_docker.result == 'success' || (contains(inputs.tag, '-alpha.') && needs.publish_docker.result == 'skipped')) }}
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
@@ -1956,16 +2080,78 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           expected_prerelease=false
+          expected_latest=false
           if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
             expected_prerelease=true
+          elif [[ "${RELEASE_NPM_DIST_TAG}" == "latest" ]]; then
+            expected_latest=true
           fi
-          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false
+          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --draft=false --prerelease="${expected_prerelease}" --latest="${expected_latest}"
           release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease)"
           if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] || \
             [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]]; then
             echo "Published GitHub release state does not match the requested draft/prerelease classification." >&2
             exit 1
           fi
+
+  publish_windows:
+    name: Dispatch Windows assets after publication
+    needs: [resolve_release_target, finalize_github_release]
+    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && (inputs.windows_node_tag != '' || inputs.windows_node_installer_digests != '') && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+    # App failures are reported by their own workflow; neither npm nor the
+    # published GitHub release depends on native asset availability.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout trusted Windows dispatch tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Dispatch detached Windows promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
+        run: |
+          set -euo pipefail
+          source scripts/lib/release-publish-children.sh
+          jq -n --arg tag "$RELEASE_TAG" --arg source "$WINDOWS_NODE_TAG" \
+            --arg digests "$WINDOWS_NODE_INSTALLER_DIGESTS" \
+            '{tag: $tag, sourceTag: $source, installerDigests: $digests, state: "dispatch-failed"}' \
+            > "$RUNNER_TEMP/windows-dispatch.json"
+          verify_release_tag_target
+          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "${GITHUB_REF}")"
+          promote_windows_release_assets
+          jq --arg runId "${windows_node_run_id}" '. + {state: "dispatched", childRunId: $runId}' \
+            "$RUNNER_TEMP/windows-dispatch.json" > "$RUNNER_TEMP/windows-dispatch.next.json"
+          mv "$RUNNER_TEMP/windows-dispatch.next.json" "$RUNNER_TEMP/windows-dispatch.json"
+
+      - name: Record failed Windows dispatch
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Windows promotion could not be dispatched; npm and GitHub publication remain complete. Use Windows Node Release for recovery."
+          echo "- Windows Hub: dispatch failed; inspect this job before manual recovery." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Windows dispatch evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-dispatch.json
+          if-no-files-found: warn

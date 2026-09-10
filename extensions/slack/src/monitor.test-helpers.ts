@@ -63,6 +63,7 @@ type SlackTestState = {
   appConstructorArgs?: Record<string, unknown>;
   appStartMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  httpRequestListenerMock: Mock<(...args: unknown[]) => unknown>;
   interactionRegistrations: string[];
   sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
@@ -91,6 +92,7 @@ const slackTestState: SlackTestState = vi.hoisted(() => {
     appConstructorArgs: undefined,
     appStartMock: vi.fn(),
     appStopMock: vi.fn(),
+    httpRequestListenerMock: vi.fn(),
     interactionRegistrations: [],
     sendMock: vi.fn(),
     replyMock: vi.fn(),
@@ -130,11 +132,7 @@ type SlackClient = {
   users: {
     info: Mock<(...args: unknown[]) => Promise<{ user: { profile: { display_name: string } } }>>;
   };
-  assistant: {
-    threads: {
-      setStatus: Mock<(...args: unknown[]) => Promise<{ ok: boolean }>>;
-    };
-  };
+  apiCall: Mock<(...args: unknown[]) => Promise<{ ok: boolean }>>;
   reactions: {
     add: (...args: unknown[]) => unknown;
     remove: (...args: unknown[]) => unknown;
@@ -180,11 +178,7 @@ function ensureSlackTestRuntime(): {
           user: { profile: { display_name: "Ada" } },
         }),
       },
-      assistant: {
-        threads: {
-          setStatus: vi.fn().mockResolvedValue({ ok: true }),
-        },
-      },
+      apiCall: vi.fn().mockResolvedValue({ ok: true }),
       reactions: {
         add: () => undefined,
         remove: () => undefined,
@@ -352,6 +346,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   slackTestState.socketModeLogger = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.httpRequestListenerMock.mockReset();
   slackTestState.interactionRegistrations.length = 0;
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
@@ -388,7 +383,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   client.users.info.mockReset().mockResolvedValue({
     user: { profile: { display_name: "Ada" } },
   });
-  client.assistant.threads.setStatus.mockReset().mockResolvedValue({ ok: true });
+  client.apiCall.mockReset().mockResolvedValue({ ok: true });
   getSlackHandlers()?.clear();
 }
 
@@ -400,6 +395,7 @@ vi.mock("./monitor/config.runtime.js", async () => {
     ...actual,
     loadConfig: () => slackTestState.config,
     readSessionUpdatedAt: vi.fn(() => undefined),
+    getSessionEntry: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
     updateLastRoute: (...args: unknown[]) => slackTestState.updateLastRouteMock(...args),
@@ -507,7 +503,7 @@ vi.mock("@slack/bolt", () => {
     stop = (...args: unknown[]) => slackTestState.appStopMock(...args);
   }
   class HTTPReceiver {
-    requestListener = vi.fn();
+    requestListener = (...args: unknown[]) => slackTestState.httpRequestListenerMock(...args);
   }
   class SocketModeReceiver {
     client = {

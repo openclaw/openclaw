@@ -1,6 +1,7 @@
 /** Tests startup reconciliation of pending ACP session identities. */
 import { describe, expect, it } from "vitest";
 import {
+  installMutableAcpSessionMetaUpsert,
   AcpSessionManager,
   baseCfg,
   createRuntime,
@@ -27,13 +28,15 @@ describe("AcpSessionManager startup identity reconcile", () => {
       runtime: runtimeState.runtime,
     });
 
-    let currentMeta: SessionAcpMeta = {
-      ...readySessionMeta(),
-      identity: {
-        state: "pending",
-        source: "ensure",
-        acpxSessionId: "acpx-stale",
-        lastUpdatedAt: Date.now(),
+    const metaState: { currentMeta: SessionAcpMeta } = {
+      currentMeta: {
+        ...readySessionMeta(),
+        identity: {
+          state: "pending",
+          source: "ensure",
+          acpxSessionId: "acpx-stale",
+          lastUpdatedAt: Date.now(),
+        },
       },
     };
     const sessionKey = "agent:codex:acp:session-1";
@@ -46,9 +49,9 @@ describe("AcpSessionManager startup identity reconcile", () => {
         entry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
-          acp: currentMeta,
+          acp: metaState.currentMeta,
         },
-        acp: currentMeta,
+        acp: metaState.currentMeta,
       },
     ]);
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
@@ -56,35 +59,19 @@ describe("AcpSessionManager startup identity reconcile", () => {
       return {
         sessionKey: key,
         storeSessionKey: key,
-        acp: currentMeta,
+        acp: metaState.currentMeta,
       };
     });
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
-      };
-      const next = params.mutate(currentMeta, { acp: currentMeta });
-      if (next) {
-        currentMeta = next;
-      }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
-    });
+    installMutableAcpSessionMetaUpsert(metaState);
 
     const manager = new AcpSessionManager();
     const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
 
     expect(result).toEqual({ checked: 1, resolved: 1, failed: 0 });
-    expect(currentMeta.identity?.state).toBe("resolved");
-    expect(currentMeta.identity?.acpxRecordId).toBe("acpx-record-1");
-    expect(currentMeta.identity?.acpxSessionId).toBe("acpx-session-1");
-    expect(currentMeta.identity?.agentSessionId).toBe("agent-session-1");
+    expect(metaState.currentMeta.identity?.state).toBe("resolved");
+    expect(metaState.currentMeta.identity?.acpxRecordId).toBe("acpx-record-1");
+    expect(metaState.currentMeta.identity?.acpxSessionId).toBe("acpx-session-1");
+    expect(metaState.currentMeta.identity?.agentSessionId).toBe("agent-session-1");
   });
 
   it("skips startup reconcile for pending identities without stable runtime ids", async () => {

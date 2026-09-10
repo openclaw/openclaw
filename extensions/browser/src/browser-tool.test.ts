@@ -3,7 +3,9 @@ import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveBrowserToolTimeoutMs } from "./browser-tool.routing.js";
 import type { BrowserActionPathResult } from "./browser/client-actions-types.js";
+import { resolveBrowserConfig } from "./browser/config.js";
 
 const browserClientMocks = vi.hoisted(() => ({
   browserCloseTab: vi.fn(async (..._args: unknown[]) => ({})),
@@ -36,15 +38,13 @@ const browserClientMocks = vi.hoisted(() => ({
   browserSystemProfiles: vi.fn(
     async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
   ),
-  browserSnapshot: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-      ok: true,
-      format: "ai",
-      targetId: "t1",
-      url: "https://example.com",
-      snapshot: "ok",
-    }),
-  ),
+  browserSnapshot: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    ok: true,
+    format: "ai",
+    targetId: "t1",
+    url: "https://example.com",
+    snapshot: "ok",
+  })),
   browserStart: vi.fn(async (..._args: unknown[]) => ({})),
   browserStatus: vi.fn(async (..._args: unknown[]) => ({
     ok: true,
@@ -80,28 +80,22 @@ const browserActionsMocks = vi.hoisted(() => ({
       },
     ],
   })),
-  browserRequests: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-      ok: true,
-      targetId: "t1",
-      requests: [],
-    }),
-  ),
-  browserErrors: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-      ok: true,
-      targetId: "t1",
-      errors: [],
-    }),
-  ),
-  browserPageText: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-      ok: true,
-      targetId: "t1",
-      text: "Page prose",
-      truncated: false,
-    }),
-  ),
+  browserRequests: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    ok: true,
+    targetId: "t1",
+    requests: [],
+  })),
+  browserErrors: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    ok: true,
+    targetId: "t1",
+    errors: [],
+  })),
+  browserPageText: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    ok: true,
+    targetId: "t1",
+    text: "Page prose",
+    truncated: false,
+  })),
   browserEmulateSetting: vi.fn(async (..._args: unknown[]) => ({ ok: true, targetId: "t1" })),
   browserNavigate: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
   browserDownload: vi.fn(async () => ({
@@ -114,13 +108,11 @@ const browserActionsMocks = vi.hoisted(() => ({
     },
   })),
   browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
-  browserScreenshotAction: vi.fn(
-    async (..._args: unknown[]): Promise<BrowserActionPathResult> => ({
-      ok: true,
-      path: "/tmp/test.png",
-      targetId: "tab-1",
-    }),
-  ),
+  browserScreenshotAction: vi.fn(async (..._args: unknown[]): Promise<BrowserActionPathResult> => ({
+    ok: true,
+    path: "/tmp/test.png",
+    targetId: "tab-1",
+  })),
   browserWaitForDownload: vi.fn(async () => ({
     ok: true,
     targetId: "tab-1",
@@ -181,12 +173,10 @@ const nodesUtilsMocks = vi.hoisted(() => ({
 
 const gatewayMocks = vi.hoisted(() => ({
   hasGatewayToolRoutingContext: vi.fn(() => true),
-  callGatewayTool: vi.fn(
-    async (): Promise<Record<string, unknown>> => ({
-      ok: true,
-      payload: { result: { ok: true, running: true } },
-    }),
-  ),
+  callGatewayTool: vi.fn(async (): Promise<Record<string, unknown>> => ({
+    ok: true,
+    payload: { result: { ok: true, running: true } },
+  })),
 }));
 
 const configMocks = vi.hoisted(() => ({
@@ -227,13 +217,11 @@ const sessionTabRegistryMocks = vi.hoisted(() => ({
 vi.mock("./browser/session-tab-registry.js", () => sessionTabRegistryMocks);
 
 const toolCommonMocks = vi.hoisted(() => ({
-  fetchBrowserJson: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-      ok: true,
-      running: true,
-      source: "gateway-host",
-    }),
-  ),
+  fetchBrowserJson: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    ok: true,
+    running: true,
+    source: "gateway-host",
+  })),
   imageResultFromFile: vi.fn<typeof import("./sdk-setup-tools.js").imageResultFromFile>(),
   describeImageFile: vi.fn(async () => ({ text: undefined, decision: { outcome: "skipped" } })),
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({ buffer })),
@@ -1105,11 +1093,16 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
-  it("uses config snapshot defaults when mode is not provided", async () => {
+  it("updates snapshot defaults for retained tools when mode is not provided", async () => {
+    const tool = createBrowserTool();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    await tool.execute?.("call-before-reload", { action: "snapshot", target: "host" });
+    expect(
+      lastMockCallArg<{ mode?: string }>(browserClientMocks.browserSnapshot, 1).mode,
+    ).toBeUndefined();
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
-    const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", target: "host" });
 
     const opts = lastMockCallArg<{ mode?: string }>(browserClientMocks.browserSnapshot, 1);
@@ -1422,13 +1415,13 @@ describe("browser tool snapshot maxChars", () => {
       "host-tab-compensate",
       {
         profile: "work-actual",
-        timeoutMs: undefined,
+        timeoutMs: 60_000,
       },
     );
     expect(toolCommonMocks.fetchBrowserJson).toHaveBeenLastCalledWith("/tabs/open?profile=work", {
       method: "POST",
       body: JSON.stringify({ url: "https://example.com" }),
-      timeoutMs: undefined,
+      timeoutMs: 60_000,
       signal: controller.signal,
     });
   });
@@ -3054,54 +3047,18 @@ describe("browser tool url alias support", () => {
     },
   );
 
-  it("preserves an explicit navigation timeout across node and Gateway watchdogs", async () => {
-    mockSingleBrowserProxyNode();
-    gatewayMocks.callGatewayTool
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          result: { ok: true, targetId: "tab-1", url: "https://example.com/slow" },
-        },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          result: {
-            ok: true,
-            format: "ai",
-            targetId: "tab-1",
-            url: "https://example.com/slow",
-            snapshot: "slow page",
-          },
-        },
-      });
-    const tool = createBrowserTool();
-
-    await tool.execute?.("call-1", {
-      action: "navigate",
-      target: "node",
-      url: "https://example.com/slow",
-      targetId: "tab-1",
-      timeoutMs: 45_000,
-    });
-
-    const { options, request } = nodeInvokeCall(0);
-    expect(options.timeoutMs).toBe(55_000);
-    expect(request.timeoutMs).toBe(50_000);
-    expect(request.params?.timeoutMs).toBe(45_000);
-    expect(request.params?.body).toEqual({
-      url: "https://example.com/slow",
-      targetId: "tab-1",
-      timeoutMs: 45_000,
-    });
-  });
-
   it.each([
-    { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
-    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
-    { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
+    { label: "default", requestedTimeoutMs: undefined, expectedTimeoutMs: 20_000 },
+    { label: "explicit", requestedTimeoutMs: 45_000, expectedTimeoutMs: 45_000 },
+    { label: "minimum", requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
+    { label: "maximum", requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
+    {
+      label: "safe integer maximum",
+      requestedTimeoutMs: Number.MAX_SAFE_INTEGER,
+      expectedTimeoutMs: 120_000,
+    },
   ])(
-    "keeps normalized node navigation timeout $requestedTimeoutMs inside nested watchdogs",
+    "keeps the $label node navigation timeout inside nested watchdogs",
     async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
       mockSingleBrowserProxyNode();
       gatewayMocks.callGatewayTool
@@ -3129,13 +3086,13 @@ describe("browser tool url alias support", () => {
         target: "node",
         url: "https://example.com/slow",
         targetId: "tab-1",
-        timeoutMs: requestedTimeoutMs,
+        ...(requestedTimeoutMs === undefined ? {} : { timeoutMs: requestedTimeoutMs }),
       });
 
       const { options, request } = nodeInvokeCall(0);
-      expect(options.timeoutMs).toBe(expectedTimeoutMs + 10_000);
-      expect(request.timeoutMs).toBe(expectedTimeoutMs + 5_000);
-      expect(request.params?.timeoutMs).toBe(expectedTimeoutMs);
+      expect(options.timeoutMs).toBe(expectedTimeoutMs + 15_000);
+      expect(request.timeoutMs).toBe(expectedTimeoutMs + 10_000);
+      expect(request.params?.timeoutMs).toBe(expectedTimeoutMs + 5_000);
       expect(request.params?.body).toEqual({
         url: "https://example.com/slow",
         targetId: "tab-1",
@@ -3677,7 +3634,7 @@ describe("browser tool act compatibility", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(80_000);
+    expect(options.timeoutMs).toBe(126_250);
     expect(request.params?.path).toBe("/act");
     expect(request.params?.body).toEqual({
       kind: "wait",
@@ -3685,7 +3642,7 @@ describe("browser tool act compatibility", () => {
       text: "ready",
       timeoutMs: "45000",
     });
-    expect(request.params?.timeoutMs).toBe(70_000);
+    expect(request.params?.timeoutMs).toBe(116_250);
   });
 
   it("sizes node proxy calls for recursively nested batch execution", async () => {
@@ -5105,12 +5062,16 @@ describe("browser observation actions and tab previews", () => {
     browserClientMocks.browserOpenTab.mockResolvedValueOnce({
       targetId: "t".repeat(128),
       title: "a".repeat(600),
-      url: "u".repeat(3000),
+      url: `https://example.com/${"u".repeat(3000)}`,
     });
     const tool = createBrowserTool();
     const opened = await tool.execute("open", { action: "open", url: "https://example.com" });
     expect(opened.details).toMatchObject({
-      browserTab: { targetId: "t".repeat(128), title: "a".repeat(512), url: "u".repeat(2048) },
+      browserTab: {
+        targetId: "t".repeat(128),
+        title: "a".repeat(512),
+        url: `https://example.com/${"u".repeat(3000)}`.slice(0, 2048),
+      },
     });
     browserClientMocks.browserFocusTab.mockResolvedValueOnce({ ok: true, title: 42, url: {} });
     const focused = await tool.execute("focus", { action: "focus", targetId: "known" });
@@ -5121,6 +5082,37 @@ describe("browser observation actions and tab previews", () => {
       profile: "openclaw",
     });
   });
+
+  it.each([
+    ["about:blank", false],
+    ["chrome://newtab/", false],
+    ["data:text/html,hello", false],
+    ["file:///tmp/page.html", false],
+    ["not a URL", false],
+    ["http://example.com/page", true],
+    ["https://example.com/page", true],
+    ["HTTPS://example.com/page", true],
+  ])(
+    "keeps the browser route but only attaches HTTP(S) display URLs (%s)",
+    async (url, eligible) => {
+      browserClientMocks.browserOpenTab.mockResolvedValueOnce({ targetId: "known", url });
+      const result = await createBrowserTool().execute("open", {
+        action: "open",
+        url: "https://example.com",
+      });
+      expect(result.details).toEqual({
+        targetId: "known",
+        url,
+        browserTab: {
+          targetId: "known",
+          target: "host",
+          profile: "openclaw",
+          ...(eligible ? { url } : {}),
+        },
+      });
+      expect(firstResultText(result)).toContain(url);
+    },
+  );
 
   it.each([
     {
@@ -5346,4 +5338,40 @@ describe("browser observation actions and tab previews", () => {
       stats: { chars: 5, refs: 0 },
     });
   });
+});
+
+describe("resolveBrowserToolTimeoutMs", () => {
+  const resolvedBrowser = resolveBrowserConfig({ enabled: true });
+
+  it("keeps the caller-supplied deadline even for persistent-Playwright profiles", () => {
+    const timeoutMs = resolveBrowserToolTimeoutMs({
+      requestedTimeoutMs: 45_000,
+      action: "tabs",
+      isUserBrowserProfile: false,
+      usesPersistentPlaywright: true,
+      isNodeProxy: false,
+      resolvedBrowser,
+    });
+    expect(timeoutMs).toBe(45_000);
+  });
+
+  it.each([
+    ["persistent tab listing", "tabs", true, false, 60_000],
+    ["persistent lifecycle action", "status", true, false, undefined],
+    ["proxied profile listing", "profiles", false, true, 60_000],
+    ["managed tab listing", "tabs", false, false, undefined],
+  ] as const)(
+    "resolves the %s budget",
+    (_label, action, usesPersistentPlaywright, isNodeProxy, expected) => {
+      const timeoutMs = resolveBrowserToolTimeoutMs({
+        requestedTimeoutMs: undefined,
+        action,
+        isUserBrowserProfile: false,
+        usesPersistentPlaywright,
+        isNodeProxy,
+        resolvedBrowser,
+      });
+      expect(timeoutMs).toBe(expected);
+    },
+  );
 });

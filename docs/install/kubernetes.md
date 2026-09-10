@@ -21,8 +21,9 @@ OpenClaw is a single container with some config files. The interesting customiza
 ## Quick start
 
 ```bash
-# Replace with your provider: ANTHROPIC, GEMINI, OPENAI, or OPENROUTER
-export <PROVIDER>_API_KEY="..."
+# Export the key for the provider you configured. Use ANTHROPIC_API_KEY,
+# GEMINI_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY.
+export ANTHROPIC_API_KEY="..."
 ./scripts/k8s/deploy.sh
 
 kubectl port-forward svc/openclaw 18789:18789 -n openclaw
@@ -55,8 +56,9 @@ Then deploy as usual with `./scripts/k8s/deploy.sh`.
 **Option A: API key in environment (one step)**
 
 ```bash
-# Replace with your provider: ANTHROPIC, GEMINI, OPENAI, or OPENROUTER
-export <PROVIDER>_API_KEY="..."
+# Export the key for the provider you configured. Use ANTHROPIC_API_KEY,
+# GEMINI_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY.
+export ANTHROPIC_API_KEY="..."
 ./scripts/k8s/deploy.sh
 ```
 

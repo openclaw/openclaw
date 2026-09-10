@@ -2,6 +2,7 @@ import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
@@ -36,7 +37,6 @@ import {
 } from "./exec-result.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommandWithInvocation } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
-import { resolveCommandStdio } from "./spawn-utils.js";
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
@@ -47,6 +47,8 @@ export type CommandOptions = {
   timeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
+  /** Synchronous live-child admission. Input is withheld until this returns. */
+  beforeInput?: (pid: number) => void;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
@@ -65,7 +67,9 @@ export type CommandOptions = {
   maxPreservedOutputLines?: number;
   preserveOutputLine?: PreserveOutputLine;
   killProcessTree?: boolean;
-  /** Signal used when terminating the direct child; tree termination owns its own grace policy. */
+  /** Join owned descendants even after a successful root exits. */
+  requireProcessTreeExtinction?: boolean;
+  /** Initial signal for direct-child and graceful process-group cancellation. */
   killSignal?: NodeJS.Signals | number;
   /** Grace between graceful termination and the force-kill fallback. */
   killGraceMs?: number;
@@ -107,8 +111,13 @@ async function runCommandWithOutputEncoding(
   } = options;
   const resolvedTimeoutMs =
     typeof timeoutMs === "number" ? resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
+  if (options.requireProcessTreeExtinction && !killProcessTree) {
+    throw new Error("Process-tree extinction requires process-tree ownership");
+  }
   const hasInput = input !== undefined;
-  const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
+  if (options.beforeInput && !hasInput) {
+    throw new Error("Child input admission requires explicit input");
+  }
   const resolvedKillGraceMs = resolveTimerTimeoutMs(
     killGraceMs,
     COMMAND_PROCESS_TREE_KILL_GRACE_MS,
@@ -123,6 +132,7 @@ async function runCommandWithOutputEncoding(
       signal: null,
       killed: false,
       termination: "signal",
+      cleanup: "normal",
       noOutputTimedOut: false,
     };
   }
@@ -155,7 +165,6 @@ async function runCommandWithOutputEncoding(
   const cancelController = new AbortController();
   let termination: CommandTerminationReason | undefined;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-  let childExited = false;
   let commandSettled = false;
   let combinedOutputBytes = 0;
   let combinedCapturedBytes = 0;
@@ -177,27 +186,48 @@ async function runCommandWithOutputEncoding(
     env,
     forceKillAfterDelay: resolvedKillGraceMs,
     killSignal,
-    ...(hasInput ? { input } : {}),
+    ...(hasInput && !options.beforeInput ? { input } : {}),
     reject: false,
-    stdio,
+    stdio: [hasInput ? "pipe" : "inherit", "pipe", "pipe"],
     stripFinalNewline: false,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
   const nodeChild = child.nodeChildProcess;
-  const releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
-  nodeChild.once("exit", (code, signalValue) => {
-    childExited = true;
-    childExitState = { code, signal: signalValue };
-  });
+  const ownsExitedProcessTree = Boolean(killProcessTree && process.platform !== "win32");
+  const shouldTrackOutputTimeout =
+    typeof noOutputTimeoutMs === "number" &&
+    Number.isFinite(noOutputTimeoutMs) &&
+    noOutputTimeoutMs > 0;
+  const resolvedNoOutputTimeoutMs = shouldTrackOutputTimeout
+    ? resolveTimerTimeoutMs(noOutputTimeoutMs, 1)
+    : undefined;
+  const ownsOutputDeadline =
+    ownsExitedProcessTree &&
+    (resolvedTimeoutMs !== undefined || resolvedNoOutputTimeoutMs !== undefined);
+  let releaseOutput: (() => void) | undefined;
   const terminationController = createCommandTerminationController({
     child: nodeChild,
     cancelController,
     baseEnv,
     env,
     processTree: killProcessTree ? { mode: "graceful" } : undefined,
-    isChildExited: () => childExited,
+    isChildExited: () => childExitState !== undefined,
     isCommandSettled: () => commandSettled,
     killGraceMs: resolvedKillGraceMs,
+    killSignal,
+  });
+  nodeChild.once("exit", (code, signalValue) => {
+    childExitState = { code, signal: signalValue };
+    // Successful tree output belongs to its command deadline, not the diagnostic
+    // idle cutoff. Failed, terminated, and unowned output still gets a bounded drain.
+    if (!ownsOutputDeadline || code !== 0 || termination) {
+      releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
+    }
+    // An inner timeout can become an ordinary failed exit while its descendants survive.
+    // Retain the existing tree owner through its drain without changing that exit result.
+    if (killProcessTree && !termination && (code !== 0 || options.requireProcessTreeExtinction)) {
+      terminationController.terminate();
+    }
   });
 
   const clearNoOutputTimer = () => {
@@ -206,37 +236,35 @@ async function runCommandWithOutputEncoding(
       noOutputTimer = undefined;
     }
   };
-  const ownsExitedProcessTree = Boolean(killProcessTree && process.platform !== "win32");
   const cancel = (reason: Exclude<CommandTerminationReason, "exit">) => {
-    // Direct exit ends ordinary timer/abort ownership; releaseChildProcessOutputAfterExit
-    // still bounds inherited pipes. POSIX tree mode must reap descendants, while
-    // output caps remain meaningful for bytes drained after exit.
+    // Failed roots already own a drain; later deadlines must preserve their exit result.
+    // Successful POSIX roots retain deadline ownership of inherited descendants.
+    // Output caps remain meaningful for bytes drained after either exit.
     if (
       termination ||
       commandSettled ||
-      (childExited && reason !== "output-limit" && !ownsExitedProcessTree)
+      (childExitState &&
+        reason !== "output-limit" &&
+        (!ownsExitedProcessTree || childExitState.code !== 0))
     ) {
       return;
     }
     termination = reason;
+    if (childExitState) {
+      // An escaped pipe holder can survive group termination; bound its final drain.
+      releaseOutput ??= releaseChildProcessOutputAfterExit(nodeChild);
+    }
     const abortDeferred = terminationController.terminate();
     if (!abortDeferred) {
       cancelController.abort();
     }
   };
-  const shouldTrackOutputTimeout =
-    typeof noOutputTimeoutMs === "number" &&
-    Number.isFinite(noOutputTimeoutMs) &&
-    noOutputTimeoutMs > 0;
-  const resolvedNoOutputTimeoutMs = shouldTrackOutputTimeout
-    ? resolveTimerTimeoutMs(noOutputTimeoutMs, 1)
-    : undefined;
   const armNoOutputTimer = () => {
     if (
       resolvedNoOutputTimeoutMs === undefined ||
       commandSettled ||
       termination ||
-      (childExited && !ownsExitedProcessTree)
+      (childExitState && !ownsExitedProcessTree)
     ) {
       return;
     }
@@ -308,10 +336,8 @@ async function runCommandWithOutputEncoding(
       }
     } else {
       const remaining = Math.max(0, maxCombinedOutputBytes - combinedBytesBeforeChunk);
-      if (remaining > 0) {
-        appendCapturedOutput(capture, buffer.subarray(0, remaining), maxBytes, captureMode);
-      }
-      capture.truncatedBytes += Math.max(0, buffer.byteLength - remaining);
+      const maxCaptureBytes = Math.min(maxBytes, capture.bytes + remaining);
+      appendCapturedOutput(capture, buffer, maxCaptureBytes, captureMode);
     }
     if (
       (combinedLimitExceeded &&
@@ -380,6 +406,31 @@ async function runCommandWithOutputEncoding(
     armNoOutputTimer();
   });
 
+  let inputAdmissionError: Error | undefined;
+  if (options.beforeInput) {
+    nodeChild.stdin?.once("error", (cause) => {
+      inputAdmissionError ??= toErrorObject(cause, "Command input failed");
+      cancel("signal");
+    });
+    try {
+      if (nodeChild.pid === undefined || !nodeChild.stdin) {
+        throw new Error("Child input admission has no spawned process");
+      }
+      const admitted: unknown = options.beforeInput(nodeChild.pid);
+      if (admitted !== undefined) {
+        if (isPromiseLike(admitted)) {
+          void Promise.resolve(admitted).catch(() => undefined);
+        }
+        throw new TypeError("Child input admission must complete synchronously");
+      }
+      nodeChild.stdin.end(input);
+    } catch (cause) {
+      inputAdmissionError = toErrorObject(cause, "Child input admission failed");
+      nodeChild.stdin?.destroy();
+      cancel("signal");
+    }
+  }
+
   const result = await child.finally(() => {
     commandSettled = true;
     if (timeoutTimer) {
@@ -387,14 +438,23 @@ async function runCommandWithOutputEncoding(
     }
     clearNoOutputTimer();
     signal?.removeEventListener("abort", onAbort);
-    releaseOutput();
+    releaseOutput?.();
   });
-  await terminationController.settle();
+  let cleanup = await terminationController.settle();
+  const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
+  if (cleanup !== "forced" && resolvedSignal) {
+    cleanup = "uncertain";
+  }
+  if (inputAdmissionError) {
+    throw Object.assign(inputAdmissionError, { cleanup });
+  }
   if (terminatingOutputError) {
-    throw terminatingOutputError;
+    throw Object.assign(terminatingOutputError, { cleanup });
   }
   if (outputObserverError !== undefined) {
-    throw toErrorObject(outputObserverError, "Command output observer failed");
+    throw Object.assign(toErrorObject(outputObserverError, "Command output observer failed"), {
+      cleanup,
+    });
   }
   // Patched Node can report null/null after a cmd.exe shim exits. Execa turns
   // that into a cause-less failure; preserve the shim fallback only post-spawn.
@@ -442,13 +502,20 @@ async function runCommandWithOutputEncoding(
     )
   ) {
     const error = createSanitizedCommandError(result);
+    Object.assign(error, {
+      cleanup:
+        typeof nodeChild.pid === "number"
+          ? cleanup === "normal"
+            ? "uncertain"
+            : cleanup
+          : "normal",
+    });
     if (outputErrorStream) {
       Object.assign(error, { outputErrorStream });
     }
     throw error;
   }
 
-  const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
   const resolvedCode = resolveProcessExitCode({
     explicitCode: result.exitCode ?? childExitState?.code,
     childExitCode: nodeChild.exitCode,
@@ -513,6 +580,7 @@ async function runCommandWithOutputEncoding(
     code: normalizedCode,
     signal: resolvedSignal,
     killed: nodeChild.killed,
+    cleanup,
     termination: termination === "output-limit" ? "signal" : termination,
     noOutputTimedOut: termination === "no-output-timeout",
     outputLimitExceeded: termination === "output-limit" || undefined,

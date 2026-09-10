@@ -7,11 +7,8 @@ import type {
   CommandsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry } from "../../api/types.ts";
 
-export type ChatMetadataResult = CommandsListResult & {
-  models?: ModelCatalogEntry[];
-};
+export type ChatMetadataResult = CommandsListResult;
 
 type ChatMetadataUpdate =
   | { type: "invalidated" }
@@ -31,7 +28,11 @@ type ChatMetadataEntry = {
 const chatMetadataCache = new WeakMap<GatewayBrowserClient, Map<string, ChatMetadataEntry>>();
 
 function metadataScopeKey(scope: ChatMetadataParams): string {
-  return JSON.stringify([scope.agentId?.trim() ?? "", scope.sessionKey ?? null]);
+  return JSON.stringify([
+    scope.agentId?.trim() ?? "",
+    scope.sessionKey ?? null,
+    scope.authProfileId ?? null,
+  ]);
 }
 
 function metadataEntryFor(
@@ -50,9 +51,9 @@ function metadataEntryFor(
       scope: params,
       listeners: new Set(),
       release: () => {
-        // Session projections live with their consumers, not every conversation ever opened.
+        // Selected-account projections live with their consumers, not every conversation/draft.
         // Retire the writer too: a late startup/read cannot repopulate a released entry.
-        if (params.sessionKey && created.listeners.size === 0) {
+        if ((params.sessionKey || params.authProfileId) && created.listeners.size === 0) {
           created.writer = undefined;
           if (cache.get(key) === created) {
             cache.delete(key);
@@ -135,12 +136,15 @@ function beginPublication(entry: ChatMetadataEntry) {
   notifyChatMetadataListeners(entry, { type: "loading" });
   return {
     isCurrent,
-    publish: (result: ChatMetadataResult) => {
+    publish: (result: ChatMetadataResult & { models?: unknown; accountSelection?: unknown }) => {
+      // Legacy/startup responses can carry models. The direct catalog is their only UI owner.
+      const { models: _models, accountSelection: _accountSelection, ...metadata } = result;
       if (isCurrent()) {
-        entry.result = result;
-        notifyChatMetadataListeners(entry, { type: "result", result });
+        entry.result = metadata;
+        notifyChatMetadataListeners(entry, { type: "result", result: metadata });
       }
       entry.release();
+      return metadata;
     },
     fail: (error: unknown) => {
       if (isCurrent()) {
@@ -160,8 +164,7 @@ function beginChatMetadataRequest(
   const pending = request
     .then(
       (result) => {
-        publication.publish(result);
-        return result;
+        return publication.publish(result);
       },
       (error: unknown) => {
         publication.fail(error);
@@ -247,7 +250,8 @@ export function invalidateChatMetadataStore(
   const invalidated = Array.from(entries).filter(
     (entry) =>
       (!scope?.agentId || entry.scope.agentId === scope.agentId) &&
-      (!scope?.sessionKey || entry.scope.sessionKey === scope.sessionKey),
+      (!scope?.sessionKey || entry.scope.sessionKey === scope.sessionKey) &&
+      (!scope?.authProfileId || entry.scope.authProfileId === scope.authProfileId),
   );
   // Retire every affected writer before subscribers can synchronously start replacements.
   for (const entry of invalidated) {

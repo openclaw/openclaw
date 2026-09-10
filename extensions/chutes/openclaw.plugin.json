@@ -1,5 +1,6 @@
 {
   "id": "chutes",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -65,6 +66,9 @@
     "properties": {}
   },
   "modelCatalog": {
+    "modelsDev": {
+      "chutes": "chutes"
+    },
     "providers": {
       "chutes": {
         "baseUrl": "https://llm.chutes.ai/v1",

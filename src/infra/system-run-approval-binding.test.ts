@@ -2,18 +2,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import * as commandResolution from "./exec-command-resolution.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
   matchSystemRunApprovalBinding,
   missingSystemRunApprovalBinding,
-  normalizeSystemRunApprovalPlan,
   prepareSystemRunMutableFileBinding,
+  prepareSystemRunMutableFileApproval,
   revalidateSystemRunMutableFileBinding,
 } from "./system-run-approval-binding.js";
+import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
+import * as mutableFilePolicy from "./system-run-mutable-file-policy.js";
 
 function expectOk<T extends { ok: boolean }>(result: T): T & { ok: true } {
   expect(result.ok).toBe(true);
@@ -335,6 +338,159 @@ describe("missingSystemRunApprovalBinding", () => {
 });
 
 describe("mutable file operand binding", () => {
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "binds protected env and ls identities in dispatch order",
+    async () => {
+      const prepared = await prepareSystemRunMutableFileBinding({
+        command: { kind: "shell", text: "env ls" },
+        env: { PATH: "/usr/bin:/bin" },
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error(prepared.message);
+      }
+      expect(prepared.binding.operands.filter((operand) => operand.executable)).toEqual([
+        expect.objectContaining({
+          kind: "identity",
+          snapshot: { argvIndex: 0, path: fs.realpathSync("/usr/bin/env") },
+        }),
+        expect.objectContaining({
+          kind: "identity",
+          snapshot: { argvIndex: 0, path: fs.realpathSync("/bin/ls") },
+        }),
+      ]);
+      await expect(
+        revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
+      ).resolves.toEqual({ ok: true });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "binds protected executable identity without hashing or requiring one-shot approval",
+    async () => {
+      const policy = vi
+        .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
+        .mockReturnValue(false);
+      try {
+        const prepared = expectOk(
+          await prepareSystemRunMutableFileBinding({
+            command: { kind: "shell", text: "ls *.ts" },
+            env: { PATH: "/bin:/usr/bin" },
+          }),
+        );
+        expect(prepared.binding.operands).toEqual([
+          expect.objectContaining({
+            kind: "identity",
+            executable: true,
+            argv: ["ls", "*.ts"],
+            snapshot: { argvIndex: 0, path: fs.realpathSync("/bin/ls") },
+            pathSearch: expect.objectContaining({ path: "/bin:/usr/bin" }),
+          }),
+        ]);
+        const reads = vi.spyOn(fs, "readFileSync");
+        try {
+          await expect(
+            revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
+          ).resolves.toEqual({ ok: true });
+          expect(reads).not.toHaveBeenCalled();
+        } finally {
+          reads.mockRestore();
+        }
+        const approval = expectOk(
+          await prepareSystemRunMutableFileApproval({ command: "/bin/ls *.ts" }),
+        );
+        expect(approval.requiresOneShot).toBe(false);
+      } finally {
+        policy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "revalidates executable availability without cached PATH resolution",
+    async () => {
+      const policy = vi
+        .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
+        .mockReturnValue(false);
+      try {
+        const prepared = expectOk(
+          await prepareSystemRunMutableFileBinding({
+            command: { kind: "shell", text: "ls *.ts" },
+            env: { PATH: "/bin" },
+          }),
+        );
+        const access = fs.accessSync;
+        const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+          if (target === "/bin/ls") {
+            throw new Error("synthetic executable unavailable");
+          }
+          return access(target, mode);
+        });
+        try {
+          await expect(
+            revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
+          ).resolves.toEqual({
+            ok: false,
+            message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+          });
+        } finally {
+          accessSpy.mockRestore();
+        }
+      } finally {
+        policy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "denies protected executable resolution drift after preparation",
+    async () => {
+      const policy = vi
+        .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
+        .mockReturnValue(false);
+      const resolution = commandResolution.resolveCommandResolutionFromArgv(["ls"], undefined, {
+        PATH: "/bin:/usr/bin",
+      });
+      if (!resolution) {
+        throw new Error("expected executable resolution");
+      }
+      const resolve = vi
+        .spyOn(commandResolution, "resolveCommandResolutionFromArgv")
+        .mockReturnValue(resolution);
+      try {
+        const prepared = expectOk(
+          await prepareSystemRunMutableFileBinding({
+            command: {
+              kind: "segments",
+              segments: [{ argv: ["ls", "*.ts"], raw: "ls *.ts", resolution }],
+            },
+            env: { PATH: "/bin:/usr/bin" },
+          }),
+        );
+        resolve.mockReturnValue({
+          ...resolution,
+          execution: { ...resolution.execution, resolvedRealPath: "/synthetic/changed/ls" },
+        });
+        await expect(
+          revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
+        ).resolves.toEqual({
+          ok: false,
+          message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+        });
+        expect(resolve).toHaveBeenLastCalledWith(
+          ["ls", "*.ts"],
+          undefined,
+          expect.objectContaining({ PATH: "/bin:/usr/bin" }),
+          process.platform,
+          { useCache: false },
+        );
+      } finally {
+        resolve.mockRestore();
+        policy.mockRestore();
+      }
+    },
+  );
+
   it("binds every script in a compound command and detects drift", async () => {
     await withTempDir("openclaw-system-run-binding-", async (rawCwd) => {
       const cwd = fs.realpathSync(rawCwd);
@@ -377,7 +533,7 @@ describe("mutable file operand binding", () => {
           cwd,
         }),
       );
-      expect(prepared.binding.operands).toHaveLength(1);
+      expect(prepared.binding.operands.filter((operand) => !operand.executable)).toHaveLength(1);
 
       fs.writeFileSync(script, "#!/bin/sh\necho changed\n", { mode: 0o755 });
       await expect(
@@ -402,7 +558,9 @@ describe("mutable file operand binding", () => {
           cwd,
         }),
       );
-      expect(prepared.binding.operands).toHaveLength(1);
+      expect(prepared.binding.operands.map((operand) => operand.snapshot.path)).toContain(
+        fs.realpathSync(script),
+      );
       if (mutate) {
         fs.writeFileSync(script, "#!/bin/sh\necho changed\n", { mode: 0o755 });
       }
@@ -428,7 +586,7 @@ describe("mutable file operand binding", () => {
           cwd,
         }),
       );
-      expect(prepared.binding.operands).toHaveLength(1);
+      expect(prepared.binding.operands.filter((operand) => operand.executable)).toHaveLength(1);
 
       fs.appendFileSync(executable, Buffer.from([0]));
       await expect(

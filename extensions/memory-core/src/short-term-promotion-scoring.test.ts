@@ -3,9 +3,9 @@ import {
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
+  resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it } from "vitest";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import type { PromotionWeights } from "./short-term-promotion-types.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -49,6 +49,7 @@ function createRecallEntry(params: {
     firstRecalledAt: "2026-04-01T10:00:00.000Z",
     lastRecalledAt: NOW_ISO,
     queryHashes: params.queryHashes,
+    userQueryHashes: params.queryHashes,
     recallDays: params.recallDays,
     conceptTags: params.conceptTags,
   };
@@ -170,7 +171,7 @@ describe("short-term promotion score calibration", () => {
   });
 
   it("keeps sweep and direct promotion fallback defaults aligned", () => {
-    const sweep = resolveShortTermPromotionDreamingConfig({ pluginConfig: {} });
+    const sweep = resolveMemoryDeepDreamingConfig({ pluginConfig: {} });
     expect({
       minScore: sweep.minScore,
       minRecallCount: sweep.minRecallCount,
@@ -232,6 +233,67 @@ describe("short-term promotion score calibration", () => {
         minRecallCount: 0,
         minUniqueQueries: 0,
         weights: relevanceOnly,
+        nowMs: NOW_MS,
+      }),
+    ).resolves.toHaveLength(0);
+  });
+
+  it("preserves unambiguous recall-only legacy query diversity", async () => {
+    const workspaceDir = await createTempWorkspace("promotion-recall-only-upgrade-");
+    const legacy = createRecallEntry({
+      key: "legacy-recall-only",
+      signalCount: 3,
+      avgScore: 1,
+      queryHashes: THREE_QUERY_HASHES,
+      recallDays: RECALL_DAYS,
+      conceptTags: ["backup", "glacier"],
+    });
+    legacy.recallCount = 3;
+    legacy.dailyCount = 0;
+    delete legacy.userQueryHashes;
+    await shortTermTestState.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: NOW_ISO,
+      entries: { legacy },
+    });
+
+    const ranked = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 3,
+      nowMs: NOW_MS,
+    });
+
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0]?.uniqueQueries).toBe(3);
+  });
+
+  it("fails closed for ambiguous mixed legacy query hashes", async () => {
+    const workspaceDir = await createTempWorkspace("promotion-mixed-upgrade-");
+    const legacy = createRecallEntry({
+      key: "legacy-mixed",
+      signalCount: 3,
+      avgScore: 1,
+      queryHashes: THREE_QUERY_HASHES,
+      recallDays: RECALL_DAYS,
+      conceptTags: ["backup", "glacier"],
+    });
+    legacy.recallCount = 1;
+    legacy.dailyCount = 2;
+    delete legacy.userQueryHashes;
+    await shortTermTestState.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: NOW_ISO,
+      entries: { legacy },
+    });
+
+    await expect(
+      rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 1,
         nowMs: NOW_MS,
       }),
     ).resolves.toHaveLength(0);

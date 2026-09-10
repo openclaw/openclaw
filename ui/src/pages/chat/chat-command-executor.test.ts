@@ -1,5 +1,7 @@
-// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -8,7 +10,8 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createResolvedModelPatch,
   createModelCatalog,
@@ -18,8 +21,8 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-executor.ts";
 
-function createTestSessionCapability(client: GatewayBrowserClient): SessionCapability {
-  const sessions = createSessionCapability({
+function createCommandSessionCapability(client: GatewayBrowserClient): SessionCapability {
+  const sessions = createTestSessionCapability({
     snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
@@ -56,7 +59,7 @@ function executeSlashCommand(
     ...rest
   } = context;
   return executeSlashCommandImpl(client, sessionKey, commandName, args, {
-    sessions: createTestSessionCapability(client),
+    sessions: createCommandSessionCapability(client),
     ...rest,
     sessionAccessSnapshot,
   });
@@ -140,7 +143,7 @@ describe("executeSlashCommand directives", () => {
     });
     const client = createTestGatewayClient(request);
     const snapshot = { client, phase: "connected" as const, hello: sessionMutationGatewayHello() };
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot,
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
@@ -200,7 +203,7 @@ describe("executeSlashCommand directives", () => {
       );
     const ownsModelOverride = vi.fn(() => true);
     const sessions = {
-      ...createTestSessionCapability(client),
+      ...createCommandSessionCapability(client),
       patch,
     } as SessionCapability;
 
@@ -228,10 +231,7 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("does not patch through a replacement connection after loading session state", async () => {
-    let resolveList: ((value: SessionsListResult) => void) | undefined;
-    const listResult = new Promise<SessionsListResult>((resolve) => {
-      resolveList = resolve;
-    });
+    const { promise: listResult, resolve: resolveList } = createDeferred<SessionsListResult>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return await listResult;
@@ -262,10 +262,7 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("rechecks live scopes before patching after loading session state", async () => {
-    let resolveList: ((value: SessionsListResult) => void) | undefined;
-    const listResult = new Promise<SessionsListResult>((resolve) => {
-      resolveList = resolve;
-    });
+    const { promise: listResult, resolve: resolveList } = createDeferred<SessionsListResult>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return await listResult;
@@ -337,6 +334,7 @@ describe("executeSlashCommand directives", () => {
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      sessionKey: "main",
       agentId: "main",
       view: "configured",
     });
@@ -421,6 +419,7 @@ describe("executeSlashCommand directives", () => {
     );
     expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
     expect(request).toHaveBeenCalledWith("models.list", {
+      sessionKey: "agent:work:main",
       agentId: "work",
       view: "configured",
     });
@@ -748,7 +747,7 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
 
-  it("reports the current thinking level for bare /think", async () => {
+  it("reports unknown thinking metadata instead of guessing from the model", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
@@ -782,9 +781,9 @@ describe("executeSlashCommand directives", () => {
 
     expect(result.content).toBe(
       [
-        t("chat.commandResults.thinking.current", { level: "low" }),
+        t("chat.commandResults.thinking.current", { level: "Unknown" }),
         t("chat.commandResults.options", {
-          options: "default, off, minimal, low, medium, high",
+          options: "Unknown",
         }),
       ].join("\n"),
     );
@@ -853,9 +852,9 @@ describe("executeSlashCommand directives", () => {
 
     expect(result.content).toBe(
       [
-        t("chat.commandResults.thinking.current", { level: "off" }),
+        t("chat.commandResults.thinking.current", { level: "Unknown" }),
         t("chat.commandResults.options", {
-          options: "default, off, minimal, low, medium, high",
+          options: "Unknown",
         }),
       ].join("\n"),
     );
@@ -1133,6 +1132,7 @@ describe("executeSlashCommand directives", () => {
             row("agent:main:main", {
               modelProvider: "deepseek",
               model: "deepseek-v4-pro",
+              thinkingDefault: "low",
               thinkingLevels: [
                 { id: "off", label: "off" },
                 { id: "minimal", label: "minimal" },
@@ -1181,10 +1181,7 @@ describe("executeSlashCommand directives", () => {
     expect(setMax.content).toBe(t("chat.commandResults.thinking.set", { level: "**max**" }));
   });
 
-  it("does not use extended defaults for session with different model when thinkingLevels is empty (#76482)", async () => {
-    // Regression: when session model differs from defaults and session has no thinkingLevels,
-    // we should NOT blindly use defaults (which could have extra levels like xhigh/max
-    // from a different model). The client-side fallback uses the base thinking levels.
+  it("does not borrow another model's defaults when thinking metadata is absent (#76482)", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
@@ -1229,9 +1226,9 @@ describe("executeSlashCommand directives", () => {
 
     expect(status.content).toBe(
       [
-        t("chat.commandResults.thinking.current", { level: "low" }),
+        t("chat.commandResults.thinking.current", { level: "Unknown" }),
         t("chat.commandResults.options", {
-          options: "default, off, minimal, low, medium, high",
+          options: "Unknown",
         }),
       ].join("\n"),
     );
@@ -1271,13 +1268,54 @@ describe("executeSlashCommand directives", () => {
 
     expect(status.content).toBe(
       [
-        t("chat.commandResults.thinking.current", { level: "low" }),
+        t("chat.commandResults.thinking.current", { level: "Unknown" }),
         t("chat.commandResults.options", {
-          options: "default, off, minimal, low, medium, high",
+          options: "Unknown",
         }),
       ].join("\n"),
     );
   });
+
+  it.each([true, false])(
+    "keeps known empty thinking support distinct from unknown support (empty: %s)",
+    async (empty) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.list") {
+          return createSessionsResult([
+            row("agent:main:main", {
+              modelProvider: "thinking-fixture",
+              model: "selected",
+              ...(empty ? { thinkingLevels: [] } : {}),
+            }),
+          ]);
+        }
+        if (method === "sessions.patch") {
+          return { ok: true };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+
+      const result = await executeSlashCommand(
+        createTestGatewayClient(request),
+        "agent:main:main",
+        "think",
+        "high",
+      );
+
+      if (empty) {
+        expect(result.content).toBe(
+          t("chat.commandResults.thinking.unsupported", { level: "high", options: "none" }),
+        );
+        expectNoRequestCall(request, "sessions.patch");
+      } else {
+        expect(result.content).toBe(t("chat.commandResults.thinking.set", { level: "**high**" }));
+        expect(request).toHaveBeenCalledWith("sessions.patch", {
+          key: "agent:main:main",
+          thinkingLevel: "high",
+        });
+      }
+    },
+  );
 
   it("reports the current verbose level for bare /verbose", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
@@ -1755,3 +1793,22 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("reports the last-run prompt budget through /usage", async () => {
+  const request = vi.fn(async () => ({
+    sessions: [
+      row("agent:main:main", {
+        totalTokens: 160_000,
+        contextTokens: 200_000,
+        contextBudgetStatus: contextBudgetStatusFixture(),
+      }),
+    ],
+  }));
+  const result = await executeSlashCommand(
+    createTestGatewayClient(request),
+    "agent:main:main",
+    "usage",
+    "",
+  );
+  expect(result.content).toContain("Prompt budget (last run): **89%** of 180k");
+});

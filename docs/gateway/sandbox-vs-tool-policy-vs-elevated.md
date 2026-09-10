@@ -158,3 +158,4 @@ In `"non-main"` mode, group/channel keys are _not_ main. Use the main session ke
 - [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [Elevated Mode](/tools/elevated)
+- [OpenShell](/gateway/openshell) — a managed sandbox backend that runs the sandbox layer over SSH

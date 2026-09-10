@@ -1,11 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
+import { describe, expect, it } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  createPreparedModelCatalogWorkerInput,
+  fingerprintPreparedModelWorkerRequest,
+} from "./prepared-model-catalog-worker.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-
-vi.mock("../plugins/manifest-registry-installed.js", () => ({
-  resolveInstalledManifestRegistryIndexFingerprint: () => "test-plugin-index",
-}));
 
 describe("prepared model catalog worker input", () => {
   it("preserves captured auth identity and distinguishes source from built artifacts", () => {
@@ -60,11 +59,10 @@ describe("prepared model catalog worker input", () => {
         templateAuthStorage: {} as never,
       } satisfies PreparedModelRuntimeAgentFacts,
       pluginMetadataSnapshot: {
+        ...createPluginMetadataSnapshotFixture(),
         policyHash: "test-policy",
         configFingerprint: "test-config",
-        index: {} as never,
-        plugins: [],
-      } as unknown as PluginMetadataSnapshot,
+      },
     };
     const workerInput = createPreparedModelCatalogWorkerInput(params);
 
@@ -93,5 +91,24 @@ describe("prepared model catalog worker input", () => {
     expect(cloned.preferBuiltPluginArtifacts).toBe(false);
     expect(builtInput.preferBuiltPluginArtifacts).toBe(true);
     expect(builtInput.generationFingerprint).not.toBe(cloned.generationFingerprint);
+    const request = {
+      kind: "catalog" as const,
+      syntheticAuth: [
+        {
+          providerRef: "native",
+          result: { apiKey: "native-login-not-real", source: "fixture", mode: "oauth" as const },
+        },
+      ],
+    };
+    const fingerprint = fingerprintPreparedModelWorkerRequest(cloned, request);
+    expect(fingerprintPreparedModelWorkerRequest(cloned, structuredClone(request))).toBe(
+      fingerprint,
+    );
+    expect(
+      fingerprintPreparedModelWorkerRequest(cloned, {
+        ...request,
+        syntheticAuth: [{ ...request.syntheticAuth[0]!, result: null }],
+      }),
+    ).not.toBe(fingerprint);
   });
 });

@@ -41,7 +41,7 @@ PR base or `origin/main`. Clean main has no implicit review target.
 
 Registered nested linked checkouts from the same repository are outside the
 current review scope. Their presence or edits do not make the parent dirty;
-ordinary adjacent files remain included and scanned. Worktree boundaries are
+ordinary adjacent files remain included in the review. Worktree boundaries are
 revalidated without changing Git ignore rules.
 
 For a complete PR candidate **including dirty rewrites**, use local mode with
@@ -89,6 +89,43 @@ Use `--engine`, `--model`, and `--thinking` to override the defaults.
 `--codex-speed fast` selects priority service when supported. Only Claude accepts
 `--fallback-model`. Per-engine environment overrides use `AUTOREVIEW_<ENGINE>_*`.
 
+By default, Codex preserves only authentication settings from user configuration;
+provider, profile, context and catalogue settings remain ignored. To project a
+named route, select it explicitly through the existing config override:
+
+```bash
+"$AUTOREVIEW" --mode local --codex-config 'model_provider="review_api"'
+```
+
+The selector must match `model_provider` in the operator's external
+`CODEX_HOME/config.toml`. It accepts one bare or simply quoted identifier;
+provider definitions and other capabilities cannot be supplied through overrides.
+Projection requires Python 3.11 or `tomli`; default auth-only operation retains
+its existing fallback parser.
+
+The selected route must use `https://api.openai.com/v1` and command authentication
+with an absolute external executable. Fixed arguments belong in that executable's
+wrapper; omitted or empty `auth.args` are accepted. Omitted `wire_api` and
+`requires_openai_auth` retain Codex's `responses` and `false` defaults. Optional
+auth timing and context settings keep native defaults and semantics.
+
+On POSIX, a private launcher restores the validated caller `HOME` only for the
+selected authentication executable; the engine and reviewer tools retain their
+isolated environment and filesystem access. Caller `HOME` must be an available
+absolute directory with no repository-owned path or symlink provenance. Windows
+keeps the native executable route. Command-auth runs suppress raw provider
+diagnostics and report fixed failure categories, while retaining compact progress,
+usage and assistant report streaming. An empty final report fails without exposing
+captured stdout.
+
+Catalogue and authentication working-directory paths resolve relative to the
+operator config directory and must remain outside the reviewed repository.
+A supplied catalogue is copied byte-for-byte into the private client runtime;
+retries use the same route and catalogue snapshot. Dry runs check the same
+ownership and route shape without executing authentication. Codex owns catalogue
+validation, model access and context clamping. Other custom provider forms and
+split context overrides are unsupported when projection is selected.
+
 | Optional engine | Prerequisites                                                                                         |
 | --------------- | ----------------------------------------------------------------------------------------------------- |
 | Claude          | CLI 2.1.169+; safe mode with web-only tools                                                           |
@@ -100,11 +137,26 @@ Use `--engine`, `--model`, and `--thinking` to override the defaults.
 
 The helper owns reviewer isolation, sanitized authentication, process cleanup,
 Git scope, and structured result validation. Keep those controls enabled.
-TruffleHog must scan the complete frozen input for partitioned reviews and each
-exact outgoing pack before it is sent; missing or failed scanning stops the run.
-Source-controlled ignore tags cannot suppress this gate. Scanner refusals never
-echo input headings or finding payloads; remove credentials locally and rerun.
-Never reproduce credentials in findings or work around an isolation failure.
+Every reviewer pass must inspect its bundle for real credentials and report
+suspected credentials as P0 findings without reproducing their values. Harmless
+placeholders and test fixtures are not credentials. Autoreview does not require
+or invoke an external secret scanner. Never work around an isolation failure.
+
+### Intentional scanner-free policy
+
+TruffleHog is intentionally excluded because enterprise security teams may flag
+or restrict it. Keep approved scanning outside autoreview; reviewer findings
+happen after transmission. Reintroducing a scanner requires an explicit maintainer
+decision. See [#240](https://github.com/openclaw/agent-skills/pull/240) for rationale and history.
+
+### Reviewer isolation
+
+On macOS, reviewer tools cannot access the shared `/tmp` and `/var/tmp` trees
+(including their `/private` aliases). Codex preflight rejects those temporary
+roots before workspace, runtime, or authentication setup; unset a shared
+`TMPDIR`/`TMP`/`TEMP` override to use macOS's private
+temporary directory. Other engines and platforms retain their normal isolation.
+Tools installed in shared scratch or requiring writes there will be denied too.
 
 Review files have no size/count cap and are never truncated. Large diffs and
 datasets are partitioned automatically. Intact instructions and required mixed
@@ -118,18 +170,61 @@ runs. `--dry-run` checks preparation and startup without contacting a reviewer.
 
 ## Results
 
-`--output` and `--json-output` paths must be outside the reviewed repository.
+`--output`, `--json-output`, and `--status-output` paths must be outside the
+reviewed repository. When using `--status-output`, all output paths must differ;
+case-only and Unicode normalization aliases are conservatively refused on every
+platform, even when the filesystem would permit distinct files.
 
 | Exit | Meaning                                                                         |
 | ---- | ------------------------------------------------------------------------------- |
 | `0`  | `scoped-clean`, or a correct verdict with only filtered lower-priority findings |
-| `1`  | Accepted findings or an incorrect provider verdict                              |
+| `1`  | Accepted findings, an incorrect provider verdict, or a failed review attempt    |
 | `2`  | Incomplete scope/attribution, or a missing required finding                     |
 
 Treat `scoped-clean` as clean only for the selected target and requested priority.
 `filtered` is not clean; resolve `incomplete` before claiming completion.
 Verify findings against the actual code and task before changing anything.
 No extra review rounds for a nicer verdict; follow the owning workflow after fixes.
+
+Use `--status-output /outside/repo/status.json` for a separate, versioned
+machine-readable outcome. It preserves the existing exit codes and
+`--json-output` validated-report format. Completed reviews report `scoped-clean`,
+`findings`, `filtered`, `incorrect`, or `incomplete`; a launched reviewer that
+fails or returns an invalid report reports `reviewer_unavailable` with exit 1.
+A failed later pass never publishes a partial review report.
+
+```json
+{
+  "schema_version": 1,
+  "status": "reviewer_unavailable",
+  "exit_code": 1,
+  "engine": "codex",
+  "report_produced": false,
+  "reason": "engine_failed",
+  "reviewer_exit_code": 124,
+  "timed_out": true
+}
+```
+
+`reason` is `engine_failed`, `invalid_report`, or `runtime_validation_failed`
+for unavailable reviewers and null for completed reviews. The last reason means
+Amp's post-launch isolation attestation or private-result validation refused
+the result; it is not a transient-provider classification. These guards still
+run before report acceptance and retain their existing failure diagnostics.
+`reviewer_exit_code` is the last reviewer process's exit code when retained,
+including zero for rejected output, otherwise null. `timed_out` identifies the
+helper's deadline, not a reviewer that happens to exit 124. Completed envelopes
+have `report_produced: true`; this means a validated final report exists, not
+that its verdict is clean. `--expect-findings` changes exit codes as before;
+inspect `status` independently of `exit_code`.
+
+The sidecar contains no provider logs, prompts, findings, or model identifiers.
+Existing bounded, display-safe diagnostics remain on stderr; command-auth
+diagnostic suppression remains in force. Use a fresh status path per invocation:
+after argument and output-path validation, a previous sidecar is removed before
+target selection. Dry runs, preflight refusals, pre-launch isolation failures, source mutations,
+interruptions, and output failures produce no new status. Absence means no
+outcome was published, never a clean review. No retry policy is added.
 
 Report material findings and status plainly. Do not add transcripts, proof
 ledgers, commits, pushes, or a new workstream unless requested.

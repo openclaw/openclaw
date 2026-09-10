@@ -22,6 +22,7 @@ import {
 } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import {
   addClientToolsToToolCatalog,
   compactToolSearchCatalogEntry,
@@ -139,6 +140,26 @@ describe("Tool Search flattened call arguments", () => {
       arguments: { id: "inspect_resource", args: null, input: null, command: "flattened" },
       expected: { command: "flattened" },
     },
+    ...["args", "input"].map((wrapper) => ({
+      label: `empty ${wrapper} wrapper with flattened top-level params`,
+      arguments: { id: "inspect_resource", [wrapper]: {}, command: "list", timeout_ms: 5_000 },
+      expected: { command: "list", timeout_ms: 5_000 },
+    })),
+    {
+      label: "empty args wrapper with dotted params",
+      arguments: {
+        id: "inspect_resource",
+        args: {},
+        "args.path": "projects/example.md",
+        "args.limit": 20,
+      },
+      expected: { path: "projects/example.md", limit: 20 },
+    },
+    {
+      label: "empty args wrapper without other params",
+      arguments: { id: "inspect_resource", args: {} },
+      expected: {},
+    },
     {
       label: "bare selector",
       arguments: { id: "inspect_resource" },
@@ -177,6 +198,15 @@ describe("Tool Search flattened call arguments", () => {
       parameters: Type.Object({ id: Type.String() }, { additionalProperties: false }),
       expected: { id: "record-7" },
     },
+    ...["args", "input"].map((wrapper) => ({
+      label: `empty ${wrapper} wrapper with flattened target arguments`,
+      arguments: { id: "inspect_resource", [wrapper]: {}, command: "list", timeout_ms: 5_000 },
+      parameters: Type.Object(
+        { command: Type.String(), timeout_ms: Type.Number() },
+        { additionalProperties: false },
+      ),
+      expected: { command: "list", timeout_ms: 5_000 },
+    })),
     {
       label: "redundant selectors for a strict no-argument tool",
       arguments: { id: "inspect_resource", toolId: "inspect_resource", name: "inspect_resource" },
@@ -345,14 +375,7 @@ describe("Tool Search dispatcher argument preparation", () => {
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
         timestamp: 1,
       };
@@ -879,24 +902,36 @@ describe("Tool Search catalog indexing", () => {
     ]);
   });
 
-  it("rebuilds the search index when a parameter description changes in place", async () => {
-    const parameters = {
-      type: "object",
-      description: "Search an orchard",
-      properties: {},
-    };
-    const { runtime } = createRuntime([fakeTool("indexed_resource", parameters as never)]);
+  it.each(["root", "property", "items"])(
+    "rebuilds the search index when a %s description changes in place",
+    async (location) => {
+      const described = {
+        type: "object",
+        description: "Search an orchard",
+        properties: {},
+      };
+      const parameters =
+        location === "root"
+          ? described
+          : location === "property"
+            ? { type: "object", properties: { resource: described } }
+            : {
+                type: "object",
+                properties: { resources: { type: "array", items: described } },
+              };
+      const { runtime } = createRuntime([fakeTool("indexed_resource", parameters as never)]);
 
-    await expect(runtime.search("orchard")).resolves.toEqual([
-      expect.objectContaining({ name: "indexed_resource" }),
-    ]);
-    parameters.description = "Search a meteor";
+      await expect(runtime.search("orchard")).resolves.toEqual([
+        expect.objectContaining({ name: "indexed_resource" }),
+      ]);
+      described.description = "Search a meteor";
 
-    await expect(runtime.search("meteor")).resolves.toEqual([
-      expect.objectContaining({ name: "indexed_resource" }),
-    ]);
-    await expect(runtime.search("orchard")).resolves.toEqual([]);
-  });
+      await expect(runtime.search("meteor")).resolves.toEqual([
+        expect.objectContaining({ name: "indexed_resource" }),
+      ]);
+      await expect(runtime.search("orchard")).resolves.toEqual([]);
+    },
+  );
 });
 
 describe("Tool Search network error boundaries", () => {
@@ -915,11 +950,9 @@ describe("Tool Search network error boundaries", () => {
           ? await runtime.call("raw_network", {}, { parentToolCallId })
           : await runtime.callValue("raw_network", {}, { parentToolCallId });
 
-      const result = formatToolSearchControlResult(
-        payload,
-        runtime,
-        surface === "structured tool call" ? parentToolCallId : undefined,
-      );
+      const result = formatToolSearchControlResult(payload, runtime, {
+        parentToolCallId: surface === "structured tool call" ? parentToolCallId : undefined,
+      });
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
       expect(text.length).toBeLessThan(21_000);
@@ -932,7 +965,9 @@ describe("Tool Search network error boundaries", () => {
       expect(result.details).toBe(payload);
       expect(JSON.stringify(result.details)).toContain(huge);
 
-      const isolated = formatToolSearchControlResult({ value: "local" }, runtime, "other-parent");
+      const isolated = formatToolSearchControlResult({ value: "local" }, runtime, {
+        parentToolCallId: "other-parent",
+      });
       expect(isolated.content[0]).toEqual({
         type: "text",
         text: '{\n  "value": "local"\n}',

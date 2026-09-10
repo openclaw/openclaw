@@ -37,9 +37,9 @@ bundled, official external, and source-only plugins, see
     openclaw plugins search "calendar"
     ```
 
-    ClawHub is the primary discovery surface for community plugins. During the
-    launch cutover, ordinary bare package specs still install from npm unless
-    they match an official plugin id. Raw `@openclaw/*` specs that match a
+    ClawHub is the primary discovery surface for community plugins. Ordinary
+    bare package specs install from npm unless they match a bundled or official
+    plugin id. Raw `@openclaw/*` specs that match a
     bundled plugin resolve to that bundled copy. Use an explicit source prefix
     when you need one source specifically.
 
@@ -95,8 +95,10 @@ bundled, official external, and source-only plugins, see
     openclaw gateway restart
     ```
 
-    Enable/disable update config and the cold registry. Inspect registration
-    next, then verify the running Gateway with an actual hook event or tool call.
+    With the default hybrid reload mode, enable/disable and ordinary plugin
+    config changes hot-reload the existing runtime for new agent turns unless
+    the plugin declares a restart-triggering prefix. Inspect registration next,
+    then verify the running Gateway with an actual hook event or tool call.
 
   </Step>
 
@@ -129,7 +131,7 @@ bundled, official external, and source-only plugins, see
 Bare package specs have special compatibility behavior: a bare name that
 matches a bundled plugin id uses that bundled source; a bare name that matches
 an official external plugin id uses the official package catalog; any other
-bare spec installs through npm during the launch cutover. Raw `@openclaw/*`
+bare spec installs through npm. Raw `@openclaw/*`
 specs that match bundled plugins also resolve to the bundled copy before npm
 fallback. Use `npm:@openclaw/<plugin>@<version>` to deliberately install the
 external npm package instead of the bundled copy. Use `clawhub:`, `npm:`,
@@ -185,7 +187,7 @@ The common plugin config shape is:
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
+    load: { paths: ["~/path/to/oss/voice-call-plugin"] },
     slots: { memory: "memory-core" },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
@@ -284,10 +286,12 @@ bypass global disable, deny, or per-plugin enablement policy.
 An explicit hook policy is also startup intent. For example,
 `plugins.entries.<id>.hooks.allowConversationAccess: true` both authorizes
 non-bundled conversation hooks and selects that configured plugin for Gateway
-startup; normal plugin policy still applies. After changing manifest or hook
-policy, inspect registration with `openclaw plugins inspect <id> --runtime --json`,
-restart the Gateway, and trigger an event to verify the running process. See
-[Plugin hooks](/plugins/hooks#quick-start) for a complete example.
+startup; normal plugin policy still applies. Restart the Gateway after changing
+the plugin manifest. With the default hybrid reload mode, hook policy changes
+hot-reload the existing plugin runtime. Inspect registration with
+`openclaw plugins inspect <id> --runtime --json`, then trigger an event to verify
+the running process. See [Plugin hooks](/plugins/hooks#quick-start) for a complete
+example.
 
 ## Verify the active Gateway
 
@@ -310,15 +314,15 @@ serves your channels, not only a wrapper or supervisor.
 
 ## Troubleshooting
 
-| Symptom                                                        | Check                                                                                                                                      | Fix                                                                                                     |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Plugin appears in `plugins list` but runtime hooks do not run  | Use `openclaw plugins inspect <id> --runtime --json` and confirm the active Gateway with `gateway status --deep --require-rpc`             | Restart the live Gateway after install, update, config, or source changes                               |
-| Duplicate channel or tool ownership diagnostics appear         | Run `openclaw plugins list --enabled --verbose`, inspect each suspected plugin with `--runtime --json`, and compare channel/tool ownership | Disable one owner, remove stale installs, or use manifest `preferOver` for intentional replacement      |
-| Config says a plugin is missing                                | Check [Plugin inventory](/plugins/plugin-inventory) for whether it is bundled, official external, or source-only                           | Install the external package, enable the bundled plugin, or remove stale config                         |
-| Config is invalid during install                               | Read the validation message and run `openclaw doctor --fix` if it points to stale plugin state                                             | Doctor can quarantine invalid plugin config by disabling the entry and removing the invalid payload     |
-| Plugin path is blocked for suspicious ownership or permissions | Inspect the diagnostic before the config error                                                                                             | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                    |
-| `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                      |
-| Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself |
+| Symptom                                                        | Check                                                                                                                                      | Fix                                                                                                                   |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Plugin appears in `plugins list` but runtime hooks do not run  | Use `openclaw plugins inspect <id> --runtime --json` and confirm the active Gateway with `gateway status --deep --require-rpc`             | Restart after install, update, or source changes; for config changes, confirm reload mode and plugin restart prefixes |
+| Duplicate channel or tool ownership diagnostics appear         | Run `openclaw plugins list --enabled --verbose`, inspect each suspected plugin with `--runtime --json`, and compare channel/tool ownership | Disable one owner, remove stale installs, or use manifest `preferOver` for intentional replacement                    |
+| Config says a plugin is missing                                | Check [Plugin inventory](/plugins/plugin-inventory) for whether it is bundled, official external, or source-only                           | Install the external package, enable the bundled plugin, or remove stale config                                       |
+| Config is invalid during install                               | Read the validation message and run `openclaw doctor --fix` if it points to stale plugin state                                             | Doctor can quarantine invalid plugin config by disabling the entry and removing the invalid payload                   |
+| Plugin path is blocked for suspicious ownership or permissions | Inspect the diagnostic before the config error                                                                                             | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                                  |
+| `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                                    |
+| Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself               |
 
 When an enabled managed plugin fails payload verification during Gateway
 startup, OpenClaw quarantines that exact installed plugin root for the boot and
@@ -344,6 +348,37 @@ If an installed package reports that it `requires compiled runtime output for
 TypeScript entry ...`, the package was published without the JavaScript files
 OpenClaw needs at runtime. Update or reinstall after the publisher ships
 compiled JavaScript, or disable/uninstall the plugin until then.
+
+### Trusted plugin state refused
+
+If a plugin fails with `openKeyedStore is only available for trusted plugins`,
+compare the error's `registryPath` with `plugin.trust.registryPath` from:
+
+```bash
+openclaw plugins inspect <plugin-id> --runtime --json
+openclaw doctor
+```
+
+Inspection and the Gateway report the trust decision recorded during plugin
+loading, including `reason`, `origin`, `installSource`, and `installSpec`.
+Matching executable versions and config files does not establish matching
+registry databases. Inspection loads into the CLI process, so compare both paths.
+Doctor also checks the installed service environment when a local Gateway is
+unreachable; if that environment cannot be verified, it says so.
+
+| Reason                  | Remedy                                                                                                                                                                                                               |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `record-missing`        | Align CLI and Gateway state paths if they differ; otherwise reinstall through `openclaw plugins install` so the install is recorded.                                                                                 |
+| `provenance-missing`    | Run `openclaw doctor --fix` with the Gateway's state/config paths. Doctor repairs catalog-proven legacy ClawHub records; unverifiable records require reinstalling from the official npm package or ClawHub listing. |
+| `origin-path`           | Replace the local path/archive install with the official npm package or ClawHub listing.                                                                                                                             |
+| `install-path-mismatch` | Reinstall the intended package and remove load paths that select another copy.                                                                                                                                       |
+| `owner-ambiguous`       | Refresh the registry and resolve conflicting package ownership before reinstalling.                                                                                                                                  |
+| `provenance-invalid`    | Reinstall from the official source; conflicting or partial provenance is not automatically trusted.                                                                                                                  |
+
+`bundled` and `trusted-official` identify accepted sources. Legacy npm records
+with a consistent official package spec remain valid without extra resolution
+fields. Doctor repairs provenance in the existing install ledger; the runtime
+does not fall back to trusting package-authored metadata.
 
 ### Blocked plugin path ownership
 
@@ -427,3 +462,6 @@ reload behavior, and legacy cleanup, see
 - [Building plugins](/plugins/building-plugins) - native plugin authoring guide
 - [Plugin SDK overview](/plugins/sdk-overview) - runtime registration, hooks, and API fields
 - [Plugin manifest](/plugins/manifest) - manifest and package metadata
+- [Context engines](/concepts/context-engine) - pluggable context assembly plugins
+- [Diffs](/tools/diffs) - read-only diff viewer and file renderer (optional plugin tool)
+- [ACP agents — setup](/tools/acp-agents-setup) - configuring a plugin-provided ACP agent

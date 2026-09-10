@@ -74,6 +74,7 @@ const modes: Record<
     env: {
       NPM_DIST_TAG: "default",
       PREFLIGHT_ONLY: "false",
+      PREPARED_ARTIFACT: "",
       PUBLISH_SCOPE: "selected",
       RELEASE_PLUGINS: "",
       RELEASE_PUBLISH_RUN_ATTEMPT: "",
@@ -164,7 +165,9 @@ posixIt.each([
     expect(gitCommands(report)).toEqual(commands);
     expect(report.githubOutput).toBe(output);
     expect(report.readyAttempts).toHaveLength(commands.length);
-    if (output) expect(report.boundaries.some(({ name }) => name === "output")).toBe(true);
+    if (output) {
+      expect(report.boundaries.some(({ name }) => name === "output")).toBe(true);
+    }
   },
   55_000,
 );
@@ -523,7 +526,9 @@ const terminalCases: Array<{
 
 posixIt.each(
   terminalCases.flatMap((entry) =>
-    (["cleanup-failure", "cancel"] as const).map((failure) => ({ ...entry, failure })),
+    (["cleanup-failure", "cancel"] as const).map((failure) =>
+      Object.assign({}, entry, { failure }),
+    ),
   ),
 )(
   "$mode $operation $failure fences every later Git/output/consumer boundary",

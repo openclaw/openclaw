@@ -19,22 +19,27 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerSessionSearchTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, json = json, requestGateway = gateway::request)
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, commandOutbox = this.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
 
   private fun sessionRowJson(
     key: String,
     updatedAt: Long,
     displayName: String? = null,
+    autoLabel: String? = null,
     archived: Boolean = false,
   ) = buildJsonObject {
     put("key", JsonPrimitive(key))
     put("updatedAt", JsonPrimitive(updatedAt))
     if (displayName != null) put("displayName", JsonPrimitive(displayName))
+    if (autoLabel != null) put("autoLabel", JsonPrimitive(autoLabel))
     if (archived) put("archived", JsonPrimitive(true))
   }
 
@@ -50,20 +55,102 @@ class ChatControllerSessionSearchTest {
       ?.content
 
   @Test
-  fun filterSessionEntriesMatchesDisplayNameLabelCategoryAndKey() {
+  fun filterSessionEntriesMatchesDisplayNameLabelCategoryKeyAndLocalTitle() {
     val sessions =
       listOf(
         ChatSessionEntry(key = "agent:main:topic-a", updatedAtMs = 2, displayName = "Trip planning"),
         ChatSessionEntry(key = "agent:main:topic-b", updatedAtMs = 1, displayName = "Groceries", category = "Team Planning"),
         ChatSessionEntry(key = "agent:main:trip-notes", updatedAtMs = 3, displayName = "Notes"),
+        ChatSessionEntry(key = "agent:main:topic-c", updatedAtMs = 4, localFallbackTitle = "Device A"),
       )
     assertEquals(
       listOf("agent:main:topic-a", "agent:main:trip-notes"),
       filterSessionEntries(sessions, "TRIP").map { it.key },
     )
     assertEquals(listOf("agent:main:topic-b"), filterSessionEntries(sessions, "TEAM PLANNING").map { it.key })
+    assertEquals(listOf("agent:main:topic-c"), filterSessionEntries(sessions, "  DEVICE A  ").map { it.key })
     assertEquals(sessions, filterSessionEntries(sessions, "  "))
   }
+
+  @Test
+  fun localDeviceTitleFollowsBindingAcrossSearchReconnectAndGatewayChanges() =
+    runTest {
+      val key = "agent:main:node-device"
+      var cacheScope = ChatCacheScope("gateway-a", 1)
+      var offline = false
+      val gateway = ScriptedGateway(json)
+      gateway.respond("sessions.list") { params ->
+        if (offline) error("offline")
+        val query = paramField(params, "search")
+        if (query == null || key.contains(query, ignoreCase = true)) {
+          sessionsListJson(sessionRowJson(key, updatedAt = 1))
+        } else {
+          sessionsListJson()
+        }
+      }
+      gateway.respondWith("chat.history", """{"sessionId":"device-session","messages":[]}""")
+      val controller =
+        backgroundScope.createChatController(
+          requestGateway = gateway::request,
+          requestGatewayForGateway = { _, method, params -> gateway.request(method, params) },
+          cacheScope = { cacheScope },
+        )
+      controller.prepareMainSessionKey(key)
+      controller.onGatewayConnected(MainSessionBinding(key, "Device A"))
+      runCurrent()
+      controller.refreshSessions()
+      runCurrent()
+      assertEquals(
+        "Device A",
+        controller.sessions.value
+          .single()
+          .localFallbackTitle,
+      )
+      val searched = controller.fetchSessionList(search = "node-device", archived = false).single()
+      assertEquals("Device A", searched.localFallbackTitle)
+      assertNull(searched.autoLabel)
+      assertNull(searched.displayName)
+
+      offline = true
+      val offlineMatches = controller.fetchSessionList(search = "  dEvIcE a  ", archived = false)
+      assertEquals(listOf(key), offlineMatches.map { it.key })
+      assertEquals("Device A", offlineMatches.single().localFallbackTitle)
+      assertNull(offlineMatches.single().autoLabel)
+      assertNull(offlineMatches.single().displayName)
+      assertTrue(controller.fetchSessionList(search = "Device A", archived = true).isEmpty())
+      assertTrue(controller.fetchSessionList(search = "Device B", archived = false).isEmpty())
+      assertEquals("Device A", controller.fetchSessionList(search = "node-device", archived = false).single().localFallbackTitle)
+      controller.onGatewayConnected(MainSessionBinding(key, "Renamed device A"))
+      assertEquals(
+        "Renamed device A",
+        controller.sessions.value
+          .single()
+          .localFallbackTitle,
+      )
+      runCurrent()
+      assertEquals(listOf(key), controller.fetchSessionList(search = "Renamed device A", archived = false).map { it.key })
+
+      controller.onGatewayScopeChanging()
+      cacheScope = ChatCacheScope("gateway-b", 2)
+      assertTrue(controller.sessions.value.isEmpty())
+      offline = false
+      assertNull(controller.fetchSessionList(search = null, archived = false).single().localFallbackTitle)
+      controller.prepareMainSessionKey(key)
+      controller.onGatewayConnected(MainSessionBinding(key, "Device B"))
+      runCurrent()
+      controller.refreshSessions()
+      runCurrent()
+      assertEquals(
+        "Device B",
+        controller.sessions.value
+          .single()
+          .localFallbackTitle,
+      )
+      assertEquals("Device B", controller.fetchSessionList(search = null, archived = false).single().localFallbackTitle)
+      offline = true
+      assertTrue(controller.fetchSessionList(search = "Device A", archived = false).isEmpty())
+      assertEquals(listOf(key), controller.fetchSessionList(search = "Device B", archived = false).map { it.key })
+    }
 
   @Test
   fun fetchSessionListSendsSearchAndArchivedParams() =
@@ -178,6 +265,7 @@ class ChatControllerSessionSearchTest {
         sessionsListJson(
           sessionRowJson(key = "agent:main:topic-a", updatedAt = 2, displayName = "Trip planning"),
           sessionRowJson(key = "agent:main:topic-b", updatedAt = 1, displayName = "Groceries"),
+          sessionRowJson(key = "agent:main:topic-c", updatedAt = 3, autoLabel = "Remote device"),
         )
       }
       val controller = newController(gateway)
@@ -186,6 +274,9 @@ class ChatControllerSessionSearchTest {
 
       val filtered = controller.fetchSessionList(search = "trip", archived = false)
       assertEquals(listOf("agent:main:topic-a"), filtered.map { it.key })
+      val automaticallyNamed = controller.fetchSessionList(search = "REMOTE DEVICE", archived = false)
+      assertEquals(listOf("agent:main:topic-c"), automaticallyNamed.map { it.key })
+      assertNull(automaticallyNamed.single().displayName)
       // Archived rows exist only server-side, so offline archived search is empty.
       assertTrue(controller.fetchSessionList(search = null, archived = true).isEmpty())
     }
@@ -197,6 +288,8 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = gateway::request,
           currentDefaultAgentId = { null },
@@ -238,6 +331,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { cacheScope },
@@ -267,6 +361,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { cacheScope },
@@ -294,6 +389,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { cacheScope },
@@ -322,6 +418,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { ChatCacheScope("gateway-a", 1) },
@@ -382,6 +479,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { scope },
@@ -426,6 +524,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },

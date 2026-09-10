@@ -1,5 +1,5 @@
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import { isSessionRouteId, routeIdFromPath, type RouteId } from "../app-route-paths.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
+import { isSessionRouteId, routeIdFromPath } from "../app-route-paths.ts";
 import {
   applyCommandPaletteTargetEvent,
   COMMAND_PALETTE_OPEN_EVENT,
@@ -72,9 +72,7 @@ type KeyboardShortcutsDialogElement = HTMLElement & {
   toggle: () => void;
 };
 
-function isSettingsTakeover(routeId: RouteId | undefined): boolean {
-  return routeId !== undefined && isSettingsNavigationRoute(routeId);
-}
+let nativeCommandsOwner: AbortController | undefined;
 
 export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
   readonly activeSessionKey: string;
@@ -154,15 +152,25 @@ export class ShellChromeOwner {
     if (isMobileNavLayout()) {
       this.navDrawerSwipe.load();
     }
+    // Document load can be a proxy sign-in page; the listener owner records readiness.
+    nativeCommandsOwner = this.listeners;
+    Object.assign(window, { __OPENCLAW_NATIVE_COMMANDS_READY__: true });
+    window.dispatchEvent(new Event("openclaw:native-commands-state"));
   }
 
   disconnect(): void {
+    const listenerOwner = this.listeners;
     this.listeners?.abort();
     this.listeners = undefined;
     this.navDrawerSwipe.disconnect();
+    if (listenerOwner && nativeCommandsOwner === listenerOwner) {
+      nativeCommandsOwner = undefined;
+      Object.assign(window, { __OPENCLAW_NATIVE_COMMANDS_READY__: false });
+      window.dispatchEvent(new Event("openclaw:native-commands-state"));
+    }
   }
 
-  toggleNavigationSurface(trigger?: HTMLElement): void {
+  readonly toggleNavigationSurface = (trigger?: HTMLElement): void => {
     const host = this.host;
     const context = host.context;
     // Desktop settings takeover has no app nav; its mobile drawer still owns navigation.
@@ -206,7 +214,7 @@ export class ShellChromeOwner {
         this.restoreFocusTo(host.querySelector<HTMLElement>(".shell-chrome-controls__nav-toggle"));
       });
     }
-  }
+  };
 
   /** Native Mac chrome hides in-page toggles, so restoration falls back to content. */
   restoreFocusTo = (target: HTMLElement | null | undefined): void =>
@@ -216,7 +224,7 @@ export class ShellChromeOwner {
         : this.host.querySelector<HTMLElement>(".content"),
     );
 
-  closeNavDrawer(options: { restoreFocus?: boolean } = {}): void {
+  readonly closeNavDrawer = (options: { restoreFocus?: boolean } = {}): void => {
     const host = this.host;
     if (host.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
@@ -229,9 +237,9 @@ export class ShellChromeOwner {
     if (options.restoreFocus) {
       requestAnimationFrame(() => this.restoreFocusTo(trigger));
     }
-  }
+  };
 
-  resizeNavigation(splitRatio: number): void {
+  readonly resizeNavigation = (splitRatio: number): void => {
     const host = this.host;
     const shell = host.querySelector<HTMLElement>(".shell");
     const context = host.context;
@@ -242,7 +250,7 @@ export class ShellChromeOwner {
       Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, splitRatio * shell.clientWidth)),
     );
     context.navigation.update({ navWidth });
-  }
+  };
 
   readonly handleNativeToggleSidebar = (): void => this.toggleNavigationSurface();
   readonly handleNativeOpenSearch = (): void => this.openPalette();
@@ -287,19 +295,20 @@ export class ShellChromeOwner {
       return;
     }
     const routeId = routeIdFromPath(path);
-    if (!routeId || !this.host.context) {
+    const context = this.host.context;
+    if (!routeId || !context) {
       // Unhandled native routes remain eligible for the host's URL fallback.
       return;
     }
     event.preventDefault();
-    // Native callers may request route chrome via a query (e.g. the macOS
-    // onboarding handoff lands on /custodian?onboarding=1).
+    // Native paths are relative to the Gateway mount. A route ID alone loses
+    // the destination and can reopen the current session instead.
+    const options: ApplicationNavigationOptions = { pathname: `${context.basePath}${path}` };
     const search = detail?.search;
     if (typeof search === "string" && search.startsWith("?") && !search.includes("#")) {
-      this.host.navigate(routeId, { search });
-      return;
+      options.search = search;
     }
-    this.host.navigate(routeId);
+    this.host.navigate(routeId, options);
   };
 
   readonly handleNativeHistoryState = (event: Event): void => {
@@ -521,7 +530,6 @@ export class ShellChromeOwner {
   readonly openPalette = (): void =>
     this.handleCommandPaletteOpen(new CustomEvent(COMMAND_PALETTE_OPEN_EVENT), this.openPalette);
 
-  readonly refreshControlUi = (): void => globalThis.location.reload();
   readonly handleShellNavDrawerToggle = (event: Event): void => {
     this.toggleNavigationSurface(shellNavDrawerTriggerFromEvent(event));
   };
@@ -565,7 +573,7 @@ export class ShellChromeOwner {
     return elements[eventType];
   }
 
-  restorePendingLazyAction(): void {
+  readonly restorePendingLazyAction = (): void => {
     const event = this.pendingLazyAction;
     if (!event || this.host.lazyCustomElements.visibleState) {
       return;
@@ -582,7 +590,7 @@ export class ShellChromeOwner {
     if (this.dispatchLazyShellEvent(event) && !this.host.lazyCustomElements.visibleState) {
       this.clearPendingLazyAction(event);
     }
-  }
+  };
 
   private requestLazyElement(
     element: OptionalCustomElement,
@@ -658,7 +666,7 @@ export class ShellChromeOwner {
   readonly handleCommandPaletteTarget = (event: Event): void =>
     applyCommandPaletteTargetEvent(this.host, event);
 
-  nativeNavCollapsed(): boolean {
+  readonly nativeNavCollapsed = (): boolean => {
     const host = this.host;
     const mobileNavLayout = isMobileNavLayout();
     return (
@@ -669,5 +677,5 @@ export class ShellChromeOwner {
         !host.desktopNavigationExpanded &&
         (host.context?.navigation.snapshot.navCollapsed ?? false))
     );
-  }
+  };
 }

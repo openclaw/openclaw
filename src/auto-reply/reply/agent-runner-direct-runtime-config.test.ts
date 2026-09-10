@@ -9,26 +9,24 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionParticipantIdentity } from "../../config/sessions/session-participant-identity.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
-import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const freshCfg = { runtimeFresh: true };
 const staleCfg = {
@@ -51,7 +49,6 @@ const createReplyMediaPathNormalizerMock = vi.fn();
 const runSessionCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const executeAgentTurnMock = vi.fn();
-const prepareGitCoauthorAttributionMock = vi.fn();
 const resetReplyRunSessionMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 
@@ -102,17 +99,6 @@ vi.mock("./agent-runner-execution.js", async () => {
   };
 });
 
-vi.mock("../../agents/git-coauthor-attribution.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/git-coauthor-attribution.js")>(
-    "../../agents/git-coauthor-attribution.js",
-  );
-  return {
-    ...actual,
-    prepareGitCoauthorAttribution: (...args: unknown[]) =>
-      prepareGitCoauthorAttributionMock(...args),
-  };
-});
-
 vi.mock("./agent-runner-session-reset.js", async () => {
   const actual = await vi.importActual<typeof import("./agent-runner-session-reset.js")>(
     "./agent-runner-session-reset.js",
@@ -149,52 +135,13 @@ type TestReplyOperation = ReplyOperation & {
 };
 
 function createReplyOperation(): TestReplyOperation {
-  let sessionId = "session-1";
-  return {
-    key: "test",
-    get sessionId() {
-      return sessionId;
-    },
-    turnKind: "visible",
-    abortSignal: new AbortController().signal,
-    resetTriggered: false,
-    phase: "queued",
-    result: null,
-    startedAtMs: Date.now(),
-    lastActivityAtMs: Date.now(),
-    recordActivity: vi.fn(),
-    setPhase: vi.fn(),
-    markWaitingForDeferredMaintenance: vi.fn(),
-    markDeferredMaintenanceWaitEnded: vi.fn(),
-    markWaitingForGlobalLane: vi.fn(),
-    markGlobalLaneWaitEnded: vi.fn(),
-    updateSessionId: vi.fn((nextSessionId: string) => {
-      sessionId = nextSessionId;
-    }),
-    updateSessionKey: vi.fn(),
+  const { replyOperation } = createMockReplyOperation({ key: "test", sessionId: "session-1" });
+  return Object.assign(replyOperation, {
+    phase: "queued" as const,
+    setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     hasOwnedSessionId: vi.fn(() => false),
-    bindToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityProjector: vi.fn(),
-    projectToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityRoute: vi.fn(),
-    attachBackend: vi.fn(),
-    detachBackend: vi.fn(),
-    retainFailureUntilComplete: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn((afterClear: () => void) => {
-      afterClear();
-    }),
-    completeWithAfterClearBarrier: vi.fn(),
-    fail: vi.fn(),
-    freezeAbort: vi.fn(),
-    abortByUser: vi.fn(),
-    abortForRestart: vi.fn(),
-    supersede: vi.fn(),
-    terminalRecovery: false,
-    acceptedSteeredInboundAudio: false,
-    markTerminalRecovery: vi.fn(),
-    markAcceptedSteeredInboundAudio: vi.fn(),
-  };
+    captureOwnedSessionIds: vi.fn(() => new Set()),
+  });
 }
 
 function createDirectRuntimeReplyParams({
@@ -272,6 +219,19 @@ function requireMaintenanceCall(mock: MockCallSource, name: string, index = 0) {
   return call;
 }
 
+type PreflightParams = Parameters<
+  typeof import("./agent-runner-memory.js").runSessionCompactionIfNeeded
+>[0];
+
+async function runRequiredCheckpoint(params: PreflightParams) {
+  if (!params.beforeCompaction) {
+    throw new Error("Expected the required preflight checkpoint");
+  }
+  return params.beforeCompaction(
+    params.sessionEntry ?? { sessionId: params.followupRun.run.sessionId, updatedAt: 1 },
+  );
+}
+
 describe("runReplyAgent runtime config", () => {
   beforeEach(() => {
     resolveQueuedReplyExecutionConfigMock.mockReset();
@@ -282,7 +242,6 @@ describe("runReplyAgent runtime config", () => {
     runSessionCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
     executeAgentTurnMock.mockReset();
-    prepareGitCoauthorAttributionMock.mockReset();
     resetReplyRunSessionMock.mockReset();
     enqueueFollowupRunMock.mockReset();
 
@@ -290,13 +249,15 @@ describe("runReplyAgent runtime config", () => {
     resolveReplyToModeMock.mockReturnValue("all");
     createReplyToModeFilterForChannelMock.mockReturnValue((payload: unknown) => payload);
     createReplyMediaPathNormalizerMock.mockReturnValue((payload: unknown) => payload);
-    runSessionCompactionIfNeededMock.mockRejectedValue(sentinelError);
+    runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
+      await runRequiredCheckpoint(params);
+      throw sentinelError;
+    });
     runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });
     executeAgentTurnMock.mockResolvedValue({
       runId: "runtime-config-test",
       outcome: { kind: "rejected", payload: { text: "main reply" } },
     });
-    prepareGitCoauthorAttributionMock.mockReturnValue(undefined);
     resetReplyRunSessionMock.mockResolvedValue(false);
   });
 
@@ -332,8 +293,8 @@ describe("runReplyAgent runtime config", () => {
     });
     expect(runSessionCompactionIfNeededMock).toHaveBeenCalledTimes(1);
     expect(runMemoryFlushIfNeededMock).toHaveBeenCalledTimes(1);
-    expect(runMemoryFlushIfNeededMock.mock.invocationCallOrder[0]).toBeLessThan(
-      runSessionCompactionIfNeededMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    expect(runSessionCompactionIfNeededMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runMemoryFlushIfNeededMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     const memoryCall = requireMaintenanceCall(runMemoryFlushIfNeededMock, "runMemoryFlushIfNeeded");
     expect(memoryCall.cfg).toBe(freshCfg);
@@ -370,70 +331,6 @@ describe("runReplyAgent runtime config", () => {
     expect(memoryCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
   });
 
-  it.each([
-    { identity: { type: "profile", id: "profile-ada" }, expectedProfileId: "profile-ada" },
-    {
-      identity: {
-        type: "remote",
-        pluginId: "slack",
-        domain: "workspace",
-        idKind: "user",
-        id: "profile-ada",
-      },
-      expectedProfileId: undefined,
-    },
-    { identity: undefined, expectedProfileId: undefined },
-  ] satisfies Array<{
-    identity: SessionParticipantIdentity | undefined;
-    expectedProfileId: string | undefined;
-  }>)(
-    "takes co-author context from accepted input $identity, not the session creator",
-    async ({ identity, expectedProfileId }) => {
-      const attribution =
-        "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
-      prepareGitCoauthorAttributionMock.mockImplementation(
-        (params: { currentProfileId?: string }) =>
-          params.currentProfileId === "profile-ada" ? attribution : undefined,
-      );
-      runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
-      await withTestDir({ prefix: "openclaw-coauthor-input-" }, async (tempDir) => {
-        const storePath = join(tempDir, "sessions.json");
-        const sessionKey = "agent:main:chat:attribution";
-        const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-        const { replyParams } = createDirectRuntimeReplyParams({
-          shouldFollowup: false,
-          isActive: false,
-        });
-        replyParams.sessionKey = sessionKey;
-        replyParams.storePath = storePath;
-        replyParams.sessionEntry = sessionEntry;
-        replyParams.sessionStore = { [sessionKey]: sessionEntry };
-        replyParams.sessionCtx.SessionCreation = {
-          via: "operator",
-          actor: { type: "human", source: "profile", id: "profile-creator" },
-        };
-        if (identity) {
-          prepareSessionParticipantInput(replyParams.sessionCtx, identity, 1);
-        }
-        await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-        await runReplyAgent(replyParams);
-        expect(prepareGitCoauthorAttributionMock).toHaveBeenLastCalledWith({
-          agentId: "main",
-          config: freshCfg,
-          currentProfileId: expectedProfileId,
-          sessionKey,
-          storePath,
-        });
-        const call = executeAgentTurnMock.mock.calls.at(-1)?.[0];
-        if (expectedProfileId) {
-          expect(call).toMatchObject({ opts: { gitCoauthorAttribution: attribution } });
-        } else {
-          expect(call).not.toHaveProperty("opts.gitCoauthorAttribution");
-        }
-      });
-    },
-  );
-
   it("continues the main reply after a recorded memory-flush failure", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
@@ -447,7 +344,7 @@ describe("runReplyAgent runtime config", () => {
       ...freshCfg,
       agents: { defaults: { compaction: { notifyUser: true } } },
     });
-    runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
+    runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
     runMemoryFlushIfNeededMock.mockImplementation(
       async (params: {
         replyOperation: ReplyOperation;
@@ -469,7 +366,7 @@ describe("runReplyAgent runtime config", () => {
     expect(replyOperation.setPhase).toHaveBeenLastCalledWith("running");
   });
 
-  it("preserves conversation after byte-forced memory exhaustion and unnecessary preflight", async () => {
+  it("preserves conversation without running byte-forced optional memory work before reply", async () => {
     const memory = await vi.importActual<typeof import("./agent-runner-memory.js")>(
       "./agent-runner-memory.js",
     );
@@ -565,26 +462,16 @@ describe("runReplyAgent runtime config", () => {
           compactionCount: 4,
           totalTokens: 100,
           totalTokensFresh: true,
-          memoryFlush: { kind: "succeeded", compactionCount: 4 },
+          memoryFlush: { kind: "failed", failureCount: 2 },
         });
         expect(sessionStore[sessionKey]).toMatchObject({
           lifecycleRevision: sessionEntry.lifecycleRevision,
           compactionCount: 4,
           totalTokens: 100,
         });
-        expect(runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
-        await expect(runMemoryFlushIfNeededMock.mock.results[0]?.value).resolves.toMatchObject({
-          outcome: "exhausted",
-        });
+        expect(runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
         expect(runSessionCompactionIfNeededMock).toHaveBeenCalledOnce();
-        expect(runMemoryFlushIfNeededMock.mock.invocationCallOrder[0]).toBeLessThan(
-          runSessionCompactionIfNeededMock.mock.invocationCallOrder[0]!,
-        );
-        expect(onBlockReply).toHaveBeenCalledWith(
-          expect.objectContaining({
-            text: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
-          }),
-        );
+        expect(onBlockReply).not.toHaveBeenCalled();
         expect(executeAgentTurnMock).toHaveBeenCalledOnce();
       });
     } finally {
@@ -607,12 +494,11 @@ describe("runReplyAgent runtime config", () => {
       sessionEntry,
       outcome: "exhausted",
     });
-    runSessionCompactionIfNeededMock.mockImplementation(
-      async (params: { sessionEntry?: typeof sessionEntry }) => {
-        expect(params.sessionEntry?.sessionId).toBe("session-1");
-        return { ...params.sessionEntry, compactionCount: 5 };
-      },
-    );
+    runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
+      expect(params.sessionEntry?.sessionId).toBe("session-1");
+      const checkpointed = await runRequiredCheckpoint(params);
+      return { ...checkpointed, compactionCount: 5 };
+    });
 
     await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "main reply" });
 
@@ -631,9 +517,10 @@ describe("runReplyAgent runtime config", () => {
         sessionEntry: { sessionId: "session-1", updatedAt: 1, compactionCount: 4 },
         outcome: "exhausted",
       });
-      runSessionCompactionIfNeededMock.mockRejectedValue(
-        new Error(`Preflight compaction required but failed: ${reason}`),
-      );
+      runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
+        await runRequiredCheckpoint(params);
+        throw new Error(`Preflight compaction required but failed: ${reason}`);
+      });
 
       const result = await runReplyAgent(replyParams);
 
@@ -656,7 +543,7 @@ describe("runReplyAgent runtime config", () => {
       });
       const runState: ReplyOperationRunState = {};
       replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
-      runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
+      runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
       runMemoryFlushIfNeededMock.mockImplementation(
         async (params: { replyOperation: ReplyOperation }) => {
           expect(params.replyOperation[abortMethod]()).toBe(true);

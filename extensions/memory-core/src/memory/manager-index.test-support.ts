@@ -1,7 +1,10 @@
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
+import type {
+  EmbeddingInput,
+  EmbeddingProviderCallOptions,
+} from "openclaw/plugin-sdk/embedding-providers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -25,7 +28,7 @@ type GetMemorySearchManager = typeof import("./index.js").getMemorySearchManager
 type ManagerConfig = Parameters<GetMemorySearchManager>[0]["cfg"];
 type ManagerResult = Awaited<ReturnType<GetMemorySearchManager>>;
 
-export type ManagerIndexFixtureConfig = {
+type ManagerIndexFixtureConfig = {
   extraPaths?: string[];
   sources?: Array<"memory" | "sessions">;
   sessionMemory?: boolean;
@@ -45,13 +48,6 @@ export type ManagerIndexFixtureConfig = {
   ftsTokenizer?: "unicode61" | "trigram";
   cacheEnabled?: boolean;
   minScore?: number;
-  onSearch?: boolean;
-  hybrid?: {
-    enabled: boolean;
-    vectorWeight?: number;
-    textWeight?: number;
-    temporalDecay?: { enabled: boolean };
-  };
 };
 
 type ProviderCall = {
@@ -61,6 +57,7 @@ type ProviderCall = {
 };
 
 type ProviderControls = {
+  beforeEmbedQuery: ((options?: EmbeddingProviderCallOptions) => Promise<void>) | null;
   embedQueryCalls: number;
   embeddedQueryTexts: string[];
   embedBatchCalls: number;
@@ -69,6 +66,7 @@ type ProviderControls = {
   embeddedBatchInputs: EmbeddingInput[][];
   providerRuntimeBatchCalls: string[][];
   providerRuntimeBatchGate: Promise<void> | null;
+  providerRuntimeBatchEntered: ((activeCalls: number, texts: readonly string[]) => void) | null;
   providerRuntimeBatchErrors: unknown[];
   providerRuntimeBatchFailuresRemaining: number;
   providerRuntimeActiveBatchCalls: number;
@@ -123,6 +121,7 @@ export type ManagerIndexFixture = {
 };
 
 const providerState = vi.hoisted(() => ({
+  beforeEmbedQuery: null as ProviderControls["beforeEmbedQuery"],
   embedQueryCalls: 0,
   embeddedQueryTexts: [] as string[],
   embedBatchCalls: 0,
@@ -131,6 +130,9 @@ const providerState = vi.hoisted(() => ({
   embeddedBatchInputs: [] as EmbeddingInput[][],
   providerRuntimeBatchCalls: [] as string[][],
   providerRuntimeBatchGate: null as Promise<void> | null,
+  providerRuntimeBatchEntered: null as
+    | ((activeCalls: number, texts: readonly string[]) => void)
+    | null,
   providerRuntimeBatchErrors: [] as unknown[],
   providerRuntimeBatchFailuresRemaining: 0,
   providerRuntimeActiveBatchCalls: 0,
@@ -266,7 +268,8 @@ vi.mock("./embeddings.js", async (importOriginal) => {
               throw providerState.providerCloseFailure;
             }
           },
-          embed: async (input: EmbeddingInput) => {
+          embed: async (input: EmbeddingInput, callOptions?: EmbeddingProviderCallOptions) => {
+            await providerState.beforeEmbedQuery?.(callOptions);
             const text = typeof input === "string" ? input : input.text;
             providerState.embedQueryCalls += 1;
             providerState.embeddedQueryTexts.push(text);
@@ -335,6 +338,10 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                       providerState.providerRuntimeActiveBatchCalls,
                     );
                     try {
+                      providerState.providerRuntimeBatchEntered?.(
+                        providerState.providerRuntimeActiveBatchCalls,
+                        batch.chunks.map((chunk) => chunk.text),
+                      );
                       await providerState.providerRuntimeBatchGate;
                       providerState.providerRuntimeBatchCalls.push(
                         batch.chunks.map((chunk) => chunk.text),
@@ -436,7 +443,6 @@ export function createManagerIndexFixture(deps: {
             vector: params.vectorEnabled !== undefined ? { enabled: params.vectorEnabled } : {},
           },
           remote: params.batchEnabled ? { batch: { enabled: true } } : undefined,
-          sync: params.onSearch === undefined ? undefined : { onSearch: params.onSearch },
           query: { minScore: params.minScore ?? 0 },
           cache: params.cacheEnabled ? { enabled: true } : undefined,
           extraPaths: params.extraPaths,
@@ -522,7 +528,6 @@ export function createManagerIndexFixture(deps: {
       sources: ["memory", "sessions"],
       sessionMemory: true,
       minScore: 0,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
     });
     const manager = requireManager(await deps.getMemorySearchManager({ cfg, agentId: "main" }));
     trackManager(manager);
@@ -561,6 +566,7 @@ export function createManagerIndexFixture(deps: {
   beforeEach(async () => {
     vi.useRealTimers();
     clearRegistry();
+    providerState.beforeEmbedQuery = null;
     providerState.embedQueryCalls = 0;
     providerState.embeddedQueryTexts = [];
     providerState.embedBatchCalls = 0;
@@ -569,6 +575,7 @@ export function createManagerIndexFixture(deps: {
     providerState.embeddedBatchInputs = [];
     providerState.providerRuntimeBatchCalls = [];
     providerState.providerRuntimeBatchGate = null;
+    providerState.providerRuntimeBatchEntered = null;
     providerState.providerRuntimeBatchErrors = [];
     providerState.providerRuntimeBatchFailuresRemaining = 0;
     providerState.providerRuntimeActiveBatchCalls = 0;

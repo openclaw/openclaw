@@ -13,7 +13,7 @@ import {
   isTerminalSafeAutocompleteValue,
   isCommandMarkedMessage,
   resolveFinalAssistantText,
-  sanitizeMarkdownSource,
+  sanitizeTerminalControlsAndBinary,
   sanitizeRenderableLine,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
@@ -447,20 +447,31 @@ describe("extractTextFromMessage", () => {
     expect(text).toBe("Line 1\nLine 2\nLine 3");
   });
 
-  it("places thinking before content when included", () => {
-    const text = extractTextFromMessage(
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "hello" },
-          { type: "thinking", thinking: "ponder" },
-        ],
-      },
-      { includeThinking: true },
-    );
+  it.each([
+    [undefined, "ponder", "hello", "hello"],
+    [false, "ponder", "hello", "hello"],
+    [true, "ponder", "hello", "[thinking]\nponder\n\nhello"],
+    [true, "ponder", "", "[thinking]\nponder"],
+    [true, "", "hello", "hello"],
+    [true, "", "", ""],
+    [false, "ponder", "", ""],
+  ] as const)(
+    "renders thinking=%s, thought=%j, content=%j",
+    (includeThinking, thought, content, expected) => {
+      const text = extractTextFromMessage(
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: ` \n${content}\t ` },
+            { type: "thinking", thinking: ` \t${thought}\n ` },
+          ],
+        },
+        { includeThinking },
+      );
 
-    expect(text).toBe("[thinking]\nponder\n\nhello");
-  });
+      expect(text).toBe(expected);
+    },
+  );
 
   it("sanitizes ANSI and control chars from string content", () => {
     const text = extractTextFromMessage({
@@ -679,12 +690,6 @@ describe("formatTuiErrorMessage", () => {
 });
 
 describe("sanitizeRenderableText", () => {
-  function expectTokenWidthUnderLimit(input: string) {
-    const sanitized = sanitizeRenderableText(input);
-    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
-    expect(longestSegment).toBeLessThanOrEqual(32);
-  }
-
   it("strips C1 CSI and OSC without exposing their final byte or payload", () => {
     const input = "before\u009b@middle\u009d0;title\u009cafter";
 
@@ -694,14 +699,14 @@ describe("sanitizeRenderableText", () => {
   it.each([
     { label: "very long", input: "a".repeat(140) },
     { label: "moderately long", input: "b".repeat(90) },
-  ])("breaks $label unbroken tokens to protect narrow terminals", ({ input }) => {
-    expectTokenWidthUnderLimit(input);
+  ])("preserves $label unbroken tokens for renderer wrapping", ({ input }) => {
+    expect(sanitizeRenderableText(input)).toBe(input);
   });
 
-  it("keeps surrogate pairs intact when breaking long prose tokens", () => {
+  it("preserves surrogate pairs in long prose tokens", () => {
     const input = `${"a".repeat(31)}😀b`;
 
-    expect(sanitizeRenderableText(input)).toBe(`${"a".repeat(31)} 😀b`);
+    expect(sanitizeRenderableText(input)).toBe(input);
   });
 
   it("preserves long CJK prose without inserting display spaces", () => {
@@ -852,15 +857,12 @@ describe("sanitizeRenderableText", () => {
     expect(sanitized).toBe(input);
   });
 
-  it("still chunks long unbroken prose tokens outside code spans", () => {
+  it("preserves long unbroken prose tokens outside code spans", () => {
     const input = `prefix ${"x".repeat(120)} suffix`;
-    const sanitized = sanitizeRenderableText(input);
-
-    const longestSegment = Math.max(...sanitized.split(/\s+/).map((s) => s.length));
-    expect(longestSegment).toBeLessThanOrEqual(32);
+    expect(sanitizeRenderableText(input)).toBe(input);
   });
 
-  it("preserves prose around code blocks while chunking long prose tokens", () => {
+  it("preserves long prose tokens around code blocks", () => {
     const input = [
       `before ${"x".repeat(120)}`,
       "```",
@@ -868,11 +870,7 @@ describe("sanitizeRenderableText", () => {
       "```",
       `after ${"y".repeat(80)}`,
     ].join("\n");
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toContain("code line preserved verbatim");
-    expect(sanitized).not.toContain("x".repeat(33));
-    expect(sanitized).not.toContain("y".repeat(33));
+    expect(sanitizeRenderableText(input)).toBe(input);
   });
 
   it("does not chunk box-drawing horizontal rules used in tables", () => {
@@ -915,9 +913,14 @@ describe("sanitizeRenderableText", () => {
 });
 
 describe("Markdown display safety", () => {
+  it("preserves layout controls while removing neighboring C0, DEL, and C1 controls", () => {
+    const input = "a\u0008\tb\u000b\nc\u000c\rd\u000e\u001f\u007f\u0080\u009f";
+    expect(sanitizeTerminalControlsAndBinary(input)).toBe("a\tb\nc\rd");
+  });
+
   it("strips hostile controls from source without adding directional isolates", () => {
     const input = "\u202e# مرحبا\u202c\n\u009b31m> שלום\u009b0m";
-    const sanitized = sanitizeMarkdownSource(input);
+    const sanitized = sanitizeTerminalControlsAndBinary(input);
 
     expect(sanitized).toBe("# مرحبا\n> שלום");
     expect(sanitized).not.toMatch(/[\u2066-\u2069]/u);
@@ -943,12 +946,19 @@ describe("Markdown display safety", () => {
 describe("isTerminalSafeAutocompleteValue", () => {
   it("accepts ordinary Unicode and rejects terminal or bidi controls", () => {
     expect(isTerminalSafeAutocompleteValue("/tmp/مرحبا-東京.txt")).toBe(true);
+    expect(isTerminalSafeAutocompleteValue("👩🏽‍💻/cafe\u0301.txt")).toBe(true);
     for (const value of [
       "bad\x1b[31m",
       "bad\tvalue",
+      "bad\rvalue",
+      "bad\nvalue",
+      "bad\u007fvalue",
+      "bad\u0085value",
       "bad\u009bvalue",
       "bad\u200evalue",
       "bad\u202evalue",
+      "bad\u2066value",
+      "bad\u2069value",
     ]) {
       expect(isTerminalSafeAutocompleteValue(value)).toBe(false);
     }

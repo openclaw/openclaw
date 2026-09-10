@@ -6,9 +6,10 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
-import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
+import type { NodeRegistry, NodeSession } from "./node-registry.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
 export const DEMO_PLUGIN_ID = "demo";
@@ -46,23 +47,18 @@ export function createContext(opts?: {
   validateAgentRuntimeApprovalAuthority?: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
 }) {
   const nodeSession = opts?.nodeSession ?? createNodeSession();
-  const invoke = vi.fn(
-    async (params?: {
-      onDispatchReady?: (invokeId: string) => void;
-      onProgress?: (chunk: string) => void;
-      isDispatchAuthorized?: () => boolean;
-    }): Promise<NodeInvokeResult> => {
-      params?.onDispatchReady?.("invoke-1");
-      return {
-        ok: true,
-        payload: { ok: true, value: 1 },
-        payloadJSON: null,
-        error: null,
-      };
-    },
-  );
+  const invoke = vi.fn<NodeRegistry["invoke"]>(async (params) => {
+    params.onDispatchReady?.("invoke-1");
+    return {
+      ok: true,
+      payload: { ok: true, value: 1 },
+      payloadJSON: null,
+      error: null,
+    };
+  });
   return {
     context: {
+      trackExecution: trackAsyncWork,
       getRuntimeConfig:
         opts?.getRuntimeConfig ?? (() => nodeCommandsConfig({ allow: [DEMO_COMMAND] })),
       nodeRegistry: {
