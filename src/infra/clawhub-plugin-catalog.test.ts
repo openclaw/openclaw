@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { jsonResponse, requestUrl } from "../test-helpers/http.js";
 import {
   fetchAllOfficialClawHubPlugins,
   fetchClawHubPluginCatalog,
@@ -6,17 +7,6 @@ import {
   fetchClawHubPluginVersionCategories,
   fetchClawHubPluginDetail,
 } from "./clawhub-plugin-catalog.js";
-
-function jsonResponse(value: unknown): Response {
-  return new Response(JSON.stringify(value), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function requestUrl(input: string | URL | Request): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-}
 
 const remotePlugin = {
   name: "memory-plus",
