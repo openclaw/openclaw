@@ -125,12 +125,18 @@ async function replay(options: ReplayOptions = {}) {
   const script = Buffer.from(encoded!, "base64").toString("utf8");
   await runInNewContext(script, {
     require: (name: string) => {
-      if (name === "node:fs") return fs;
-      if (name === "node:path") return path.win32;
+      if (name === "node:fs") {
+        return fs;
+      }
+      if (name === "node:path") {
+        return path.win32;
+      }
       if (name === "node:os") {
         return { homedir: () => (options.canonicalizePaths ? home.toLowerCase() : home) };
       }
-      if (name === "node:child_process") return { spawn, spawnSync };
+      if (name === "node:child_process") {
+        return { spawn, spawnSync };
+      }
       return require(name);
     },
     process: processFixture,
