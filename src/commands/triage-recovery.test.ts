@@ -169,9 +169,7 @@ describe("triage external recovery handoff", () => {
       ["/usr/local/bin/claude", "--help"],
       expect.objectContaining({ timeoutMs: 10_000, killProcessTree: true }),
     );
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Claude Code 2.1.169 or newer is required"),
-    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Claude Code 2.1.169+"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Run without safe mode:"));
   });
 

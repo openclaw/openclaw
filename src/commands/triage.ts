@@ -463,17 +463,15 @@ export async function triageCommand(
       return;
     }
     if (handoff.agent === "claude" && !automatic) {
-      const { claudeAdvertisesSafeMode } = await import("./triage-claude.js");
-      let supportsSafeMode: boolean;
-      try {
-        supportsSafeMode = await claudeAdvertisesSafeMode({
-          argv: [handoff.program.command, ...handoff.program.leadingArgv],
-          env: targetEnv,
-          ...agentOptions,
-        });
-      } catch (error) {
+      const { probeClaudeSafeMode } = await import("./triage-claude.js");
+      const probe = await probeClaudeSafeMode({
+        argv: [handoff.program.command, ...handoff.program.leadingArgv],
+        env: targetEnv,
+        ...agentOptions,
+      });
+      if (!probe.ok) {
         runtime.error(
-          `Failed to check Claude safe-mode support: ${triageCollectionError(error, redaction)}`,
+          `Failed to check Claude safe-mode support: ${triageCollectionError(probe.error, redaction)}`,
         );
         runtime.log(`Run manually: ${suggestedCommands[0]}`);
         exitCliAfterOutput(runtime, 1);
@@ -481,16 +479,13 @@ export async function triageCommand(
       if (!isCurrent()) {
         return;
       }
-      if (!supportsSafeMode) {
-        runtime.error(
-          "Installed Claude does not advertise --safe-mode; Claude Code 2.1.169 or newer is required for direct triage launch.",
-        );
+      if (!probe.supported) {
+        runtime.error("Claude --safe-mode unavailable; update to Claude Code 2.1.169+.");
         runtime.log(`Run without safe mode: ${suggestedCommands[0]}`);
         exitCliAfterOutput(runtime, 1);
       }
     }
     runtime.log(`Starting ${handoff.agent}; use --agent <name> to select another coding agent.`);
-    // Project startup hooks can block the repair prompt before Claude's first turn.
     const args =
       handoff.agent === "claude"
         ? ["--safe-mode", prompt]
