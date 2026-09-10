@@ -327,14 +327,20 @@ async function requestChatAbort(
 }
 
 /**
- * The Gateway had nothing to abort for the exact run this browser still owns:
- * either its lifecycle notifications never arrived or the run is finalizing.
- * Neither case is decided here; the authoritative refresh reconciles the
- * session row and transcript, clearing the run only once the Gateway reports
- * it terminal.
+ * The Gateway had nothing to abort for what this browser still shows as
+ * active: the exact owned run, or cached session activity (a direct run or
+ * descendant work) whose lifecycle notifications never arrived, or a run that
+ * is still finalizing. Neither case is decided here; the authoritative refresh
+ * reconciles the session rows and transcript, clearing local state only once
+ * the Gateway reports it terminal. Fenced to the session and client the Stop
+ * was captured for, so a later navigation or reconnect is never refreshed on
+ * behalf of a stale answer.
  */
-async function settleNoopAbort(state: ChatAbortRunState, runId: string): Promise<void> {
-  if (state.chatRunId !== runId) {
+async function settleNoopAbort(state: ChatAbortRunState, intent: ChatAbortIntent): Promise<void> {
+  if (state.client !== intent.sourceClient || state.sessionKey !== intent.sessionKey) {
+    return;
+  }
+  if (intent.runId !== null && state.chatRunId !== intent.runId) {
     return;
   }
   await state.refreshCurrentChat?.();
@@ -371,8 +377,8 @@ async function abortChatRun(state: ChatAbortRunState): Promise<ChatAbortOutcome>
     setChatError(state, formatConnectError(result.error));
     return "failed";
   }
-  if (intent.runId !== null && result.noActiveRun) {
-    await settleNoopAbort(state, intent.runId);
+  if (result.noActiveRun) {
+    await settleNoopAbort(state, intent);
     return "no-active-run";
   }
   return "aborted";
@@ -403,7 +409,7 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
   const result = await requestChatAbort(client, intent);
   if (result.ok) {
     if (result.noActiveRun) {
-      await settleNoopAbort(host, intent.runId);
+      await settleNoopAbort(host, intent);
     }
     return true;
   }

@@ -180,6 +180,52 @@ describe("handleAbortChat", () => {
     expect(refreshCurrentChat).toHaveBeenCalledTimes(1);
   });
 
+  it("settles a session-only Stop when sessions.abort reports no active run", async () => {
+    // Cached session activity keeps Stop visible without a browser-owned run ID.
+    const request = vi.fn(async () => ({ ok: true, abortedRunId: null, status: "no-active-run" }));
+    const refreshCurrentChat = vi.fn(async () => {});
+    const host = makeAbortHost({
+      client: createTestGatewayClient(request),
+      chatRunId: null,
+      refreshCurrentChat,
+      sessionsResult: makeSessionsResult([
+        { key: "agent:main", hasActiveRun: true, status: "running" },
+      ]),
+    });
+
+    const outcome = await handleAbortChat(host, { preserveDraft: true });
+
+    expect(outcome).toBe("no-active-run");
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: "agent:main",
+      clearQueued: true,
+    });
+    expect(refreshCurrentChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh a session the Stop was not captured for", async () => {
+    const refreshCurrentChat = vi.fn(async () => {});
+    const host = makeAbortHost({
+      chatRunId: null,
+      refreshCurrentChat,
+      sessionsResult: makeSessionsResult([
+        { key: "agent:main", hasActiveRun: true, status: "running" },
+      ]),
+    });
+    // The selection moves to another session while the abort is in flight.
+    host.client = createTestGatewayClient(
+      vi.fn(async () => {
+        host.sessionKey = "agent:other";
+        return { ok: true, abortedRunId: null, status: "no-active-run" };
+      }),
+    );
+
+    const outcome = await handleAbortChat(host, { preserveDraft: true });
+
+    expect(outcome).toBe("no-active-run");
+    expect(refreshCurrentChat).not.toHaveBeenCalled();
+  });
+
   it("shows reconnect guidance when an offline session run has no browser run identity", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
