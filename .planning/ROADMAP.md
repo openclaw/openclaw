@@ -46,6 +46,12 @@
 
 - VERIFICATION.md report
 
+**Plans:**
+
+- [ ] 02-01-PLAN.md — Run check:changed and tsgo typecheck lanes
+- [ ] 02-02-PLAN.md — Run focused gateway server tests
+- [ ] 02-03-PLAN.md — Run ratchets, full subsystem tests, write VERIFICATION.md
+
 ## Phase 3: Landing
 
 **Goal:** Prepare for landing the branch.
