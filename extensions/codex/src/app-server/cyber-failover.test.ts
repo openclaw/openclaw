@@ -202,6 +202,38 @@ describe("escalation planning", () => {
   });
 });
 
+describe("window bookkeeping", () => {
+  it("stays bounded when many sessions escalate", () => {
+    const now = 1_000;
+    for (let index = 0; index < 400; index += 1) {
+      recordCodexCyberEscalation({
+        sessionKey: `bounded-${index}`,
+        outcome: "answered",
+        cooloffMs: 600_000,
+        now,
+      });
+    }
+    // The newest session keeps its window; older ones are shed rather than kept
+    // for the life of the process.
+    expect(
+      resolveCodexCyberStickyModel({
+        config: config(),
+        sessionKey: "bounded-399",
+        currentModel: PRIMARY,
+        now: now + 1,
+      }),
+    ).toBe(DAYBREAK);
+    expect(
+      resolveCodexCyberStickyModel({
+        config: config(),
+        sessionKey: "bounded-0",
+        currentModel: PRIMARY,
+        now: now + 1,
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("sticky routing inside the window", () => {
   it("pre-routes follow-up turns only after Daybreak actually answered", () => {
     const SESSION = nextSession();

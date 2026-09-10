@@ -60,6 +60,9 @@ type CyberEscalationRecord = {
 // Session-scoped and deliberately in memory: the window is minutes long, so it
 // must not outlive the process or enter the session store.
 const escalationWindows = new Map<string, CyberEscalationRecord>();
+// Entries expire on read, so a session that never returns would otherwise linger
+// for the life of the Gateway. Sweep on write to keep the map bounded.
+const MAX_ESCALATION_WINDOWS = 256;
 
 function readWindow(
   sessionKey: string | undefined,
@@ -89,6 +92,21 @@ export function recordCodexCyberEscalation(params: {
     return;
   }
   const now = params.now ?? Date.now();
+  if (escalationWindows.size >= MAX_ESCALATION_WINDOWS) {
+    for (const [sessionKey, record] of escalationWindows) {
+      if (record.expiresAt <= now) {
+        escalationWindows.delete(sessionKey);
+      }
+    }
+    // Insertion order approximates age closely enough to shed the oldest live
+    // windows if a burst of sessions is still inside its cooloff.
+    for (const sessionKey of escalationWindows.keys()) {
+      if (escalationWindows.size < MAX_ESCALATION_WINDOWS) {
+        break;
+      }
+      escalationWindows.delete(sessionKey);
+    }
+  }
   escalationWindows.set(params.sessionKey, {
     outcome: params.outcome,
     expiresAt: now + params.cooloffMs,
