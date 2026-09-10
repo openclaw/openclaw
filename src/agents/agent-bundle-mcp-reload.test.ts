@@ -484,7 +484,10 @@ it.each(["removal", "public origin change", "plugin replacement with explicit sh
       cfg,
       requesterSenderId: "alice",
     });
-    const connect = runtime.requesterConnect?.createExecute("calendar");
+    const connect = runtime.requesterConnect?.createExecute("calendar", {
+      assertActive: () => {},
+      send: async () => ({ status: "sent" }),
+    });
     expect(connect).toBeDefined();
     await connect!("before", {});
     expect(startAuthorization).toHaveBeenCalledOnce();

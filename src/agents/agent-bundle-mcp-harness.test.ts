@@ -8,6 +8,9 @@ import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const startAuthorization = vi.hoisted(() => vi.fn());
 const readCredentialsStatus = vi.hoisted(() => vi.fn());
+const sendRequesterPrivateMessage = vi.hoisted(() => vi.fn());
+
+vi.mock("../infra/outbound/requester-private.js", () => ({ sendRequesterPrivateMessage }));
 
 const mocks = vi.hoisted(() => {
   type Runtime = SessionMcpRuntime;
@@ -172,6 +175,11 @@ async function makeConnectRuntime(params: {
   publicOrigin?: string;
 }): Promise<SessionMcpRuntime> {
   const runtime = makeRuntime(params);
+  runtime.requesterScope = {
+    requesterSenderId: params.requesterSenderId,
+    messageChannel: "telegram",
+    agentAccountId: "bot",
+  };
   const catalog = { version: 1, generatedAt: 0, servers: {}, tools: [] };
   runtime.peekCatalog = () => catalog;
   runtime.getCatalog = async () => catalog;
@@ -185,11 +193,7 @@ async function makeConnectRuntime(params: {
       },
     },
     safeServerNamesByServer: new Map([["calendar", "calendar"]]),
-    requesterScope: {
-      requesterSenderId: params.requesterSenderId,
-      messageChannel: "telegram",
-      agentAccountId: "bot",
-    },
+    requesterScope: runtime.requesterScope,
     cfg: params.publicOrigin ? { gateway: { publicOrigin: params.publicOrigin } } : undefined,
     configFingerprint: "connect-fingerprint",
   });
@@ -204,6 +208,10 @@ beforeEach(() => {
   mocks.getAdvertisedScopedMcpCatalog.mockClear();
   readCredentialsStatus.mockReset().mockResolvedValue({ state: "unauthenticated" });
   startAuthorization.mockReset();
+  sendRequesterPrivateMessage.mockReset().mockImplementation(async ({ assertActive }) => {
+    assertActive();
+    return { status: "sent" };
+  });
 });
 
 describe("materializeStaticMcpToolsForHarnessRunCore", () => {
@@ -715,57 +723,129 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
   });
 
-  it("bootstraps a requester connect tool without starting OAuth during materialization", async () => {
-    mocks.setResolveImpl(async (params) =>
-      makeConnectRuntime({
-        sessionId: params.sessionId,
-        requesterSenderId: params.requesterSenderId ?? "alice",
-        publicOrigin: "https://gateway.example",
-      }),
-    );
-    startAuthorization.mockResolvedValue({
-      status: "redirect",
-      authorizationUrl: "https://auth.example/authorize?state=opaque",
-      redirectUrl: "https://gateway.example/oauth/mcp/callback",
-      state: "opaque",
-    });
-    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
-      sessionId: "session-connect",
-      workspaceDir: "/workspace",
-      requesterSenderId: "alice",
-      messageChannel: "telegram",
-      agentAccountId: "bot",
-      cfg: {
-        gateway: { publicOrigin: "https://gateway.example" },
-        mcp: {
-          servers: {
-            calendar: {
-              url: "https://mcp.example/rpc",
-              auth: "oauth",
-              oauth: { identity: "per-requester" },
+  it.each(["tools", "advertisedTools"] as const)(
+    "privately delivers connect links from %s without exposing them to the harness",
+    async (surface) => {
+      mocks.setResolveImpl(async (params) =>
+        makeConnectRuntime({
+          sessionId: params.sessionId,
+          requesterSenderId: params.requesterSenderId ?? "alice",
+          publicOrigin: "https://gateway.example",
+        }),
+      );
+      startAuthorization.mockResolvedValue({
+        status: "redirect",
+        authorizationUrl: "https://auth.example/authorize?state=opaque",
+        redirectUrl: "https://gateway.example/oauth/mcp/callback",
+        state: "opaque",
+      });
+      const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+        sessionId: "session-connect",
+        workspaceDir: "/workspace",
+        requesterSenderId: "alice",
+        messageChannel: "telegram",
+        agentAccountId: "bot",
+        assertActive: () => {},
+        cfg: {
+          gateway: { publicOrigin: "https://gateway.example" },
+          mcp: {
+            servers: {
+              calendar: {
+                url: "https://mcp.example/rpc",
+                auth: "oauth",
+                oauth: { identity: "per-requester" },
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expect(result?.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
-    expect(startAuthorization).not.toHaveBeenCalled();
-    const connect = await result!.tools[0]!.execute("connect", {});
-    expect(connect).toMatchObject({
-      details: {
-        mcpConnect: {
-          serverName: "calendar",
-          authorizationUrl: "https://auth.example/authorize?state=opaque",
-        },
-      },
+      expect(result?.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
+      expect(startAuthorization).not.toHaveBeenCalled();
+      const connect = await result![surface][0]!.execute("connect", {});
+      expect(connect).toMatchObject({
+        details: { status: "link-sent", mcpServer: "calendar" },
+      });
+      expect(JSON.stringify(connect)).not.toContain("https://auth.example");
+      expect(sendRequesterPrivateMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "telegram",
+          accountId: "bot",
+          senderId: "alice",
+          text: expect.stringContaining("https://auth.example/authorize?state=opaque"),
+        }),
+      );
+      expect(startAuthorization).toHaveBeenCalledWith(
+        expect.objectContaining({ principal: "requester", serverName: "calendar" }),
+        expect.objectContaining({ url: "https://mcp.example/rpc" }),
+        { redirectUrl: "https://gateway.example/oauth/mcp/callback" },
+      );
+      expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
+      await result!.dispose();
+    },
+  );
+
+  it("keeps private delivery bound to the current view when a requester runtime is reused", async () => {
+    const runtime = await makeConnectRuntime({
+      sessionId: "session-reused-connect",
+      requesterSenderId: "alice",
+      publicOrigin: "https://gateway.example",
     });
-    expect(startAuthorization).toHaveBeenCalledWith(
-      expect.objectContaining({ principal: "requester", serverName: "calendar" }),
-      expect.objectContaining({ url: "https://mcp.example/rpc" }),
-      { redirectUrl: "https://gateway.example/oauth/mcp/callback" },
+    mocks.setResolveImpl(async () => runtime);
+    startAuthorization.mockResolvedValue({
+      status: "redirect",
+      authorizationUrl: "https://auth.example/authorize?state=current",
+    });
+    const params = {
+      sessionId: runtime.sessionId,
+      workspaceDir: "/workspace",
+      requesterSenderId: "alice",
+      cfg: { gateway: { publicOrigin: "https://gateway.example" } },
+    };
+    const priorAssertion = vi.fn();
+    const prior = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      ...params,
+      assertActive: priorAssertion,
+    });
+    const currentAssertion = vi.fn();
+    const current = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      ...params,
+      assertActive: currentAssertion,
+    });
+    await prior!.dispose();
+    for (const surface of ["tools", "advertisedTools"] as const) {
+      await expect(prior![surface][0]!.execute("stale", {})).rejects.toThrow("disposed");
+    }
+    expect(startAuthorization).not.toHaveBeenCalled();
+    expect(sendRequesterPrivateMessage).not.toHaveBeenCalled();
+    await expect(current!.tools[0]!.execute("current", {})).resolves.toMatchObject({
+      details: { status: "link-sent" },
+    });
+    expect(currentAssertion).toHaveBeenCalled();
+    expect(priorAssertion).not.toHaveBeenCalled();
+    expect(sendRequesterPrivateMessage).toHaveBeenCalledTimes(1);
+    await current!.dispose();
+  });
+
+  it("does not start requester OAuth without host authority", async () => {
+    mocks.setResolveImpl(async () =>
+      makeConnectRuntime({
+        sessionId: "session-no-private-authority",
+        requesterSenderId: "alice",
+        publicOrigin: "https://gateway.example",
+      }),
     );
-    expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-no-private-authority",
+      workspaceDir: "/workspace",
+      requesterSenderId: "alice",
+      cfg: { gateway: { publicOrigin: "https://gateway.example" } },
+    });
+    const connect = await result!.tools[0]!.execute("connect", {});
+    expect(connect.details).toMatchObject({ status: "error" });
+    expect(connect.content[0]).toMatchObject({ text: expect.stringContaining("private delivery") });
+    expect(startAuthorization).not.toHaveBeenCalled();
+    expect(sendRequesterPrivateMessage).not.toHaveBeenCalled();
     await result!.dispose();
   });
 

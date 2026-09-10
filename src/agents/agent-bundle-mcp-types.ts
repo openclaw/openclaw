@@ -83,11 +83,23 @@ export type McpToolCatalog = {
 };
 
 /** Transient requester sign-in surface kept outside the remembered live catalog. */
+export type RequesterMcpConnectDelivery = {
+  assertActive: () => void;
+  send: (params: {
+    serverName: string;
+    authorizationUrl: string;
+    assertActive: () => void;
+  }) => Promise<{ status: "sent" | "unavailable" | "failed" }>;
+};
+
 export type RequesterMcpConnect = {
   catalog: McpToolCatalog;
   authorizedServerNames: readonly string[];
   configFingerprint: string;
-  createExecute: (serverName: string) => AnyAgentTool["execute"] | undefined;
+  createExecute: (
+    serverName: string,
+    delivery?: RequesterMcpConnectDelivery,
+  ) => AnyAgentTool["execute"] | undefined;
 };
 
 type PreparedNativeMcpServerPolicy = {

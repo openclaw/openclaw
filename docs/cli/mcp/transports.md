@@ -104,13 +104,18 @@ Set `oauth.identity: "per-requester"` when every authenticated sender should con
 
 The per-requester flow is sender-driven:
 
-1. The sender calls a tool from the server before connecting an account.
-2. OpenClaw returns a sign-in link for that sender instead of exposing another sender's credentials.
-3. The provider redirects through the Gateway callback. After the callback succeeds, the sender retries the tool call with their connected account.
+1. The sender asks the agent to connect the server from an allowed conversation.
+2. The agent uses the server's `connect` tool. OpenClaw sends the sign-in link privately to that sender through the originating Discord or Slack account, even when the request came from a group.
+3. The conversation receives only a delivery confirmation. The sign-in URL is not included in the model's tool result or shared transcript.
+4. The sender opens the private link and authorizes the provider. After the Gateway callback succeeds, they return to the original conversation and retry their task on the next message.
 
 If `gateway.publicOrigin` is missing, the sign-in result names that setting and `openclaw doctor` reports the same operator fix. `openclaw mcp login` and `openclaw mcp logout` remain operator-only commands for shared credentials; they do not manage per-requester accounts.
 
-Sign-in links are single-use bearer links: any chat participant who opens one connects their own account to the sender the link was issued for. Use per-requester OAuth in channels where every trusted sender is mutually trusted; a requester-private sign-in handoff is tracked as follow-up work.
+Private delivery requires a known sender and originating channel account. If that route is unsupported or the bot cannot send private messages, OpenClaw reports the failure without posting the link publicly. Allow private messages from the bot, or ask the operator to check its private messaging access, then try connecting again.
+
+Receiving a sign-in message does not approve the sender for DM conversations or change pairing, allowlists, or tool permissions. The sender can complete sign-in in the browser and continue in the original allowed group. `openclaw mcp login` is not a workaround: it manages the operator's shared connection, not the sender's account.
+
+Sign-in links remain single-use bearer links. Anyone the sender forwards a link to can connect their own account to the requester the link was issued for; the callback does not independently verify the browser user's Discord or Slack identity. Requester connections are scoped to the channel, channel account, and sender, not shared automatically across platforms. Separate credentials also do not make group replies or shared conversation history private.
 
 The shared operator flow uses the following commands:
 

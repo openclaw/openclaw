@@ -143,6 +143,10 @@ type SlackSendOpts = {
   deliveryQueueId?: string;
   /** Refresh durable timing after the per-target queue and before Slack API work. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** Revalidate caller-owned authority immediately before each text post. */
+  assertPlatformSendAuthorized?: () => void;
+  /** Sensitive messages must not expose their URLs through link previews. */
+  suppressLinkPreviews?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
 };
@@ -1124,7 +1128,10 @@ async function sendMessageSlackQueuedInner(params: {
   delivery: SlackResolvedDelivery;
 }): Promise<SlackSendResult> {
   const { opts, cfg, account, blocks, trimmedMessage, delivery } = params;
-  const { client, identity, recipient, unfurl } = delivery;
+  const { client, identity, recipient } = delivery;
+  const unfurl = opts.suppressLinkPreviews
+    ? { unfurlLinks: false, unfurlMedia: false }
+    : delivery.unfurl;
   if (opts.replyBroadcast && opts.mediaUrl) {
     throw new Error("Slack replyBroadcast is only supported for text or block thread replies.");
   }
@@ -1252,6 +1259,7 @@ async function sendMessageSlackQueuedInner(params: {
       await dispatchOnce();
       try {
         const { response } = await postSlackMessageBestEffort({
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
           client,
           channelId,
           text: accessibilityText,
@@ -1304,6 +1312,7 @@ async function sendMessageSlackQueuedInner(params: {
           await dispatchOnce();
         }
         const posted = await postSlackMessageBestEffort({
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
           client,
           channelId,
           text: fallback.text,
@@ -1428,6 +1437,7 @@ async function sendMessageSlackQueuedInner(params: {
       await dispatchOnce();
     }
     const posted = await postSlackMessageBestEffort({
+      assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
       client,
       channelId,
       text: chunk,

@@ -4,6 +4,7 @@ import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import type {
   McpToolCatalog,
   RequesterMcpConnect,
+  RequesterMcpConnectDelivery,
   SessionMcpRequesterScope,
 } from "./agent-bundle-mcp-types.js";
 import { requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
@@ -21,21 +22,47 @@ async function connectRequesterOAuthServer(params: {
   server: RequesterOAuthServer;
   requesterScope: SessionMcpRequesterScope;
   publicOrigin?: string;
+  delivery?: RequesterMcpConnectDelivery;
+  signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
+  const failure = (message: string): AgentToolResult<unknown> => ({
+    content: [{ type: "text", text: message }],
+    details: { status: "error", error: message, mcpServer: params.serverName },
+  });
   if (!params.publicOrigin) {
     const message =
       `MCP server "${params.serverName}" needs requester sign-in, but gateway.publicOrigin is not configured. ` +
       "Ask the operator to set the public Gateway HTTP(S) origin.";
-    return {
-      content: [{ type: "text", text: message }],
-      details: { status: "error", error: message, mcpServer: params.serverName },
-    };
+    return failure(message);
   }
-  const result = await startMcpOAuthAuthorization(
-    requesterMcpOAuthIdentity(params.serverName, params.server.url, params.requesterScope),
-    params.server,
-    { redirectUrl: new URL("/oauth/mcp/callback", params.publicOrigin).href },
-  );
+  const delivery = params.delivery;
+  if (!delivery) {
+    return failure(
+      `MCP server "${params.serverName}" needs a private sign-in link, but private delivery is unavailable for this request. ` +
+        "Ask the operator to enable a supported private messaging route for your account, then try connecting again.",
+    );
+  }
+  const assertActive = () => {
+    params.signal?.throwIfAborted();
+    delivery.assertActive();
+  };
+  assertActive();
+  let result: Awaited<ReturnType<typeof startMcpOAuthAuthorization>>;
+  try {
+    result = await startMcpOAuthAuthorization(
+      requesterMcpOAuthIdentity(params.serverName, params.server.url, params.requesterScope),
+      params.server,
+      { redirectUrl: new URL("/oauth/mcp/callback", params.publicOrigin).href },
+    );
+  } catch {
+    assertActive();
+    // Provider errors can include the bearer authorization URL. Never put them
+    // into a shared tool result, transcript, or public reply.
+    return failure(
+      `Could not prepare sign-in for MCP server "${params.serverName}". Try connecting again or ask the operator to check the server's OAuth configuration.`,
+    );
+  }
+  assertActive();
   if (result.status === "authorized") {
     return {
       content: [
@@ -47,18 +74,34 @@ async function connectRequesterOAuthServer(params: {
       details: { mcpServer: params.serverName },
     };
   }
+  let sent: Awaited<ReturnType<RequesterMcpConnectDelivery["send"]>>;
+  try {
+    sent = await delivery.send({
+      serverName: params.serverName,
+      authorizationUrl: result.authorizationUrl,
+      assertActive,
+    });
+  } catch {
+    assertActive();
+    sent = { status: "failed" };
+  }
+  assertActive();
+  if (sent.status !== "sent") {
+    return failure(
+      `Could not privately deliver the sign-in link for MCP server "${params.serverName}". ` +
+        "Allow private messages from this bot and ask the operator to check its private messaging access, then try connecting again. No sign-in link was posted to this conversation.",
+    );
+  }
   return {
     content: [
       {
         type: "text",
         text:
-          `Connect MCP server "${params.serverName}" at ${result.authorizationUrl}\n` +
-          "After sign-in completes, the server's tools become available on the next message.",
+          `Sent you a private message with the sign-in link for MCP server "${params.serverName}". ` +
+          "Complete sign-in there, then return to this conversation. The server's tools become available on the next message.",
       },
     ],
-    details: {
-      mcpConnect: { serverName: params.serverName, authorizationUrl: result.authorizationUrl },
-    },
+    details: { mcpServer: params.serverName, status: "link-sent" },
   };
 }
 
@@ -85,8 +128,8 @@ function buildRequesterConnectCatalog(
       serverName,
       safeServerName: safeServerNamesByServer.get(serverName) ?? serverName,
       toolName: "connect",
-      description: `Connect your ${serverName} account.`,
-      fallbackDescription: `Connect your ${serverName} account.`,
+      description: `Connect your ${serverName} account with a private sign-in message.`,
+      fallbackDescription: `Connect your ${serverName} account with a private sign-in message.`,
       inputSchema: Type.Object({}),
     })),
   };
@@ -134,15 +177,17 @@ export async function createRequesterMcpConnect(params: {
     catalog: buildRequesterConnectCatalog(servers, params.safeServerNamesByServer),
     authorizedServerNames,
     configFingerprint,
-    createExecute(serverName) {
+    createExecute(serverName, delivery) {
       const server = servers.get(serverName);
       return server
-        ? async () =>
+        ? async (_toolCallId, _input, signal) =>
             await connectRequesterOAuthServer({
               serverName,
               server,
               requesterScope: params.requesterScope,
               publicOrigin: params.cfg?.gateway?.publicOrigin,
+              delivery,
+              signal,
             })
         : undefined;
     },

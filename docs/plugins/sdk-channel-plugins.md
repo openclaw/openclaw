@@ -298,6 +298,22 @@ raw callback string. Actor and source-message checks remain channel-owned.
       Send contexts also include `replyToIdSource` (`implicit` or `explicit`)
       when a native reply target was resolved, so payload helpers can preserve
       explicit reply tags without consuming an implicit single-use reply slot.
+
+      Raw outbound adapters may also implement `sendPrivateText` for sensitive
+      host-generated messages. Its context contains `cfg`, the originating
+      `accountId`, authenticated `senderId`, `text`, and a required `assertActive`
+      callback. Resolve the sender to a private destination on that account;
+      never substitute a group, thread, default account, or configured approver.
+      Revalidate `assertActive` after awaited preparation and immediately before
+      each physical send, including retries. Return an acknowledged delivery
+      result or throw when private delivery fails.
+
+      This capability sends directly through the plugin's transport without
+      exposing sensitive text to shared transcripts, message hooks, or recovery
+      queues. It must not fall back to public delivery or grant DM pairing
+      approval. Core returns only a safe delivery outcome to the caller. Discord
+      and Slack implement it using direct messages; OAuth policy and credential
+      storage remain with the MCP owner.
     </Accordion>
 
     ### Group tool-policy adapters

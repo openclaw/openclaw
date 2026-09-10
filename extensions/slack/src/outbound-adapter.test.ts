@@ -29,6 +29,22 @@ describe("slackOutbound", () => {
     sendMessageSlackMock.mockReset();
   });
 
+  it.each(["channel:C123", "#general", "team:TWORK:channel:C123"])(
+    "rejects public destination %s for private delivery",
+    async (senderId) => {
+      await expect(
+        slackOutbound.sendPrivateText!({
+          cfg,
+          accountId: "default",
+          senderId,
+          text: "private",
+          assertActive: () => {},
+        }),
+      ).rejects.toThrow("requires a user ID");
+      expect(sendMessageSlackMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("sends mirrored question controls once at the Slack message block limit", async () => {
     sendMessageSlackMock.mockResolvedValue({ messageId: "171.001", channelId: "C123" });
     const questionId = "ask_0123456789abcdef0123456789abcdef";

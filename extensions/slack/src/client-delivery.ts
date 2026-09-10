@@ -254,13 +254,15 @@ export async function postSlackMessageBestEffort(params: {
   metadata?: MessageMetadata;
   mrkdwn?: boolean;
   unfurl?: SlackUnfurlOptions;
+  assertPlatformSendAuthorized?: () => void;
 }) {
   const basePayload = buildSlackPostMessagePayload(params);
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => ({
-    response: await withSlackDnsRequestRetry("chat.postMessage", () =>
-      postChatMessage(payload),
-    ).catch(rethrowSlackPermanentOutboundApiRejection),
+    response: await withSlackDnsRequestRetry("chat.postMessage", () => {
+      params.assertPlatformSendAuthorized?.();
+      return postChatMessage(payload);
+    }).catch(rethrowSlackPermanentOutboundApiRejection),
     identity,
   });
   const posted = await postSlackMessageWithIdentityFallback({

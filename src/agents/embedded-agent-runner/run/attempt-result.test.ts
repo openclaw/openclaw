@@ -82,7 +82,6 @@ function createResultFixture(params?: {
     getLastCompactionTokensAfter: () => undefined,
     getLastToolError: () => undefined,
     getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
-    getLatestMcpConnectAction: () => undefined,
     getMessagingToolSentMediaUrls: () => params?.messagingToolSentMediaUrls ?? [],
     getMessagingToolSentTargets: () => [],
     getMessagingToolSentTexts: () => [],
@@ -518,22 +517,14 @@ describe("attempt result projection", () => {
     });
   });
 
-  it("carries the newest MCP presentation state across retry attempts", () => {
+  it("carries the newest MCP App view across retry attempts", () => {
     const carryover = createAttemptCarryover();
     const first = {
       latestMcpAppChannelView: { viewId: "view-first" },
-      latestMcpConnectAction: {
-        serverName: "calendar",
-        authorizationUrl: "https://auth.example/first",
-      },
     };
     const retry: Parameters<typeof carryover.apply>[0] = {};
     const latest = {
       latestMcpAppChannelView: { viewId: "view-latest" },
-      latestMcpConnectAction: {
-        serverName: "calendar",
-        authorizationUrl: "https://auth.example/latest",
-      },
     };
 
     carryover.apply(first);
@@ -542,7 +533,6 @@ describe("attempt result projection", () => {
 
     expect(retry).toEqual(first);
     expect(latest.latestMcpAppChannelView.viewId).toBe("view-latest");
-    expect(latest.latestMcpConnectAction.authorizationUrl).toBe("https://auth.example/latest");
   });
 
   it("keeps completed client tool calls in reserved source order", () => {

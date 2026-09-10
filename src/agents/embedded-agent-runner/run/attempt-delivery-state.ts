@@ -4,7 +4,6 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
   return {
     latestMcpAppChannelView: attempt.latestMcpAppChannelView,
-    latestMcpConnectAction: attempt.latestMcpConnectAction,
     didSendViaMessagingTool: attempt.didSendViaMessagingTool,
     sourceReplyDelivered: attempt.sourceReplyDelivered,
     didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,

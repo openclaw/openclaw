@@ -51,7 +51,6 @@ import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js"
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
-import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
@@ -485,10 +484,6 @@ export async function prepareReplyAgentPayloads(state: {
     channel: replyToChannel,
     sessionKey,
     view: runResult.latestMcpAppChannelView,
-  });
-  replyPayloads = attachMcpConnectChannelAction({
-    payloads: replyPayloads,
-    action: runResult.latestMcpConnectAction,
   });
 
   const hasVisibleReplyPayload = replyPayloads.some(

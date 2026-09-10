@@ -143,7 +143,6 @@ function createSubscriptionMock(): SubscriptionMock {
     getCurrentAttemptAssistant: () => undefined,
     getLastAssistantTextMessageIndex: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
-    getLatestMcpConnectAction: () => undefined,
     toolMetas: [] as SubscriptionMock["toolMetas"],
     runToolLifecycle: async <T>(toolParams: {
       args: unknown;

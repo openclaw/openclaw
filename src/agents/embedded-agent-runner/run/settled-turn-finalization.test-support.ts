@@ -179,7 +179,6 @@ export function projectSettledProviderFailureAttempt(
     getLastCompactionTokensAfter: () => undefined,
     getLastToolError: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
-    getLatestMcpConnectAction: () => undefined,
     getMessagingToolSentMediaUrls: () => [],
     getMessagingToolSentTargets: () => [],
     getMessagingToolSentTexts: () => [],

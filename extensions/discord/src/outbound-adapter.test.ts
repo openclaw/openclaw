@@ -111,6 +111,48 @@ describe("discordOutbound", () => {
     outboundWarnSpy.mockClear();
   });
 
+  it("delivers private text to the requesting user without a public webhook or thread", async () => {
+    const assertActive = vi.fn();
+    await discordOutbound.sendPrivateText!({
+      cfg: {},
+      accountId: "work-bot",
+      senderId: "123456789",
+      text: "https://example.test/connect?state=private-fixture",
+      assertActive,
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledOnce();
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "user:123456789",
+      "https://example.test/connect?state=private-fixture",
+      {
+        cfg: {},
+        accountId: "work-bot",
+        suppressEmbeds: true,
+        allowedMentions: { parse: [] },
+        assertPlatformSendAuthorized: assertActive,
+      },
+    );
+    expect(hoisted.sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["channel:123", "#general", "<@123>"])(
+    "rejects non-ingress user id %s for private delivery",
+    async (senderId) => {
+      await expect(
+        discordOutbound.sendPrivateText!({
+          cfg: {},
+          accountId: "default",
+          senderId,
+          text: "private",
+          assertActive: () => {},
+        }),
+      ).rejects.toThrow("requires a user ID");
+      expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+      expect(hoisted.sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes text sends to thread target when threadId is provided", async () => {
     const result = await discordOutbound.sendText?.({
       cfg: {},

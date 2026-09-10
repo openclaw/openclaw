@@ -497,6 +497,10 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     const { slackOutbound } = await loadSlackOutboundAdapterModule();
     return await slackOutbound.sendText!(ctx);
   },
+  sendPrivateText: async (ctx) => {
+    const { slackOutbound } = await loadSlackOutboundAdapterModule();
+    return await slackOutbound.sendPrivateText!(ctx);
+  },
   sendMedia: async (ctx) => {
     const { slackOutbound } = await loadSlackOutboundAdapterModule();
     return await slackOutbound.sendMedia!(ctx);

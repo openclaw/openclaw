@@ -152,6 +152,26 @@ export const discordOutbound: ChannelOutboundAdapter = {
     });
   },
   resolveTarget: ({ to, allowFrom }) => normalizeDiscordOutboundTarget(to, allowFrom),
+  sendPrivateText: async ({ cfg, accountId, senderId, text, assertActive }) => {
+    // Sender IDs come from ingress, never channel names or model-chosen targets.
+    if (!/^\d+$/.test(senderId)) {
+      throw new Error("Discord private delivery requires a user ID");
+    }
+    const { sendMessageDiscord } = await loadDiscordSendRuntime();
+    assertActive();
+    return attachChannelToResult(
+      "discord",
+      toDiscordOutboundDeliveryResult(
+        await sendMessageDiscord(`user:${senderId}`, text, {
+          cfg,
+          accountId,
+          suppressEmbeds: true,
+          allowedMentions: { parse: [] },
+          assertPlatformSendAuthorized: assertActive,
+        }),
+      ),
+    );
+  },
   sendPayload: async (ctx) =>
     await sendDiscordOutboundPayload({
       ctx,

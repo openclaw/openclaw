@@ -304,6 +304,18 @@ export type ChannelOutboundAdapter = {
     ctx: ChannelOutboundFormattedContext & { mediaUrl: string },
   ) => Promise<OutboundDeliveryResult>;
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
+  /**
+   * Deliver sensitive text only to this host-authenticated sender, outside shared
+   * transcripts, hooks, and recovery queues. Never fall back to a public target.
+   */
+  sendPrivateText?: (ctx: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    senderId: string;
+    text: string;
+    /** Revalidate the originating run immediately before every physical send. */
+    assertActive: () => void;
+  }) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
 };

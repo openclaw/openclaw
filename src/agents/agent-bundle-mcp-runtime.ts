@@ -350,14 +350,21 @@ export function createSessionMcpRuntime(
         tools: catalog.tools.filter((tool) => connectFingerprints.has(tool.serverName)),
       };
     },
-    createExecute(serverName) {
-      const execute = requesterConnect.createExecute(serverName);
+    createExecute(serverName, delivery) {
+      const assertCurrent = () => {
+        if (!connectFingerprints.has(serverName)) {
+          throw createDisposedError(params.sessionId);
+        }
+        delivery?.assertActive();
+      };
+      const execute = requesterConnect.createExecute(
+        serverName,
+        delivery && { ...delivery, assertActive: assertCurrent },
+      );
       return (
         execute &&
         (async (...args) => {
-          if (!connectFingerprints.has(serverName)) {
-            throw createDisposedError(params.sessionId);
-          }
+          assertCurrent();
           return await execute(...args);
         })
       );

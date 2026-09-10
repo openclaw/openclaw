@@ -75,6 +75,27 @@ describe("requester MCP connect runtime", () => {
   let manager: ReturnType<typeof createSessionMcpRuntimeManager>;
   const created: Array<Parameters<CreateSessionMcpRuntime>[0]> = [];
 
+  const request = {
+    sessionId: "session-connect",
+    workspaceDir: "/workspace",
+    requesterSenderId: "alice",
+    messageChannel: "telegram",
+    agentAccountId: "bot",
+    cfg: {
+      gateway: { publicOrigin: "https://gateway.example" },
+      mcp: {
+        servers: {
+          calendar: {
+            url: "https://mcp.example/rpc",
+            transport: "streamable-http" as const,
+            auth: "oauth" as const,
+            oauth: { identity: "per-requester" as const },
+          },
+        },
+      },
+    },
+  };
+
   beforeEach(() => {
     oauthStatus.mockReset().mockResolvedValue({ state: "unauthenticated" });
     startAuthorization.mockReset().mockResolvedValue({
@@ -98,41 +119,22 @@ describe("requester MCP connect runtime", () => {
   });
 
   it("materializes connect before authorization and real tools on the next message", async () => {
-    const request = {
-      sessionId: "session-connect",
-      workspaceDir: "/workspace",
-      requesterSenderId: "alice",
-      messageChannel: "telegram",
-      agentAccountId: "bot",
-      cfg: {
-        gateway: { publicOrigin: "https://gateway.example" },
-        mcp: {
-          servers: {
-            calendar: {
-              url: "https://mcp.example/rpc",
-              transport: "streamable-http" as const,
-              auth: "oauth" as const,
-              oauth: { identity: "per-requester" as const },
-            },
-          },
-        },
-      },
-    };
-
     const disconnectedRuntime = await manager.getOrCreate(request);
+    const send = vi.fn().mockResolvedValue({ status: "sent" });
     const disconnected = await materializeBundleMcpToolsForRun({
       runtime: disconnectedRuntime,
+      requesterConnectDelivery: { assertActive: () => {}, send },
     });
     expect(disconnected.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
     expect(created.find((params) => params.requesterScope)?.includeServerNames).toEqual(new Set());
     expect(startAuthorization).not.toHaveBeenCalled();
-    await expect(disconnected.tools[0]!.execute("connect", {})).resolves.toMatchObject({
-      details: {
-        mcpConnect: {
-          serverName: "calendar",
-          authorizationUrl: "https://auth.example/authorize?state=opaque",
-        },
-      },
+    const result = await disconnected.tools[0]!.execute("connect", {});
+    expect(JSON.stringify(result)).not.toContain("https://auth.example");
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining("private message") });
+    expect(send).toHaveBeenCalledWith({
+      serverName: "calendar",
+      authorizationUrl: "https://auth.example/authorize?state=opaque",
+      assertActive: expect.any(Function),
     });
     startAuthorization
       .mockResolvedValueOnce({
@@ -157,7 +159,7 @@ describe("requester MCP connect runtime", () => {
         content: [
           {
             type: "text",
-            text: expect.stringContaining("https://auth.example/authorize?state=opaque"),
+            text: expect.stringContaining("private message"),
           },
         ],
         isError: false,
@@ -180,6 +182,117 @@ describe("requester MCP connect runtime", () => {
     );
     await connected.dispose();
   });
+
+  it("does not start OAuth when private delivery is unavailable", async () => {
+    const runtime = await manager.getOrCreate(request);
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    try {
+      const result = await materialized.tools[0]!.execute("connect", {});
+      expect(result.details).toMatchObject({ status: "error" });
+      expect(result.content[0]).toMatchObject({
+        text: expect.stringContaining("private delivery is unavailable"),
+      });
+      expect(startAuthorization).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain("https://auth.example");
+    } finally {
+      await materialized.dispose();
+    }
+  });
+
+  it.each(["oauth", "delivery", "rejected-delivery"])(
+    "keeps sensitive %s failures out of tool results",
+    async (failure) => {
+      const secret = "https://auth.example/authorize?state=opaque";
+      const send = vi.fn().mockResolvedValue({ status: "failed" });
+      if (failure === "oauth") {
+        startAuthorization.mockRejectedValue(new Error(secret));
+      } else if (failure === "delivery") {
+        send.mockRejectedValue(new Error(secret));
+      }
+      const runtime = await manager.getOrCreate(request);
+      const materialized = await materializeBundleMcpToolsForRun({
+        runtime,
+        requesterConnectDelivery: { assertActive: () => {}, send },
+      });
+      try {
+        const result = await materialized.tools[0]!.execute("connect", {});
+        expect(result.details).toMatchObject({ status: "error" });
+        expect(JSON.stringify(result)).not.toContain(secret);
+        expect(result.content[0]).toMatchObject({
+          text: expect.stringMatching(/try connecting again/i),
+        });
+        if (failure === "oauth") {
+          expect(send).not.toHaveBeenCalled();
+        }
+      } finally {
+        await materialized.dispose();
+      }
+    },
+  );
+
+  it.each(["sent", "failed"] as const)(
+    "rejects revoked calls after private delivery resolves with %s",
+    async (status) => {
+      let active = true;
+      const runtime = await manager.getOrCreate(request);
+      const materialized = await materializeBundleMcpToolsForRun({
+        runtime,
+        requesterConnectDelivery: {
+          assertActive: () => {
+            if (!active) {
+              throw new Error("Run closed");
+            }
+          },
+          send: async () => {
+            active = false;
+            return { status };
+          },
+        },
+      });
+      try {
+        await expect(materialized.tools[0]!.execute("connect", {})).rejects.toThrow("Run closed");
+      } finally {
+        await materialized.dispose();
+      }
+    },
+  );
+
+  it.each(["abort", "dispose"])(
+    "does not deliver after %s during OAuth preparation",
+    async (end) => {
+      const started = Promise.withResolvers<void>();
+      const authorization = Promise.withResolvers<{
+        status: "redirect";
+        authorizationUrl: string;
+      }>();
+      startAuthorization.mockImplementation(() => {
+        started.resolve();
+        return authorization.promise;
+      });
+      const send = vi.fn().mockResolvedValue({ status: "sent" });
+      const runtime = await manager.getOrCreate(request);
+      const materialized = await materializeBundleMcpToolsForRun({
+        runtime,
+        requesterConnectDelivery: { assertActive: () => {}, send },
+      });
+      const controller = new AbortController();
+      const execution = materialized.tools[0]!.execute("connect", {}, controller.signal);
+      const rejected = expect(execution).rejects.toThrow(end === "abort" ? "aborted" : "disposed");
+      await started.promise;
+      if (end === "abort") {
+        controller.abort();
+      } else {
+        await materialized.dispose();
+      }
+      authorization.resolve({
+        status: "redirect",
+        authorizationUrl: "https://auth.example/authorize?state=opaque",
+      });
+      await rejected;
+      expect(send).not.toHaveBeenCalled();
+      await materialized.dispose();
+    },
+  );
 
   it("returns requester connection configuration failures as failed MCP guest results", async () => {
     const runtime = await manager.getOrCreate({
