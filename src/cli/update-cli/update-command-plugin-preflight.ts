@@ -5,7 +5,7 @@ import { resolveNpmSpecMetadata } from "../../infra/install-source-utils.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import { resolveNpmInstallSpecsForUpdateChannel } from "../../plugins/install-channel-specs.js";
 import { UpdatePreMutationError } from "./shared.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 /** Admit configured npm targets without installing plugins or changing live state. */
 export async function preflightConfiguredNpmPluginTargets(params: {
