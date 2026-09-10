@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import type { MediaKind } from "@openclaw/media-core/constants";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import {
   asPositiveSafeInteger as parsePositiveInteger,
   asSafeIntegerInRange,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { withTempWorkspace } from "../infra/private-temp-workspace.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
@@ -144,7 +147,12 @@ function parseFfprobeMediaMetadata(
   };
 }
 
-function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
+type FfprobeInput =
+  | { protocol: "fd" | "pipe" }
+  | { protocol: "file"; filePath: string; format: "ogg" | "mp3" | "mov" };
+
+function buildFfprobeMetadataArgs(input: FfprobeInput): string[] {
+  const protocol = input.protocol;
   const isFileDescriptor = protocol === "fd";
   return [
     "-v",
@@ -156,7 +164,8 @@ function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
     "-of",
     "json",
     ...(isFileDescriptor ? ["-fd", "0"] : []),
-    isFileDescriptor ? "fd:" : "pipe:0",
+    ...(input.protocol === "file" ? ["-f", input.format] : []),
+    protocol === "file" ? input.filePath : isFileDescriptor ? "fd:" : "pipe:0",
   ];
 }
 
@@ -177,7 +186,7 @@ async function probeMediaSource(
 ): Promise<PlaybackMediaProbeResult | null> {
   const runProbe = async (protocol: "fd" | "pipe") =>
     await runFfprobe(
-      buildFfprobeMetadataArgs(protocol),
+      buildFfprobeMetadataArgs({ protocol }),
       source.kind === "buffer"
         ? { input: source.buffer, ...options }
         : { stdinFileDescriptor: source.fd, ...options },
@@ -239,6 +248,33 @@ async function probeMediaFile(
   }
 }
 
+async function probeSeekableMediaBuffer(
+  buffer: Buffer,
+  kind: MediaProbeKind,
+  format: "ogg" | "mp3" | "mov",
+): Promise<MediaProbeResult> {
+  try {
+    return await withTempWorkspace(
+      {
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "media-probe-",
+      },
+      async (workspace) => {
+        const filePath = await workspace.write("media", buffer);
+        return toMediaProbeResult(
+          parseFfprobeMediaMetadata(
+            // Fixed demuxers keep playlist-like bytes from opening nested local paths.
+            await runFfprobe(buildFfprobeMetadataArgs({ protocol: "file", filePath, format })),
+            kind,
+          ),
+        );
+      },
+    );
+  } catch {
+    return {};
+  }
+}
+
 /** Probes a bounded batch under one elapsed-time budget, unaffected by wall-clock steps. */
 export async function probeMediaFilesWithinBudget(
   inputs: readonly MediaFileProbeInput[],
@@ -285,4 +321,30 @@ export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensi
     await probeMediaSource({ kind: "buffer", buffer }, "video"),
   );
   return width && height ? { width, height } : undefined;
+}
+
+function resolveAudioProbeFormat(contentType?: string): "ogg" | "mp3" | "mov" | undefined {
+  switch (normalizeMimeType(contentType)) {
+    case "audio/ogg":
+    case "audio/opus":
+      return "ogg";
+    case "audio/mpeg":
+    case "audio/mp3":
+      return "mp3";
+    case "audio/mp4":
+    case "audio/m4a":
+    case "audio/x-m4a":
+      return "mov";
+    default:
+      return undefined;
+  }
+}
+
+/** Positive audio duration in milliseconds for a known safe container. */
+export async function probeAudioDurationMs(
+  buffer: Buffer,
+  contentType?: string,
+): Promise<number | undefined> {
+  const format = resolveAudioProbeFormat(contentType);
+  return format ? (await probeSeekableMediaBuffer(buffer, "audio", format)).durationMs : undefined;
 }

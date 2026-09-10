@@ -27,6 +27,7 @@ export {
   getImageMetadata,
   isImageProcessorUnavailableError,
   parseFfprobeCodecAndSampleRate,
+  probeAudioDurationMs,
   probeVideoDimensions,
   resolveFfmpegBin,
   resizeToJpeg,

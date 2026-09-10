@@ -7,6 +7,7 @@ export {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
   normalizePollInput,
+  probeAudioDurationMs,
   probeVideoDimensions,
 } from "openclaw/plugin-sdk/media-runtime";
 export { loadWebMedia } from "openclaw/plugin-sdk/web-media";
