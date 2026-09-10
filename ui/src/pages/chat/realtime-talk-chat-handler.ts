@@ -1,5 +1,27 @@
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import type { RealtimeTalkEventInput, ChatPayload } from "./realtime-talk-shared.js";
+import type { RealtimeTalkEvent } from "./realtime-talk-shared.js";
+
+/** Payload shape for a chat event frame from the gateway. */
+export type ChatPayload = {
+  runId?: string;
+  stream?: string;
+  state?: string;
+  errorMessage?: string;
+  data?: unknown;
+  message?: unknown;
+};
+
+/** Input shape for emitting a realtime talk event to the client. */
+export type RealtimeTalkEventInput<TPayload = unknown> = {
+  type: RealtimeTalkEvent["type"];
+  payload?: TPayload;
+  turnId?: string;
+  captureId?: string;
+  final?: boolean;
+  callId?: string;
+  itemId?: string;
+  parentId?: string;
+};
 
 /** Result of processing a chat event — either settled or needs further action. */
 export type ChatEventDisposition =
@@ -139,6 +161,7 @@ export function createChatHandler(deps: ChatHandlerDeps) {
     if (evt.event !== "chat") {
       return undefined;
     }
+    // SAFETY: chat event payload is the unstructured chat envelope from the gateway.
     const payload = evt.payload as ChatPayload | undefined;
     if (!payload) {
       return undefined;
@@ -171,6 +194,7 @@ function emitRealtimeTalkAgentProgress(
     return;
   }
   const data = payload.data && typeof payload.data === "object" ? payload.data : {};
+  // SAFETY: data is an opaque object from the tool.progress payload.
   const record = data as Record<string, unknown>;
   const phase = typeof record.phase === "string" ? record.phase : undefined;
   const name = typeof record.name === "string" ? record.name : undefined;

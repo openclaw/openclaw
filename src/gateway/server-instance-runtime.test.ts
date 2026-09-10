@@ -32,6 +32,7 @@ function createContext(): GatewayRequestContext {
     },
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
+    retiredFollowupRunIds: new Map(),
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }

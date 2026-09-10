@@ -102,5 +102,3 @@ export function observePendingFollowupRunId(params: {
     }
   };
 }
-
-export { FOLLOWUP_POLL_INTERVAL_MS };

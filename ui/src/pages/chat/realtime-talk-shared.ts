@@ -12,7 +12,12 @@ import type { TalkEvent } from "../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 // Control UI chat module implements realtime talk shared behavior.
 import { formatUiError } from "../../lib/format-error.ts";
-import { createChatHandler, type ChatEventDisposition } from "./realtime-talk-chat-handler.ts";
+import {
+  createChatHandler,
+  type ChatEventDisposition,
+  type ChatPayload,
+  type RealtimeTalkEventInput,
+} from "./realtime-talk-chat-handler.ts";
 import {
   observePendingFollowupRunId,
   type AgentWaitResult,
@@ -51,16 +56,7 @@ export type RealtimeTalkCallbacks = {
   onVideoError?: (error: unknown) => void;
 };
 
-export type RealtimeTalkEventInput<TPayload = unknown> = {
-  type: RealtimeTalkEvent["type"];
-  payload?: TPayload;
-  turnId?: string;
-  captureId?: string;
-  final?: boolean;
-  callId?: string;
-  itemId?: string;
-  parentId?: string;
-};
+export { RealtimeTalkEventInput };
 
 type RealtimeTalkAudioContract = {
   inputEncoding: "pcm16" | "g711_ulaw";
@@ -234,14 +230,7 @@ function resolveRealtimeTalkEventSessionId(
   return `${ctx.sessionKey}:${session.provider}:${session.transport}`;
 }
 
-export type ChatPayload = {
-  runId?: string;
-  stream?: string;
-  state?: string;
-  errorMessage?: string;
-  data?: unknown;
-  message?: unknown;
-};
+export { ChatPayload };
 
 const EMPTY_FINAL_FALLBACK_GRACE_MS = 500;
 const EMPTY_FINAL_FALLBACK_TEXT = "OpenClaw finished with no text.";
