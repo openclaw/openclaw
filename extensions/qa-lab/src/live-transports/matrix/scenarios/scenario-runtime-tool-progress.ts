@@ -416,7 +416,7 @@ export async function runToolProgressErrorScenario(context: MatrixQaScenarioCont
 export async function runToolProgressMentionSafetyScenario(context: MatrixQaScenarioContext) {
   if (process.platform === "win32") {
     throw new QaSuiteScenarioSkipError(
-      "Matrix tool progress mention safety requires POSIX FIFO support.",
+      "Matrix tool progress mention safety requires POSIX shell support.",
     );
   }
   return runMatrixToolProgressScenario(context, {

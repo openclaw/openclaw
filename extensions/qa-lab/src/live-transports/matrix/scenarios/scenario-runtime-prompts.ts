@@ -23,8 +23,8 @@ export function buildMatrixPartialStreamingPrompt(sutUserId: string, text: strin
 
 export const MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME = "QA_KICKOFF_TASK.md";
 export const MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME =
-  "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt";
-const MATRIX_QA_TOOL_PROGRESS_MENTION_COMMAND = `cat '${MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME}'; false`;
+  "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release";
+const MATRIX_QA_TOOL_PROGRESS_MENTION_COMMAND = `while [ ! -f '${MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME}' ]; do sleep 0.05; done; cat '${MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME}'; rm -f '${MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME}'; false`;
 const MATRIX_QA_TOOL_PROGRESS_COMMAND = "printf 'matrix-command-progress-start\\n'; sleep 2";
 
 export function buildMatrixToolProgressTaskContent(text: string) {
