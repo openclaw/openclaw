@@ -1,5 +1,6 @@
-import { withEnvOverride, withTempHome } from "../config/test-helpers.js";
+import { withTempHome } from "../config/test-helpers.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 /** Keep real preflight fixtures from provisioning plugins for the developer's credentials. */
 export async function withDoctorConfigPreflightHome<T>(
@@ -12,6 +13,6 @@ export async function withDoctorConfigPreflightHome<T>(
         undefined,
       ]),
     );
-    return withEnvOverride(providerEnv, () => run(home));
+    return withEnvAsync(providerEnv, () => run(home));
   });
 }

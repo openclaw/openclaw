@@ -3,11 +3,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { withEnvOverride } from "../config/test-helpers.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { isTrustedOfficialPluginInstallRecord } from "../plugins/official-external-install-records.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
 import {
   createCurrentIndex,
@@ -46,7 +46,7 @@ describe("doctor official plugin provenance", () => {
       } else {
         const configPath = path.join(stateDir, "openclaw.json");
         fs.writeFileSync(configPath, JSON.stringify(config));
-        await withEnvOverride(
+        await withEnvAsync(
           {
             ...hermeticEnv(),
             OPENCLAW_CONFIG_PATH: configPath,
