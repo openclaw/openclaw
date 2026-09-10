@@ -92,7 +92,7 @@ const GATEWAY_ROOT_WORK_ORIGIN_MAX_CHARS = 80;
 
 function createGatewayRootWorkAdmission(
   origin: string,
-  independentWork = false,
+  detachedWork = false,
 ): GatewayRootWorkAdmissionLease {
   const normalizedOrigin = origin
     .trim()
@@ -110,7 +110,7 @@ function createGatewayRootWorkAdmission(
     release,
     run: async <T>(run: () => Promise<T>) =>
       await GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(admission, () =>
-        independentWork ? runWithIndependentAsyncWork(admission, run) : run(),
+        detachedWork ? runWithDetachedAsyncWork(admission, run) : run(),
       ),
   };
 }
@@ -131,12 +131,12 @@ function createGatewayRootWorkRelease(admission: GatewayRootWorkAdmission): () =
   };
 }
 
-async function runWithIndependentAsyncWork<T>(
+async function runWithDetachedAsyncWork<T>(
   admission: GatewayRootWorkAdmission,
   run: () => Promise<T>,
 ): Promise<T> {
   // Timers can inherit a completed request's scope. Retain cleanup under this
-  // independent root without delaying its caller's existing result boundary.
+  // detached root without delaying its caller's existing result boundary.
   admission.references += 1;
   const releaseWork = createGatewayRootWorkRelease(admission);
   const result = createDeferredCore<T>();
@@ -399,7 +399,7 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
   return createGatewayRootWorkAdmission("restart-prepared");
 }
 
-/** Independent detached work counts separately even when launched by an admitted parent. */
+/** Independent roots count separately even when launched by an admitted parent. */
 export function tryBeginGatewayIndependentRootWorkAdmission(
   origin = "independent",
 ): GatewayRootWorkAdmissionLease | null {
@@ -410,7 +410,7 @@ export function tryBeginGatewayIndependentRootWorkAdmission(
   ) {
     return null;
   }
-  return createGatewayRootWorkAdmission(origin, true);
+  return createGatewayRootWorkAdmission(origin);
 }
 
 async function waitForGatewayWorkAdmissionChange(signal?: AbortSignal): Promise<void> {
@@ -439,10 +439,29 @@ export async function beginGatewayRootWorkAdmissionWhenOpen(
   }
 }
 
-export async function runWithGatewayIndependentRootWorkAdmission<T>(
+/** Keeps the caller's async-resource owner, including server shutdown cancellation. */
+export function runWithGatewayIndependentRootWorkAdmission<T>(
   run: () => Promise<T>,
   origin?: string,
   signal?: AbortSignal,
+): Promise<T> {
+  return runWithGatewayNewRootWorkAdmission(run, origin, signal, false);
+}
+
+/** Delayed producers outlive their triggering request and own their async cleanup. */
+export function runWithGatewayDetachedWorkAdmission<T>(
+  run: () => Promise<T>,
+  origin?: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  return runWithGatewayNewRootWorkAdmission(run, origin, signal, true);
+}
+
+async function runWithGatewayNewRootWorkAdmission<T>(
+  run: () => Promise<T>,
+  origin: string | undefined,
+  signal: AbortSignal | undefined,
+  detachedWork: boolean,
 ): Promise<T> {
   while (true) {
     // Cancellation retires admission only; an admitted operation still owns its full completion.
@@ -450,7 +469,9 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
     if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
       throw new GatewayDrainingError("gateway is draining for restart");
     }
-    const admission = tryBeginGatewayIndependentRootWorkAdmission(origin);
+    const admission = isGatewayWorkAdmissionClosed()
+      ? null
+      : createGatewayRootWorkAdmission(origin ?? "independent", detachedWork);
     if (admission) {
       try {
         return await admission.run(run);
@@ -482,7 +503,7 @@ export function runWithGatewayIndependentRootWorkContinuation<T>(
   if (!parent || parent.released) {
     return runWithGatewayIndependentRootWorkAdmission(run, origin);
   }
-  const admission = createGatewayRootWorkAdmission(origin, true);
+  const admission = createGatewayRootWorkAdmission(origin);
   return admission.run(run).finally(admission.release);
 }
 

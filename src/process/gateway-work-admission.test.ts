@@ -25,6 +25,7 @@ import {
   retainGatewayRootWorkAdmissionContinuation,
   resetGatewayWorkAdmission,
   rollbackGatewayRestartSignalFence,
+  runWithGatewayDetachedWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
   runWithGatewayIndependentRootWorkContinuation,
   runWithRetainedGatewayRootWork,
@@ -317,59 +318,52 @@ it("uses the supplied origin when a continuation has no live parent", async () =
   expect(getActiveGatewayRootWorkHolders()).toEqual([]);
 });
 
-it.each(["admission", "continuation"] as const)(
-  "retains independent %s through descendant cleanup after its requester closes",
-  async (kind) => {
-    const foreground = new AsyncWorkScope();
-    const root = tryBeginGatewayRootWorkAdmission("foreground")!;
-    const releaseChild = createDeferredCore();
-    const handlerReturned = createDeferredCore();
-    let child: Promise<void> | undefined;
-    let track: ReturnType<typeof captureAsyncWorkTracker> | undefined;
-    let backgroundSignal: AbortSignal | undefined;
-    let settled = false;
-    const run = async () => {
-      track = captureAsyncWorkTracker();
-      backgroundSignal = getAsyncWorkSignal();
-      child = trackAsyncWork(async () => {
-        await releaseChild.promise;
-        await trackAsyncWork(() => {});
-      });
-      handlerReturned.resolve();
-      return "completed";
-    };
-    const background = root.run(async () =>
-      foreground.run(() =>
-        kind === "admission"
-          ? runWithGatewayIndependentRootWorkAdmission(run, "background")
-          : runWithGatewayIndependentRootWorkContinuation(run, "background"),
-      ),
-    );
-    void background.then(() => {
-      settled = true;
+it("retains detached work through descendant cleanup after its requester closes", async () => {
+  const foreground = new AsyncWorkScope();
+  const root = tryBeginGatewayRootWorkAdmission("foreground")!;
+  const releaseChild = createDeferredCore();
+  const handlerReturned = createDeferredCore();
+  let child: Promise<void> | undefined;
+  let track: ReturnType<typeof captureAsyncWorkTracker> | undefined;
+  let backgroundSignal: AbortSignal | undefined;
+  let settled = false;
+  const run = async () => {
+    track = captureAsyncWorkTracker();
+    backgroundSignal = getAsyncWorkSignal();
+    child = trackAsyncWork(async () => {
+      await releaseChild.promise;
+      await trackAsyncWork(() => {});
     });
-    await handlerReturned.promise;
-    root.release();
-    const foregroundClosed = foreground.drain();
-    try {
-      await nextTurn();
-      expect(settled).toBe(true);
-      expect(backgroundSignal).toBeDefined();
-      expect(backgroundSignal).not.toBe(foreground.signal);
-      expect(backgroundSignal?.aborted).toBe(false);
-      expect(getActiveGatewayRootWorkHolders()).toEqual(["background"]);
-    } finally {
-      releaseChild.resolve();
-      await child;
-      await background;
-      await foregroundClosed;
-      await nextTurn();
-    }
-    expect(backgroundSignal?.aborted).toBe(true);
-    await expect(track?.(() => {})).rejects.toThrow("Async work scope is closed");
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-  },
-);
+    handlerReturned.resolve();
+    return "completed";
+  };
+  const background = root.run(async () =>
+    foreground.run(() => runWithGatewayDetachedWorkAdmission(run, "background")),
+  );
+  void background.then(() => {
+    settled = true;
+  });
+  await handlerReturned.promise;
+  root.release();
+  const foregroundClosed = foreground.drain();
+  try {
+    await nextTurn();
+    expect(settled).toBe(true);
+    expect(backgroundSignal).toBeDefined();
+    expect(backgroundSignal).not.toBe(foreground.signal);
+    expect(backgroundSignal?.aborted).toBe(false);
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["background"]);
+  } finally {
+    releaseChild.resolve();
+    await child;
+    await background;
+    await foregroundClosed;
+    await nextTurn();
+  }
+  expect(backgroundSignal?.aborted).toBe(true);
+  await expect(track?.(() => {})).rejects.toThrow("Async work scope is closed");
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
 
 it("retains an admitted request root across its handler return", async () => {
   const root = tryBeginGatewayRootWorkAdmission();
