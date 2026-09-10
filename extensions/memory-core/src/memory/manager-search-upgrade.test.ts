@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -77,6 +78,59 @@ describe("memory search after a chunking upgrade", () => {
       expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION);
     },
   );
+
+  it("uses the existing lexical index when an upgrade rebuild cannot embed", async () => {
+    const cfg = createConfig();
+    await seedIndex(cfg);
+    await fs.writeFile(
+      `${fixture.paths.memory}/2026-01-12.md`,
+      "# Log\nAlpha memory line changed after the prior index was published.",
+    );
+    const manager = await fixture.getFreshManager(cfg);
+    const quotaError = Object.assign(new Error("Embeddings quota exhausted"), {
+      status: 429,
+      code: "insufficient_quota",
+    });
+    let embedBatchCalls = 0;
+    const fields = manager as unknown as {
+      providerInitialized: boolean;
+      providerKey: string;
+      computeProviderKey: () => string;
+      provider: {
+        id: string;
+        model: string;
+        embed: () => Promise<number[]>;
+        embedBatch: () => Promise<number[][]>;
+        close: () => Promise<void>;
+      };
+    };
+    fields.providerInitialized = true;
+    fields.provider = {
+      id: "mock",
+      model: "mock-embed",
+      embed: async () => {
+        throw quotaError;
+      },
+      embedBatch: async () => {
+        embedBatchCalls += 1;
+        throw quotaError;
+      },
+      close: async () => {},
+    };
+    fields.providerKey = fields.computeProviderKey();
+
+    const results = await manager.search("alpha");
+
+    expect(manager.status().custom?.indexIdentity).toMatchObject({
+      status: "mismatched",
+      code: "chunking_version",
+      owner: "openclaw",
+    });
+    expect(results).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+    expect(embedBatchCalls).toBe(1);
+  });
 
   it("keeps status inspection read-only during an upgrade", async () => {
     const cfg = createConfig();
