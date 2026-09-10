@@ -1,5 +1,6 @@
 // Telegram plugin module implements group history window behavior.
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   TelegramAmbientTranscriptWatermark,
   TelegramPromptContextEntry,
@@ -23,10 +24,6 @@ export function isTelegramSelfSenderName(name: string | undefined): name is stri
   return name?.endsWith(TELEGRAM_SELF_SENDER_SUFFIX) === true;
 }
 
-function isTelegramGroupHistorySelfEntry(entry: HistoryEntry): boolean {
-  return isTelegramSelfSenderName(entry.sender);
-}
-
 function telegramPromptMessageKey(message: Record<string, unknown>): string | undefined {
   const messageId = message["message_id"];
   const body = message["body"];
@@ -36,16 +33,6 @@ function telegramPromptMessageKey(message: Record<string, unknown>): string | un
   }
   if (typeof body === "string" && typeof timestampMs === "number") {
     return `text:${timestampMs}:${body.trim()}`;
-  }
-  return undefined;
-}
-
-function telegramHistoryEntryKey(entry: HistoryEntry): string | undefined {
-  if (entry.messageId?.trim()) {
-    return `id:${entry.messageId.trim()}`;
-  }
-  if (entry.timestamp !== undefined) {
-    return `text:${entry.timestamp}:${entry.body.trim()}`;
   }
   return undefined;
 }
@@ -86,27 +73,10 @@ export function isTelegramHistoryEntryAfterAmbientWatermark(
   return entry.messageId !== watermark.messageId;
 }
 
-function telegramChatWindowPayload(
-  entry: TelegramPromptContextEntry | undefined,
-): Record<string, unknown> | undefined {
-  return entry?.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload)
-    ? (entry.payload as Record<string, unknown>)
-    : undefined;
-}
-
-function telegramPromptMessages(payload: Record<string, unknown> | undefined) {
-  return Array.isArray(payload?.["messages"])
-    ? payload["messages"].filter(
-        (message): message is Record<string, unknown> =>
-          Boolean(message) && typeof message === "object" && !Array.isArray(message),
-      )
-    : [];
-}
-
 export function selectTelegramGroupHistoryAfterLastSelf(
   entries: readonly HistoryEntry[],
 ): HistoryEntry[] {
-  const lastSelfIndex = entries.findLastIndex(isTelegramGroupHistorySelfEntry);
+  const lastSelfIndex = entries.findLastIndex((entry) => isTelegramSelfSenderName(entry.sender));
   return lastSelfIndex === -1 ? [...entries] : entries.slice(lastSelfIndex + 1);
 }
 
@@ -114,63 +84,49 @@ export function isTelegramChatWindowPromptContext(entry: TelegramPromptContextEn
   return entry.source === "telegram" && entry.type === "chat_window";
 }
 
-export function retainTelegramGroupHistoryPromptContext(params: {
+export function buildTelegramGroupHistoryPromptContext(params: {
   promptContext: TelegramPromptContextEntry[];
   entries: HistoryEntry[];
+  observeMessages?: boolean;
+  threadId?: number;
 }): TelegramPromptContextEntry[] {
-  const entryKeys = new Set(
-    params.entries.flatMap((entry) => {
-      const key = telegramHistoryEntryKey(entry);
-      return key ? [key] : [];
-    }),
-  );
-  return params.promptContext.flatMap((entry) => {
-    if (!isTelegramChatWindowPromptContext(entry)) {
-      return [entry];
-    }
-    const payload = telegramChatWindowPayload(entry);
-    const messages = telegramPromptMessages(payload).filter((message) => {
-      const key = telegramPromptMessageKey(message);
-      return message["is_reply_target"] === true || Boolean(key && entryKeys.has(key));
-    });
-    if (messages.length === 0) {
-      return [];
-    }
-    return [
-      {
-        ...entry,
-        payload: {
-          ...payload,
-          messages,
-        },
-      },
-    ];
-  });
-}
-
-export function mergeTelegramGroupHistoryPromptContext(params: {
-  promptContext: TelegramPromptContextEntry[];
-  entries: HistoryEntry[];
-}): TelegramPromptContextEntry[] {
-  if (params.entries.length === 0) {
-    return params.promptContext;
-  }
-  const historyMessages = params.entries.map((entry) => ({
-    ...(entry.messageId ? { message_id: entry.messageId } : {}),
-    sender: entry.sender,
-    ...(entry.timestamp !== undefined ? { timestamp_ms: entry.timestamp } : {}),
-    body: entry.body,
-  }));
   const chatWindowIndex = params.promptContext.findIndex(isTelegramChatWindowPromptContext);
   const baseEntry = params.promptContext[chatWindowIndex];
-  const basePayload = telegramChatWindowPayload(baseEntry);
-  const existingMessages = telegramPromptMessages(basePayload);
+  const basePayload = isRecord(baseEntry?.payload) ? baseEntry.payload : undefined;
+  let retainedCacheContext: TelegramPromptContextEntry | undefined;
   const messagesByKey = new Map<string, Record<string, unknown>>();
-  for (const message of [...historyMessages, ...existingMessages]) {
+  for (const entry of params.entries) {
+    const message = {
+      message_id: entry.messageId,
+      sender: entry.sender,
+      timestamp_ms: entry.timestamp,
+      body: entry.body,
+    };
     const key = telegramPromptMessageKey(message);
     if (key) {
       messagesByKey.set(key, message);
     }
+  }
+  for (const message of Array.isArray(basePayload?.messages) ? basePayload.messages : []) {
+    if (!isRecord(message)) {
+      continue;
+    }
+    const key = telegramPromptMessageKey(message);
+    // Pending windows must not resurrect cleared chatter from the cache. Observation
+    // explicitly retains it; native topic identity prevents leaks during routing recovery.
+    if (
+      key &&
+      (messagesByKey.has(key) ||
+        message.is_reply_target === true ||
+        (params.observeMessages &&
+          message.thread_id === (params.threadId != null ? String(params.threadId) : undefined)))
+    ) {
+      messagesByKey.set(key, message);
+      retainedCacheContext = baseEntry;
+    }
+  }
+  if (messagesByKey.size === 0) {
+    return params.promptContext.filter((_, index) => index !== chatWindowIndex);
   }
   const mergedMessages = [...messagesByKey.values()].toSorted((left, right) => {
     const leftTimestamp = typeof left["timestamp_ms"] === "number" ? left["timestamp_ms"] : 0;
@@ -178,11 +134,13 @@ export function mergeTelegramGroupHistoryPromptContext(params: {
     return leftTimestamp - rightTimestamp;
   });
   const mergedEntry: TelegramPromptContextEntry = {
-    ...baseEntry,
+    // Projection dedupe belongs to retained cache content, not the replacement pending window.
+    ...retainedCacheContext,
     label: "Conversation context",
     source: baseEntry?.source ?? "telegram",
     type: "chat_window",
     payload: {
+      ...(retainedCacheContext ? basePayload : undefined),
       order: "chronological",
       relation: "selected_for_current_message",
       messages: mergedMessages,

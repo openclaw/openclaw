@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -504,9 +505,9 @@ export function createTelegramMessagePipeline({
         channel: "telegram",
         accountId,
       });
-      const shouldHydrateReplyMedia = async (
+      const shouldIncludeSupplementalContext = async (
         node: TelegramCachedMessageNode,
-        index: number,
+        kind: "quote" | "thread" | "history",
       ): Promise<boolean> => {
         if (!isGroupConversation) {
           return true;
@@ -527,14 +528,14 @@ export function createTelegramMessagePipeline({
           : true;
         return evaluateSupplementalContextVisibility({
           mode: contextVisibilityMode,
-          kind: index === 0 ? "quote" : "thread",
+          kind,
           senderAllowed,
         }).include;
       };
       const { replyMedia, replyChain } = await resolveReplyMediaForChain(
         params.ctx,
         replyChainNodes,
-        shouldHydrateReplyMedia,
+        (node, index) => shouldIncludeSupplementalContext(node, index === 0 ? "quote" : "thread"),
         durableMediaReplay,
         ...spooledReplayParticipants.map((participant) => participant.abortSignal),
         ...(params.spooledReplayAbortSignal ? [params.spooledReplayAbortSignal] : []),
@@ -579,6 +580,16 @@ export function createTelegramMessagePipeline({
         params.options,
         promptContextMediaByMessageId,
         params.promptContextMessageSelection,
+        isGroupConversation &&
+          (topicConfig?.observeMessages ??
+            // SAFETY: Group messages select TelegramGroupConfig from the shared chat-scope resolver.
+            (groupConfig as TelegramGroupConfig | undefined)?.observeMessages)
+          ? (node) =>
+              shouldIncludeSupplementalContext(
+                node,
+                node.messageId === replyChainNodes[0]?.messageId ? "quote" : "history",
+              )
+          : undefined,
       );
       const result = await processMessage({
         ctx: params.ctx,

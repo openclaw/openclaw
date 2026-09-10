@@ -95,6 +95,7 @@ export type TelegramMessageContext = {
   msg: BuildTelegramMessageContextParams["primaryCtx"]["message"];
   chatId: BuildTelegramMessageContextParams["primaryCtx"]["message"]["chat"]["id"];
   isGroup: boolean;
+  observeMessages: boolean;
   groupConfig?: ReturnType<
     BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]
   >["groupConfig"];
@@ -240,6 +241,8 @@ export const buildTelegramMessageContext = async ({
   const telegramGroupConfig = isGroup
     ? (groupConfig as TelegramGroupConfig | undefined)
     : undefined;
+  const observeMessages =
+    isGroup && (topicConfig?.observeMessages ?? telegramGroupConfig?.observeMessages) === true;
   const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
     isGroup,
     groupConfig,
@@ -513,6 +516,7 @@ export const buildTelegramMessageContext = async ({
     replyChain,
     promptContext,
     isGroup,
+    observeMessages,
     isForum,
     chatId,
     senderId,
@@ -668,6 +672,7 @@ export const buildTelegramMessageContext = async ({
     msg,
     chatId,
     isGroup,
+    observeMessages,
     groupConfig,
     topicConfig,
     resolvedThreadId,

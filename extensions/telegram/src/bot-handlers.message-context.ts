@@ -439,6 +439,7 @@ export function createTelegramMessageContextRuntime({
     options?: TelegramMessageContextOptions,
     mediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>,
     selectedMessageIds?: TelegramPromptContextMessageSelection,
+    includeObservedNode?: (node: TelegramCachedMessageNode) => Promise<boolean>,
   ): Promise<TelegramPromptContextEntry[]> => {
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const groupHistoryLimit = Math.max(
@@ -503,6 +504,15 @@ export function createTelegramMessageContextRuntime({
       });
       if (node?.messageId) {
         conversationContextById.set(node.messageId, { node });
+      }
+    }
+    // Filter observed history before computing projection IDs; excluded context must
+    // never suppress a transcript message that remains visible to the current sender.
+    if (includeObservedNode) {
+      for (const [id, entry] of conversationContextById) {
+        if (!(await includeObservedNode(entry.node))) {
+          conversationContextById.delete(id);
+        }
       }
     }
     const cacheEntries = Array.from(conversationContextById.values()).map((entry) => ({

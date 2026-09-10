@@ -72,6 +72,29 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it("accepts opt-in group observation with topic overrides", () => {
+    const groups = {
+      "-1001234567890": {
+        requireMention: true,
+        observeMessages: true,
+        topics: { "99": { observeMessages: false } },
+      },
+    };
+    expect(TelegramConfigSchema.parse({ groups }).groups).toEqual(groups);
+    expect(TelegramConfigSchema.parse({ groups: { "*": {} } }).groups?.["*"]).not.toHaveProperty(
+      "observeMessages",
+    );
+    expectTelegramConfigIssue(
+      { groups: { "*": { observeMessages: "true" } } },
+      "groups.*.observeMessages",
+    );
+    expect(
+      TelegramConfigSchema.safeParse({
+        direct: { "123": { topics: { "99": { observeMessages: true } } } },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts group join introduction overrides per account", () => {
     const res = TelegramConfigSchema.safeParse({
       joinIntro: false,

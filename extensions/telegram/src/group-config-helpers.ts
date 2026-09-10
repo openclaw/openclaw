@@ -44,7 +44,7 @@ export function resolveTelegramScopedGroupConfig(
   const path = groupKey ? [groupKey] : [];
   const matchKey = path[0];
   const groupConfig = matchKey ? scopedConfigs?.[matchKey] : undefined;
-  const topicConfig = resolveTopicConfig(groupConfig);
+  const topicConfig = resolveTopicConfig<TelegramTopicConfig>(groupConfig);
   return { groupConfig, topicConfig };
 }
 

@@ -1207,7 +1207,6 @@ extensions/telegram/src/doctor.ts	12
 extensions/telegram/src/fetch.ts	13
 extensions/telegram/src/forum-service-message.ts	1
 extensions/telegram/src/group-config-helpers.ts	1
-extensions/telegram/src/group-history-window.ts	1
 extensions/telegram/src/inline-buttons.ts	1
 extensions/telegram/src/interactive-fallback.ts	1
 extensions/telegram/src/lane-delivery-text-deliverer.ts	1

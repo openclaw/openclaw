@@ -177,6 +177,29 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Group history context is always on and bounded by `historyLimit`. Set `channels.telegram.historyLimit: 0` to disable the group history window. `openclaw doctor --fix` removes the retired `includeGroupHistoryContext` key.
 
+    To include retained group conversation across replies and gateway restarts, enable `observeMessages` alongside mention gating:
+
+    ```json5
+    {
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+              observeMessages: true,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Ordinary chatter stays silent. A later mention or reply to the bot can use observed messages as background context, including discussions addressed to other bots. Existing sender and group access rules still apply. Observation does not change activation, commands, or ambient behavior when `requireMention: false`.
+
+    `observeMessages` defaults to `false`, preserving the existing pending-history window. Topics inherit the group setting and can override it with `topics.<threadId>.observeMessages`. Use `groups."*"` for unlisted groups; an exact group entry still replaces the wildcard entry.
+
+    Observation uses the existing Telegram message cache. The prompt window respects `historyLimit` (default 50), session resets, and topic boundaries. The cache retains up to 3,000 messages across its namespace; this is bounded context, not a permanent archive. It can only contain messages Telegram delivered to the gateway. See [group privacy setup](/channels/telegram/setup).
+
     Getting the group chat ID: forward a group message to `@userinfobot` / `@getidsbot`, read `chat.id` from `openclaw logs --follow`, inspect Bot API `getUpdates`, or (once the group is allowed) run `/whoami@<bot_username>`.
 
   </Tab>

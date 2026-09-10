@@ -13,8 +13,7 @@ import {
 } from "./bot/helpers.js";
 import {
   isTelegramHistoryEntryAfterAmbientWatermark,
-  mergeTelegramGroupHistoryPromptContext,
-  retainTelegramGroupHistoryPromptContext,
+  buildTelegramGroupHistoryPromptContext,
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
 
@@ -218,19 +217,12 @@ export function resolveDispatchTelegramContext(params: {
         ? recoveredPromptHistoryEntries
         : undefined
       : params.context.ctxPayload.InboundHistory;
-  const recoveredPromptContextBase = retainTelegramGroupHistoryPromptContext({
+  const recoveredPromptContext = buildTelegramGroupHistoryPromptContext({
     promptContext: params.context.ctxPayload.ChannelStructuredContext ?? [],
     entries: recoveredPromptHistoryEntries,
+    observeMessages: params.context.observeMessages,
+    threadId: threadSpec.id,
   });
-  const recoveredPromptContext =
-    recoveredPromptHistoryEntries.length > 0
-      ? mergeTelegramGroupHistoryPromptContext({
-          promptContext: recoveredPromptContextBase ?? [],
-          entries: recoveredPromptHistoryEntries,
-        })
-      : recoveredPromptContextBase?.length
-        ? recoveredPromptContextBase
-        : undefined;
   const recoveredSendTyping = buildRecoveredTelegramChatActionSender({
     context: params.context,
     threadId: threadSpec.id,
@@ -252,7 +244,7 @@ export function resolveDispatchTelegramContext(params: {
       OriginatingTo: recoveredRoutingTarget,
       To: recoveredRoutingTarget,
       TransportThreadId: threadSpec.id,
-      ChannelStructuredContext: recoveredPromptContext,
+      ChannelStructuredContext: recoveredPromptContext.length ? recoveredPromptContext : undefined,
     });
   }
   const recovered = {

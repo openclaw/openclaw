@@ -18,6 +18,14 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Group Join Introduction",
     help: "Send one room-aware introduction when the bot joins an allowed group or supergroup (default: true). Telegram cannot provide message history from before the bot joined.",
   },
+  "groups.*.observeMessages": {
+    label: "Observe Group Messages",
+    help: "Include retained Telegram chat context across replies and gateway restarts, bounded by historyLimit and the message cache. Default: false. This does not start agent turns or change requireMention.",
+  },
+  "groups.*.topics.*.observeMessages": {
+    label: "Observe Topic Messages",
+    help: "Override observed chat context for this topic. Inherits the group setting. This does not change mention activation.",
+  },
   ...createChannelConfigUiHints({
     channelLabel: "Telegram",
     dmPolicy: { channelKey: "telegram" },

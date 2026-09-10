@@ -579,6 +579,7 @@ export function createContext(overrides?: Partial<TelegramMessageContext>): Tele
     },
     chatId: 123,
     isGroup: false,
+    observeMessages: false,
     groupConfig: undefined,
     resolvedThreadId: undefined,
     replyThreadId: 777,

@@ -714,6 +714,7 @@ function createDirectDispatchContext(cfg: OpenClawConfig): TelegramDispatchParam
     msg,
     chatId: 123,
     isGroup: false,
+    observeMessages: false,
     threadSpec: { scope: "none" },
     isForum: false,
     historyLimit: 0,
@@ -4805,6 +4806,65 @@ describe("createTelegramBot", () => {
     expect(getFileSpy).not.toHaveBeenCalled();
     expect(mediaFetch).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { contextVisibility: "all", chatId: -10070 },
+    { contextVisibility: "allowlist", chatId: -10071 },
+    { contextVisibility: "allowlist_quote", chatId: -10072 },
+  ] as const)(
+    "applies $contextVisibility visibility to observed history from an earlier reply",
+    async ({ contextVisibility, chatId }) => {
+      mockTelegramConfig(
+        {
+          contextVisibility,
+          groups: { [chatId]: { requireMention: true, observeMessages: true, allowFrom: ["1"] } },
+        },
+        { messages: { inbound: { debounceMs: 0 } } },
+      );
+      setTelegramPluginStateRuntimeForTests();
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const chat = { id: chatId, type: "supergroup", title: "Launch" };
+      const from = { id: 1, is_bot: false, first_name: "Allowed" };
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: getEmptyTelegramFile,
+        message: {
+          chat,
+          from,
+          message_id: 102,
+          date: 1736380800,
+          text: "Background from an allowed sender",
+          reply_to_message: {
+            chat,
+            message_id: 101,
+            date: 1736380750,
+            text: "Excluded sender background",
+            from: { id: 2, is_bot: false, first_name: "Excluded" },
+          },
+        },
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+      const replyDelivered = waitForReplyCalls(1);
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: getEmptyTelegramFile,
+        message: {
+          chat,
+          from,
+          message_id: 103,
+          date: 1736380805,
+          text: "@openclaw_bot Summarize our discussion",
+          entities: [{ type: "mention", offset: 0, length: "@openclaw_bot".length }],
+        },
+      });
+      await replyDelivered;
+      const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
+      const history = JSON.stringify(payload.ChannelStructuredContext);
+      expect(history).toContain("Background from an allowed sender");
+      expect(history.includes("Excluded sender background")).toBe(contextVisibility === "all");
+    },
+  );
 
   it("uses refreshed channel-DM topic config for reply-media visibility", async () => {
     mockTelegramConfig({

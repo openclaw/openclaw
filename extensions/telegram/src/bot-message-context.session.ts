@@ -59,9 +59,8 @@ import {
 import {
   isTelegramHistoryEntryAfterAmbientWatermark,
   isTelegramChatWindowPromptContext,
-  mergeTelegramGroupHistoryPromptContext,
+  buildTelegramGroupHistoryPromptContext,
   recordTelegramGroupHistoryEntry,
-  retainTelegramGroupHistoryPromptContext,
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
 import { TELEGRAM_REPLY_CHAIN_MAX_DEPTH, type TelegramReplyChainEntry } from "./message-cache.js";
@@ -226,6 +225,7 @@ export async function buildTelegramInboundContextPayload(params: {
   replyChain: TelegramReplyChainEntry[];
   promptContext: TelegramPromptContextEntry[];
   isGroup: boolean;
+  observeMessages: boolean;
   isForum: boolean;
   chatId: number | string;
   senderId: string;
@@ -279,6 +279,7 @@ export async function buildTelegramInboundContextPayload(params: {
     replyChain,
     promptContext,
     isGroup,
+    observeMessages,
     isForum,
     chatId,
     senderId,
@@ -595,16 +596,14 @@ export async function buildTelegramInboundContextPayload(params: {
     groupHistoryPromptEntries =
       inboundEventKind === "room_event" ? fullGroupHistoryEntries : watermarkedGroupHistoryEntries;
   }
-  const retainedVisiblePromptContext = hasGroupHistoryContext
-    ? retainTelegramGroupHistoryPromptContext({
+  const visiblePromptContext = hasGroupHistoryContext
+    ? buildTelegramGroupHistoryPromptContext({
         promptContext: baseVisiblePromptContext,
         entries: groupHistoryPromptEntries,
+        observeMessages,
+        threadId: threadSpec.id,
       })
     : baseVisiblePromptContext;
-  const visiblePromptContext = mergeTelegramGroupHistoryPromptContext({
-    promptContext: retainedVisiblePromptContext,
-    entries: groupHistoryPromptEntries,
-  });
 
   const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
     groupConfig,

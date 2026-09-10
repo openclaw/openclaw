@@ -160,6 +160,8 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
 
 export type TelegramTopicConfig = {
   requireMention?: boolean;
+  /** Include retained observed chat context without changing mention activation. */
+  observeMessages?: boolean;
   /** Emit internal message hooks for mention-skipped topic messages. */
   ingest?: boolean;
   /** Per-topic override for group message policy (open|disabled|allowlist). */
@@ -182,6 +184,8 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
+  /** Include retained observed chat context without changing mention activation. Default: false. */
+  observeMessages?: boolean;
   /** Emit internal message hooks for mention-skipped group messages. */
   ingest?: boolean;
   /** Per-group override for group message policy (open|disabled|allowlist). */
@@ -223,7 +227,7 @@ export type TelegramDirectConfig = {
   /** If specified, only load these skills for this DM (when no topic). Omit = all skills; empty = no skills. */
   skills?: string[];
   /** Per-topic configuration for DM topics (key is message_thread_id as string, or "*" for topic defaults). */
-  topics?: Record<string, TelegramTopicConfig>;
+  topics?: Record<string, Omit<TelegramTopicConfig, "observeMessages">>;
   /** If false, disable the bot for this DM (and its topics). */
   enabled?: boolean;
   /** If true, require messages to be from a topic when topics are enabled. */
