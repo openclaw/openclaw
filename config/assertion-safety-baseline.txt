@@ -687,12 +687,12 @@ extensions/matrix/src/matrix/send/chunking.ts	4
 extensions/matrix/src/matrix/send/client.ts	1
 extensions/matrix/src/matrix/send/formatting.ts	1
 extensions/matrix/src/matrix/thread-bindings.ts	2
-extensions/matrix/src/onboarding.ts	10
+extensions/matrix/src/onboarding.ts	7
 extensions/matrix/src/outbound.ts	1
 extensions/matrix/src/profile-update.ts	2
 extensions/matrix/src/setup-config.ts	6
 extensions/matrix/src/setup-contract.ts	1
-extensions/matrix/src/setup-core.ts	8
+extensions/matrix/src/setup-core.ts	5
 extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	10
 extensions/matrix/src/tool-actions.ts	2
@@ -1063,7 +1063,7 @@ extensions/reef/src/cli.ts	6
 extensions/reef/src/doctor-durable-state.ts	2
 extensions/reef/src/legacy-key-guard.ts	1
 extensions/reef/src/registration-state.ts	3
-extensions/reef/src/setup.ts	5
+extensions/reef/src/setup.ts	3
 extensions/reef/src/state.ts	3
 extensions/reef/src/transport.ts	3
 extensions/runway/video-generation-provider.ts	1
@@ -1150,7 +1150,7 @@ extensions/slack/src/scopes.ts	2
 extensions/slack/src/secret-contract.ts	1
 extensions/slack/src/security-audit.ts	6
 extensions/slack/src/send.ts	6
-extensions/slack/src/setup-core.ts	7
+extensions/slack/src/setup-core.ts	5
 extensions/slack/src/setup-surface.ts	1
 extensions/slack/src/streaming.ts	3
 extensions/slack/src/target-parsing.ts	1
