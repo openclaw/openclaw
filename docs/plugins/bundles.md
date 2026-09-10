@@ -78,7 +78,7 @@ is detected but not yet wired.
 | ------------- | ------------------------------------------------------------------------------------------------- | -------------- |
 | Skill content | Bundle skill roots load as normal OpenClaw skills                                                 | All formats    |
 | Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                        | Claude, Cursor |
-| Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                                   | Codex          |
+| Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                                   | Claude, Codex  |
 | MCP tools     | Bundle MCP config merged into embedded OpenClaw settings; supported stdio and HTTP servers loaded | All formats    |
 | Env contract  | `PLUGIN_ROOT` and `PLUGIN_DATA` env vars plus placeholder expansion for stdio MCP servers         | Agent Plugins  |
 | LSP servers   | Claude `.lsp.json` and manifest-declared `lspServers` merged into embedded OpenClaw LSP defaults  | Claude         |
@@ -95,9 +95,15 @@ normal OpenClaw skill loader.
 
 #### Hook packs
 
-Bundle hook roots work **only** when they use the normal OpenClaw hook-pack
-layout: `HOOK.md` plus `handler.ts` or `handler.js`. Today this is primarily
-the Codex-compatible case.
+Bundle hook roots are collection directories. Put each hook's `HOOK.md` and
+`handler.ts` or `handler.js` in its own child directory, such as `hooks/my-hook/`,
+and declare `hooks/` as the root. Declaring the hook's leaf directory directly does
+not load it.
+
+Plugin inspection lists these hook packs separately from detected JSON automation.
+Claude `hooks/hooks.json` remains in the declared capabilities, but does not appear
+as a supported hook. A bundle containing both layouts keeps its OpenClaw hook packs.
+Inspection does not execute handlers or prove that the running Gateway loaded them.
 
 #### MCP for embedded OpenClaw
 

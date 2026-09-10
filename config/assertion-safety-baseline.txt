@@ -2920,7 +2920,6 @@ src/hooks/loader.ts	1
 src/hooks/message-hook-mappers.ts	2
 src/hooks/module-loader.ts	3
 src/hooks/policy.ts	1
-src/hooks/workspace.ts	1
 src/infra/advertised-lan-host.ts	1
 src/infra/agent-event-lifecycle.ts	1
 src/infra/agent-events.ts	2
