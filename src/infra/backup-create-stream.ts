@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sameBackupTempIdentity } from "./backup-temp-sweep.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
@@ -57,7 +58,7 @@ export function removePreparedBackupArchive(prepared: PreparedBackupArchive): bo
   } catch {
     return false;
   }
-  if (!currentIdentity.isFile() || !sameFileIdentity(prepared.identity, currentIdentity)) {
+  if (!currentIdentity.isFile() || !sameBackupTempIdentity(prepared.identity, currentIdentity)) {
     return false;
   }
   try {

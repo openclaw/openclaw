@@ -9,6 +9,7 @@ import {
 } from "./backup-create-stream.js";
 import {
   keepBackupTempDirectoryAlive,
+  sameBackupTempIdentity,
   sweepStaleBackupTempDirectories,
 } from "./backup-temp-sweep.js";
 import {
@@ -71,7 +72,7 @@ async function removeDirectoryIfOwned(
   if (
     !currentIdentity ||
     !currentIdentity.isDirectory() ||
-    !sameFileIdentity(expectedIdentity, currentIdentity)
+    !sameBackupTempIdentity(expectedIdentity, currentIdentity)
   ) {
     return false;
   }

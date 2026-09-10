@@ -9,6 +9,17 @@ const BACKUP_TEMP_KEEPALIVE_INTERVAL_MS = BACKUP_TEMP_ORPHAN_MIN_AGE_MS / 48;
 // Unmarked directories may belong to a live pre-upgrade backup.
 const OWNER_MARKER_FILENAME = ".openclaw-backup-owner";
 
+function hasBackupTempIdentity(identity: Stats): boolean {
+  return process.platform !== "win32" || (identity.dev !== 0 && identity.ino !== 0);
+}
+
+export function sameBackupTempIdentity(left: Stats, right: Stats): boolean {
+  // The general read comparator tolerates unknown Windows IDs; mutation cannot.
+  return (
+    hasBackupTempIdentity(left) && hasBackupTempIdentity(right) && sameFileIdentity(left, right)
+  );
+}
+
 function readIdentity(filePath: string): Stats | undefined {
   try {
     return fsSync.lstatSync(filePath);
@@ -19,7 +30,7 @@ function readIdentity(filePath: string): Stats | undefined {
 
 function isOwnedDirectory(directoryPath: string, identity: Stats): boolean {
   const current = readIdentity(directoryPath);
-  return Boolean(current?.isDirectory() && sameFileIdentity(identity, current));
+  return Boolean(current?.isDirectory() && sameBackupTempIdentity(identity, current));
 }
 
 function isPrivateMarker(identity: Stats): boolean {
@@ -55,7 +66,7 @@ export function keepBackupTempDirectoryAlive(
   } catch (error) {
     if (isOwnedDirectory(directoryPath, expectedIdentity)) {
       const marker = readIdentity(markerPath);
-      if (marker?.isFile() && sameFileIdentity(markerIdentity, marker)) {
+      if (marker?.isFile() && sameBackupTempIdentity(markerIdentity, marker)) {
         try {
           fsSync.unlinkSync(markerPath);
         } catch {
@@ -65,12 +76,17 @@ export function keepBackupTempDirectoryAlive(
     }
     throw error;
   }
+  if (!hasBackupTempIdentity(markerIdentity)) {
+    throw new Error(`Backup staging marker identity is unavailable: ${markerPath}`);
+  }
   const ownsMarker = (): boolean => {
     if (!isOwnedDirectory(directoryPath, expectedIdentity)) {
       return false;
     }
     const marker = readIdentity(markerPath);
-    return Boolean(marker && isPrivateMarker(marker) && sameFileIdentity(markerIdentity, marker));
+    return Boolean(
+      marker && isPrivateMarker(marker) && sameBackupTempIdentity(markerIdentity, marker),
+    );
   };
   const timer = setInterval(() => {
     // Keep checks and update together: a queued refresh must not touch a replacement.
@@ -133,9 +149,9 @@ function removeStaleDirectory(directoryPath: string, nowMs: number): boolean {
     const currentMarker = fsSync.lstatSync(markerPath);
     if (
       !currentDirectory.isDirectory() ||
-      !sameFileIdentity(directory, currentDirectory) ||
+      !sameBackupTempIdentity(directory, currentDirectory) ||
       !isPrivateMarker(currentMarker) ||
-      !sameFileIdentity(marker, currentMarker) ||
+      !sameBackupTempIdentity(marker, currentMarker) ||
       nowMs - Math.max(newestMs, currentDirectory.mtimeMs, currentMarker.mtimeMs) <
         BACKUP_TEMP_ORPHAN_MIN_AGE_MS
     ) {

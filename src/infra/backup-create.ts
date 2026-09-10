@@ -41,6 +41,7 @@ import {
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import {
   keepBackupTempDirectoryAlive,
+  sameBackupTempIdentity,
   sweepStaleBackupTempDirectories,
 } from "./backup-temp-sweep.js";
 import {
@@ -48,7 +49,6 @@ import {
   createBackupVolatileStatCache,
 } from "./backup-volatile-stat-cache.js";
 import { isErrno } from "./errors.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { writeJson } from "./json-files.js";
 import {
   createLegacyAuditBackupCapture,
@@ -545,7 +545,7 @@ export async function createBackupArchive(
   } catch (error) {
     try {
       const current = lstatSync(tempDir);
-      if (current.isDirectory() && sameFileIdentity(tempIdentity, current)) {
+      if (current.isDirectory() && sameBackupTempIdentity(tempIdentity, current)) {
         rmdirSync(tempDir);
       }
     } catch {
@@ -559,7 +559,7 @@ export async function createBackupArchive(
     }
     try {
       const current = lstatSync(tempDir);
-      if (current.isDirectory() && sameFileIdentity(tempIdentity, current)) {
+      if (current.isDirectory() && sameBackupTempIdentity(tempIdentity, current)) {
         rmSync(tempDir, { recursive: true });
       }
     } catch {
