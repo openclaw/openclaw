@@ -5,24 +5,23 @@ import {
   formatProviderLoginCommand,
   formatProviderLoginComplete,
   formatProviderLoginFailed,
+  formatProviderLoginSavedIncomplete,
   formatProviderLoginSessionSwitchFailed,
   isProviderLoginPatchPersisted,
   prepareProviderChannelLogin,
+  ProviderCredentialsSavedError,
   releaseProviderLoginFlow,
   reserveProviderLoginFlow,
   runProviderChannelLoginFlow,
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import {
-  resolveStorePath,
-  updateSessionStoreEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
-import { buildTelegramRoutingTarget } from "./bot/helpers.js";
+import { buildTelegramRoutingTarget, resolveTelegramCommandAuthorization } from "./bot/helpers.js";
 
 const activeTelegramProviderLoginFlows = createProviderLoginFlowRegistry();
 
@@ -138,6 +137,21 @@ export async function executeTelegramLoginCommand(params: {
   const flowSignal = dispatch.opts.accountAbortSignal
     ? AbortSignal.any([reservation.record.signal, dispatch.opts.accountAbortSignal])
     : reservation.record.signal;
+  const assertCurrent = (config = dispatch.telegramDeps.getRuntimeConfig()) => {
+    const authorization = resolveTelegramCommandAuthorization({
+      cfg: config,
+      accountId: dispatch.route.accountId,
+      chatId: dispatch.chatId,
+      isGroup: dispatch.isGroup,
+      threadSpec: dispatch.threadSpec,
+      senderId: dispatch.senderId,
+      senderUsername: dispatch.senderUsername,
+      commandAuthorized: dispatch.commandAuthorized,
+    });
+    if (!authorization.senderIsOwner || !authorization.isAuthorizedSender) {
+      throw new Error("Provider login authority is no longer active.");
+    }
+  };
   const signInActionDelivered = createDeferred<void>();
   let signInActionWasDelivered = false;
   // Sign-in action delivery releases Telegram's serialized chat lane. The
@@ -160,8 +174,10 @@ export async function executeTelegramLoginCommand(params: {
         choice: loginChoice,
         agentId: dispatch.route.agentId,
         config: dispatch.runtimeCfg,
+        readConfig: dispatch.telegramDeps.getRuntimeConfig,
         runtime: dispatch.runtime,
         signal: flowSignal,
+        assertCurrent,
         sendMessage: sendLoginMessage,
         sendDeviceCode: async (deviceCode) => {
           flowSignal.throwIfAborted();
@@ -192,16 +208,17 @@ export async function executeTelegramLoginCommand(params: {
         let entryObserved = false;
         let adoptionDecision: ReturnType<typeof decideProviderLoginSessionAdoption> | undefined;
         try {
-          const persisted = await updateSessionStoreEntry({
+          const persisted = await patchSessionEntry({
             sessionKey: dispatch.targetSessionKey,
             storePath,
             requireWriteSuccess: true,
             skipMaintenance: true,
+            assertCommitAllowed: () => {
+              flowSignal.throwIfAborted();
+              assertCurrent();
+            },
             update: (entry) => {
               entryObserved = true;
-              if (flowSignal.aborted) {
-                return null;
-              }
               adoptionDecision = decideProviderLoginSessionAdoption({
                 currentModelProvider: params.currentProvider,
                 loginProvider: loginChoice.providerId,
@@ -241,7 +258,10 @@ export async function executeTelegramLoginCommand(params: {
       dispatch.runtime.error?.(
         danger(`telegram ${formatProviderLoginCommand(loginChoice)} failed: ${String(error)}`),
       );
-      terminalMessage = formatProviderLoginFailed(loginChoice);
+      terminalMessage =
+        error instanceof ProviderCredentialsSavedError
+          ? formatProviderLoginSavedIncomplete(loginChoice)
+          : formatProviderLoginFailed(loginChoice);
     }
     if (flowSignal.aborted) {
       return;

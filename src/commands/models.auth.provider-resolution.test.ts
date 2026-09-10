@@ -224,6 +224,7 @@ describe("models auth login explicit credential selection", () => {
     "set-default",
     "unavailable-import",
     "credential-only",
+    "revoked-after-save",
     "concurrent-config",
     "concurrent-providers",
     "concurrent-models",
@@ -467,9 +468,20 @@ describe("models auth login explicit credential selection", () => {
               ? { setDefault: true }
               : selection === "credential-only"
                 ? { credentialOnly: true }
-                : selection !== "unavailable-import"
-                  ? { profileId: freshId }
-                  : {}),
+                : selection === "revoked-after-save"
+                  ? {
+                      credentialOnly: true,
+                      assertCurrent: () => {
+                        if (loadPersistedAuthProfileStore()?.profiles[freshId]) {
+                          throw new Error(
+                            "Login authority was revoked after the credential write.",
+                          );
+                        }
+                      },
+                    }
+                  : selection !== "unavailable-import"
+                    ? { profileId: freshId }
+                    : {}),
         ...(selection === "runtime-canonical-models" ? {} : { config }),
         runtime,
         prompter: createWizardPrompter({
@@ -478,7 +490,9 @@ describe("models auth login explicit credential selection", () => {
           confirm: unexpectedPrompt,
         }),
       });
-      if (modelConflict) {
+      if (selection === "revoked-after-save") {
+        await expect(login).rejects.toThrow("credentials were saved");
+      } else if (modelConflict) {
         await expect
           .soft(login)
           .rejects.toThrow("Credentials saved, but provider settings could not be applied");
@@ -556,7 +570,9 @@ describe("models auth login explicit credential selection", () => {
           `Removed cached auth profiles for provider "${provider}" (--force). Running fresh auth flow.`,
         );
       }
-      if (selection !== "config-rejected" && !modelConflict) {
+      if (selection === "revoked-after-save") {
+        expect(local?.order?.[provider]).toEqual([`${provider}:local`]);
+      } else if (selection !== "config-rejected" && !modelConflict) {
         expect(runtime.log).toHaveBeenCalledWith(`Auth profile: ${freshId} (${provider}/token)`);
       }
     } finally {

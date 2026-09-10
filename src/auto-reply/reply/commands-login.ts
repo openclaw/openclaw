@@ -2,7 +2,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   decideProviderLoginSessionAdoption,
@@ -10,15 +11,18 @@ import {
   formatProviderLoginCommand,
   formatProviderLoginComplete,
   formatProviderLoginFailed,
+  formatProviderLoginSavedIncomplete,
   formatProviderLoginSessionSwitchFailed,
   isProviderLoginPatchPersisted,
   prepareProviderChannelLogin,
+  ProviderCredentialsSavedError,
   releaseProviderLoginFlow,
   reserveProviderLoginFlow,
   runProviderChannelLoginFlow,
   type ProviderChannelLoginChoice,
 } from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { isConfiguredCommandOwner } from "../command-auth.js";
 import type { ReplyPayload } from "../types.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
@@ -117,6 +121,7 @@ async function switchLoginSessionProfile(params: {
   loginProvider: string;
   nextProfileId: string | undefined;
   signal: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<"unchanged" | "updated" | "failed"> {
   const { commandParams, loginProvider, nextProfileId } = params;
   const currentEntry = commandParams.sessionEntry;
@@ -159,13 +164,12 @@ async function switchLoginSessionProfile(params: {
     let persistedEntry: SessionEntry = nextEntry;
     if (commandParams.storePath) {
       let persistedDecision: ReturnType<typeof decideProviderLoginSessionAdoption> | undefined;
-      const persisted = await updateSessionEntry(
+      const persisted = await patchSessionEntryCore(
         {
           storePath: commandParams.storePath,
           sessionKey: commandParams.sessionKey,
         },
         (entry) => {
-          params.signal.throwIfAborted();
           persistedDecision = decideProviderLoginSessionAdoption({
             currentModelProvider: commandParams.provider,
             loginProvider,
@@ -176,6 +180,10 @@ async function switchLoginSessionProfile(params: {
           return persistedDecision.status === "patch" ? persistedDecision.patch : null;
         },
         {
+          assertCommitAllowed: () => {
+            params.signal.throwIfAborted();
+            params.assertCurrent();
+          },
           requireWriteSuccess: true,
           skipMaintenance: true,
         },
@@ -191,6 +199,9 @@ async function switchLoginSessionProfile(params: {
       }
       finalDecision = persistedDecision;
       persistedEntry = persisted;
+    } else {
+      params.signal.throwIfAborted();
+      params.assertCurrent();
     }
     commandParams.sessionEntry = persistedEntry;
     sessionStore[commandParams.sessionKey] = persistedEntry;
@@ -233,13 +244,28 @@ async function runChannelProviderLogin(params: {
   const flowSignal = commandSignal
     ? AbortSignal.any([reservation.record.signal, commandSignal])
     : reservation.record.signal;
+  const readConfig =
+    params.commandParams.opts?.getProviderLoginConfig ??
+    (() => getRuntimeConfigSnapshot() ?? params.commandParams.cfg);
+  const assertCurrent = (config = readConfig()) => {
+    const assertAuthority = params.commandParams.opts?.assertProviderLoginAuthority;
+    if (assertAuthority) {
+      assertAuthority();
+      return;
+    }
+    if (!isConfiguredCommandOwner(config, params.commandParams.command)) {
+      throw new Error("Provider login authority is no longer active.");
+    }
+  };
   try {
     const loginResult = await runProviderChannelLoginFlow({
       choice: params.choice,
       agentId: params.agentId,
       config: params.commandParams.cfg,
+      readConfig,
       runtime: params.runtime ?? defaultRuntime,
       signal: flowSignal,
+      assertCurrent,
       sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
       unsupportedPromptMessage:
         "This provider needs input that chat cannot collect. Open Control UI → Models and choose Sign in.",
@@ -257,6 +283,7 @@ async function runChannelProviderLogin(params: {
       loginProvider: params.choice.providerId,
       nextProfileId,
       signal: flowSignal,
+      assertCurrent,
     });
     return {
       text:
@@ -264,8 +291,13 @@ async function runChannelProviderLogin(params: {
           ? formatProviderLoginSessionSwitchFailed(params.choice)
           : formatProviderLoginComplete(params.choice),
     };
-  } catch {
-    return { text: formatProviderLoginFailed(params.choice) };
+  } catch (error) {
+    return {
+      text:
+        error instanceof ProviderCredentialsSavedError
+          ? formatProviderLoginSavedIncomplete(params.choice)
+          : formatProviderLoginFailed(params.choice),
+    };
   } finally {
     releaseProviderLoginFlow({
       flows: activeProviderLoginFlows,

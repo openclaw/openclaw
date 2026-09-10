@@ -25,6 +25,7 @@ export type {
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
 export type { ProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
+export { ProviderCredentialsSavedError } from "../plugins/provider-auth-errors.js";
 
 type ProviderAuthLoginFlowRuntime = typeof import("../commands/models/auth.js");
 
@@ -252,15 +253,15 @@ export async function prepareProviderChannelLogin(params: {
 function buildProviderChannelLoginPrompter(params: {
   sendMessage: (message: string) => Promise<void>;
   sendDeviceCode?: NonNullable<ModelsAuthLoginFlowOptions["prompter"]["deviceCode"]>;
-  signal?: AbortSignal;
+  assertCurrent: () => void;
   unsupportedPromptMessage: string;
 }): ModelsAuthLoginFlowOptions["prompter"] {
   const sendCleanMessage = async (message: string) => {
-    params.signal?.throwIfAborted();
+    params.assertCurrent();
     const text = message.trim();
     if (text) {
       await params.sendMessage(text);
-      params.signal?.throwIfAborted();
+      params.assertCurrent();
     }
   };
   const sendDeviceCode = params.sendDeviceCode;
@@ -277,9 +278,9 @@ function buildProviderChannelLoginPrompter(params: {
     ...(sendDeviceCode
       ? {
           deviceCode: async (deviceCode) => {
-            params.signal?.throwIfAborted();
+            params.assertCurrent();
             await sendDeviceCode(deviceCode);
-            params.signal?.throwIfAborted();
+            params.assertCurrent();
           },
         }
       : {}),
@@ -348,42 +349,48 @@ export async function runProviderChannelLoginFlow(params: {
   sendMessage: (message: string) => Promise<void>;
   sendDeviceCode?: NonNullable<ModelsAuthLoginFlowOptions["prompter"]["deviceCode"]>;
   signal?: AbortSignal;
+  readConfig?: () => OpenClawConfig;
+  assertCurrent?: (config: OpenClawConfig) => void;
   unsupportedPromptMessage: string;
   runLoginFlow?: (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
 }): Promise<ModelsAuthLoginFlowResult> {
-  params.signal?.throwIfAborted();
-  const resolution = resolveProviderChannelLoginChoice(
-    formatProviderLoginChoiceRef(params.choice),
-    {
-      config: params.config,
-    },
-  );
-  if (
-    resolution.status !== "resolved" ||
-    resolution.choice.mode !== "chat" ||
-    resolution.choice.pluginId !== params.choice.pluginId ||
-    resolution.choice.providerId !== params.choice.providerId ||
-    resolution.choice.methodId !== params.choice.methodId
-  ) {
-    throw new Error("This provider login is no longer available. Send /login to choose again.");
-  }
-  const choice = resolution.choice;
+  const readConfig = params.readConfig ?? (() => params.config);
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    const config = readConfig();
+    params.assertCurrent?.(config);
+    const resolution = resolveProviderChannelLoginChoice(
+      formatProviderLoginChoiceRef(params.choice),
+      { config },
+    );
+    if (
+      resolution.status !== "resolved" ||
+      resolution.choice.mode !== "chat" ||
+      resolution.choice.pluginId !== params.choice.pluginId ||
+      resolution.choice.providerId !== params.choice.providerId ||
+      resolution.choice.methodId !== params.choice.methodId
+    ) {
+      throw new Error("This provider login is no longer available. Send /login to choose again.");
+    }
+  };
+  assertCurrent();
+  const choice = params.choice;
   const result = await (params.runLoginFlow ?? runModelsAuthLoginFlow)({
     provider: choice.providerId,
     method: choice.methodId,
     ownerPluginId: choice.pluginId,
     credentialOnly: true,
-    assertCurrent: () => params.signal?.throwIfAborted(),
+    assertCurrent,
     agent: params.agentId,
-    config: params.config,
+    config: readConfig(),
     runtime: params.runtime,
     signal: params.signal,
-    prompter: buildProviderChannelLoginPrompter(params),
+    prompter: buildProviderChannelLoginPrompter({ ...params, assertCurrent }),
     isRemote: true,
     openUrl: async (url) => {
-      params.signal?.throwIfAborted();
+      assertCurrent();
       await params.sendMessage(url);
-      params.signal?.throwIfAborted();
+      assertCurrent();
     },
   });
   return parseModelsAuthLoginFlowResult(result);
@@ -406,6 +413,10 @@ export function formatProviderLoginSessionSwitchFailed(
 
 export function formatProviderLoginFailed(choice: ProviderChannelLoginChoice): string {
   return `${choice.providerLabel} login did not complete. Send \`${formatProviderLoginCommand(choice)}\` to try again.`;
+}
+
+export function formatProviderLoginSavedIncomplete(choice: ProviderChannelLoginChoice): string {
+  return `${choice.providerLabel} credentials were saved, but sign-in did not finish. Send \`${formatProviderLoginCommand(choice)}\` to retry.`;
 }
 
 function formatProviderLoginControlUiHandoff(choice: ProviderChannelLoginChoice): string {
