@@ -187,7 +187,12 @@ jobs:
           smoke_dir="$DIAGNOSTIC_DIR/image-conversion-smoke"
           mkdir -p "$smoke_dir"
           for dimensions in 1440x2560 454x454; do
-            /usr/bin/convert -size "$dimensions" 'gradient:#1878c8-#c82878' \
+            width="${dimensions%x*}"
+            height="${dimensions#*x}"
+            /usr/bin/convert \
+              \( -size "$dimensions" 'gradient:#000000-#ff0000' \) \
+              \( -size "${height}x${width}" 'gradient:#000000-#00ff00' -transpose \) \
+              -compose plus -composite \
               -alpha set -channel A -evaluate set 60% +channel \
               "$smoke_dir/input-${dimensions}.png"
             "$adapter" -s format jpeg -s formatOptions best \

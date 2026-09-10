@@ -2605,7 +2605,7 @@ fi
     expect(source).not.toMatch(/apps-signing|MATCH_PASSWORD|GOOGLE_PLAY|upload-and-record/iu);
   });
 
-  it("generates varied-color Android conversion smoke inputs", () => {
+  it("generates two-axis varied-color Android conversion smoke inputs", () => {
     const workflow = parse(
       fs.readFileSync(".github/workflows/android-emulator-diagnostic.yml", "utf8"),
     ) as {
@@ -2615,8 +2615,9 @@ fi
       .flatMap((job) => job.steps ?? [])
       .find((step) => step.name === "Prepare trusted Linux Android tooling")?.run;
 
-    expect(tooling).toContain("'gradient:#1878c8-#c82878'");
-    expect(tooling).toContain("-alpha set -channel A -evaluate set 60% +channel");
+    expect(tooling).toMatch(
+      /width="\$\{dimensions%x\*\}"\n\s+height="\$\{dimensions#\*x\}"\n\s+\/usr\/bin\/convert \\\n\s+\\\( -size "\$dimensions" 'gradient:#000000-#ff0000' \\\) \\\n\s+\\\( -size "\$\{height\}x\$\{width\}" 'gradient:#000000-#00ff00' -transpose \\\) \\\n\s+-compose plus -composite \\\n\s+-alpha set -channel A -evaluate set 60% \+channel/u,
+    );
     expect(tooling).not.toContain("'xc:");
   });
 
@@ -2641,7 +2642,7 @@ fi
 
     const diagnosticTooling = readToolingBody(".github/workflows/android-emulator-diagnostic.yml");
     expect(diagnosticTooling).toMatch(
-      /\/usr\/bin\/convert -size "\$dimensions" 'gradient:#1878c8-#c82878' \\\n\s+-alpha set -channel A -evaluate set 60% \+channel \\\n\s+"\$smoke_dir\/input-\$\{dimensions\}\.png"/u,
+      /width="\$\{dimensions%x\*\}"\n\s+height="\$\{dimensions#\*x\}"\n\s+\/usr\/bin\/convert \\\n\s+\\\( -size "\$dimensions" 'gradient:#000000-#ff0000' \\\) \\\n\s+\\\( -size "\$\{height\}x\$\{width\}" 'gradient:#000000-#00ff00' -transpose \\\) \\\n\s+-compose plus -composite \\\n\s+-alpha set -channel A -evaluate set 60% \+channel \\\n\s+"\$smoke_dir\/input-\$\{dimensions\}\.png"/u,
     );
     expect(diagnosticTooling).not.toContain("gradient:rgba(");
 
