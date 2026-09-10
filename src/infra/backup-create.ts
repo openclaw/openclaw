@@ -1,5 +1,5 @@
 // Creates backup archives while filtering volatile runtime state.
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync, rmdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,10 +40,15 @@ import {
 } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import {
+  keepBackupTempDirectoryAlive,
+  sweepStaleBackupTempDirectories,
+} from "./backup-temp-sweep.js";
+import {
   createBackupLinkCache,
   createBackupVolatileStatCache,
 } from "./backup-volatile-stat-cache.js";
 import { isErrno } from "./errors.js";
+import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { writeJson } from "./json-files.js";
 import {
   createLegacyAuditBackupCapture,
@@ -56,6 +61,11 @@ import {
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
+
+// `fs.mkdtemp` appends exactly six alphanumeric characters. Matching that
+// shape rather than the bare prefix keeps the sweep from also claiming a
+// live `openclaw-backup-verify-sqlite-*` run, which shares the prefix.
+const STALE_BACKUP_STAGING_DIRECTORY_PATTERN = /^openclaw-backup-[A-Za-z0-9]{6}$/u;
 
 export type BackupCreateOptions = {
   output?: string;
@@ -520,16 +530,50 @@ export async function createBackupArchive(
   await prepareBackupOutputParent(outputPath);
   const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
   await fs.mkdir(tempRoot, { recursive: true });
+  // Staleness is wall-clock, not `opts.nowMs`: that timestamp names the
+  // archive and callers inject arbitrary values for it.
+  await sweepStaleBackupTempDirectories({
+    directoryPath: tempRoot,
+    entryPattern: STALE_BACKUP_STAGING_DIRECTORY_PATTERN,
+    log: opts.log,
+  });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
+  const tempIdentity = await fs.lstat(tempDir);
+  let stopTempDirKeepAlive: () => boolean;
+  try {
+    stopTempDirKeepAlive = keepBackupTempDirectoryAlive(tempDir, tempIdentity);
+  } catch (error) {
+    try {
+      const current = lstatSync(tempDir);
+      if (current.isDirectory() && sameFileIdentity(tempIdentity, current)) {
+        rmdirSync(tempDir);
+      }
+    } catch {
+      // Preserve any changed or non-empty directory after failed ownership setup.
+    }
+    throw error;
+  }
+  const cleanupTempDir = (): void => {
+    if (!stopTempDirKeepAlive()) {
+      return;
+    }
+    try {
+      const current = lstatSync(tempDir);
+      if (current.isDirectory() && sameFileIdentity(tempIdentity, current)) {
+        rmSync(tempDir, { recursive: true });
+      }
+    } catch {
+      // Preserve staging when its identity cannot be verified or removal fails.
+    }
+  };
   const manifestPath = path.join(tempDir, "manifest.json");
   let publication: BackupArchivePublication;
   try {
-    publication = await createBackupArchivePublication(outputPath);
+    publication = await createBackupArchivePublication(outputPath, opts.log);
   } catch (error) {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    cleanupTempDir();
     throw formatBackupOutputFailure(error, outputPath, "publication");
   }
-  const tempArchivePath = publication.tempArchivePath;
   try {
     const { legacyAuditSnapshots, stateSqliteBackup } = await createConsistentStateSnapshotPlan({
       inventory: plan.inventory,
@@ -616,7 +660,7 @@ export async function createBackupArchive(
       return true;
     };
     const completedArchive = await writeTarArchiveWithRetry({
-      tempArchivePath,
+      tempArchivePath: publication.tempArchivePath,
       log: opts.log,
       runTar: async (attemptTempArchivePath) => {
         // tar.c re-walks the tree (and thus re-invokes tarFilter) on every
@@ -738,8 +782,11 @@ export async function createBackupArchive(
       throw formatBackupOutputFailure(error, outputPath, "publication");
     }
   } finally {
-    await cleanupBackupArchivePublication(publication, opts.log);
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    try {
+      await cleanupBackupArchivePublication(publication, opts.log);
+    } finally {
+      cleanupTempDir();
+    }
   }
 
   return result;

@@ -253,6 +253,43 @@ describe("backup archive publication", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "reports the first cleanup sync failure without losing the committed archive",
+    async () => {
+      const { outputPath, plan } = await createPublication("openclaw-backup-cleanup-sync-");
+      const prepared = await prepareArchive(plan);
+      const log = vi.fn();
+      const originalOpen = fs.open.bind(fs);
+      let failedCleanupSync = false;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+        const handle = await originalOpen(target, flags, mode);
+        if (
+          path.resolve(String(target)) === plan.canonicalParentPath &&
+          !fsSync.existsSync(plan.stagingDir) &&
+          !failedCleanupSync
+        ) {
+          vi.spyOn(handle, "sync").mockImplementationOnce(async () => {
+            failedCleanupSync = true;
+            throw Object.assign(new Error("cleanup sync failed"), { code: "EIO" });
+          });
+        }
+        return handle;
+      });
+      try {
+        await publishPreparedBackupArchive({ plan, prepared, log });
+
+        expect(failedCleanupSync).toBe(true);
+        await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("complete archive");
+        await expect(fs.lstat(plan.stagingDir)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(log).toHaveBeenCalledWith(
+          `Backup archiver could not sync cleanup in ${plan.canonicalParentPath}: EIO.`,
+        );
+      } finally {
+        openSpy.mockRestore();
+      }
+    },
+  );
+
   it("keeps the committed final archive when staging cleanup fails", async () => {
     const { outputPath, plan } = await createPublication("openclaw-backup-cleanup-failure-");
     const prepared = await prepareArchive(plan);
@@ -276,6 +313,20 @@ describe("backup archive publication", () => {
       await expect(fs.lstat(prepared.archivePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.lstat(plan.stagingDir)).rejects.toMatchObject({ code: "ENOENT" });
     }
+  });
+
+  it("preserves pending archive bytes when the ownership marker is replaced", async () => {
+    const { plan } = await createPublication("openclaw-backup-marker-replacement-");
+    const prepared = await prepareArchive(plan);
+    plan.pendingCleanupArchives.push(prepared);
+    const markerPath = path.join(plan.stagingDir, ".openclaw-backup-owner");
+    await fs.rename(markerPath, `${markerPath}.original`);
+    await fs.writeFile(markerPath, "replacement", { mode: 0o600 });
+
+    await cleanupBackupArchivePublication(plan);
+
+    await expect(fs.readFile(prepared.archivePath, "utf8")).resolves.toBe("complete archive");
+    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("replacement");
   });
 
   it("retries cleanup when descriptor and pathname identity reads initially fail", async () => {

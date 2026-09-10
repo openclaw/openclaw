@@ -360,6 +360,8 @@ OpenClaw does not enforce a built-in maximum backup size or per-file size limit.
 
 If final-directory durability confirmation fails after publication, the command reports failure but preserves the complete final entry rather than risk deleting a concurrent replacement.
 
+After a hard stop, a later `backup create` reclaims its marked temporary staging directories once they have been inactive for at least 24 hours. Active backups refresh their ownership every 30 minutes. Unmarked directories from older versions and artifacts owned by other operations are left alone.
+
 Large workspaces are usually the main driver of archive size. Use `--no-include-workspace` for a smaller/faster backup, or `--only-config` for the smallest archive.
 
 ## Related

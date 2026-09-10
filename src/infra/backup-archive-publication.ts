@@ -8,6 +8,10 @@ import {
   type PreparedBackupArchive,
 } from "./backup-create-stream.js";
 import {
+  keepBackupTempDirectoryAlive,
+  sweepStaleBackupTempDirectories,
+} from "./backup-temp-sweep.js";
+import {
   getPublishFileExclusiveFailureDetails,
   isHardlinkFallbackError,
   publishFileExclusive,
@@ -19,6 +23,11 @@ import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 type BackupArchiveLogger = (message: string) => void;
 
+// Publish staging is `.openclaw-backup-publish-<uuid>-<mkdtemp suffix>`.
+// Matching the whole shape keeps the sweep to directories this module made.
+const STALE_BACKUP_PUBLISH_DIRECTORY_PATTERN =
+  /^\.openclaw-backup-publish-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[A-Za-z0-9]{6}$/u;
+
 export type BackupArchivePublication = {
   canonicalOutputPath: string;
   canonicalParentPath: string;
@@ -28,6 +37,7 @@ export type BackupArchivePublication = {
   requestedParentPath: string;
   stagingDir: string;
   stagingIdentity: Stats;
+  stopKeepAlive: () => boolean;
   tempArchivePath: string;
 };
 
@@ -73,12 +83,9 @@ async function removeDirectoryIfOwned(
   }
 }
 
-async function removeStagingDirectoryIfOwned(plan: BackupArchivePublication): Promise<boolean> {
-  return await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
-}
-
 export async function createBackupArchivePublication(
   outputPath: string,
+  log?: BackupArchiveLogger,
 ): Promise<BackupArchivePublication> {
   const requestedOutputPath = path.resolve(outputPath);
   const requestedParentPath = path.dirname(requestedOutputPath);
@@ -89,6 +96,11 @@ export async function createBackupArchivePublication(
   }
   const canonicalOutputPath = path.join(canonicalParentPath, path.basename(requestedOutputPath));
   await assertTargetAbsent(canonicalOutputPath);
+  await sweepStaleBackupTempDirectories({
+    directoryPath: canonicalParentPath,
+    entryPattern: STALE_BACKUP_PUBLISH_DIRECTORY_PATTERN,
+    log,
+  });
   const stagingDir = await fs.mkdtemp(
     path.join(canonicalParentPath, `.openclaw-backup-publish-${randomUUID()}-`),
   );
@@ -109,6 +121,7 @@ export async function createBackupArchivePublication(
       requestedParentPath,
       stagingDir,
       stagingIdentity,
+      stopKeepAlive: keepBackupTempDirectoryAlive(stagingDir, stagingIdentity),
       tempArchivePath: path.join(stagingDir, "archive.tar.gz.tmp"),
     };
   } catch (error) {
@@ -165,17 +178,24 @@ async function removePendingBackupArchive(
   });
 }
 
+async function removeOwnedPublicationStaging(plan: BackupArchivePublication): Promise<boolean> {
+  if (plan.stopKeepAlive()) {
+    const retainedArchives = plan.pendingCleanupArchives.splice(0);
+    for (const receipt of retainedArchives) {
+      if (!(await removePendingBackupArchive(plan, receipt))) {
+        retainArchiveForCleanup(plan, receipt);
+      }
+    }
+    return await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
+  }
+  return false;
+}
+
 export async function cleanupBackupArchivePublication(
   plan: BackupArchivePublication,
   log?: BackupArchiveLogger,
 ): Promise<void> {
-  const retainedArchives = plan.pendingCleanupArchives.splice(0);
-  for (const receipt of retainedArchives) {
-    if (!(await removePendingBackupArchive(plan, receipt))) {
-      retainArchiveForCleanup(plan, receipt);
-    }
-  }
-  if (await removeStagingDirectoryIfOwned(plan)) {
+  if (await removeOwnedPublicationStaging(plan)) {
     await syncDirectoryIfSupported(plan.canonicalParentPath).catch(() => undefined);
     return;
   }
@@ -233,11 +253,8 @@ export async function publishPreparedBackupArchive(params: {
       retainArchiveForCleanup(plan, prepared);
       params.log?.(`Backup archiver preserved changed staging file ${prepared.archivePath}.`);
     }
-    if (!(await removeStagingDirectoryIfOwned(plan))) {
-      params.log?.(
-        `Backup archiver preserved changed or non-empty staging directory ${plan.stagingDir}.`,
-      );
-    }
+    // The outer owner reports retention after its final cleanup attempt.
+    await removeOwnedPublicationStaging(plan);
     await syncDirectoryIfSupported(plan.canonicalParentPath).catch((error: unknown) => {
       params.log?.(
         `Backup archiver could not sync cleanup in ${plan.canonicalParentPath}: ${
@@ -255,7 +272,7 @@ export async function publishPreparedBackupArchive(params: {
       if (!removePreparedBackupArchive(prepared)) {
         retainArchiveForCleanup(plan, prepared);
       }
-      await removeStagingDirectoryIfOwned(plan);
+      await removeOwnedPublicationStaging(plan);
     }
     throw error;
   }
