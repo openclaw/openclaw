@@ -2,7 +2,7 @@ import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/ha
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { PluginGatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
 import type {
@@ -234,7 +234,7 @@ export type OpenClawPluginApi = {
    */
   registerGatewayMethod: (
     method: string,
-    handler: GatewayRequestHandler,
+    handler: PluginGatewayRequestHandler,
     opts?: {
       scope?: OperatorScope;
       profileAccess?: "independent" | "required";

@@ -32,6 +32,14 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runt
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
+// Return-value gateway handlers are part of the public SDK contract. These
+// assignments must stay valid for plugins that return an implicit response.
+type PluginGatewayMethodHandler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+const returnedGatewayHandlerResult: Awaited<ReturnType<PluginGatewayMethodHandler>> = {
+  ok: true,
+};
+void returnedGatewayHandlerResult;
+
 const workflowMocks = vi.hoisted(() => ({
   cronAdd: vi.fn(),
   cronListPage: vi.fn(),

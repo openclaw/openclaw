@@ -31,7 +31,11 @@ export {
   parseGatewayPayload as safeParseJson,
   respondUnavailableOnNodeInvokeError,
 } from "../gateway/server-methods/nodes.helpers.js";
-export type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
+export type {
+  GatewayRequestHandler,
+  GatewayRequestHandlers,
+  PluginGatewayRequestHandler,
+} from "../gateway/server-methods/types.js";
 export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 export { resolveGatewayAuth } from "../gateway/auth.js";
 

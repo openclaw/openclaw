@@ -461,8 +461,13 @@ export type GatewayRequestHandlerOptions = {
   hasCurrentClientAuthority?: () => boolean;
 };
 
-/** Single gateway method implementation. */
+/** Single core gateway method implementation. */
 export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
+
+/** Plugin-facing gateway handler; the registration adapter turns returned values into responses. */
+export type PluginGatewayRequestHandler =
+  | GatewayRequestHandler
+  | ((opts: GatewayRequestHandlerOptions) => unknown);
 
 /** Registry fragment keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;

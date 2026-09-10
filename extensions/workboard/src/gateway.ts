@@ -55,6 +55,7 @@ export function registerWorkboardGatewayMethods(params: {
             return await store.runOperation(() => handler(request));
           } catch (error) {
             respondError(request.respond, error);
+            return undefined;
           }
         },
         options,
