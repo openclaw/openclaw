@@ -32,6 +32,7 @@ vi.mock("../shared/pid-alive.js", async (original) => ({
   getFileLockProcessStartTime: () => 123,
 }));
 vi.mock("../infra/tmp-openclaw-dir.js", () => ({
+  DEFAULT_POSIX_TMP_ROOT: "/tmp/openclaw",
   resolvePreferredOpenClawTmpDir: () => fixture.root,
 }));
 
