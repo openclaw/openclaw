@@ -372,8 +372,14 @@ describe("config form map integrity", () => {
         }),
         container,
       );
-      expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
-      expect(container.querySelector('[aria-label="Retained"]')).toBeNull();
+      // Since the scalar pass-through (issue #143646), retained renders as an
+      // editable text input beside its siblings instead of a Raw-mode error.
+      expect(container.textContent).not.toContain("Unsupported schema node. Use Raw mode.");
+      const retained = expectElement(
+        container.querySelector<HTMLInputElement>('[aria-label="Retained"]'),
+        "supported retained field",
+      );
+      expect(retained.value).toBe("false");
       const name = expectElement(
         container.querySelector<HTMLInputElement>('[aria-label="Name"]'),
         "supported name field",
