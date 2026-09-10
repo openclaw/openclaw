@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import { resolveAgentDir } from "../agent-scope-config.js";
 import { clearAuthProfileMigrationDiagnostics } from "../auth-profiles/legacy-source-diagnostic.js";
 import { updateAuthProfileStoreWithLock } from "../auth-profiles/store-runtime.js";
@@ -17,7 +18,7 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { compactNativeCliSession } from "./compact.js";
 
 const { runCliAgentMock } = vi.hoisted(() => ({
-  runCliAgentMock: vi.fn(async () => ({
+  runCliAgentMock: vi.fn(async (_params: { preparedRunAdmission?: PreparedAgentRunAdmission }) => ({
     meta: {
       durationMs: 1,
       agentMeta: { sessionId: "native-session", provider: "claude-cli", model: "opus" },
@@ -58,30 +59,31 @@ describe("native CLI manual compaction: CLI child credential handoff", () => {
   }
 
   function registerScriptedClaudeCliBackend() {
-    const backend = {
-      id: "claude-cli",
-      modelProvider: "anthropic",
-      pluginId: "anthropic",
-      ownsNativeCompaction: true,
-      bundleMcp: false,
-      config: {
-        command: "claude",
-        args: ["-p"],
-        input: "stdin" as const,
-        output: "jsonl" as const,
-        sessionMode: "existing" as const,
-      },
-      manualCompaction: {
-        buildPrompt: (instructions?: string) =>
-          instructions ? `/compact ${instructions}` : "/compact",
-        input: "arg" as const,
-        validateOutput: () => ({ ok: true }),
-      },
-    };
     cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: ({ backend: id }) =>
-        id === backend.id ? { pluginId: backend.pluginId, backend } : undefined,
-      resolveRuntimeCliBackends: () => [backend],
+      resolveRuntimeCliBackends: () =>
+        [
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            pluginId: "anthropic",
+            ownsNativeCompaction: true,
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["-p"],
+              input: "stdin",
+              output: "jsonl",
+              sessionMode: "existing",
+            },
+            manualCompaction: {
+              buildPrompt: (instructions?: string) =>
+                instructions ? `/compact ${instructions}` : "/compact",
+              input: "arg",
+              validateOutput: () => ({ ok: true }),
+            },
+          },
+        ] as never,
+      resolvePluginSetupCliBackend: () => undefined,
     });
   }
 
