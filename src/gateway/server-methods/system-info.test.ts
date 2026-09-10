@@ -59,6 +59,7 @@ describe("system.info", () => {
   beforeEach(() => {
     sampleTime += 30_001;
     vi.spyOn(Date, "now").mockReturnValue(sampleTime);
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     vi.spyOn(os, "platform").mockReturnValue("darwin");
     mocks.runCommandWithTimeout.mockReset().mockImplementation(mountedVolumeOutput);
     mocks.statfs.mockReset().mockImplementation(async (path: string) => ({
@@ -94,6 +95,7 @@ describe("system.info", () => {
       },
     };
     const getEventLoopHealth = vi.fn(() => ({ ...eventLoop }));
+    const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(4096);
 
     const request = {
       params: {},
@@ -125,6 +127,8 @@ describe("system.info", () => {
     }
     expect(payload.cpuCount).toBeGreaterThanOrEqual(1);
     expect(payload.memoryTotalBytes).toBeGreaterThan(0);
+    expect(payload.memoryFreeBytes).toBe(4096);
+    expect(availableMemory).toHaveBeenCalled();
     expect(payload.processInstanceId).toBe(getGatewayProcessInstanceId());
     expect(payload.uptimeMs).toBeGreaterThanOrEqual(0);
     expect(payload.defaultAgentUtilityModel).toEqual({ status: "unavailable" });
@@ -165,6 +169,7 @@ describe("system.info", () => {
       vi.spyOn(process, "uptime").mockReturnValue(123);
       vi.spyOn(process, "memoryUsage").mockReturnValue(process.memoryUsage());
       const freemem = vi.spyOn(os, "freemem").mockReturnValue(1024);
+      const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(1024);
       const loadavg = vi.spyOn(os, "loadavg").mockReturnValue([1, 2, 3]);
       const readDisk = vi
         .spyOn(diskSpace, "tryReadDiskSpace")
@@ -183,6 +188,7 @@ describe("system.info", () => {
       await handler(request);
       const initial = respond.mock.calls[0]?.[1];
       freemem.mockReturnValue(512);
+      availableMemory.mockReturnValue(512);
       loadavg.mockReturnValue([4, 5, 6]);
       readDisk.mockImplementation((targetPath) => ({
         targetPath,
@@ -209,6 +215,35 @@ describe("system.info", () => {
       await handler(request);
       expect(readDisk).toHaveBeenCalledTimes(3);
       expect(respond.mock.calls[3]?.[1]).toMatchObject({ diskPath: "/system-info-second" });
+    },
+  );
+
+  it.each(["linux", "win32"] as const)(
+    "keeps host-wide memory readings on %s",
+    async (platform) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      vi.spyOn(os, "platform").mockReturnValue(platform);
+      const freeMemory = vi.spyOn(os, "freemem").mockReturnValue(8192);
+      const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(4096);
+
+      const respond = vi.fn();
+      await expectDefined(
+        systemHandlers["system.info"],
+        "system.info handler",
+      )({
+        params: {},
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+      } as unknown as GatewayRequestHandlerOptions);
+
+      const [ok, payload] = respond.mock.calls[0] ?? [];
+      expect(ok).toBe(true);
+      if (!validateSystemInfoResult(payload)) {
+        throw new Error("system.info returned an invalid payload");
+      }
+      expect(payload.memoryFreeBytes).toBe(8192);
+      expect(freeMemory).toHaveBeenCalled();
+      expect(availableMemory).not.toHaveBeenCalled();
     },
   );
 
