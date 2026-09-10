@@ -14,6 +14,7 @@ const UPDATE_POST_INSTALL_DOCTOR_RESULT_FILENAME_RE =
 export type PackageUpdateStepAdvisory = {
   kind: "package-post-install-doctor";
   message: string;
+  details?: string[];
 };
 
 export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {

@@ -80,6 +80,12 @@ Human output, chat completion notices, the Control UI update view, and the
 `openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
 means that check has not been observed.
 
+Recoverable maintenance failures appear as recorded warnings even when the update
+succeeds. Each warning names the skipped work, the cause, and a repair command.
+Doctor also shows warnings from the latest run as historical observations: a later
+repair may already have resolved them. The existing report and history size limits
+still apply.
+
 Gateway clients with `operator.admin` can inspect history:
 
 ```bash

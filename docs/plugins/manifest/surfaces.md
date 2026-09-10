@@ -63,6 +63,12 @@ warning is advisory and required state remains safe for later repairs. Doctor pr
 in its receipts and continues. Detection errors, thrown failures, and unclassified warnings from another
 migration still refuse the combined step.
 
+For `definePluginDoctorMigrationFromPlans`, a `plugin-state-import` plan may set
+`cleanupWarningDisposition: "recoverable"` when its retired source is an unused,
+rebuildable artifact. This applies only to cleanup failures after import succeeds.
+Read, import, and verification failures still refuse the migration. Every plan
+consuming a shared source must opt in before its cleanup failures become advisory.
+
 The Codex plugin sets `doctorHealthChecks: true` when its public API exports
 health-check registration. Doctor checks the selected plugin's trust before
 loading this surface. Older installed versions without the declaration skip

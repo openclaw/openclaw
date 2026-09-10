@@ -12,7 +12,12 @@ import {
   hasActiveStartupMigrationLease,
   readMigrationCheckpointStatus,
 } from "../infra/startup-migration-checkpoint.js";
-import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+} from "../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -118,6 +123,23 @@ async function seedLastKnownGood(
 }
 
 describe("runDoctorConfigPreflight", () => {
+  it("surfaces recorded cleanup warnings from a successful update", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await writeOpenClawConfig(home, { gateway: { mode: "local" } });
+      const run = createUpdateRun({ trigger: "cli" });
+      const detail =
+        "Warning: Skipped derived cache cleanup: permission denied. Run openclaw doctor --fix.";
+      recordUpdateRunStep(run.runId, {
+        step: "warning:openclaw doctor",
+        status: "completed",
+        detail,
+      });
+      finishUpdateRun(run.runId, { status: "succeeded" });
+      await runDoctorConfigPreflight({ migrateState: false, migrateLegacyConfig: false });
+      expect(noteMock).toHaveBeenCalledWith(expect.stringContaining(detail), "Update history");
+      expect(getUpdateRun(run.runId)?.status).toBe("succeeded");
+    });
+  });
   it("reports stale legacy update recovery without modifying the run", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await writeOpenClawConfig(home, { gateway: { mode: "local" } });

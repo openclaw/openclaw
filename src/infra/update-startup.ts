@@ -73,7 +73,7 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
-import { summarizeUpdateStepFailure } from "./update-run-record.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { runGatewayUpdatePreflight, type UpdateRunResult } from "./update-runner.js";
 
 type UpdateCheckState = {
@@ -848,15 +848,10 @@ async function runCampaignUpdate(params: {
         before: outcome.result.before,
         origin: { nextAction: outcome.message },
       });
-      for (const step of outcome.result.steps) {
+      for (const step of outcome.result.steps.flatMap(updateRunStepsFromResultStep)) {
         recordUpdateRunStep(runId, {
-          step: step.name,
-          status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
+          ...step,
           endedAtMs: Date.now(),
-          detail:
-            step.exitCode === 0
-              ? undefined
-              : (step.advisory?.message ?? summarizeUpdateStepFailure(step)),
         });
       }
     }

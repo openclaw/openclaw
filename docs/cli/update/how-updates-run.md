@@ -37,6 +37,13 @@ Explicit package artifacts, such as tarball paths and URLs, still pass through
 validation and installation when their version matches the installed version.
 A matching version alone does not establish artifact equality.
 
+Updates continue with recorded warnings when disposable validation-copy cleanup,
+retired derived-cache cleanup, or Git upstream tracking setup fails. Resolve the
+reported cause, then run the warning's exact cleanup command or
+`openclaw doctor --fix`. Invalid ownership, unsafe state migrations, and a Gateway
+that cannot boot or pass readiness still block completion. See
+[Status and history](/cli/update/status-and-history) to inspect recorded warnings.
+
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.
 An interrupted update is not a successful update or a verified rollback.

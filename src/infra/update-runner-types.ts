@@ -9,7 +9,7 @@ import type { UpdateRecovery } from "./update-recovery.js";
 
 export type UpdateStepAdvisory =
   | PackageUpdateStepAdvisory
-  | { kind: "candidate-runtime-unavailable"; message: string };
+  | { kind: "candidate-runtime-unavailable" | "recoverable-maintenance"; message: string };
 
 export type UpdateStepResult = {
   name: string;

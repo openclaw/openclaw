@@ -21,6 +21,7 @@ import {
 import { trimLogTail } from "./restart-sentinel.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+  normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
@@ -301,22 +302,42 @@ export function markPackagePostInstallDoctorAdvisory<
   advisory?: UpdateStepResult["advisory"];
 } {
   if (
-    step.exitCode !== UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE ||
-    result?.status !== "advisory" ||
-    !isNormalProcessExit(step)
+    !result ||
+    result.status === "error" ||
+    !isNormalProcessExit(step) ||
+    !(
+      (step.exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
+        result.status === "advisory") ||
+      (step.exitCode === 0 && result.warnings?.length)
+    )
   ) {
     return step;
   }
   const advisoryTail = [
     step.stderrTail,
-    ...result.advisory.details,
+    ...(result.status === "advisory" ? result.advisory.details : []),
+    ...(result.warnings ?? []),
     PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
   ]
     .filter((line): line is string => Boolean(line?.trim()))
     .join("\n");
   return {
     ...step,
-    advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+    advisory: {
+      ...PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+      details: normalizeUpdatePostInstallDoctorWarnings([
+        ...new Set([
+          ...(result.warnings ?? []),
+          ...(result.status === "advisory" ? result.advisory.details : []),
+        ]),
+      ]).map((detail) => `Run openclaw doctor --fix to finish deferred repairs. ${detail}`),
+      message: [
+        ...(result.warnings ?? []),
+        ...(result.status === "advisory" ? result.advisory.details : []),
+        PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
+        "Run openclaw doctor --fix to finish deferred repairs.",
+      ].join("\n"),
+    },
     stderrTail: trimLogTail(advisoryTail) ?? step.stderrTail,
   };
 }
