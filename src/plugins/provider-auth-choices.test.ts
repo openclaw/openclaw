@@ -48,6 +48,7 @@ vi.resetModules();
 
 const {
   resolveManifestDeprecatedProviderAuthChoice,
+  resolveManifestDeclaredProviderAuthChoices,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveProviderOnboardAuthFlags,
@@ -167,6 +168,77 @@ describe("provider auth choice manifest helpers", () => {
       ],
       resolvedProviderIds: { "openai-api-key": "openai" },
     });
+  });
+
+  it("does not resolve equal-priority owners of the same login choice", () => {
+    setManifestPlugins(
+      ["first", "second"].map((id) => ({
+        id,
+        origin: "global",
+        providerAuthChoices: [{ provider: id, method: "oauth", choiceId: "shared-login" }],
+      })),
+    );
+
+    expect(resolveManifestProviderAuthChoice("shared-login")).toBeUndefined();
+  });
+
+  it("carries the declared credential-only and chat login contracts", () => {
+    setSingleManifestProviderAuthChoices("demo", [
+      {
+        provider: "demo",
+        method: "device-code",
+        choiceId: "demo-device",
+        credentialOnly: true,
+        channelLogin: { aliases: ["demo-login"] },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoice("demo-device")).toMatchObject({
+      credentialOnly: true,
+      channelLogin: { aliases: ["demo-login"] },
+    });
+  });
+
+  it("keeps descriptor setup fallback out of executable declared choices", () => {
+    setManifestPlugins([
+      {
+        id: "descriptor",
+        origin: "bundled",
+        setup: { providers: [{ id: "descriptor", authMethods: ["oauth"] }] },
+      },
+    ]);
+    expect(resolveManifestProviderAuthChoices()).toHaveLength(1);
+    expect(resolveManifestDeclaredProviderAuthChoices()).toEqual([]);
+  });
+
+  it("excludes workspace and explicitly disabled owners from executable choices", () => {
+    setManifestPlugins(
+      ["workspace", "global"].map((origin) => ({
+        id: origin,
+        origin,
+        providerAuthChoices: [{ provider: origin, method: "oauth", choiceId: origin }],
+      })),
+    );
+    const config = {
+      plugins: {
+        entries: {
+          workspace: { enabled: true },
+          global: { enabled: false },
+        },
+      },
+    };
+    expect(resolveManifestDeclaredProviderAuthChoices({ config })).toEqual([]);
+  });
+
+  it("retains tied declarations for explicit owner selection but rejects an unqualified start", () => {
+    setManifestPlugins(
+      ["first", "second"].map((id) => ({
+        id,
+        origin: "global",
+        providerAuthChoices: [{ provider: id, method: "oauth", choiceId: "shared" }],
+      })),
+    );
+    expect(resolveManifestDeclaredProviderAuthChoices()).toHaveLength(2);
   });
 
   it("keeps installed manifest flags ahead of official cold-install flags", () => {

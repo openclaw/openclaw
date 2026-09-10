@@ -638,6 +638,10 @@ export type PluginManifestProviderAuthChoice = {
   appGuidedActionLabel?: string;
   /** Provider-owned interactive login that native setup clients can render generically. */
   appGuidedAuth?: "oauth" | "device-code";
+  /** Auth can return credentials without discovering or selecting a starter model. */
+  credentialOnly?: boolean;
+  /** Fixed-input sign-in offered in private owner-only chat. */
+  channelLogin?: { aliases?: string[] };
   /**
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.

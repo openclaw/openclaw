@@ -223,6 +223,7 @@ describe("models auth login explicit credential selection", () => {
     "profile-id",
     "set-default",
     "unavailable-import",
+    "credential-only",
     "concurrent-config",
     "concurrent-providers",
     "concurrent-models",
@@ -319,9 +320,12 @@ describe("models auth login explicit credential selection", () => {
               id: ${JSON.stringify(provider)}, label: "Auth store proof",
               auth: [{ id: "token", label: "Fixture token", kind: "token",
                 credentialImport: { migrationProviderId: ${JSON.stringify(provider)}, itemId: "auth:shared", credentialKind: "token" },
-                async run({ config }) {
+                async run({ config, credentialOnly }) {
                   const result = ${JSON.stringify({ profiles: [{ profileId: `${provider}:fresh`, credential: fresh }], defaultModel: `${provider}/recommended` })};
-                  if (${JSON.stringify(selection)} === "concurrent-config" || ${JSON.stringify(selection)} === "concurrent-providers") {
+                  if (${JSON.stringify(selection)} === "credential-only") {
+                    if (!credentialOnly) throw new Error("Credential-only login attempted starter discovery");
+                    result.configPatch = ${JSON.stringify({ agents: { defaults: { model: { primary: "authstore-proof/recommended" }, models: { "authstore-proof/*": {} } } } })};
+                  } else if (${JSON.stringify(selection)} === "concurrent-config" || ${JSON.stringify(selection)} === "concurrent-providers") {
                     const concurrent = ${JSON.stringify(selection)} === "concurrent-providers"
                       ? { models: { providers: { "other-proof": {
                           baseUrl: "https://other.invalid", api: "openai-completions", models: []
@@ -461,9 +465,11 @@ describe("models auth login explicit credential selection", () => {
             ? { profileId: freshId }
             : selection === "set-default"
               ? { setDefault: true }
-              : selection !== "unavailable-import"
-                ? { profileId: freshId }
-                : {}),
+              : selection === "credential-only"
+                ? { credentialOnly: true }
+                : selection !== "unavailable-import"
+                  ? { profileId: freshId }
+                  : {}),
         ...(selection === "runtime-canonical-models" ? {} : { config }),
         runtime,
         prompter: createWizardPrompter({
@@ -495,6 +501,9 @@ describe("models auth login explicit credential selection", () => {
       if (selection === "concurrent-config") {
         expect(savedConfig.logging.level).toBe("debug");
         expect(savedConfig.models.providers[provider].baseUrl).toBe("https://fixture.invalid");
+      }
+      if (selection === "credential-only") {
+        expect(savedConfig.agents.defaults.models).toBeUndefined();
       }
       if (selection === "concurrent-providers") {
         expect(savedConfig.models.providers[provider].baseUrl).toBe("https://fixture.invalid");

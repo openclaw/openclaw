@@ -89,11 +89,12 @@ export async function updateConfig(
     cfg: OpenClawConfig,
     context: UpdateConfigContext,
   ) => readonly (ModelRef | undefined)[],
+  beforeCommit?: () => void,
 ): Promise<OpenClawConfig> {
   const explicitSetPaths: string[][] = [];
   const result = await transformConfigFile({
     base: "source",
-    writeOptions: { explicitSetPaths },
+    writeOptions: { explicitSetPaths, beforeCommit },
     transform: async (currentConfig, { snapshot }, { envSnapshotForRestore }) => {
       if (!snapshot.valid) {
         const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");

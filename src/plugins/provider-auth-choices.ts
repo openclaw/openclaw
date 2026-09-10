@@ -3,6 +3,7 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
+import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -36,6 +37,8 @@ export type ProviderAuthChoiceMetadata = {
   appGuidedActionLabel?: string;
   appGuidedDiscovery?: boolean;
   appGuidedAuth?: "oauth" | "device-code";
+  credentialOnly?: boolean;
+  channelLogin?: { aliases?: string[] };
   onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
@@ -121,6 +124,8 @@ function toProviderAuthChoiceCandidate(params: {
     ...(choice.appGuidedActionLabel ? { appGuidedActionLabel: choice.appGuidedActionLabel } : {}),
     ...(choice.appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
     ...(choice.appGuidedAuth ? { appGuidedAuth: choice.appGuidedAuth } : {}),
+    ...(choice.credentialOnly ? { credentialOnly: true } : {}),
+    ...(choice.channelLogin ? { channelLogin: choice.channelLogin } : {}),
     ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
   };
 }
@@ -199,6 +204,7 @@ function stripChoiceOrigin(choice: ProviderAuthChoiceCandidate): ProviderAuthCho
 
 function resolveManifestProviderAuthChoiceCandidates(
   params?: ManifestProviderAuthChoiceParams,
+  declaredOnly = false,
 ): ProviderAuthChoiceCandidate[] {
   const metadataSnapshot =
     params?.metadataSnapshot ??
@@ -210,6 +216,9 @@ function resolveManifestProviderAuthChoiceCandidates(
   const registry = metadataSnapshot.manifestRegistry;
   const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
   return registry.plugins.flatMap((plugin) => {
+    if (declaredOnly && !passesManifestOwnerBasePolicy({ plugin, normalizedConfig })) {
+      return [];
+    }
     if (plugin.origin === "workspace" && params?.includeWorkspacePlugins === false) {
       return [];
     }
@@ -235,7 +244,9 @@ function resolveManifestProviderAuthChoiceCandidates(
         }),
       );
     }
-    choices.push(...listSetupProviderAuthChoiceCandidates(plugin));
+    if (!declaredOnly) {
+      choices.push(...listSetupProviderAuthChoiceCandidates(plugin));
+    }
     return choices;
   });
 }
@@ -244,6 +255,7 @@ function pickPreferredManifestAuthChoice(
   candidates: readonly ProviderAuthChoiceCandidate[],
 ): ProviderAuthChoiceCandidate | undefined {
   let preferred: ProviderAuthChoiceCandidate | undefined;
+  let ambiguous = false;
   for (const candidate of candidates) {
     if (!preferred) {
       preferred = candidate;
@@ -254,9 +266,15 @@ function pickPreferredManifestAuthChoice(
       resolveProviderAuthChoiceOriginPriority(preferred.origin)
     ) {
       preferred = candidate;
+      ambiguous = false;
+    } else if (
+      resolveProviderAuthChoiceOriginPriority(candidate.origin) ===
+      resolveProviderAuthChoiceOriginPriority(preferred.origin)
+    ) {
+      ambiguous = true;
     }
   }
-  return preferred;
+  return ambiguous ? undefined : preferred;
 }
 
 function resolvePreferredManifestAuthChoicesByChoiceId(
@@ -297,6 +315,29 @@ export function resolveManifestProviderAuthChoices(
   return resolvePreferredManifestAuthChoicesByChoiceId(
     resolveManifestProviderAuthChoiceCandidates(params),
   ).map(stripChoiceOrigin);
+}
+
+/** Executable declarations exclude workspace code and honor current plugin policy. */
+export function resolveManifestDeclaredProviderAuthChoices(
+  params?: ManifestProviderAuthChoiceParams,
+): ProviderAuthChoiceMetadata[] {
+  const candidates = resolveManifestProviderAuthChoiceCandidates(
+    { ...params, includeWorkspacePlugins: false },
+    true,
+  );
+  const preferred = resolvePreferredManifestAuthChoicesByChoiceId(candidates);
+  const priorities = new Map(
+    preferred.map((choice) => [
+      choice.choiceId,
+      resolveProviderAuthChoiceOriginPriority(choice.origin),
+    ]),
+  );
+  return candidates
+    .filter(
+      (choice) =>
+        priorities.get(choice.choiceId) === resolveProviderAuthChoiceOriginPriority(choice.origin),
+    )
+    .map(stripChoiceOrigin);
 }
 
 export function resolveManifestProviderAuthChoice(

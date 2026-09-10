@@ -41,7 +41,8 @@ export type ProviderProfilesViewProps = {
   canMutate: boolean;
   mutationBlockedReason: string | null;
   profileOrders: Record<string, string[]>;
-  onOpenModelSetup: () => void;
+  onAddAccount: (() => void) | undefined;
+  addAccountDisabled: boolean;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onRequestLogout: (pending: ModelProviderPendingLogout) => void;
 };
@@ -389,9 +390,18 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
               ${t("modelProviders.profiles.resetOrder")}
             </button>`,
           )}
-          <button type="button" class="btn btn--sm" @click=${props.onOpenModelSetup}>
-            ${t("modelProviders.profiles.addAccount")}
-          </button>
+          ${
+            props.onAddAccount
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm"
+                  ?disabled=${props.addAccountDisabled}
+                  @click=${props.onAddAccount}
+                >
+                  ${t("modelProviders.profiles.addAccount")}
+                </button>`
+              : nothing
+          }
         </div>
       </div>
       <div class="model-providers__profile-list" role="list">

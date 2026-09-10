@@ -1,7 +1,11 @@
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
+import {
+  resolveManifestDeclaredProviderAuthChoices,
+  resolveManifestProviderAuthChoices,
+} from "../../plugins/provider-auth-choices.js";
+import { listProviderLoginOptions } from "../../plugins/provider-login-options.js";
 import {
   supportsSetupManualSecret,
   supportsSetupTextInference,
@@ -28,6 +32,10 @@ export function resolveModelProviderCapabilities(params: {
     [...providers.keys(), ...modelCatalogProviders.keys()].map(resolveProvider),
   );
   const capabilities = new Map<string, ModelProviderCapability>();
+  const loginChoices = resolveManifestDeclaredProviderAuthChoices({
+    ...lookup,
+    includeWorkspacePlugins: false,
+  });
   for (const choice of resolveManifestProviderAuthChoices(lookup)) {
     const provider = resolveProvider(choice.providerId);
     // Setup descriptors also include tools and media-only services, not just model accounts.
@@ -41,6 +49,9 @@ export function resolveModelProviderCapabilities(params: {
       provider,
       apiKeySupported: current?.apiKeySupported === true || apiKeySupported,
       quickApiKeySetup: current?.quickApiKeySetup === true || quickApiKeySetup,
+      loginOptions: listProviderLoginOptions(
+        loginChoices.filter((entry) => resolveProvider(entry.providerId) === provider),
+      ),
     });
   }
   return {

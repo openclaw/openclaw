@@ -48,6 +48,8 @@ export type ProviderAuthResult = {
 /** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
+  /** Save connection credentials without discovering or selecting a starter model. */
+  credentialOnly?: boolean;
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;

@@ -38,6 +38,7 @@ import {
   MODEL_PROVIDERS_COST_DAYS,
   type ModelProvidersData,
 } from "./load.ts";
+import { ModelProviderLoginController } from "./login-controller.ts";
 import { readModelBehaviorConfig, type ModelBehaviorConfig } from "./model-behavior.ts";
 import {
   buildDefaultsPatch,
@@ -177,6 +178,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     clearProbe: (cardId) => this.clearProbe(cardId),
     setLogoutSuccess: showProfileLogoutSuccess,
   });
+  private readonly login = new ModelProviderLoginController(this, {
+    getScope: () => ({ context: this.context, agentId: this.selectedAgentId, data: this.data }),
+    canStart: () => this.canMutate(),
+    canContinue: () => this.mutationBlockedReason() === null,
+    refresh: () => this.refresh({ force: true }),
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.runtimeConfig,
@@ -284,6 +291,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private resetAgentScopeState() {
+    this.login.reset();
     this.busy = {};
     this.messages = {};
     this.probeResults = {};
@@ -312,8 +320,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private syncSelectedAgent() {
-    const agentId = this.resolveSelectedAgentId();
-    if (!this.setSelectedAgent(agentId)) {
+    if (!this.setSelectedAgent(this.resolveSelectedAgentId())) {
       return;
     }
     this.invalidateRequests();
@@ -670,7 +677,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         gatewaySnapshot.phase === "connected" &&
         operatorAuth?.scopes !== undefined &&
         hasOperatorAdminAccess(operatorAuth),
-      canMutate: this.canMutate(),
       mutationBlockedReason: this.mutationBlockedReason(),
       providerUsageStalled: this.refreshPolicy.incompleteUsageExhausted,
       probeAvailable: !this.probeUnsupported && advertised !== false,
@@ -726,12 +732,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onModelPickerOpen: () => this.catalogDiscovery.openPicker(),
       onCatalogRetry: () => this.catalogDiscovery.retry(),
       onOpenModelSetup: () => this.context.navigate("model-setup"),
+      ...this.login.providerActions,
     });
     return renderModelProvidersPageShell({
       agentSelection: this.context.agentSelection,
       agents,
       onOpenModelSetup: () => this.context.navigate("model-setup"),
-      selectedAgentId: this.selectedAgentId,
+      ...this.login.pageActions,
       body,
     });
   }

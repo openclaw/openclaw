@@ -16,6 +16,7 @@ import {
 } from "./state.ts";
 
 export type ModelSetupWizardStartMethod =
+  | "models.authLogin"
   | "openclaw.setup.auth.start"
   | "openclaw.setup.prepare.start"
   | "openclaw.setup.activate.start";

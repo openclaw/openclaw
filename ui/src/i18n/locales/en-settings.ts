@@ -276,6 +276,15 @@ const enSettings = {
   modelProviders: {
     title: "Configured providers",
     configureModels: "Configure Models",
+    login: {
+      action: "Connect provider",
+      title: "Connect a provider",
+      description: "Save credentials for this agent. Choose the active model separately.",
+      done: "Provider credentials saved.",
+      finishing: "Credentials are being saved. Wait for the result.",
+      sessionExpired:
+        "This sign-in session ended. Close this dialog and refresh Models to check the result.",
+    },
     subtitle: "Providers and credentials for the selected agent.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",

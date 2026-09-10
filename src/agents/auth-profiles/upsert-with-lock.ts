@@ -130,6 +130,8 @@ function supersedesOAuthRefreshGenerationObservedAtAdmission(params: {
 }
 
 type PersistAuthProfileBatchParams = {
+  /** Revalidate the calling operation after lock acquisition, at the write boundary. */
+  beforeWrite?: () => void;
   profiles: readonly {
     profileId: string;
     credential: AuthProfileCredential;
@@ -189,6 +191,7 @@ export async function persistAuthProfileBatch(
       const preparedOwner = runAuthProfileWriteTransaction(
         params.agentDir,
         (database, owner) => {
+          params.beforeWrite?.();
           storeWasAbsent =
             inspectPersistedAuthProfileStoreRaw(params.agentDir, database).status === "missing";
           stateWasAbsent =
