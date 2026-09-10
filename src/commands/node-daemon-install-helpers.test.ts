@@ -68,6 +68,7 @@ describe("buildNodeInstallPlan", () => {
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
       env: {},
+      runtime: "node",
       extraPathDirs: ["/custom/node/bin"],
     });
   });
@@ -97,6 +98,7 @@ describe("buildNodeInstallPlan", () => {
     expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
       env: { HOME: "/home/test" },
+      runtime: "bun",
       extraPathDirs: ["/home/test/.bun/bin"],
     });
   });
@@ -126,6 +128,7 @@ describe("buildNodeInstallPlan", () => {
 
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
       env: {},
+      runtime: "node",
       extraPathDirs: undefined,
     });
   });

@@ -130,6 +130,7 @@ export function mergeInstallInvocationEnv(params: {
       upper === "HOME" ||
       upper === "PATH" ||
       upper === "TMPDIR" ||
+      upper === "HOMEBREW_PREFIX" ||
       upper.startsWith("OPENCLAW_")
     ) {
       continue;

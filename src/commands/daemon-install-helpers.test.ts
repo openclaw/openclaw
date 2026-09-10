@@ -2479,6 +2479,7 @@ describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist",
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
+        ...(env.HOMEBREW_PREFIX !== undefined ? { HOMEBREW_PREFIX: env.HOMEBREW_PREFIX } : {}),
         ...(env.OPENCLAW_CONFIG_READONLY !== undefined
           ? { OPENCLAW_CONFIG_READONLY: env.OPENCLAW_CONFIG_READONLY }
           : {}),
@@ -2497,6 +2498,17 @@ describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist",
   it("continues to drop stale OPENCLAW_ALLOW_ROOT", async () => {
     const result = await buildEnvironment({ OPENCLAW_ALLOW_ROOT: "1" });
     expect(result.OPENCLAW_ALLOW_ROOT).toBeUndefined();
+  });
+
+  it("uses only the current install's HOMEBREW_PREFIX", async () => {
+    const existingEnvironment = { HOMEBREW_PREFIX: "/opt/homebrew" };
+    const result = await buildEnvironment(existingEnvironment);
+    expect(result.HOMEBREW_PREFIX).toBeUndefined();
+    const current = await buildEnvironment(existingEnvironment, {
+      HOME: "/tmp",
+      HOMEBREW_PREFIX: "/usr/local",
+    });
+    expect(current.HOMEBREW_PREFIX).toBe("/usr/local");
   });
 
   it("preserves OPENCLAW_CLI_CONTAINER_BYPASS and OPENCLAW_CONTAINER_HINT", async () => {

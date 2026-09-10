@@ -49,6 +49,27 @@ export const SERVICE_PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 
+function readServiceSqliteEnvironment(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+  runtime: GatewayDaemonRuntime | undefined,
+): { OPENCLAW_SQLITE_LIBRARY?: string; HOMEBREW_PREFIX?: string } {
+  // Match the library selected by the installing shell and judged by the daemon
+  // probe (src/daemon/runtime-paths.ts RUNTIME_PROBE_ENV_KEYS); wrappers hide the runtime.
+  if (
+    platform !== "darwin" ||
+    (runtime !== "bun" && !normalizeOptionalString(env.OPENCLAW_WRAPPER))
+  ) {
+    return {};
+  }
+  const library = normalizeOptionalString(env.OPENCLAW_SQLITE_LIBRARY);
+  const prefix = normalizeOptionalString(env.HOMEBREW_PREFIX);
+  return {
+    ...(library ? { OPENCLAW_SQLITE_LIBRARY: library } : {}),
+    ...(prefix && path.posix.isAbsolute(prefix) ? { HOMEBREW_PREFIX: prefix } : {}),
+  };
+}
+
 function readServiceProxyEnvironment(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
@@ -355,6 +376,7 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    ...readServiceSqliteEnvironment(env, platform, params.runtime),
     // An empty assignment clears supervisor ambient options; omission would
     // allow preloads/debug flags to bypass the heap-only service boundary.
     NODE_OPTIONS: resolveGatewayHeapNodeOptions(
@@ -378,6 +400,7 @@ export function buildServiceEnvironment(params: {
 
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
+  runtime?: GatewayDaemonRuntime;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
   execPath?: string;
@@ -397,6 +420,7 @@ export function buildNodeServiceEnvironment(params: {
   const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    ...readServiceSqliteEnvironment(env, platform, params.runtime),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
     CF_ACCESS_CLIENT_ID: cloudflareAccessClientId,
