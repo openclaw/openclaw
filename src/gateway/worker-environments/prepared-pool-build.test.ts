@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   IDLE_TIMEOUT_MS,
   usePreparedPoolFixture,
@@ -7,6 +8,76 @@ import {
 
 describe("prepared worker builds", () => {
   const fixture = usePreparedPoolFixture();
+
+  it.each(["new build", "promoted reserve"] as const)(
+    "retains a %s admitted while another project's retention is pending",
+    async (admission) => {
+      fixture.config.cloudWorkers!.preparedPool = { maxTotal: 1 };
+      fixture.attach(fixture.ready(fixture.seed("source-a")));
+      const projectKey = "1".repeat(64);
+      const preparationKey = "2".repeat(64);
+      const reserve =
+        admission === "promoted reserve"
+          ? fixture.seed("reserve-b", { reserve: true, projectKey, preparationKey })
+          : undefined;
+      const entered = createDeferred();
+      const release = createDeferred();
+      fixture.releases.push(() => release.resolve());
+      const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
+      const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>();
+      const owner = fixture.pool({
+        reconcile,
+        prepareIntent,
+        prepareRetention: async (record) => {
+          if (record.environmentId === "source-a") {
+            entered.resolve();
+            await release.promise;
+          }
+          return { assertCurrent: () => {} };
+        },
+      });
+      const running = fixture.schedule(owner);
+      await Promise.race([entered.promise, running]);
+      fixture.nowMs += 100;
+      fixture.developmentProfile.readyWorkers = 0;
+      const build = fixture.store.ensurePreparedIntent({
+        intent: {
+          environmentId: "build-b",
+          providerId: fixture.provider.id,
+          profileId: "development",
+          provisionOperationId: "provision:build-b",
+          profileSnapshot: fixture.profile(projectKey, preparationKey),
+          preparation: {
+            purpose: "build",
+            key: preparationKey,
+            demandAtMs: fixture.nowMs,
+            expiresAtMs: fixture.nowMs + IDLE_TIMEOUT_MS,
+          },
+        },
+        projectKey,
+        target: 0,
+        maxTotal: 1,
+        assertCurrent: () => {},
+      })!;
+      expect(build).toBeDefined();
+      const repeated = fixture.schedule(owner);
+      release.resolve();
+      await Promise.all([running, repeated]);
+      expect(fixture.store.get(build.environmentId)).toMatchObject({
+        state: "requested",
+        destroyRequestedAtMs: null,
+        preparation: {
+          purpose: "build",
+          expiresAtMs: reserve?.preparation?.expiresAtMs ?? fixture.nowMs + IDLE_TIMEOUT_MS,
+        },
+      });
+      expect(fixture.reserves()).toHaveLength(1);
+      expect(prepareIntent).not.toHaveBeenCalled();
+      expect(reconcile.mock.calls.map(([record]) => record.environmentId)).toContain(
+        build.environmentId,
+      );
+    },
+  );
 
   it("prefers a new build over an older commit activated in the same millisecond", async () => {
     fixture.developmentProfile.readyWorkers = 0;

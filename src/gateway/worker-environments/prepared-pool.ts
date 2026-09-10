@@ -98,9 +98,10 @@ export function createPreparedWorkerPool(options: PoolOptions) {
   };
   const runPass = async () => {
     current();
+    const inventory = store.list();
     const sources = new Map<string, { record: WorkerEnvironmentRecord; demandAtMs: number }>();
     const buildingKeys = new Set<string>();
-    for (const record of store.list()) {
+    for (const record of inventory) {
       const demandAtMs = demandAt(record);
       const key = groupKey(record);
       if (
@@ -264,8 +265,12 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       let totalKept = 0;
       const cleanup: WorkerEnvironmentRecord[] = [];
       const work: WorkerEnvironmentRecord[] = [];
-      for (const record of store.list().toSorted((a, b) => a.createdAtMs - b.createdAtMs)) {
+      // Builds admitted during an await belong to the next scheduled pass's
+      // source snapshot. Existing rows still use live promotion and cleanup state.
+      for (const snapshot of inventory.toSorted((a, b) => a.createdAtMs - b.createdAtMs)) {
+        const record = store.get(snapshot.environmentId);
         if (
+          !record ||
           record.preparation?.consumedAtMs !== null ||
           record.state === "destroyed" ||
           record.state === "failed"
