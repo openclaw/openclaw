@@ -51,6 +51,17 @@ function auditInput(overrides: Partial<AuditEventInput> = {}): AuditEventInput {
   } as AuditEventInput;
 }
 
+function skillSelectionInput(overrides: Partial<AuditEventInput> = {}): AuditEventInput {
+  return auditInput({
+    sourceSequence: 2,
+    kind: "skill_selection",
+    action: "skill.selection.observed",
+    status: "observed",
+    toolName: "debug-toolkit",
+    ...overrides,
+  });
+}
+
 function agentEvent(overrides: Partial<AgentEventPayload>): AgentEventPayload {
   return {
     runId: currentAuditTestRunId,
@@ -196,6 +207,73 @@ describe("audit event persistence", () => {
     expect(recordAuditEvent(input, database)).toBeDefined();
     expect(recordAuditEvent(input, database)).toBeUndefined();
     expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(1);
+  });
+
+  it("stores skill selection outside the legacy audit_events table while preserving activity pagination", () => {
+    const database = createDatabaseOptions();
+    const now = Date.now();
+    recordAuditEvent(auditInput({ occurredAt: now, sourceSequence: 1 }), database);
+    const skill = recordAuditEvent(
+      skillSelectionInput({ occurredAt: now + 1, sourceSequence: 2 }),
+      database,
+    );
+    recordAuditEvent(
+      auditInput({
+        occurredAt: now + 2,
+        sourceSequence: 3,
+        action: "agent.run.finished",
+        status: "succeeded",
+      }),
+      database,
+    );
+
+    const { db } = openOpenClawStateDatabase(database);
+    expect(
+      db.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE kind = 'skill_selection'").get(),
+    ).toEqual({ count: 0 });
+    expect(db.prepare("SELECT tool_name FROM audit_skill_selection_events").get()).toEqual({
+      tool_name: "debug-toolkit",
+    });
+
+    const legacy = listAuditEvents({ database, limit: 10 });
+    expect(legacy.events.map((event) => event.kind)).toEqual(["agent_run", "agent_run"]);
+
+    const first = listAuditEvents({
+      database,
+      limit: 2,
+      filters: { includeSkillSelections: true },
+    });
+    expect(first.events.map((event) => event.sourceSequence)).toEqual([3, 2]);
+    expect(first.events[1]).toMatchObject({
+      kind: "skill_selection",
+      sequence: skill?.sequence,
+      sourceSequence: 2,
+      redaction: "metadata_only",
+      actorType: "agent",
+      actorId: "main",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-1",
+      runId: "run-1",
+      toolName: "debug-toolkit",
+    });
+    expect(first.nextCursor).toBe(skill?.sequence);
+
+    const second = listAuditEvents({
+      database,
+      limit: 2,
+      cursor: first.nextCursor,
+      filters: { includeSkillSelections: true },
+    });
+    expect(second.events.map((event) => event.sourceSequence)).toEqual([1]);
+    expect(second.nextCursor).toBeUndefined();
+
+    const skillOnly = listAuditEvents({
+      database,
+      limit: 10,
+      filters: { kind: "skill_selection" },
+    });
+    expect(skillOnly.events).toEqual([expect.objectContaining({ kind: "skill_selection" })]);
   });
 
   it("rejects persisted run lifecycle tuples outside the closed contract", () => {

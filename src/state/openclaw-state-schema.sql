@@ -204,6 +204,36 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_channel_sequence
 CREATE INDEX IF NOT EXISTS idx_audit_events_direction_sequence
   ON audit_events(direction, sequence DESC);
 
+CREATE TABLE IF NOT EXISTS audit_skill_selection_events (
+  sequence INTEGER PRIMARY KEY,
+  event_id TEXT NOT NULL UNIQUE,
+  source_id TEXT NOT NULL UNIQUE,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  source_sequence INTEGER NOT NULL,
+  occurred_at INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  session_key TEXT,
+  session_id TEXT,
+  run_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_audit_skill_selection_events_agent_sequence
+  ON audit_skill_selection_events(agent_id, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_skill_selection_events_session_sequence
+  ON audit_skill_selection_events(session_key, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_skill_selection_events_run_sequence
+  ON audit_skill_selection_events(run_id, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_skill_selection_events_status_sequence
+  ON audit_skill_selection_events(status, sequence DESC);
+
 CREATE TABLE IF NOT EXISTS outbound_message_execution_bindings (
   event_id TEXT NOT NULL PRIMARY KEY,
   context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),

@@ -77,6 +77,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "skill_workshop_collection_reviews",
   "skill_workshop_proposal_rollbacks",
   "skill_workshop_proposals",
+  "audit_skill_selection_events",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
 ] as const;
@@ -87,6 +88,10 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   "idx_github_publication_requests_pending",
   "secret_store_entries_live_idx",
   "idx_skill_workshop_collection_reviews_owner_time",
+  "idx_audit_skill_selection_events_agent_sequence",
+  "idx_audit_skill_selection_events_session_sequence",
+  "idx_audit_skill_selection_events_run_sequence",
+  "idx_audit_skill_selection_events_status_sequence",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;

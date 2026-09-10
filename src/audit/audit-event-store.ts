@@ -15,6 +15,23 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import {
+  corruptAuditRow,
+  optionalEnum,
+  optionalHmacRef,
+  optionalInteger,
+  optionalText,
+  parseAuditRecordBase,
+  requiredEnum,
+  requiredHmacRef,
+  requiredText,
+  requireNull,
+  requireNullColumns,
+} from "./audit-event-store.row-helpers.js";
+import {
+  listSkillSelectionAuditEvents,
+  recordSkillSelectionAuditEvent,
+} from "./audit-event-store.skill-selection-storage.js";
 import { parseSkillSelectionAuditRow } from "./audit-event-store.skill-selection.js";
 import {
   AUDIT_EVENT_SCHEMA_VERSION,
@@ -51,13 +68,14 @@ const AUDIT_EVENT_PRUNE_BATCH_ROWS = 1_024;
 // The single audit writer owns one DB handle. Invalidate on out-of-band
 // maintenance or rollback so the hot path avoids a 100k-row scan per message.
 const auditEventRowCounts = new WeakMap<DatabaseSync, number>();
-function getAuditKysely(db: DatabaseSync) { return getNodeSqliteKysely<AuditDatabase>(db); }
+function getAuditKysely(db: DatabaseSync) {
+  return getNodeSqliteKysely<AuditDatabase>(db);
+}
 const RUN_ACTIONS = ["agent.run.started", "agent.run.finished"] as const;
 const TOOL_ACTIONS = ["tool.action.started", "tool.action.finished"] as const;
 const CONVERSATION_KINDS = ["direct", "group", "channel", "unknown"] as const;
 const DELIVERY_KINDS = ["text", "media", "other"] as const;
 const FAILURE_STAGES = ["platform_send", "queue", "unknown"] as const;
-const AUDIT_HMAC_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
 const MESSAGE_COLUMNS = [
   "direction",
   "channel",
@@ -73,89 +91,7 @@ const MESSAGE_COLUMNS = [
   "message_ref",
   "target_ref",
 ] as const satisfies readonly (keyof AuditEventRow)[];
-function corruptAuditRow(row: AuditEventRow, problem: string): never {
-  const sequence = normalizeSqliteNumber(row.sequence);
-  const location = sequence === undefined ? "" : ` ${sequence}`;
-  throw new Error(`corrupt audit event row${location}: ${problem}`);
-}
-function requiredInteger(
-  row: AuditEventRow,
-  value: number | bigint | null,
-  field: string,
-  minimum: number,
-): number {
-  const normalized = normalizeSqliteNumber(value);
-  if (normalized === undefined || !Number.isSafeInteger(normalized) || normalized < minimum) {
-    corruptAuditRow(row, `invalid ${field}`);
-  }
-  return normalized;
-}
-function optionalInteger(
-  row: AuditEventRow,
-  value: number | bigint | null,
-  field: string,
-  minimum: number,
-): number | undefined {
-  if (value === null) {
-    return undefined;
-  }
-  return requiredInteger(row, value, field, minimum);
-}
-function requiredText(row: AuditEventRow, value: unknown, field: string): string { if (typeof value !== "string" || value.length === 0) { corruptAuditRow(row, `invalid ${field}`); } return value; }
-function optionalText(row: AuditEventRow, value: unknown, field: string): string | undefined { if (value === null || value === undefined) { return undefined; } return requiredText(row, value, field); }
-function requiredEnum<const Value extends string>(
-  row: AuditEventRow,
-  value: unknown,
-  field: string,
-  allowed: readonly Value[],
-): Value {
-  for (const candidate of allowed) {
-    if (value === candidate) {
-      return candidate;
-    }
-  }
-  return corruptAuditRow(row, `invalid ${field}`);
-}
-function optionalEnum<const Value extends string>(
-  row: AuditEventRow,
-  value: unknown,
-  field: string,
-  allowed: readonly Value[],
-): Value | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  return requiredEnum(row, value, field, allowed);
-}
-function requiredHmacRef(row: AuditEventRow, value: unknown, field: string): string {
-  const ref = requiredText(row, value, field);
-  if (!AUDIT_HMAC_REF_RE.test(ref)) {
-    corruptAuditRow(row, `invalid ${field}`);
-  }
-  return ref;
-}
-function optionalHmacRef(row: AuditEventRow, value: unknown, field: string): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  return requiredHmacRef(row, value, field);
-}
-function requireNull(row: AuditEventRow, field: keyof AuditEventRow): void { if (row[field] !== null) { corruptAuditRow(row, `unexpected ${field}`); } }
-function requireNullColumns(row: AuditEventRow, fields: readonly (keyof AuditEventRow)[]): void { for (const field of fields) { requireNull(row, field); } }
-function parseAuditRecordBase(row: AuditEventRow) {
-  const schemaVersion = requiredInteger(row, row.schema_version, "schemaVersion", 1);
-  if (schemaVersion !== AUDIT_EVENT_SCHEMA_VERSION) {
-    corruptAuditRow(row, `unsupported schemaVersion ${schemaVersion}`);
-  }
-  return {
-    schemaVersion,
-    sequence: requiredInteger(row, row.sequence, "sequence", 1),
-    eventId: requiredText(row, row.event_id, "eventId"),
-    sourceSequence: requiredInteger(row, row.source_sequence, "sourceSequence", 1),
-    occurredAt: requiredInteger(row, row.occurred_at, "occurredAt", 0),
-    redaction: "metadata_only" as const,
-  };
-}
+
 function parseAgentRecordFields(row: AuditEventRow) {
   requireNullColumns(row, MESSAGE_COLUMNS);
   return {
@@ -507,6 +443,7 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<Au
     target_ref: message?.targetRef ?? null,
   };
 }
+
 function countAuditEvents(db: DatabaseSync): number {
   const row = executeSqliteQueryTakeFirstSync(
     db,
@@ -562,6 +499,7 @@ function pruneAuditEventsAfterInsert(db: DatabaseSync, now: number): void {
   }
   auditEventRowCounts.set(db, rowCount);
 }
+
 /** Persist one projected event idempotently and prune fixed retention bounds. */
 export function recordAuditEvent(
   input: AuditEventInput,
@@ -581,6 +519,9 @@ export function recordAuditEvent(
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       countCacheDatabase = db;
+      if (input.kind === "skill_selection") {
+        return recordSkillSelectionAuditEvent(input, db, Date.now() - AUDIT_EVENT_RETENTION_MS);
+      }
       // Read losslessly so Node's rowid decoding cannot preempt the safe-integer guard.
       const insert = executeSqliteQueryTakeFirstSync(
         db,
@@ -634,6 +575,7 @@ export function listAuditEvents(params: {
     .selectFrom("audit_events")
     .selectAll()
     .where("occurred_at", ">=", retainedAfter)
+    .where("kind", "!=", "skill_selection")
     // Nonterminal outbound facts belong to the lazy progress owner. Excluding
     // transitional rows keeps the released activity contract terminal-only.
     .where("action", "not in", ["message.outbound.queued", "message.outbound.platform-started"]);
@@ -673,9 +615,27 @@ export function listAuditEvents(params: {
     db,
     query.orderBy("sequence", "desc").limit(params.limit + 1),
   ).rows;
-  const hasMore = rows.length > params.limit;
-  const pageRows = hasMore ? rows.slice(0, params.limit) : rows;
-  const events = pageRows.map(rowToAuditEvent);
+  const auditEvents = rows.map(rowToAuditEvent);
+  const skillEvents =
+    filters.includeSkillSelections === true || filters.kind === "skill_selection"
+      ? listSkillSelectionAuditEvents({
+          db,
+          filters,
+          retainedAfter,
+          ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
+          limit: params.limit + 1,
+        })
+      : [];
+  const mergedEvents = [...auditEvents, ...skillEvents].sort((left, right) => {
+    if (right.sequence !== left.sequence) {
+      return right.sequence - left.sequence;
+    }
+    return right.occurredAt - left.occurredAt;
+  });
+  const hasMore = mergedEvents.length > params.limit;
+  const events = (
+    hasMore ? mergedEvents.slice(0, params.limit) : mergedEvents
+  ) as AuditEventRecord[];
   return {
     events,
     ...(hasMore && events.length > 0 ? { nextCursor: events[events.length - 1]?.sequence } : {}),

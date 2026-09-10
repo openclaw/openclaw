@@ -1625,6 +1625,9 @@ describe("before_tool_call loop detection behavior", () => {
           source: "workspace",
           activation: "read",
           skillFile: skillFilePath,
+          agentId: "main",
+          sessionKey: "session-key",
+          sessionId: "session-id",
         },
       ]);
       expect(consumeRunSkillUsage("run-1")).toEqual([]);

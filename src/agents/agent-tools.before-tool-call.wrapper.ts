@@ -585,6 +585,9 @@ export function wrapToolWithBeforeToolCallHook(
         if (skillMatch) {
           recordRunSkillUsage({
             runId: ctx?.runId,
+            agentId: ctx?.agentId,
+            sessionKey: ctx?.sessionKey,
+            sessionId: ctx?.sessionId,
             name: skillMatch.skillName,
             source: skillMatch.skillSource,
             activation: skillMatch.activation,

@@ -368,6 +368,7 @@ export type AuditEventListFilters = {
   direction?: AuditMessageDirection;
   channel?: string;
   includeMessages?: boolean;
+  includeSkillSelections?: boolean;
   after?: number;
   before?: number;
 };
