@@ -11,6 +11,7 @@ import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
+import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
@@ -181,10 +182,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         record.lastError &&
         !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)
       ) {
-        throw serviceError(
-          "invalid_state",
-          `Cloud worker runtime update is pending; recovery will retry when the worker is available: ${boundedError(record.lastError)}`,
-        );
+        throw new WorkerRuntimeRefreshPendingError(boundedError(record.lastError));
       }
       const credential = store.getCredential(request.environmentId);
       if (

@@ -4,6 +4,16 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
+export class WorkerRuntimeRefreshPendingError extends Error {
+  readonly code = "invalid_state";
+
+  constructor(detail: string) {
+    super(
+      `Cloud worker runtime update is pending; recovery will retry when the worker is available: ${detail}`,
+    );
+  }
+}
+
 type WorkerRuntimeRefreshOptions = Pick<
   WorkerProviderLifecycleOptions,
   | "store"

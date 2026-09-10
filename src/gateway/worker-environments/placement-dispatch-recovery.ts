@@ -15,6 +15,7 @@ import {
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
 } from "./placement-record.js";
+import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 const log = createSubsystemLogger("gateway/worker-placement");
@@ -162,6 +163,11 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         ownerEpoch: environment.ownerEpoch,
       });
     } catch (error) {
+      if (error instanceof WorkerRuntimeRefreshPendingError) {
+        // The provider still owns this machine. A failed runtime update closes
+        // execution until retry; it is not evidence that the lease must be reclaimed.
+        return;
+      }
       await failure.failActive(placement, error);
     }
   };

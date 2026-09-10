@@ -81,14 +81,14 @@ describe("placement reclaim with provider-owned node teardown", () => {
         throw new Error("expected active placement");
       }
       if (operation === "recovery") {
-        placements.markWorkspaceResultPending(
-          placements.claimTurn({
-            ...REQUEST,
-            claimId: "pending-claim",
-            runId: "pending-run",
-            owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
-          }),
-        );
+        const claim = placements.claimTurn({
+          ...REQUEST,
+          claimId: "pending-claim",
+          runId: "pending-run",
+          owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
+        });
+        placements.markWorkspaceResultPending(claim);
+        placements.startWorkspaceResultDrain(claim);
         placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
         harness = createHarness(support.testState.stateDb, placements, harnessOptions);
       }

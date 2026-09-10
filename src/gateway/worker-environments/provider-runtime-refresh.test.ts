@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  type WorkerAdmissionHandshake,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
+import { createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
@@ -13,17 +18,43 @@ describe("worker environment runtime upgrades", () => {
     ...support.BOOTSTRAP_RECEIPT,
     bundleHash: "b".repeat(64),
     openclawVersion: "2026.7.3",
+    protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
   };
 
   function setupUpgrade(
     transport: "node" | "ssh",
     state: "ready" | "idle" | "attached" = "attached",
+    bootstrapReceipt: WorkerAdmissionHandshake = support.BOOTSTRAP_RECEIPT,
   ) {
     const environmentId = "worker-runtime-upgrade";
-    const ready =
-      transport === "node"
-        ? support.seedReadyNodeDesktop(environmentId)
-        : support.seedReadyDesktop(environmentId);
+    support.testState.store.createIntent({
+      environmentId,
+      providerId: "fake",
+      profileId: "development",
+      profileSnapshot: { settings: { region: "test", desktop: true } },
+      provisionOperationId: `provision:${environmentId}`,
+    });
+    support.testState.store.transition({ environmentId, from: "requested", to: "provisioning" });
+    if (transport === "ssh") {
+      support.testState.store.transition({
+        environmentId,
+        from: "provisioning",
+        to: "bootstrapping",
+        patch: { leaseId: `lease:${environmentId}`, sshEndpoint: support.SSH_ENDPOINT },
+      });
+    }
+    const ready = support.testState.store.transition({
+      environmentId,
+      from: transport === "node" ? "provisioning" : "bootstrapping",
+      to: "ready",
+      patch: {
+        ...support.readyPatch(environmentId, bootstrapReceipt),
+        desktop: support.DESKTOP,
+        ...(transport === "node"
+          ? { leaseId: `lease:${environmentId}`, nodeDeviceId: `node:${environmentId}` }
+          : {}),
+      },
+    });
     const environment =
       state === "ready"
         ? ready
@@ -180,6 +211,46 @@ describe("worker environment runtime upgrades", () => {
       expect(h.destroy).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps an idle SSH machine through startup recovery when its runtime upgrade must retry", async () => {
+    const h = setupUpgrade("ssh", "attached", {
+      ...support.BOOTSTRAP_RECEIPT,
+      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+    });
+    const recovery = createRecoveryService(h.placements, h.service);
+    h.install.mockRejectedValueOnce(new Error("runtime download interrupted"));
+
+    await recovery.reconcile("startup");
+
+    expect(h.install).toHaveBeenCalledOnce();
+    expect(h.destroy).not.toHaveBeenCalled();
+    expect(h.placements.get(REQUEST.sessionId)).toEqual(h.placement);
+    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+      state: "attached",
+      leaseId: h.environment.leaseId,
+      ownerEpoch: h.environment.ownerEpoch,
+      bootstrapReceipt: h.environment.bootstrapReceipt,
+      destroyRequestedAtMs: null,
+      lastError: "runtime download interrupted",
+    });
+
+    await recovery.reconcileActive(h.environment.environmentId);
+
+    expect(h.install).toHaveBeenCalledTimes(2);
+    expect(h.provision).not.toHaveBeenCalled();
+    expect(h.destroy).not.toHaveBeenCalled();
+    expect(h.placements.get(REQUEST.sessionId)).toEqual({
+      ...h.placement,
+      workerBundleHash: currentReceipt.bundleHash,
+    });
+    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+      state: "attached",
+      leaseId: h.environment.leaseId,
+      ownerEpoch: h.environment.ownerEpoch,
+      bootstrapReceipt: { ...currentReceipt, installKind: "bundle" },
+      lastError: null,
+    });
+  });
 
   it.each(["shutdown", "destroy", "move", "live turn"] as const)(
     "rejects a finished installation after %s closes its authority",
