@@ -1564,7 +1564,7 @@ describe("model-specific runtime view", () => {
 });
 
 describe("declared minimum host", () => {
-  it("renders an unavailable runtime and disables Submit without the new SDK helper", () => {
+  it("keeps model-only Submit available without the new SDK helper", () => {
     hostSdk.runtimeChoicesAvailable = false;
     const data = createModelsProviderData({ openai: ["gpt-4o"] });
     delete data.runtimeChoicesByModel;
@@ -1579,8 +1579,13 @@ describe("declared minimum host", () => {
       pendingModelIndex: 1,
     });
 
+    const submit = rows.flatMap((row) => row.components ?? []).find((c) => c.label === "Submit");
+    expect(submit).toBeDefined();
+    expect(submit?.disabled).not.toBe(true);
     expect(
-      rows.flatMap((row) => row.components ?? []).find((c) => c.label === "Submit")?.disabled,
-    ).toBe(true);
+      rows
+        .flatMap((row) => row.components ?? [])
+        .find((c) => parseDiscordModelPickerCustomId(c.custom_id ?? "")?.action === "runtime"),
+    ).toBeUndefined();
   });
 });

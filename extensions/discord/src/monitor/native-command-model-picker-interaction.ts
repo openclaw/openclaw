@@ -3,6 +3,7 @@ import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
   listChatCommands,
+  resolveEffectiveAgentRuntime,
   type ChatCommandDefinition,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -19,7 +20,10 @@ import {
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import { readDiscordModelPickerRecentModels } from "./model-picker-preferences.js";
-import { getDiscordModelPickerRuntimeChoices } from "./model-picker.runtime.js";
+import {
+  getDiscordModelPickerRuntimeChoices,
+  supportsDiscordModelPickerRuntimeChoices,
+} from "./model-picker.runtime.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   createDiscordModelPickerModelToken,
@@ -577,19 +581,54 @@ async function handleDiscordModelPickerInteraction(params: {
       parsedModelRef.provider,
       parsedModelRef.model,
     );
-    if (choices === undefined) {
+    const modelOnlyHost = !supportsDiscordModelPickerRuntimeChoices();
+    const supportsModelOnlySelection = () => {
+      const currentEntry = getSessionEntry({
+        storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+        sessionKey: route.sessionKey,
+        readConsistency: "latest",
+      });
+      const override = currentEntry?.agentRuntimeOverride?.trim();
+      // The old command owner cannot validate native pins against a different model.
+      // Preserve those pins; model-only compatibility never invents a runtime choice.
+      if (override && !["auto", "default", "openclaw"].includes(override)) {
+        return false;
+      }
+      const model = pickerData.modelCatalog?.find(
+        (entry) => entry.provider === parsedModelRef.provider && entry.id === parsedModelRef.model,
+      );
+      return (
+        resolveEffectiveAgentRuntime({
+          cfg,
+          provider: parsedModelRef.provider,
+          modelId: parsedModelRef.model,
+          modelApi: model?.api,
+          modelBaseUrl: model?.baseUrl,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          sessionEntry: currentEntry,
+        }) === "openclaw"
+      );
+    };
+    const legacyRuntimeNotice =
+      "This OpenClaw version supports model-only selection here. Update OpenClaw to change runtimes in the picker.";
+    if (modelOnlyHost && (parsed.runtime || parsed.runtimeToken || !supportsModelOnlySelection())) {
+      await showNotice(legacyRuntimeNotice);
+      return;
+    }
+    if (!modelOnlyHost && choices === undefined) {
       await showNotice("Runtime availability is not confirmed. Reopen /model to try again.");
       return;
     }
     const selectedRuntime =
       normalizeOptionalString(parsed.runtime) ?? resolveRuntimeToken(choices, parsed.runtimeToken);
     if (
-      choices.length === 0 ||
+      choices?.length === 0 ||
       (parsed.runtimeToken && selectedRuntime === undefined) ||
       (selectedRuntime &&
         selectedRuntime !== "auto" &&
         selectedRuntime !== "default" &&
-        !choices.some((choice) => choice.id === selectedRuntime))
+        !choices?.some((choice) => choice.id === selectedRuntime))
     ) {
       await showNotice(
         "That runtime is not available for this model. Reopen /model and choose again.",
@@ -612,6 +651,10 @@ async function handleDiscordModelPickerInteraction(params: {
 
     if (pickerData.isCurrent?.() === false) {
       await showNotice("That model picker expired. Reopen /model to try again.");
+      return;
+    }
+    if (modelOnlyHost && !supportsModelOnlySelection()) {
+      await showNotice(legacyRuntimeNotice);
       return;
     }
     const applyResult = await applyDiscordModelPickerSelection({

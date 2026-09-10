@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsRuntimeChoice } from "openclaw/plugin-sdk/models-provider-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseCustomId, serializePayload } from "../internal/discord.js";
@@ -342,27 +343,85 @@ describe("Discord model picker interactions", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("refuses a declared minimum host submission without dispatch when the SDK helper is absent", async () => {
-    hostSdk.runtimeChoicesAvailable = false;
-    const context = createModelPickerContext();
-    const data = createDefaultModelPickerData();
-    delete data.runtimeChoicesByModel;
-    delete data.isCurrent;
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
-    mockModelCommandPipeline(createModelCommandDefinition());
-    const dispatchSpy = createDispatchSpy();
+  it.each(["submit", "reset", "recents"])(
+    "dispatches declared minimum host %s through the built-in runtime",
+    async (action) => {
+      hostSdk.runtimeChoicesAvailable = false;
+      const context = createModelPickerContext();
+      const data = createDefaultModelPickerData();
+      delete data.runtimeChoicesByModel;
+      delete data.isCurrent;
+      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
+      mockModelCommandPipeline(createModelCommandDefinition());
+      const dispatchSpy = createDispatchSpy();
 
-    const interaction = await runSubmitButton({
-      context,
-      data: { ...createModelsViewSubmitData(), r: "openclaw" },
-      dispatchCommandInteraction: dispatchSpy,
-    });
+      await runSubmitButton({
+        context,
+        data: {
+          ...createModelsViewSubmitData(),
+          p: "anthropic",
+          mi: "1",
+          ...(action === "reset" ? { act: "reset" } : {}),
+          ...(action === "recents" ? { view: "recents", rs: "1" } : {}),
+        },
+        dispatchCommandInteraction: dispatchSpy,
+      });
 
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(
-      JSON.stringify(firstMockArg(interaction.editReply, "unconfirmed runtime notice")),
-    ).toContain("Runtime availability is not confirmed");
-  });
+      expectDispatchedModelSelection({ dispatchSpy, model: "anthropic/claude-sonnet-4-5" });
+    },
+  );
+
+  it.each(["explicit runtime", "native model policy", "native session pin"])(
+    "preserves declared minimum host state with an unsupported %s",
+    async (mode) => {
+      hostSdk.runtimeChoicesAvailable = false;
+      const context = createModelPickerContext();
+      const data = createDefaultModelPickerData();
+      delete data.runtimeChoicesByModel;
+      delete data.isCurrent;
+      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
+      mockModelCommandPipeline(createModelCommandDefinition());
+      if (mode === "native model policy") {
+        context.cfg.agents = {
+          defaults: {
+            models: { "anthropic/claude-sonnet-4-5": { agentRuntime: { id: "claude-cli" } } },
+          },
+        };
+      }
+      const interaction = createInteraction();
+      context.cfg.session = { ...context.cfg.session, dmScope: "main" };
+      const store = {
+        storePath: path.join(tempDir, "sessions.json"),
+        sessionKey: "agent:main:main",
+      };
+      await upsertSessionEntry({
+        ...store,
+        entry: {
+          sessionId: "minimum-host-session",
+          updatedAt: 1,
+          ...(mode === "native session pin" ? { agentRuntimeOverride: "claude-cli" } : {}),
+        },
+      });
+      const before = getSessionEntry({ ...store, readConsistency: "latest" });
+      const dispatchSpy = createDispatchSpy();
+      await runSubmitButton({
+        context,
+        interaction,
+        data: {
+          ...createModelsViewSubmitData(),
+          p: "anthropic",
+          mi: "1",
+          ...(mode === "explicit runtime" ? { r: "claude-cli" } : {}),
+        },
+        dispatchCommandInteraction: dispatchSpy,
+      });
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      expect(getSessionEntry({ ...store, readConsistency: "latest" })).toEqual(before);
+      expect(JSON.stringify(firstMockArg(interaction.editReply, "model-only notice"))).toContain(
+        "supports model-only selection",
+      );
+    },
+  );
 
   it("registers distinct fallback ids for button and select handlers", () => {
     const context = createModelPickerContext();

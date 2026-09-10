@@ -17,7 +17,10 @@ import {
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "../internal/discord.js";
-import { getDiscordModelPickerRuntimeChoices } from "./model-picker.runtime.js";
+import {
+  getDiscordModelPickerRuntimeChoices,
+  supportsDiscordModelPickerRuntimeChoices,
+} from "./model-picker.runtime.js";
 import {
   buildDiscordModelPickerCustomId,
   createDiscordModelPickerModelToken,
@@ -256,6 +259,9 @@ function resolveCompactRuntimeState(params: {
   currentRuntime?: string;
   pendingRuntime?: string;
 }): CompactRuntimeState {
+  if (!supportsDiscordModelPickerRuntimeChoices()) {
+    return {};
+  }
   const runtime = resolveExplicitRuntimeState(params);
   return runtime ? { runtimeToken: createDiscordModelPickerRuntimeToken(runtime) } : {};
 }
@@ -627,7 +633,9 @@ function buildModelRows(params: {
     createModelPickerButton({
       label: "Submit",
       style: ButtonStyle.Primary,
-      disabled: !hasPendingSelection || selectedRuntime === undefined,
+      disabled:
+        !hasPendingSelection ||
+        (supportsDiscordModelPickerRuntimeChoices() && selectedRuntime === undefined),
       customId: buildDiscordModelPickerCustomId({
         ...modelActionState,
         action: "submit",
@@ -800,13 +808,15 @@ export function renderDiscordModelPickerModelsView(
   });
   const pendingLine = !params.pendingModel
     ? "Select a model, then press Submit."
-    : choices === undefined
-      ? "Runtime availability is not confirmed. Reopen /model to try again."
-      : choices.length === 0
-        ? "No runtime is available for the selected model. Choose another model."
-        : selectedRuntime
-          ? `Selected: ${params.pendingModel} · runtime ${selectedRuntime} (press Submit)`
-          : "Choose an available runtime for the selected model, then press Submit.";
+    : !supportsDiscordModelPickerRuntimeChoices()
+      ? `Selected: ${params.pendingModel} (press Submit)`
+      : choices === undefined
+        ? "Runtime availability is not confirmed. Reopen /model to try again."
+        : choices.length === 0
+          ? "No runtime is available for the selected model. Choose another model."
+          : selectedRuntime
+            ? `Selected: ${params.pendingModel} · runtime ${selectedRuntime} (press Submit)`
+            : "Choose an available runtime for the selected model, then press Submit.";
 
   const detailLines = [formatCurrentModelLine(params.currentModel), `Default: ${defaultModel}`];
   if (modelPage.totalPages > 1) {
