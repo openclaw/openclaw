@@ -305,6 +305,7 @@ export function projectChatTranscript(
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
     fetchLinkFavicon: props.fetchLinkFavicon,
+    pluginToolIcons: props.pluginToolIcons,
     githubRepo: props.githubRepo,
     showAssistantAvatar: avatarPlacement === "gutter" && Boolean(assistantIdentity.avatar),
   } satisfies StreamGroupOptions;
@@ -687,6 +688,7 @@ export function projectChatTranscript(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     Boolean(props.fetchLinkFavicon),
+    props.pluginToolIcons,
     props.githubRepo?.owner,
     props.githubRepo?.repo,
     threadContextWindow,
