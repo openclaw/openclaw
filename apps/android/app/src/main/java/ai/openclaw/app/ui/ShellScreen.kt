@@ -413,9 +413,9 @@ fun ShellScreen(
             prompt = prompt,
             confirmLabel = stringResource(R.string.trust_and_continue),
             cancelLabel = stringResource(R.string.cancel),
-            onAccept = viewModel::acceptGatewayTrustPrompt,
-            onUseSystemTrust = viewModel::useSystemGatewayTrustPrompt,
-            onDecline = viewModel::declineGatewayTrustPrompt,
+            onAccept = { viewModel.acceptGatewayTrustPrompt(prompt, it) },
+            onUseSystemTrust = { viewModel.useSystemGatewayTrustPrompt(prompt) },
+            onDecline = { viewModel.declineGatewayTrustPrompt(prompt) },
           )
         }
       }
