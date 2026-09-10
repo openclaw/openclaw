@@ -7,6 +7,7 @@ import ts from "typescript";
 import { isCodeFile, listRepoFilesSync } from "./check-file-utils.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { getPropertyNameText, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
@@ -302,6 +303,10 @@ export const BANNED_COERCION_HELPER_NAMES: readonly BannedCoercionHelperName[] =
   ]),
 ];
 const BANNED_HELPER_NAMES: ReadonlySet<string> = new Set(BANNED_COERCION_HELPER_NAMES);
+const BANNED_HELPER_NAME_PATTERN = new RegExp(
+  [...BANNED_HELPER_NAMES].map(escapeRegExp).join("|"),
+  "u",
+);
 // One tracked-tree scan covers root configs plus config, Actions, skills, apps, plugins, and packages.
 const SCAN_ROOTS = ["."];
 const GENERATED_OR_FIXTURE_PATH_RE =
@@ -418,7 +423,7 @@ export function findBannedCoercionHelperDeclarations(
   source: string,
   file = "source.ts",
 ): CoercionHelperDeclaration[] {
-  if (![...BANNED_HELPER_NAMES].some((name) => source.includes(name))) {
+  if (!BANNED_HELPER_NAME_PATTERN.test(source)) {
     return [];
   }
   const scriptKind = file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
