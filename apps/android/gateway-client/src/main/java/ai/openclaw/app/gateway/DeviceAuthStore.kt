@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.SecurePrefs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -58,9 +57,9 @@ interface DeviceAuthTokenStore {
   )
 }
 
-/** SecurePrefs-backed implementation of Android gateway device-token storage. */
+/** Gateway device-token storage backed by the app's secure credential store. */
 class DeviceAuthStore(
-  private val prefs: SecurePrefs,
+  private val prefs: GatewayCredentialStore,
 ) : DeviceAuthTokenStore {
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -131,37 +130,49 @@ class DeviceAuthStore(
     prefs.remove(metadataKey(gatewayId, deviceId, role))
   }
 
-  private fun tokenKey(
-    gatewayId: String,
-    deviceId: String,
-    role: String,
-  ): String {
-    val normalizedGateway = normalizeGatewayId(gatewayId)
-    val normalizedDevice = normalizeDeviceId(deviceId)
-    val normalizedRole = normalizeRole(role)
-    // Keep key normalization shared with metadata keys so token and metadata
-    // are added/removed as one logical auth entry.
-    return "gateway.deviceToken.$normalizedGateway.$normalizedDevice.$normalizedRole"
+  companion object {
+    /** Pure edits for an app-owned registry/credential transaction after session writers drain. */
+    fun removalEdits(
+      gatewayId: String,
+      deviceId: String,
+      roles: List<String>,
+    ): Map<String, String?> =
+      roles
+        .flatMap { role ->
+          listOf(tokenKey(gatewayId, deviceId, role), metadataKey(gatewayId, deviceId, role))
+        }.associateWith { null }
+
+    private fun tokenKey(
+      gatewayId: String,
+      deviceId: String,
+      role: String,
+    ): String {
+      val normalizedGateway = normalizeGatewayId(gatewayId)
+      val normalizedDevice = normalizeDeviceId(deviceId)
+      val normalizedRole = normalizeRole(role)
+      // Token and metadata keys must share normalization, including transaction removals.
+      return "gateway.deviceToken.$normalizedGateway.$normalizedDevice.$normalizedRole"
+    }
+
+    private fun metadataKey(
+      gatewayId: String,
+      deviceId: String,
+      role: String,
+    ): String {
+      val normalizedGateway = normalizeGatewayId(gatewayId)
+      val normalizedDevice = normalizeDeviceId(deviceId)
+      val normalizedRole = normalizeRole(role)
+      return "gateway.deviceTokenMeta.$normalizedGateway.$normalizedDevice.$normalizedRole"
+    }
+
+    private fun normalizeGatewayId(gatewayId: String): String = gatewayId.trim().also { require(it.isNotEmpty()) }
+
+    /** Normalizes device ids before they become encrypted preference key segments. */
+    private fun normalizeDeviceId(deviceId: String): String = deviceId.trim().lowercase()
+
+    /** Normalizes role names so node/operator token slots are stable across callers. */
+    private fun normalizeRole(role: String): String = role.trim().lowercase()
   }
-
-  private fun metadataKey(
-    gatewayId: String,
-    deviceId: String,
-    role: String,
-  ): String {
-    val normalizedGateway = normalizeGatewayId(gatewayId)
-    val normalizedDevice = normalizeDeviceId(deviceId)
-    val normalizedRole = normalizeRole(role)
-    return "gateway.deviceTokenMeta.$normalizedGateway.$normalizedDevice.$normalizedRole"
-  }
-
-  private fun normalizeGatewayId(gatewayId: String): String = gatewayId.trim().also { require(it.isNotEmpty()) }
-
-  /** Normalizes device ids before they become encrypted preference key segments. */
-  private fun normalizeDeviceId(deviceId: String): String = deviceId.trim().lowercase()
-
-  /** Normalizes role names so node/operator token slots are stable across callers. */
-  private fun normalizeRole(role: String): String = role.trim().lowercase()
 
   /** Stores scopes in deterministic order for display and restart comparisons. */
   private fun normalizeScopes(scopes: List<String>): List<String> =

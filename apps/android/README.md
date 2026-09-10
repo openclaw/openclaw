@@ -109,7 +109,7 @@ pnpm install
 cd apps/android
 ./gradlew :app:assemblePlayDebug
 ./gradlew :app:installPlayDebug
-./gradlew :app:testPlayDebugUnitTest
+./gradlew :app:testPlayDebugUnitTest :gateway-client:testDebugUnitTest
 cd ../..
 pnpm android:release:archive
 ```
@@ -241,9 +241,9 @@ Direct Gradle tasks:
 
 ```bash
 cd apps/android
-./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck
-./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear:ktlintFormat :wear-shared:ktlintFormat
-./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck :gateway-client:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat :gateway-client:ktlintFormat :wear:ktlintFormat :wear-shared:ktlintFormat
+./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :gateway-client:lintDebug :wear:lintDebug :wear-shared:lintDebug
 ```
 
 Set `ANDROID_HOME` to your installed Android SDK, or set `sdk.dir` in the local `apps/android/local.properties` file. For Homebrew's command-line tools, the SDK may be at `/opt/homebrew/share/android-commandlinetools`.

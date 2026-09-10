@@ -39,7 +39,19 @@ internal fun interface WearMessageTransport {
     path: String,
     data: ByteArray,
   )
+
+  suspend fun sendGuarded(
+    nodeId: String,
+    path: String,
+    data: ByteArray,
+    guard: WearProxyEnqueueGuard,
+  ) {
+    guard {}
+    send(nodeId, path, data)
+  }
 }
+
+internal typealias WearProxyEnqueueGuard = (() -> Unit) -> Unit
 
 internal interface WearRpcRequester {
   suspend fun request(
@@ -73,6 +85,7 @@ internal class WearProxyException(
 internal class WearProxyClient private constructor(
   private val nodeResolver: WearNodeResolver,
   private val transport: WearMessageTransport,
+  private val captureRoute: () -> WearProxyEnqueueGuard = { { it() } },
 ) : WearRpcRequester {
   private val pending = ConcurrentHashMap<String, PendingWearRequest>()
   private val preferredPhoneLock = Any()
@@ -96,10 +109,11 @@ internal class WearProxyClient private constructor(
     expectedNodeId: String?,
     requirePreferredNode: Boolean,
   ): WearRpcResult {
+    val route = captureRoute()
     var attemptedPreferredPhone: PreferredPhoneRegistration? = null
     val result =
       withTimeoutOrNull(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS) {
-        requestBeforeDeadline(method, params, expectedNodeId, requirePreferredNode) { registration ->
+        requestBeforeDeadline(method, params, expectedNodeId, requirePreferredNode, route) { registration ->
           attemptedPreferredPhone = registration
         }
       }
@@ -116,6 +130,7 @@ internal class WearProxyClient private constructor(
     params: JsonObject,
     expectedNodeId: String?,
     requirePreferredNode: Boolean,
+    route: WearProxyEnqueueGuard,
     recordPreferredPhoneAttempt: (PreferredPhoneRegistration?) -> Unit,
   ): WearRpcResult {
     // Stateful RPCs stay on the phone that supplied their session/transcript.
@@ -141,13 +156,14 @@ internal class WearProxyClient private constructor(
     check(pending.putIfAbsent(requestId, pendingRequest) == null)
     return try {
       try {
-        transport.send(
+        transport.sendGuarded(
           nodeId = nodeId,
           path = WearProtocol.REQUEST_PATH,
           data =
             WearProtocolCodec.encode(
               WearMessage.Request(requestId = requestId, method = method, params = params),
             ),
+          guard = route,
         )
       } catch (_: CancellationException) {
         currentCoroutineContext().ensureActive()
@@ -158,6 +174,7 @@ internal class WearProxyClient private constructor(
         throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
       }
       val envelope = response.await()
+      route {}
       if (
         (expectedNodeId == null || requirePreferredNode || method.requiresPreferredSnapshotSource()) &&
         currentPreferredPhone()?.nodeId != nodeId
@@ -343,11 +360,15 @@ internal class WearProxyClient private constructor(
   companion object {
     private const val MAX_BUFFERED_EVENTS = 64
 
-    fun create(context: Context): WearProxyClient {
+    fun create(
+      context: Context,
+      captureRoute: () -> WearProxyEnqueueGuard = { { it() } },
+    ): WearProxyClient {
       val appContext = context.applicationContext
       val capabilityClient = Wearable.getCapabilityClient(appContext)
       val messageClient = Wearable.getMessageClient(appContext)
       return WearProxyClient(
+        captureRoute = captureRoute,
         nodeResolver =
           WearNodeResolver {
             selectReachablePhoneNodeId(
@@ -359,8 +380,25 @@ internal class WearProxyClient private constructor(
             )
           },
         transport =
-          WearMessageTransport { nodeId, path, data ->
-            messageClient.sendMessage(nodeId, path, data).await()
+          object : WearMessageTransport {
+            override suspend fun send(
+              nodeId: String,
+              path: String,
+              data: ByteArray,
+            ) {
+              messageClient.sendMessage(nodeId, path, data).await()
+            }
+
+            override suspend fun sendGuarded(
+              nodeId: String,
+              path: String,
+              data: ByteArray,
+              guard: WearProxyEnqueueGuard,
+            ) {
+              var task: Task<Int>? = null
+              guard { task = messageClient.sendMessage(nodeId, path, data) }
+              checkNotNull(task).await()
+            }
           },
       )
     }

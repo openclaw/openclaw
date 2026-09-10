@@ -35,9 +35,12 @@ const ALLOWLIST_FILE = "scripts/protocol-event-coverage.allowlist.json";
 const IOS_SCAN_ROOTS = ["apps/ios/Sources", "apps/shared/OpenClawKit/Sources"];
 const IOS_SENTINEL_FILE =
   "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatGatewayPayloadCodec.swift";
-const ANDROID_SCAN_ROOT = "apps/android/app/src/main/java/ai/openclaw/app";
+const ANDROID_SCAN_ROOTS = [
+  "apps/android/app/src/main/java/ai/openclaw/app",
+  "apps/android/gateway-client/src/main/java/ai/openclaw/app",
+];
 const ANDROID_SENTINEL_FILES = [
-  "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+  "apps/android/gateway-client/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
   "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
 ];
 
@@ -722,7 +725,7 @@ function collectProtocolEventCoverageErrors(params: { rootDir?: string; fs?: FsI
       client: "android" satisfies keyof typeof allowlist,
       handledEvents: collectClientHandledEvents({
         rootDir,
-        roots: [ANDROID_SCAN_ROOT],
+        roots: ANDROID_SCAN_ROOTS,
         extension: ".kt",
         extract: extractKotlinHandledEvents,
         buildExtractContext: (sources) => collectStringConstants(sources, "Kotlin"),

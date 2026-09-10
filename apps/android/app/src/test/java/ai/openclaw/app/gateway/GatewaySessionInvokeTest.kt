@@ -232,55 +232,6 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun canvasRoutePinsOnlyTheConnectedTlsEndpoint() {
-    val fingerprint = "ab".repeat(32)
-
-    data class RouteCase(
-      val host: String,
-      val surfaceOrigin: String,
-      val matches: Boolean,
-      val port: Int = 7443,
-      val tls: Boolean = true,
-      val pin: String? = fingerprint,
-    )
-    val cases =
-      listOf(
-        RouteCase("gateway.example", "https://gateway.example:7443", true),
-        RouteCase("GATEWAY.example.", "https://gateway.EXAMPLE:7443", true),
-        RouteCase(" gateway.example. ", "https://gateway.example.:7443", true),
-        RouteCase("gateway.example", "https://gateway.example", true, port = 443),
-        RouteCase("192.0.2.10", "https://192.0.2.10:7443", true),
-        RouteCase("[2001:db8::10]", "https://[2001:db8::10]:7443", true),
-        RouteCase("gateway.example", "https://canvas.example:7443", false),
-        RouteCase("gateway.example", "https://gateway.example:9443", false),
-        RouteCase("gateway.example", "http://gateway.example:7443", false),
-        RouteCase("localhost", "https://127.0.0.1:7443", false),
-        RouteCase("bücher.example", "https://xn--bcher-kva.example:7443", false),
-        RouteCase("192.0.2.10", "https://192.0.2.11:7443", false),
-        RouteCase("2001:db8::10", "https://[2001:db8::11]:7443", false),
-        RouteCase("::ffff:192.0.2.10", "https://192.0.2.11:7443", false),
-        RouteCase("gateway.example", "https://gateway.example:7443", false, tls = false),
-        RouteCase("gateway.example", "https://gateway.example:7443", false, pin = null),
-        RouteCase("::ffff:192.0.2.10", "https://192.0.2.10:7443", true),
-        RouteCase("192.0.2.10", "https://[::ffff:192.0.2.10]:7443", true),
-        RouteCase("2001:db8::10", "https://[2001:db8::10]:7443", true),
-        RouteCase("2001:0db8:0:0:0:0:0:10", "https://[2001:db8::10]:7443", true),
-      )
-    for (case in cases) {
-      assertEquals(
-        "Gateway ${case.host}:${case.port}, surface ${case.surfaceOrigin}",
-        fingerprint.takeIf { case.matches },
-        gatewayTlsFingerprintForCanvasSurface(
-          fingerprint = case.pin,
-          surfaceUrl = "${case.surfaceOrigin}/__openclaw__/cap/token",
-          endpoint = GatewayEndpoint.manual(host = case.host, port = case.port),
-          isTlsConnection = case.tls,
-        ),
-      )
-    }
-  }
-
-  @Test
   fun refreshCanvasHostUrl_usesNodeRefreshMethod() =
     runBlocking {
       for (contextPath in listOf("", "/tenant%20gateway/gw", "/tenant%2Fgateway", "//tenant/gw", "/__openclaw__")) {
@@ -384,10 +335,10 @@ class GatewaySessionInvokeTest {
         contextPath = contextPath,
       )
       awaitConnectedOrThrow(connected, lastDisconnect, server)
-      val oldUrl = requireNotNull(harness.session.currentCanvasHostUrl())
+      val oldUrl = requireNotNull(harness.session.currentCanvasHostRoute()?.url)
       val beforeRefresh = loadDocument(oldUrl)
-      val refreshed = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
-      val lagging = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
+      val refreshed = harness.session.refreshCanvasHostRouteIfCurrent(oldUrl)?.url
+      val lagging = harness.session.refreshCanvasHostRouteIfCurrent(oldUrl)?.url
       val afterRefresh = loadDocument(requireNotNull(refreshed))
       val expiredDocument = loadDocument(oldUrl)
       val responses = listOf(beforeRefresh, afterRefresh)
@@ -397,7 +348,7 @@ class GatewaySessionInvokeTest {
       assertEquals(404, expiredDocument.first)
       assertTrue(oldUrl.endsWith("/old-token"))
       assertTrue(refreshed.endsWith("/new-token"))
-      assertEquals(refreshed, harness.session.currentCanvasHostUrl())
+      assertEquals(refreshed, harness.session.currentCanvasHostRoute()?.url)
       assertEquals(refreshed, lagging)
       assertEquals(1, refreshRequests.get())
     } finally {
@@ -428,7 +379,7 @@ class GatewaySessionInvokeTest {
       try {
         connectNodeSession(harness.session, server.port, role = "operator", scopes = listOf("operator.read"), contextPath = contextPath)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
-        assertEquals(advertised.get(), harness.session.currentCanvasHostUrl())
+        assertEquals(advertised.get(), harness.session.currentCanvasHostRoute()?.url)
         val origin = "http://127.0.0.1:${server.port}"
         val explicitRoutes =
           listOf(
@@ -445,7 +396,10 @@ class GatewaySessionInvokeTest {
           )
         for (route in explicitRoutes) {
           advertised.set(route)
-          assertEquals(route, harness.session.refreshCanvasHostUrl())
+          assertEquals(
+            route,
+            harness.session.refreshCanvasHostRouteIfCurrent(harness.session.currentCanvasHostRoute()?.url)?.url,
+          )
         }
       } finally {
         shutdownHarness(harness, server)

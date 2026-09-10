@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.SecurePrefs
 import android.content.Context
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -35,7 +34,7 @@ class DeviceIdentityStoreTest {
   @Test
   fun migratesLegacyIdentityAndKeepsItStableAcrossReopen() {
     val backing = newBackingPrefs()
-    val prefs = SecurePrefs(app, securePrefsOverride = backing)
+    val prefs = TestGatewayCredentialStore(backing)
     val seed = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate()
     backing.edit().clear().commit()
     legacyFile.parentFile?.mkdirs()
@@ -49,9 +48,9 @@ class DeviceIdentityStoreTest {
   }
 
   @Test
-  fun freshInstallPersistsIdentityOnlyInSecurePrefs() {
+  fun freshInstallPersistsIdentityOnlyInCredentialStore() {
     val backing = newBackingPrefs()
-    val prefs = SecurePrefs(app, securePrefsOverride = backing)
+    val prefs = TestGatewayCredentialStore(backing)
 
     val created = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate()
 
@@ -62,7 +61,7 @@ class DeviceIdentityStoreTest {
   @Test
   fun corruptedLegacyFileIsDeletedAndReplacedWithStableIdentity() {
     val backing = newBackingPrefs()
-    val prefs = SecurePrefs(app, securePrefsOverride = backing)
+    val prefs = TestGatewayCredentialStore(backing)
     legacyFile.parentFile?.mkdirs()
     legacyFile.writeText("{not-json", Charsets.UTF_8)
 

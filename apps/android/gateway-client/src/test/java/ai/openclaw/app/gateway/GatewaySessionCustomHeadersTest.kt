@@ -1,7 +1,5 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.SecurePrefs
-import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +30,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -357,31 +354,22 @@ class GatewaySessionCustomHeadersTest {
 
   @Test
   fun tlsUpgradeRequest_carriesLatestSanitizedHeadersForOnlyThisGateway() {
-    val app = RuntimeEnvironment.getApplication()
-    val securePrefsBacking =
-      app.getSharedPreferences("openclaw.node.secure.test.${UUID.randomUUID()}", Context.MODE_PRIVATE)
-    val prefs = SecurePrefs(app, securePrefsOverride = securePrefsBacking)
     val stableId = "manual|gateway.example|443"
     val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 443)
     val tls = GatewayTlsParams(required = true, expectedFingerprint = "aa".repeat(32), allowTOFU = false, stableId = stableId)
-
-    prefs.saveGatewayCustomHeaders(stableId, mapOf("CF-Access-Client-Id" to "client-id"))
-    securePrefsBacking
-      .edit()
-      .putString(
-        "gateway.customHeaders.$stableId",
-        """{"CF-Access-Client-Id":"client-id","Host":"smuggled.example"}""",
-      ).commit()
-    prefs.saveGatewayCustomHeaders("manual|other.example|443", mapOf("X-Other-Gateway" to "leak"))
-
-    val first = buildGatewayWebSocketUpgradeRequest(endpoint, tls, prefs::loadGatewayCustomHeaders)
+    val headers =
+      mutableMapOf(
+        stableId to mapOf("CF-Access-Client-Id" to "client-id", "Host" to "smuggled.example"),
+        "manual|other.example|443" to mapOf("X-Other-Gateway" to "leak"),
+      )
+    val first = buildGatewayWebSocketUpgradeRequest(endpoint, tls) { headers[it].orEmpty() }
     assertTrue(first.url.isHttps)
     assertEquals("client-id", first.header("CF-Access-Client-Id"))
     assertNull(first.header("Host"))
     assertNull(first.header("X-Other-Gateway"))
 
-    prefs.saveGatewayCustomHeaders(stableId, mapOf("CF-Access-Client-Id" to "updated-id"))
-    val reconnected = buildGatewayWebSocketUpgradeRequest(endpoint, tls, prefs::loadGatewayCustomHeaders)
+    headers[stableId] = mapOf("CF-Access-Client-Id" to "updated-id")
+    val reconnected = buildGatewayWebSocketUpgradeRequest(endpoint, tls) { headers[it].orEmpty() }
     assertEquals("updated-id", reconnected.header("CF-Access-Client-Id"))
   }
 
@@ -389,17 +377,10 @@ class GatewaySessionCustomHeadersTest {
   fun cleartextUpgrade_neverReadsOrSendsStoredCustomHeaders() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
-      val securePrefsBacking =
-        app.getSharedPreferences("openclaw.node.secure.test.${UUID.randomUUID()}", Context.MODE_PRIVATE)
-      val prefs = SecurePrefs(app, securePrefsOverride = securePrefsBacking)
-
       val handshake = AtomicReference<RecordedRequest?>(null)
       val server = startCapturingGatewayServer { request -> handshake.compareAndSet(null, request) }
       val stableId = "manual|127.0.0.1|${server.port}"
-      prefs.saveGatewayCustomHeaders(
-        stableId,
-        mapOf("CF-Access-Client-Id" to "client-id", "CF-Access-Client-Secret" to "client-secret"),
-      )
+      val headers = mapOf("CF-Access-Client-Id" to "client-id", "CF-Access-Client-Secret" to "client-secret")
       val providerRead = AtomicBoolean(false)
 
       val sessionJob = SupervisorJob()
@@ -413,9 +394,9 @@ class GatewaySessionCustomHeadersTest {
           onConnected = { if (!connected.isCompleted) connected.complete(Unit) },
           onDisconnected = {},
           onEvent = { _, _ -> },
-          customHeadersProvider = { id ->
+          customHeadersProvider = {
             providerRead.set(true)
-            prefs.loadGatewayCustomHeaders(id)
+            headers
           },
         )
 

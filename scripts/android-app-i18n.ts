@@ -22,6 +22,7 @@ const ANDROID_SOURCE_ROOTS = [
   SOURCE_ROOT,
   ANDROID_PLAY_SOURCE_ROOT,
   ANDROID_THIRD_PARTY_SOURCE_ROOT,
+  path.join(ROOT, "apps", "android", "gateway-client", "src", "main", "java"),
   WEAR_SOURCE_ROOT,
 ] as const;
 const INVENTORY_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");

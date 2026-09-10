@@ -16,6 +16,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "OpenClawNodeAndroid"
 include(":app")
+include(":gateway-client")
 include(":benchmark")
 include(":wear")
 include(":wear-shared")

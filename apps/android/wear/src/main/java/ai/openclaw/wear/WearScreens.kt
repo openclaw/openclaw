@@ -181,6 +181,7 @@ internal fun OpenClawWearScreens(
   onOpenNotificationSettings: () -> Unit,
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
+  onManageConnection: (() -> Unit)? = null,
 ) {
   val lifecycleOwner = LocalLifecycleOwner.current
   val agentPulseSupported = snapshot?.agentPulseSupported == true
@@ -228,6 +229,7 @@ internal fun OpenClawWearScreens(
       loading = loading,
       failure = failure,
       onRefresh = onRefresh,
+      onManageConnection = onManageConnection,
     )
     return
   }
@@ -349,6 +351,7 @@ internal fun OpenClawWearScreens(
             onOpenNotificationSettings = onOpenNotificationSettings,
             onRefresh = onRefresh,
             onGatewayEnabledChange = onGatewayEnabledChange,
+            onManageConnection = onManageConnection,
           )
         }
 
@@ -1491,10 +1494,14 @@ private fun ControlsPage(
   onOpenNotificationSettings: () -> Unit,
   onRefresh: () -> Unit,
   onGatewayEnabledChange: (Boolean) -> Unit,
+  onManageConnection: (() -> Unit)? = null,
 ) {
   val gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED
 
   WearPage(pageLabel = stringResource(R.string.controls)) {
+    onManageConnection?.let { manage ->
+      item { SecondaryButton(label = stringResource(R.string.watch_connection), enabled = true, onClick = manage) }
+    }
     item {
       ConnectionPanel(snapshot = snapshot)
     }
@@ -1832,6 +1839,7 @@ private fun ConnectionStateScreen(
   loading: Boolean,
   failure: WearConversationFailure?,
   onRefresh: () -> Unit,
+  onManageConnection: (() -> Unit)? = null,
 ) {
   val colors = OpenClawWearTheme.colors
   val listState = rememberTransformingLazyColumnState()
@@ -1872,12 +1880,15 @@ private fun ConnectionStateScreen(
           onClick = onRefresh,
         )
       }
+      onManageConnection?.let { manage ->
+        item { SecondaryButton(label = stringResource(R.string.watch_connection), enabled = true, onClick = manage) }
+      }
     }
   }
 }
 
 @Composable
-private fun WearPage(
+internal fun WearPage(
   pageLabel: String,
   listState: androidx.wear.compose.foundation.lazy.TransformingLazyColumnState? = null,
   content: androidx.wear.compose.foundation.lazy.TransformingLazyColumnScope.() -> Unit,
@@ -2336,7 +2347,7 @@ private fun ConversationStatus(
 }
 
 @Composable
-private fun MessageBubble(message: WearChatMessage) {
+internal fun MessageBubble(message: WearChatMessage) {
   val colors = OpenClawWearTheme.colors
   val isUser = message.chatRole == WearChatRole.USER
   val background =
@@ -2388,7 +2399,7 @@ private fun MessageBubble(message: WearChatMessage) {
 }
 
 @Composable
-private fun StreamingBubble(text: String) {
+internal fun StreamingBubble(text: String) {
   val colors = OpenClawWearTheme.colors
   Column(
     modifier =
@@ -2661,7 +2672,7 @@ private fun ActionButton(
 }
 
 @Composable
-private fun SecondaryButton(
+internal fun SecondaryButton(
   label: String,
   enabled: Boolean,
   onClick: () -> Unit,

@@ -5,7 +5,7 @@ import java.net.InetAddress
 import java.util.Locale
 
 /** Returns true only for loopback hosts safe to treat as local gateway origins. */
-internal fun isLoopbackGatewayHost(
+fun isLoopbackGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
 ): Boolean {
@@ -49,7 +49,7 @@ internal fun isLoopbackGatewayHost(
 }
 
 /** Allows cleartext only for loopback, `.local`, and private/link-local network ranges. */
-internal fun isLocalCleartextGatewayHost(
+fun isLocalCleartextGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
 ): Boolean {

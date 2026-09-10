@@ -41,7 +41,89 @@ suspend the secondary connections after the app leaves the foreground.
 
 ## Wear OS companion
 
-The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.
+The Wear OS app defaults to **Phone Proxy**. **Direct Gateway** is an opt-in
+connection with a separate pairing owned by the watch.
+
+### Phone Proxy (default)
+
+Phone Proxy uses the paired Android phone's authenticated Gateway connection
+without transferring that phone's Gateway credentials to the watch. It can
+select agents and sessions, read bounded transcripts, send text or dictated
+replies, abort an active run, start realtime Talk inside the selected session,
+and connect or disconnect the paired phone's Gateway. It also offers local
+reply notifications, dark or light appearance, and optional automatic speech
+for replies. Agent and Gateway controls are capability-negotiated for staggered
+phone/watch updates. Realtime Talk streams microphone and playback audio over
+a temporary Wear OS Data Layer channel and stops when the selected phone,
+Gateway connection, or audio channel is lost.
+
+### Direct Gateway (opt-in)
+
+Direct Gateway connects the watch itself to a running Gateway instead of using
+the phone relay. The Gateway must be reachable from the watch's network; the
+watch does not host it. Use a secure `wss://` endpoint for public or Tailscale
+access, as described in the [connection runbook](/platforms/android#connection-runbook).
+
+1. Generate a limited setup code on the Gateway host:
+
+   ```bash
+   openclaw qr --limited --setup-code-only
+   ```
+
+2. On the watch, open **Controls > Connection**, or **Connection** on the
+   phone-connection error screen. Choose **Enter limited setup code**, enter
+   or paste the code, then tap **Connect**.
+3. If a certificate prompt appears, compare its SHA-256 fingerprint with the
+   Gateway's certificate through a trusted channel before choosing **Trust
+   certificate**. Reject an unexpected certificate.
+4. Wait for **Connected directly**, then open **Sessions** to choose a
+   conversation.
+
+The setup field accepts the full [setup code](/cli/qr), not a short numeric
+code or the phone's token/password. Direct Gateway requests read, write, and
+approval access and rejects grants containing administrative or pairing
+authority. Generate a new limited code if it reports full-access credentials.
+
+The watch keeps its own device identity, saved-Gateway registry, credentials,
+and accepted certificate pins in encrypted local storage. **Connection** lets
+you select a saved Gateway or explicitly return to **Phone Proxy**. **Forget
+Gateway > Confirm forget** removes that Gateway's local credentials and pin;
+it does not revoke the device on the Gateway. Connection failures do not
+automatically switch to Phone Proxy.
+
+Direct Gateway supports session selection, bounded chat history, streaming
+replies, text input, and **Stop** for an active run. The system input surface
+can supply dictated text; this is not direct realtime Talk. Realtime Talk
+remains a Phone Proxy feature.
+
+**Approvals** shows the selected session's canonical exec, plugin, and
+system-agent requests. Review the authority details and confirm a decision;
+unsupported, incomplete, or oversized decision terms cannot be allowed.
+Decisions stay locked after an unconfirmed outcome until **Refresh**
+reconciles the Gateway's result. If the approval list is incomplete, review
+the remaining requests on another approval surface.
+
+Direct connections run only while the watch app is visible. Backgrounding
+pauses and tears down the connection; returning reconnects the selected
+Gateway unless you chose **Disconnect** during the current app session.
+**Reconnect** starts a fresh attempt without forgetting the pairing.
+
+Direct sends have no persistent offline outbox and are not automatically
+replayed or sent through the phone. Input returned before reconnection finishes
+remains as one unsent message until you choose **Retry** after the connection
+is ready. Use **Discard message** to remove an unsent or rejected message, even
+while offline; unconfirmed messages cannot be discarded.
+If delivery is unconfirmed, reconnect as
+needed and **Refresh** history before choosing **Retry**. Retry reuses the
+pending send's idempotency key. Switching sessions or Gateways, or restarting
+the app, discards that in-memory pending state. An unconfirmed **Stop** also
+requires refreshing the conversation before assuming the run stopped.
+
+<Note>
+The Wear package still declares itself a companion app. Direct Gateway does
+not establish phone-free installation support; physical phone-off, Wi-Fi,
+and LTE operation are not yet qualified.
+</Note>
 
 ## Install outside Google Play
 

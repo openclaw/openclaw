@@ -6,7 +6,7 @@ import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
-import { selectDeterministicTranslation } from "./android-app-i18n.ts";
+import { decodeAndroidResourceValue, selectDeterministicTranslation } from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
@@ -90,6 +90,7 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
     path.join(ROOT, "apps", "android", "app", "src", "main"),
     path.join(ROOT, "apps", "android", "app", "src", "play"),
     path.join(ROOT, "apps", "android", "app", "src", "thirdParty"),
+    path.join(ROOT, "apps", "android", "gateway-client", "src", "main"),
     path.join(ROOT, "apps", "android", "wear", "src", "main", "res", "values"),
   ],
   apple: [
@@ -772,7 +773,11 @@ function addCandidate(
   kind: string,
   line: number,
 ) {
-  const normalized = normalizeSource(decodeLiteral(source, kind));
+  const normalized = normalizeSource(
+    surface === "android" && (kind === "resource-string" || kind === "resource-item")
+      ? decodeAndroidResourceValue(source)
+      : decodeLiteral(source, kind),
+  );
   if (normalized.length > 500 || !normalized.trim() || !/\p{L}/u.test(normalized)) {
     return;
   }

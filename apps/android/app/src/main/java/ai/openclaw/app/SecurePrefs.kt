@@ -3,6 +3,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayBootstrapHandoff
+import ai.openclaw.app.gateway.GatewayCredentialStore
 import ai.openclaw.app.gateway.GatewayCustomHeaders
 import ai.openclaw.app.gateway.GatewayRegistryStore
 import ai.openclaw.app.gateway.GatewayStoreMigration
@@ -80,7 +81,7 @@ internal fun sanitizeSidebarVisiblePages(pageIds: List<String>): List<String> {
 class SecurePrefs(
   context: Context,
   private val securePrefsOverride: SharedPreferences? = null,
-) {
+) : GatewayCredentialStore {
   private val gatewayCredentialLock = Any()
   private val gatewayCredentialRevisions = mutableMapOf<String, Long>()
 
@@ -631,27 +632,25 @@ class SecurePrefs(
     }
   }
 
-  fun getString(key: String): String? = securePrefs.getString(key, null)
+  override fun getString(key: String): String? = securePrefs.getString(key, null)
 
-  fun putString(
+  override fun putString(
     key: String,
     value: String,
   ) {
     securePrefs.edit { putString(key, value) }
   }
 
-  // KTX edit(commit = true) discards commit's Boolean; the identity migration fails closed on it.
-  @Suppress("UseKtx")
-  internal fun putStringSynchronously(
+  override fun putStringSynchronously(
     key: String,
     value: String,
-  ): Boolean = securePrefs.edit().putString(key, value).commit()
+  ): Boolean = commitSecureStrings(mapOf(key to value))
 
-  internal fun commitSecureStrings(values: Map<String, String>): Boolean =
+  override fun commitSecureStrings(values: Map<String, String?>): Boolean =
     synchronized(securePrefs) {
       val previous = values.keys.associateWith { securePrefs.getString(it, null) }
       val editor = securePrefs.edit()
-      values.forEach { (key, value) -> editor.putString(key, value) }
+      values.forEach { (key, value) -> if (value == null) editor.remove(key) else editor.putString(key, value) }
       val committed = runCatching { editor.commit() }.getOrDefault(false)
       if (!committed) {
         // commit(false) can still publish its changes in memory. Keep failed handoffs
@@ -663,7 +662,7 @@ class SecurePrefs(
       return committed
     }
 
-  fun remove(key: String) {
+  override fun remove(key: String) {
     securePrefs.edit { remove(key) }
   }
 

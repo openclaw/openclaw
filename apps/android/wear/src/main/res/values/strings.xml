@@ -123,4 +123,65 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation">Queued %1$d, Running %2$d, Done %3$d, Failed %4$d, Hidden %5$d</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation">More phases not shown</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation">Unknown</string>
+    <!-- The serialized native-locale refresh owns translations for source-only changes. -->
+    <string name="watch_connection" tools:ignore="MissingTranslation">Connection</string>
+    <string name="watch_phone_proxy" tools:ignore="MissingTranslation">Phone Proxy</string>
+    <string name="watch_setup_code" tools:ignore="MissingTranslation">Enter limited setup code</string>
+    <string name="watch_updating_connection" tools:ignore="MissingTranslation">Updating connection</string>
+    <string name="watch_connect" tools:ignore="MissingTranslation">Connect</string>
+    <string name="watch_forget" tools:ignore="MissingTranslation">Forget Gateway</string>
+    <string name="watch_forget_confirmation" tools:ignore="MissingTranslation">Remove this Gateway and its credentials from this watch?</string>
+    <string name="watch_confirm_forget" tools:ignore="MissingTranslation">Confirm forget</string>
+    <string name="watch_certificate" tools:ignore="MissingTranslation">Verify Gateway SHA-256 certificate</string>
+    <string name="watch_previous_certificate" tools:ignore="MissingTranslation">Previous: %1$s</string>
+    <string name="watch_trust_certificate" tools:ignore="MissingTranslation">Trust certificate</string>
+    <string name="watch_reject_certificate" tools:ignore="MissingTranslation">Reject certificate</string>
+    <string name="watch_sessions" tools:ignore="MissingTranslation">Sessions</string>
+    <string name="watch_message_unconfirmed" tools:ignore="MissingTranslation">Delivery unconfirmed. Refresh history before retrying.</string>
+    <string name="watch_discard_message" tools:ignore="MissingTranslation">Discard message</string>
+    <string name="watch_approval" tools:ignore="MissingTranslation">Approval</string>
+    <string name="watch_approvals" tools:ignore="MissingTranslation">Approvals</string>
+    <string name="watch_approval_unconfirmed" tools:ignore="MissingTranslation">Outcome unconfirmed. Refresh before deciding again.</string>
+    <string name="watch_approvals_unavailable" tools:ignore="MissingTranslation">Approval review unavailable. Refresh to reconnect the session stream.</string>
+    <string name="watch_approvals_incomplete" tools:ignore="MissingTranslation">Only part of this session\'s approvals is available. Review the rest on another surface.</string>
+    <string name="watch_no_approvals" tools:ignore="MissingTranslation">No pending approvals in this session.</string>
+    <string name="watch_confirm_decision" tools:ignore="MissingTranslation">Confirm: %1$s</string>
+    <string name="watch_allow_once" tools:ignore="MissingTranslation">Allow once</string>
+    <string name="watch_allow_always" tools:ignore="MissingTranslation">Always allow</string>
+    <string name="watch_deny" tools:ignore="MissingTranslation">Deny</string>
+    <string name="watch_stop" tools:ignore="MissingTranslation">Stop</string>
+    <string name="watch_disconnect" tools:ignore="MissingTranslation">Disconnect</string>
+    <string name="watch_reconnect" tools:ignore="MissingTranslation">Reconnect</string>
+    <string name="watch_command_approval" tools:ignore="MissingTranslation">Command approval</string>
+    <string name="watch_approval_context_invalid" tools:ignore="MissingTranslation">Some decision details are unsupported or invalid. Review this request on another approval surface before allowing it.</string>
+    <string name="watch_approval_too_large" tools:ignore="MissingTranslation">This request is too large to review on the watch. Review it on another approval surface.</string>
+    <string name="watch_approval_preview" tools:ignore="MissingTranslation">Preview: %1$s</string>
+    <string name="watch_approval_warning" tools:ignore="MissingTranslation">Warning: %1$s</string>
+    <string name="watch_approval_host" tools:ignore="MissingTranslation">Host: %1$s</string>
+    <string name="watch_approval_node" tools:ignore="MissingTranslation">Node: %1$s</string>
+    <string name="watch_approval_agent" tools:ignore="MissingTranslation">Agent: %1$s</string>
+    <string name="watch_approval_plugin" tools:ignore="MissingTranslation">Plugin: %1$s</string>
+    <string name="watch_approval_tool" tools:ignore="MissingTranslation">Tool: %1$s</string>
+    <string name="watch_approval_proposal" tools:ignore="MissingTranslation">Proposal: %1$s</string>
+    <string name="watch_approval_severity_info" tools:ignore="MissingTranslation">Severity: Information</string>
+    <string name="watch_approval_severity_warning" tools:ignore="MissingTranslation">Severity: Warning</string>
+    <string name="watch_approval_severity_critical" tools:ignore="MissingTranslation">Severity: Critical</string>
+    <string name="watch_approval_external_resolution" tools:ignore="MissingTranslation">External resolution: %1$s</string>
+    <string name="watch_scope_message" tools:ignore="MissingTranslation">Message delivery</string>
+    <string name="watch_scope_payment" tools:ignore="MissingTranslation">Payment</string>
+    <string name="watch_scope_post" tools:ignore="MissingTranslation">External publication</string>
+    <string name="watch_scope_standing_grant" tools:ignore="MissingTranslation">Standing grant</string>
+    <string name="watch_scope_target" tools:ignore="MissingTranslation">Target: %1$s</string>
+    <string name="watch_scope_recipient_count" tools:ignore="MissingTranslation">Recipient count: %1$s</string>
+    <string name="watch_scope_recipient" tools:ignore="MissingTranslation">Recipient: %1$s</string>
+    <string name="watch_scope_audience_internal" tools:ignore="MissingTranslation">Audience: Internal</string>
+    <string name="watch_scope_audience_external" tools:ignore="MissingTranslation">Audience: External</string>
+    <string name="watch_scope_amount" tools:ignore="MissingTranslation">Amount: %1$s</string>
+    <string name="watch_scope_currency" tools:ignore="MissingTranslation">Currency: %1$s</string>
+    <string name="watch_scope_visibility_public" tools:ignore="MissingTranslation">Visibility: Public</string>
+    <string name="watch_scope_visibility_restricted" tools:ignore="MissingTranslation">Visibility: Restricted</string>
+    <string name="watch_scope_automation" tools:ignore="MissingTranslation">Automation: %1$s</string>
+    <string name="watch_scope_command" tools:ignore="MissingTranslation">Command: %1$s</string>
+    <string name="watch_scope_expiry_days" tools:ignore="MissingTranslation">Expires after %1$s days</string>
+    <string name="watch_scope_expiry_until_revoked" tools:ignore="MissingTranslation">Valid until revoked or the automation changes</string>
 </resources>

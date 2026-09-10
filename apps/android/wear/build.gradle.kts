@@ -115,6 +115,8 @@ dependencies {
   implementation(composeBom)
 
   implementation(project(":wear-shared"))
+  implementation(project(":gateway-client"))
+  implementation(libs.androidx.security.crypto)
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -136,4 +138,5 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation(libs.mockwebserver)
 }

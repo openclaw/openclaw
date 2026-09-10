@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -597,7 +598,7 @@ class ChatControllerPermissionSelectionTest {
       }
 
     fun requestLease(connection: Int) =
-      GatewaySession.RequestLease(
+      syntheticGatewayRequestLease(
         endpointStableId = gatewayScope.gatewayId,
         isCurrentImpl = { physicalConnection == connection },
       ) { method, paramsJson, _, withEnqueue ->

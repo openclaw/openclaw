@@ -4,6 +4,7 @@ import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -84,7 +85,7 @@ class ChatControllerModelSelectionTest {
         val controller =
           createChatController(
             captureRequestLease = {
-              GatewaySession.RequestLease(endpointStableId = "") { method, paramsJson, _, withEnqueue ->
+              syntheticGatewayRequestLease(endpointStableId = "") { method, paramsJson, _, withEnqueue ->
                 val patch = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
                 if ("model" in patch && !lockFromResponse) {
                   modelTransportStarted.complete(Unit)
@@ -425,7 +426,7 @@ class ChatControllerModelSelectionTest {
       val controller =
         createChatController(
           captureRequestLease = {
-            GatewaySession.RequestLease(endpointStableId = "") { _, _, _, withEnqueue ->
+            syntheticGatewayRequestLease(endpointStableId = "") { _, _, _, withEnqueue ->
               transportStarted.complete(Unit)
               releaseTransport.await()
               withEnqueue { requestStarted.complete(Unit) }
@@ -1139,7 +1140,7 @@ class ChatControllerModelSelectionTest {
           cacheScope = { gatewayScope },
           captureRequestLease = { scope ->
             scope ?: error("missing scope")
-            GatewaySession.RequestLease(scope.gatewayId) { _, _, _, withEnqueue ->
+            syntheticGatewayRequestLease(scope.gatewayId) { _, _, _, withEnqueue ->
               withEnqueue {}
               capturedScopes += scope
               "{}"

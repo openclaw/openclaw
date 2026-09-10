@@ -4,7 +4,7 @@ import java.net.InetAddress
 import java.util.Locale
 
 /** Route advice only: Tailscale-looking addresses never grant TLS or cleartext trust. */
-internal fun isTailscaleGatewayHost(rawHost: String): Boolean {
+fun isTailscaleGatewayHost(rawHost: String): Boolean {
   val host =
     rawHost
       .trim()
@@ -59,7 +59,7 @@ data class GatewayEndpoint(
   }
 }
 
-internal fun normalizeGatewayContextPath(value: String?): String {
+fun normalizeGatewayContextPath(value: String?): String {
   val path = value.orEmpty()
   if (path.isEmpty() || path == "/") return ""
   val prefixed = if (path.startsWith('/')) path else "/$path"

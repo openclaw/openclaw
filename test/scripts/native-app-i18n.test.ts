@@ -354,6 +354,30 @@ describe("native app i18n inventory", () => {
     expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
   });
 
+  it("decodes Android XML resource values once before inventory identity", () => {
+    const entries = extractNativeI18nCandidates(
+      "android",
+      "apps/android/wear/src/main/res/values/strings.xml",
+      String.raw`<resources>
+        <string name="session">This session\'s approvals</string>
+        <string name="quoted">"Say \"hello\" to %1$s"</string>
+        <string name="entities">Read &amp; write &lt;now&gt; &quot;safely&quot;</string>
+        <string name="backslash">Path C:\\temp</string>
+        <string-array name="choices"><item>"Read &amp; write"</item></string-array>
+        <plurals name="approvals"><item quantity="one">%1$d session\'s approval</item></plurals>
+      </resources>`,
+    );
+
+    expect(entries.map(({ kind, source }) => ({ kind, source }))).toEqual([
+      { kind: "resource-string", source: "This session's approvals" },
+      { kind: "resource-string", source: 'Say "hello" to %1$s' },
+      { kind: "resource-string", source: 'Read & write <now> "safely"' },
+      { kind: "resource-string", source: String.raw`Path C:\temp` },
+      { kind: "resource-item", source: "Read & write" },
+      { kind: "resource-item", source: "%1$d session's approval" },
+    ]);
+  });
+
   it("extracts only localizable usage descriptions from Apple plists", () => {
     const entries = extractNativeI18nCandidates(
       "apple",
@@ -441,9 +465,23 @@ describe("native app i18n inventory", () => {
               site.path.startsWith("apps/android/app/src/main/") ||
               site.path.startsWith("apps/android/app/src/play/") ||
               site.path.startsWith("apps/android/app/src/thirdParty/") ||
+              site.path.startsWith("apps/android/gateway-client/src/main/") ||
               site.path === "apps/android/wear/src/main/res/values/strings.xml",
           ),
         ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.surface === "android" &&
+          entry.source === "Connecting…" &&
+          hasSite(
+            entry,
+            (site) =>
+              site.path ===
+              "apps/android/gateway-client/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+          ),
+      ),
     ).toBe(true);
     expect(
       entries.some(

@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -236,7 +237,7 @@ class ChatControllerOutboxTest {
 
     fun captureRequestLease(gatewayScope: ChatCacheScope?): GatewaySession.RequestLease? {
       if (!online) return null
-      return GatewaySession.RequestLease(
+      return syntheticGatewayRequestLease(
         endpointStableId = gatewayScope?.gatewayId.orEmpty(),
         isCurrentImpl = { online },
       ) { method, paramsJson, _, withEnqueue ->
