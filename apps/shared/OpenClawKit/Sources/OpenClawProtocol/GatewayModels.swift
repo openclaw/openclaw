@@ -8391,6 +8391,24 @@ public struct ModelsAuthOrderSetParams: Codable, Sendable {
     }
 }
 
+public struct ModelsAuthRefreshParams: Codable, Sendable {
+    public let operation: AnyCodable
+    public let agentid: String?
+
+    public init(
+        operation: AnyCodable,
+        agentid: String? = nil)
+    {
+        self.operation = operation
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case operation
+        case agentid = "agentId"
+    }
+}
+
 public struct ModelsAuthStatusParams: Codable, Sendable {
     public let refresh: Bool?
     public let agentid: String?

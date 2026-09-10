@@ -185,6 +185,7 @@ describe("listGatewayMethods", () => {
       ...pluginDiscoveryMethods,
       "tasks.history",
       "environments.prepare",
+      "models.authRefresh",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -210,6 +211,7 @@ describe("listGatewayMethods", () => {
       ...pluginDiscoveryMethods,
       "tasks.history",
       "environments.prepare",
+      "models.authRefresh",
     ]);
   });
 
@@ -362,6 +364,7 @@ describe("listGatewayMethods", () => {
       ...pluginDiscoveryMethods,
       "tasks.history",
       "environments.prepare",
+      "models.authRefresh",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

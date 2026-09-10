@@ -144,9 +144,9 @@ vi.mock("../server-model-catalog-auth.js", () => ({
 }));
 
 import { modelsAuthOrderHandlers } from "./models-auth-order.js";
+import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import {
   aggregateRefreshableAuthStatus,
-  invalidateModelAuthStatusCache,
   modelsAuthStatusHandlers,
   type ModelAuthLogoutResult,
   type ModelAuthStatusResult,
@@ -319,7 +319,7 @@ function resetAuthStatusMocks(): void {
   }
   vi.stubEnv("OPENAI_API_KEY", "");
   vi.clearAllMocks();
-  invalidateModelAuthStatusCache();
+  clearModelAuthStatusUsageCache();
   mocks.getRuntimeConfig.mockReturnValue({});
   mocks.listAgentIds.mockReturnValue(["main"]);
   mocks.resolveAgentDir.mockImplementation((_cfg: unknown, agentId: string) =>
@@ -1568,13 +1568,6 @@ describe("models.authStatus", () => {
     expect(error?.message).toContain("refresh failed");
   });
 
-  it("invalidateModelAuthStatusCache() preserves fresh auth reads", async () => {
-    await handler(createOptions());
-    invalidateModelAuthStatusCache();
-    await handler(createOptions());
-    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
-  });
-
   it("does not publish usage captured before a concurrent logout", async () => {
     let releaseUsage: (() => void) | undefined;
     let usageFinished = false;
@@ -2342,7 +2335,6 @@ describe("models.authOrderSet", () => {
     expect(mocks.prepareModelRuntimeSnapshot).toHaveBeenCalledWith({
       agentId: "main",
       agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
       config: {},
     });
 
@@ -2776,16 +2768,42 @@ describe("models.authLogout", () => {
     });
   });
 
-  it("does not abort runs when runtime auth snapshot refresh fails", async () => {
-    await expectLogoutFailureDoesNotAbortRun({
-      arrangeFailure: () => {
-        mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValue(
-          new Error("refresh failed"),
-        );
-      },
-      message: "refresh failed",
-    });
-  });
+  it.each(["secrets", "publication"] as const)(
+    "aborts revoked provider runs when %s refresh fails",
+    async (stage) => {
+      const cfg = { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } };
+      mocks.getRuntimeConfig.mockReturnValue(cfg);
+      mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+      const refresh =
+        stage === "secrets"
+          ? mocks.refreshActiveProviderAuthRuntimeSnapshot
+          : mocks.prepareModelRuntimeSnapshot;
+      refresh.mockRejectedValueOnce(new Error("refresh failed"));
+      const opts = createLogoutOptions({ provider: "openrouter", agentId: "writer" });
+      const revokedRun = createActiveRun("openrouter", undefined, "writer");
+      const otherAgentRun = createActiveRun("openrouter", undefined, "main");
+      const otherProviderRun = createActiveRun("openai", undefined, "writer");
+      opts.context.chatAbortControllers.set("revoked", revokedRun);
+      opts.context.chatAbortControllers.set("other-agent", otherAgentRun);
+      opts.context.chatAbortControllers.set("other-provider", otherProviderRun);
+
+      await logoutHandler(opts);
+
+      expect(revokedRun.controller.signal.aborted).toBe(true);
+      expect(otherAgentRun.controller.signal.aborted).toBe(false);
+      expect(otherProviderRun.controller.signal.aborted).toBe(false);
+      expect(opts.context.chatAbortControllers.has("revoked")).toBe(false);
+      expect(opts.context.broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId: "revoked", state: "aborted", stopReason: "auth-revoked" }),
+        { sessionKeys: [revokedRun.sessionKey] },
+      );
+      const [ok, payload, error] = firstRespondCall(opts) ?? [];
+      expect(ok).toBe(false);
+      expect(payload).toBeUndefined();
+      expect(error?.message).toContain("refresh failed");
+    },
+  );
 
   it("rejects missing provider", async () => {
     const opts = createLogoutOptions();

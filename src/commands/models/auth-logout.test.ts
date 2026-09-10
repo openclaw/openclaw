@@ -127,7 +127,7 @@ describe("models auth logout", () => {
       cfg: {},
       profileIds: ["openai:manual"],
     });
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("poe", runtime);
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("poe", "logout", runtime);
     expect(runtime.logs).toContain("Removed auth profile: openai:manual (openai/oauth)");
     expect(runtime.logs.some((line) => line.includes("No auth profiles remain for openai"))).toBe(
       true,

@@ -33,10 +33,6 @@ import {
   NON_ENV_SECRETREF_MARKER,
 } from "../../agents/model-auth-markers.js";
 import {
-  clearCurrentProviderAuthState,
-  warmCurrentProviderAuthStateOffMainThread,
-} from "../../agents/model-provider-auth.js";
-import {
   type ProviderAuthAliasLookupParams,
   resolveProviderIdForAuth,
 } from "../../agents/provider-auth-aliases.js";
@@ -44,18 +40,19 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
-import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
+import {
+  modelsAuthRefreshHandlers,
+  refreshModelAuthStateAfterMutation,
+} from "./models-auth-refresh.js";
 import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
 import {
-  clearModelAuthStatusUsageCache,
   type ProviderUsageStatus,
   readProviderUsageStaleWhileRevalidate,
 } from "./models-auth-status-usage-cache.js";
@@ -80,7 +77,6 @@ export type {
   ModelProviderCapability,
 } from "./models-auth-status.types.js";
 
-const log = createSubsystemLogger("models-auth-status");
 const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
 
 type PreparedAuthMetadataLookupParams = ProviderAuthAliasLookupParams & {
@@ -113,21 +109,6 @@ function resolveAuthRefreshScope(cfg: OpenClawConfig): {
     providerIds,
     ...(profileIds.length > 0 ? { profileIds } : {}),
   };
-}
-
-/**
- * Invalidate auxiliary usage and prepared provider-auth state after an auth
- * mutation. Auth health itself is rebuilt on every request; only outbound
- * usage enrichment is cached.
- */
-export function invalidateModelAuthStatusCache(): void {
-  clearModelAuthStatusUsageCache();
-  // The prepared provider-auth map (model-provider-auth.ts) was built from
-  // the pre-mutation auth state, so it must be invalidated alongside this
-  // cache whenever an auth-profile mutation lands (logout, login, token
-  // rotation, etc.). Without this, `/models` and pickers keep advertising
-  // providers the running gateway can no longer authenticate.
-  clearCurrentProviderAuthState();
 }
 
 async function refreshModelAuthStatusRuntimeState(): Promise<void> {
@@ -468,6 +449,7 @@ function resolveConfiguredProviders(
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
+  ...modelsAuthRefreshHandlers,
   "models.authLogout": async ({ params, respond, context }) => {
     const provider = readProviderParam(params);
     if (!provider) {
@@ -542,15 +524,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      // Fence auxiliary usage work that captured the removed profiles before
-      // logout. Its later completion must not repopulate the cache.
-      invalidateModelAuthStatusCache();
-      await refreshActiveProviderAuthRuntimeSnapshot();
-      void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch(
-        (err: unknown) => {
-          log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
-        },
-      );
       // A provider-wide abort would terminate runs using credentials this
       // logout preserved (other profiles, tokens, or the config API key). Abort
       // entries do not carry the profile id, so a targeted logout cannot scope
@@ -564,6 +537,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             agentId: scope.agentId,
             stopReason: "auth-revoked",
           });
+      await refreshModelAuthStateAfterMutation(context, "logout", scope.agentId);
       const result: ModelAuthLogoutResult = {
         provider,
         removedProfiles,
