@@ -22,7 +22,7 @@ it("records terminal metrics without reading logs or private diagnostic content"
         },
       },
     });
-  exporter.service.start({
+  await exporter.service.start({
     config: {},
     stateDir: "/tmp/openclaw-prometheus-test",
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
