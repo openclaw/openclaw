@@ -11,7 +11,7 @@ struct DashboardBrowserRect: Codable, Equatable, Sendable {
 }
 
 enum DashboardBrowserAction: String, Equatable, Sendable {
-    case back, forward, reload, stop, close, snapshot
+    case back, forward, reload, stop, close, snapshot, download
 }
 
 enum DashboardBrowserRequest: Equatable, Sendable {
@@ -29,6 +29,8 @@ enum DashboardBrowserError: Error, LocalizedError {
     case duplicateTab
     case unavailable
     case captureFailed
+    case downloadFailed
+    case downloadInProgress
 
     var errorDescription: String? {
         switch self {
@@ -37,6 +39,8 @@ enum DashboardBrowserError: Error, LocalizedError {
         case .duplicateTab: "This Mac tab already exists."
         case .unavailable: "The native browser is no longer available."
         case .captureFailed: "Could not capture this Mac tab. Try again after the page loads."
+        case .downloadFailed: "Could not download this asset. Try again after the page loads."
+        case .downloadInProgress: "This tab already has a download in progress."
         }
     }
 }

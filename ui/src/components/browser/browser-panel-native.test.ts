@@ -55,6 +55,8 @@ function fakeNativeBrowser(tabs: NativeBrowserTab[] = []) {
         };
       case "inspect":
         return { ok: true, node: createInspectedNode("Save") };
+      case "download":
+        return { ok: true, cancelled: false };
       case "back":
       case "forward":
       case "navigate":
@@ -688,6 +690,49 @@ describe("native Browser panel ownership", () => {
     expect(controller.inspected).toBeNull();
     expect(controller.inspectPointer).toBeNull();
   });
+
+  it("releases a slow remote download immediately when another tab is selected", async () => {
+    const native = fakeNativeBrowser([nativeTab("mac-one")]);
+    const { controller } = controllerFixture();
+    await controller.selectTab("remote");
+    const body = createDeferred<Blob>();
+    const response = new Response();
+    vi.spyOn(response, "blob").mockReturnValue(body.promise);
+    vi.mocked(fetch).mockResolvedValueOnce(response);
+    const saving = controller.download.save();
+    await flushBrowserResponses();
+    expect(controller.download.pending).toBe(true);
+    await controller.selectTab("mac-one");
+    expect(controller.download.available).toBe(true);
+    await controller.download.save();
+    expect(native.messages()).toContainEqual({ type: "download", tabId: "mac-one" });
+    expect(controller.noticeText).toBe("File saved.");
+    body.resolve(new Blob(["late bytes"]));
+    await saving;
+    expect(controller.noticeText).toBe("File saved.");
+  });
+
+  it.each([false, true])(
+    "saves the native asset without navigation (cancelled: %s)",
+    async (cancelled) => {
+      const native = fakeNativeBrowser([
+        nativeTab("mac-one", "https://assets.example.test/video.mp4"),
+      ]);
+      const { controller, request } = controllerFixture();
+      flushFrames();
+      controller.urlDraft = "https://example.test/unfinished";
+      native.postMessage.mockResolvedValueOnce({ ok: true, cancelled });
+      const before = request.mock.calls.length;
+      await controller.download.save();
+      expect(native.messages().at(-1)).toEqual({ type: "download", tabId: "mac-one" });
+      expect(request.mock.calls).toHaveLength(before);
+      expect(controller.activeTargetId).toBe("mac-one");
+      expect(controller.urlDraft).toBe("https://example.test/unfinished");
+      expect(controller.noticeText).toBe(cancelled ? null : "File saved.");
+      expect(controller.errorText).toBeNull();
+      expect(controller.download.pending).toBe(false);
+    },
+  );
 
   it.each([
     { mode: "annotate", action: "reload" },

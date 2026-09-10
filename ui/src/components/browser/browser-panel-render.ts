@@ -183,6 +183,17 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
           : nothing
       }
       <button
+        class="bp-icon"
+        type="button"
+        title=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
+        aria-label=${t("browser.downloadFile")}
+        aria-busy=${controller.download.pending}
+        ?disabled=${!controller.download.available}
+        @click=${() => void controller.download.save()}
+      >
+        ${icons.download}
+      </button>
+      <button
         class="bp-icon ${controller.mode === "annotate" ? "is-active" : ""}"
         type="button"
         title=${t("browser.annotate")}

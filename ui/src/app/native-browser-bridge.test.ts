@@ -52,6 +52,7 @@ describe("native browser bridge wire contract", () => {
     },
     { type: "present", scope: "", tabId: null, rect: null, visible: false },
     { type: "unknown", tabId: "mac-1" },
+    { type: "download", tabId: " " },
   ])("rejects malformed or unsupported request %j before calling WebKit", async (message) => {
     const post = install();
     expect(await postNativeBrowserMessage(message as NativeBrowserMessage)).toMatchObject({
@@ -86,6 +87,25 @@ describe("native browser bridge wire contract", () => {
       { type: "present", scope: "scope", tabId: null, rect: null, visible: false },
       { type: "release-scope", scope: "scope" },
     ]);
+  });
+
+  it("downloads through the native tab and distinguishes a saved file from cancellation", async () => {
+    const post = install();
+    for (const cancelled of [false, true]) {
+      post.mockResolvedValueOnce({ ok: true, cancelled });
+      expect(await postNativeBrowserMessage({ type: "download", tabId: "mac-1" })).toEqual({
+        ok: true,
+        cancelled,
+      });
+      expect(post).toHaveBeenLastCalledWith({ type: "download", tabId: "mac-1" });
+    }
+    for (const reply of [{ ok: true }, { ok: true, cancelled: "false" }]) {
+      post.mockResolvedValueOnce(reply);
+      expect(await postNativeBrowserMessage({ type: "download", tabId: "mac-1" })).toEqual({
+        ok: false,
+        error: "Invalid native browser download",
+      });
+    }
   });
 
   it("rejects malformed snapshots and propagates native failures", async () => {

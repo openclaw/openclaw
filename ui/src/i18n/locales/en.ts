@@ -2311,6 +2311,10 @@ export const en: TranslationMap & {
     forward: "Forward",
     reload: "Reload",
     openExternal: "Open in your browser",
+    downloading: "Downloading…",
+    downloadFile: "Download file",
+    downloadStarted: "Download started.",
+    fileSaved: "File saved.",
     urlPlaceholder: "Enter a URL and press Enter",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
@@ -2334,6 +2338,8 @@ export const en: TranslationMap & {
     annotationSent: "Annotation added to the chat composer.",
     errors: {
       requestFailed: "Browser request failed: {error}",
+      downloadFailed:
+        "Could not download this file: {error}. Try again, or open it in your browser to save it.",
       screenshotPathMissing: "Browser screenshot did not return a media path.",
       screenshotFetchTimedOut: "Screenshot fetch timed out.",
       screenshotFetchFailed: "Screenshot fetch failed ({status}).",

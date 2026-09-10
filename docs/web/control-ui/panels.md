@@ -92,6 +92,8 @@ In the macOS app, modified clicks open the default browser; right-click an exter
 
 Each Agent browser tab keeps one stable identity across in-place navigation and target replacement, so its selected state, keyboard focus, URL, page snapshot, and browser actions stay aligned even when the Gateway returns tabs in a different order.
 
+To save an asset opened in the panel, click **Download file** beside the pencil and pointer icons. The preview stays open. Mac tabs show a Save dialog and use the tab's signed-in browser session. Agent browser tabs download through your current web browser; the asset server must allow access from that browser. If the download fails, the panel shows an error with an option to use **Open in your browser** instead. Blank and loading tabs cannot be downloaded.
+
 Two capture modes package page context for the agent. For Mac tabs, either mode captures a one-shot snapshot of the live WebKit page. Navigating the captured tab to a different URL exits capture mode and restores its live view:
 
 - **Annotate (pencil)**: draw freehand markup over the page. **Send to chat** composites the strokes into the screenshot and adds one structured annotation card to the active chat composer. The card keeps its generated page and region context with the image instead of inserting it into your editable draft.

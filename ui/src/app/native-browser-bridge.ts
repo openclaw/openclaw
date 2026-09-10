@@ -2,7 +2,7 @@
  * Canonical macOS Browser bridge (DashboardBrowserMessageHandler mirrors these keys).
  * Handler: window.webkit.messageHandlers.openclawBrowser, Promise reply {ok:true,...}
  * or {ok:false,error}. Requests use type: open {tabId,url,activate?}, navigate
- * {tabId,url}, back/forward/reload/stop/close/snapshot {tabId}, inspect {tabId,x,y},
+ * {tabId,url}, back/forward/reload/stop/close/snapshot/download {tabId}, inspect {tabId,x,y},
  * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope}.
  * IDs and scopes are opaque; web-created IDs are `mac-` plus a generated UUID.
  * Open replies include tabId. The host reuses a tab at the requested URL or its
@@ -15,6 +15,8 @@
  * {revision,tabs:[{id,url,title,loading,canGoBack,canGoForward,openedBy,openerTabId?}]}.
  * Tabs are in creation order; openedBy is web|native. Snapshot adds dataUrl (PNG),
  * cssWidth,cssHeight; inspect adds node (BrowserInspectedNode|null).
+ * Download saves the current tab through macOS, preserving its browser session;
+ * its reply adds cancelled (true when the save panel was dismissed).
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserInspectedNode } from "../components/browser/browser-client.ts";
@@ -37,7 +39,10 @@ type NativeBrowserRect = { x: number; y: number; width: number; height: number }
 export type NativeBrowserMessage =
   | { type: "open"; tabId: string; url: string; activate?: boolean }
   | { type: "navigate"; tabId: string; url: string }
-  | { type: "back" | "forward" | "reload" | "stop" | "close" | "snapshot"; tabId: string }
+  | {
+      type: "back" | "forward" | "reload" | "stop" | "close" | "snapshot" | "download";
+      tabId: string;
+    }
   | { type: "inspect"; tabId: string; x: number; y: number }
   | {
       type: "present";
@@ -51,6 +56,7 @@ export type NativeBrowserReply =
   | {
       ok: true;
       tabId?: string;
+      cancelled?: boolean;
       dataUrl?: string;
       cssWidth?: number;
       cssHeight?: number;
@@ -139,6 +145,7 @@ function validMessage(value: unknown): value is NativeBrowserMessage {
     case "stop":
     case "close":
     case "snapshot":
+    case "download":
       return true;
     default:
       return false;
@@ -212,6 +219,11 @@ export async function postNativeBrowserMessage(
       return nonempty(reply.tabId)
         ? { ok: true, tabId: reply.tabId }
         : { ok: false, error: "Invalid native browser reply" };
+    }
+    if (message.type === "download") {
+      return typeof reply.cancelled === "boolean"
+        ? { ok: true, cancelled: reply.cancelled }
+        : { ok: false, error: "Invalid native browser download" };
     }
     if (message.type === "snapshot") {
       if (

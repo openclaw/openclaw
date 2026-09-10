@@ -48,6 +48,7 @@ final class DashboardNativeBrowserHost {
     private let websiteDataStore: WKWebsiteDataStore
     private let onStateChange: (DashboardBrowserState) -> Void
     private var tabs: [Tab] = []
+    private var downloads: [String: DashboardBrowserDownload] = [:]
     private var presentations: [String: Presentation] = [:]
     private var presentationOrder: UInt64 = 0
     private var revision = 0
@@ -74,6 +75,7 @@ final class DashboardNativeBrowserHost {
 
     isolated deinit {
         if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+        self.downloads.values.forEach { $0.cancel() }
         self.tabs.forEach { $0.browser.dispose() }
     }
 
@@ -163,7 +165,7 @@ final class DashboardNativeBrowserHost {
         case .reload: webView.reload()
         case .stop: webView.stopLoading()
         case .close: try self.close(tabId: tabId)
-        case .snapshot: throw DashboardBrowserError.invalidRequest
+        case .snapshot, .download: throw DashboardBrowserError.invalidRequest
         }
         self.scheduleStatePush()
     }
@@ -172,6 +174,7 @@ final class DashboardNativeBrowserHost {
         guard let index = self.tabs.firstIndex(where: { $0.id == tabId }) else {
             throw DashboardBrowserError.unknownTab
         }
+        self.downloads.removeValue(forKey: tabId)?.cancel()
         self.tabs.remove(at: index).browser.dispose()
         self.presentations = self.presentations.filter { $0.value.tabId != tabId }
         self.updatePresentations()
@@ -231,6 +234,8 @@ final class DashboardNativeBrowserHost {
     }
 
     func dispose() {
+        self.downloads.values.forEach { $0.cancel() }
+        self.downloads.removeAll()
         self.releaseAllScopes()
         self.tabs.forEach { $0.browser.dispose() }
         self.tabs.removeAll()
@@ -286,6 +291,23 @@ final class DashboardNativeBrowserHost {
 }
 
 extension DashboardNativeBrowserHost {
+    func download(tabId: String, isCurrent: @escaping @MainActor () -> Bool) async throws -> Bool {
+        let webView = try self.requireWebView(tabId)
+        guard self.downloads[tabId] == nil else { throw DashboardBrowserError.downloadInProgress }
+        guard let url = self.browserTab(for: webView)?.representedURL,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let window = self.dashboardWebView?.window,
+              isCurrent()
+        else { throw DashboardBrowserError.downloadFailed }
+        let transfer = DashboardBrowserDownload(window: window) { [weak self, weak webView] in
+            guard let self, let webView else { return false }
+            return self.webView(for: tabId) === webView && isCurrent()
+        }
+        self.downloads[tabId] = transfer
+        defer { self.downloads.removeValue(forKey: tabId) }
+        return try await transfer.start(using: webView, url: url)
+    }
+
     func snapshot(tabId: String) async throws -> [String: Any] {
         let webView = try self.requireWebView(tabId)
         let size = webView.bounds.size
