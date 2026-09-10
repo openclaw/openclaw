@@ -1143,7 +1143,9 @@ describe("/model chat UX", () => {
       allowedModelCatalog: policy.allowedCatalog,
     });
 
-    expect(policy.allowsKey("openrouter/meta-llama/llama-3.3-70b-instruct:free")).toBe(true);
+    expect(
+      policy.allows({ provider: "openrouter", model: "meta-llama/llama-3.3-70b-instruct:free" }),
+    ).toBe(true);
     expect(reply?.text).toContain("openrouter/meta-llama/llama-3.3-70b-instruct:free");
     expect(reply?.text).not.toContain("anthropic/openrouter:free");
   });
