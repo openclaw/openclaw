@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { buildAgentRunTerminalOutcomeFromAttempt } from "../../agent-run-terminal-outcome.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import {
@@ -26,6 +27,46 @@ describe("runEmbeddedAttempt abort races", () => {
   afterEach(async () => {
     await cleanupTempPaths(tempPaths);
     tempPaths.length = 0;
+    vi.useRealTimers();
+  });
+
+  it("preserves the approval budget through the production attempt entrypoint", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const publishedDeadlines: Array<{ kind: string; deadlineAtMs?: number }> = [];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:telegram:direct:approval-clock-step",
+      tempPaths,
+      sessionPrompt: async () => {
+        await vi.advanceTimersByTimeAsync(30);
+        vi.setSystemTime(60_000);
+        emitAgentEvent({
+          runId: "run-context-engine-forwarding",
+          sessionId: "embedded-session",
+          stream: "lifecycle",
+          data: { phase: "waiting-approval", approvalId: "clock-step" },
+        });
+        emitAgentEvent({
+          runId: "run-context-engine-forwarding",
+          sessionId: "embedded-session",
+          stream: "lifecycle",
+          data: { phase: "approval-resolved", approvalId: "clock-step" },
+        });
+      },
+      attemptOverrides: {
+        timeoutMs: 100,
+        onAttemptDeadlineChanged: (deadline) => publishedDeadlines.push(deadline),
+      },
+    });
+
+    expect(result.terminal).toEqual({ kind: "ok" });
+    expect(publishedDeadlines).toEqual([
+      { kind: "bounded", deadlineAtMs: 100 },
+      { kind: "unlimited" },
+      { kind: "bounded", deadlineAtMs: 60_070 },
+    ]);
   });
 
   it.each([false, true])(
