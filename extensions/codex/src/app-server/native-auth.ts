@@ -1,4 +1,3 @@
-import { CODEX_APP_SERVER_AUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
@@ -73,7 +72,7 @@ export async function probeCodexNativeAuth(params: {
     // Workload identity and Bedrock logins do not authorize an OpenAI route.
     return mode
       ? {
-          apiKey: CODEX_APP_SERVER_AUTH_MARKER,
+          apiKey: "codex-app-server",
           source: "Codex native login",
           mode,
           nativeAuth: { runtime: "codex", mode },

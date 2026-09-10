@@ -227,7 +227,15 @@ function apiKeyProviderCapabilities(params: {
 }
 
 type ModelsListCatalogSource =
-  | { kind: "gateway"; context: GatewayRequestContext }
+  | {
+      kind: "gateway";
+      context: Pick<
+        GatewayRequestContext,
+        "getRuntimeConfig" | "loadGatewayModelCatalogSnapshot"
+      > & {
+        logGateway: Pick<GatewayRequestContext["logGateway"], "debug">;
+      };
+    }
   | {
       kind: "published";
       owner: ResolvedPublishedModelCatalogOwner & {

@@ -6,7 +6,6 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
-import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
 import {
   loadGatewayModelCatalogSnapshot,
@@ -654,7 +653,7 @@ describe("prepared model catalog worker boundary", () => {
         getRuntimeConfig: () => config,
         loadGatewayModelCatalogSnapshot: loadProjectedCatalogSnapshot,
         logGateway: { debug: () => undefined },
-      } as unknown as GatewayRequestContext;
+      };
       return {
         projected,
         result: await buildModelsListResult({
@@ -872,7 +871,7 @@ describe("prepared model catalog worker boundary", () => {
           getRuntimeConfig: () => config,
           loadGatewayModelCatalogSnapshot: loadSnapshot,
           logGateway: { debug: () => undefined },
-        } as unknown as GatewayRequestContext;
+        };
         return await buildModelsListResult({
           source: { kind: "gateway", context },
           params: { view: "all", refresh: true },

@@ -578,24 +578,20 @@ export async function applyCodexAuthItems(params: {
     stateDir: ctx.stateDir,
     updater: (freshStore) => {
       ctx.signal?.throwIfAborted();
+      const effectiveStore = loadAuthProfileStoreWithoutExternalProfiles(targets.agentDir);
       if (
         item.details?.legacyNativeHome !== undefined &&
-        itemProfileTarget(
-          credential,
-          loadAuthProfileStoreWithoutExternalProfiles(targets.agentDir),
-          ctx,
-          source,
-        ).profileId !== profileId
+        itemProfileTarget(credential, effectiveStore, ctx, source).profileId !== profileId
       ) {
         conflicted = true;
         return false;
       }
-      const existing = freshStore.profiles[profileId];
+      const existing = effectiveStore.profiles[profileId];
       if (!ctx.overwrite && existing) {
         const matchedProfileId =
           credential.kind === "oauth"
-            ? findMatchingOAuthProfile(freshStore, oauthCredential!)
-            : findMatchingApiKeyProfile(freshStore, credential.provider, credential.key);
+            ? findMatchingOAuthProfile(effectiveStore, oauthCredential!)
+            : findMatchingApiKeyProfile(effectiveStore, credential.provider, credential.key);
         if (matchedProfileId === profileId) {
           // A matching account cannot turn an expired or fenced profile into a successful login.
           unusable = existing.type === "oauth" && !hasUsableOAuthCredential(existing);
@@ -624,7 +620,10 @@ export async function applyCodexAuthItems(params: {
   if (unusable) {
     return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_PROFILE_UNUSABLE)];
   }
-  if (!store?.profiles[profileId]) {
+  if (
+    !store ||
+    !loadAuthProfileStoreWithoutExternalProfiles(targets.agentDir).profiles[profileId]
+  ) {
     return [markMigrationItemError(item, CODEX_REASON_AUTH_PROFILE_WRITE_FAILED)];
   }
   const configResult =

@@ -191,7 +191,7 @@ describe("captured model decisions", () => {
     expect(evaluation.availability).toBe(true);
     expect(evaluation.runtimeAuth).toBeUndefined();
     expect(evaluation.selectedRoute).toMatchObject(platformRoute);
-    expect(evaluation.selectedAuthMode).toBe("api_key");
+    expect(evaluation.selectedAuthMode).toBe("api-key");
     expect(
       resolveCatalogDecisionRuntime({
         cfg,
