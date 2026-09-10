@@ -3,8 +3,12 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeConfiguredProviderCatalogModelRef } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { mergeModelCost } from "../config/model-cost.js";
 import { normalizeProviderCatalogModelIdForConfig } from "../config/model-input.js";
+import {
+  getProviderModelId,
+  materializeConfiguredProviderModelRows,
+  mergeNormalizedProviderModel,
+} from "../config/model-provider-rows.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
@@ -34,10 +38,6 @@ type ProviderModelConfig = NonNullable<
   NonNullable<ModelsConfig["providers"]>[string]["models"]
 >[number];
 
-function getProviderModelId(model: ProviderModelConfig): string | undefined {
-  return typeof model.id === "string" && model.id.trim() ? model.id : undefined;
-}
-
 function normalizeModelCostForCatalog(model: ProviderModelConfig): ProviderModelConfig {
   const cost = model.cost;
   if (
@@ -58,14 +58,6 @@ function normalizeModelCostForCatalog(model: ProviderModelConfig): ProviderModel
       cacheWrite: cost.cacheWrite ?? 0,
     },
   };
-}
-
-function mergeNormalizedProviderModel(
-  existing: ProviderModelConfig,
-  incoming: ProviderModelConfig,
-): ProviderModelConfig {
-  const cost = mergeModelCost(incoming.cost, existing.cost);
-  return { ...incoming, ...existing, ...(cost ? { cost } : {}) };
 }
 
 function normalizeProviderModelsForConfig(
@@ -145,47 +137,9 @@ export function materializeConfiguredProviderCatalogModels(
   options: ModelManifestNormalizationContext = {},
 ): ModelsConfig["providers"] {
   const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(options);
-  return normalizeProviderModelMap(providers, (providerKey, provider) => {
-    if (!Array.isArray(provider.models) || provider.models.length === 0) {
-      return provider;
-    }
-    const exactRows = new Map<string, ProviderModelConfig>();
-    for (const model of provider.models) {
-      const id = getProviderModelId(model)?.trim();
-      if (id) {
-        const existing = exactRows.get(id);
-        exactRows.set(id, existing ? mergeNormalizedProviderModel(existing, model) : model);
-      }
-    }
-    const normalizedIds = new Map<string, string>();
-    const selectedRows = new Map<string, ProviderModelConfig>();
-    for (const [id, model] of exactRows) {
-      const normalized = normalizeModelId(providerKey, id) || id;
-      normalizedIds.set(id, normalized);
-      // Exact destinations retain their omissions; other aliases do not donate fields.
-      if (!selectedRows.has(normalized)) {
-        selectedRows.set(normalized, exactRows.get(normalized) ?? model);
-      }
-    }
-    const seen = new Set<string>();
-    const models = provider.models.flatMap((model) => {
-      const rawId = getProviderModelId(model);
-      if (!rawId) {
-        return [model];
-      }
-      const id = normalizedIds.get(rawId.trim())!;
-      if (seen.has(id)) {
-        return [];
-      }
-      seen.add(id);
-      const selected = selectedRows.get(id)!;
-      return [selected.id === id ? selected : { ...selected, id }];
-    });
-    return models.length === provider.models.length &&
-      models.every((model, index) => model === provider.models[index])
-      ? provider
-      : { ...provider, models };
-  });
+  return normalizeProviderModelMap(providers, (providerKey, provider) =>
+    materializeConfiguredProviderModelRows(provider, (id) => normalizeModelId(providerKey, id)),
+  );
 }
 
 /** Finalizes emitted rows without applying authored aliases to their identities. */
