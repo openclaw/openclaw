@@ -93,9 +93,15 @@ disaster-recovery sequence.
 The managed `<stateDir>.update-captures/` root is excluded from ordinary archives,
 SQLite snapshots, Git backups, and support exports. Selecting a containing or
 nested workspace does not override this rule. Selecting a capture file as config
-or as a database backup source refuses the backup. Unrelated similarly named
-workspace directories remain included. This exclusion does not create captures
-or change ordinary backup sanitization.
+or as a database backup source refuses the backup. Other states' captures are
+recognized by the exact sibling layout: `<owner>/` beside
+`<owner>.update-captures/`, with an existing owner directory. Canonical path
+aliases receive the same protection. Unrelated similarly named workspace
+directories remain included; a suffix alone does not establish ownership.
+
+Keep captures at their managed location alongside their owner. Moved, renamed,
+or orphaned captures from another state cannot be identified by this rule.
+This exclusion does not create captures or change ordinary backup sanitization.
 
 ## SQLite snapshots
 
