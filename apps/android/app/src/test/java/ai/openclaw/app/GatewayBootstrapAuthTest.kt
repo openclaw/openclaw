@@ -2053,6 +2053,8 @@ class GatewayBootstrapAuthTest {
           val runtimeScope = readField<CoroutineScope>(runtime, "scope")
           writeField(runtime, "scope", CoroutineScope(runtimeScope.coroutineContext + dispatcher))
           assertNull(runtime.gatewayConnectionDisplay.value.problem)
+          val operatorSession = readField<GatewaySession>(runtime, "operatorSession")
+          val previousOperatorCleanup = readField<Job?>(operatorSession, "disconnectTail")
           val first =
             async(dispatcher) {
               runtime.connectSwitchingGateway(replacement, auth(bootstrapToken = "replacement-bootstrap"))
@@ -2060,9 +2062,15 @@ class GatewayBootstrapAuthTest {
           switching = first
           scheduler.runCurrent()
           withTimeout(5_000) {
-            while (!stalled.cancelled.isCompleted) {
+            // An earlier Disconnect may already have cancelled the socket. Observe this
+            // switch's drain before queueing its replacement, not that earlier signal alone.
+            var operatorCleanup = readField<Job?>(operatorSession, "disconnectTail")
+            while (!stalled.cancelled.isCompleted || operatorCleanup == null ||
+              operatorCleanup === previousOperatorCleanup || !operatorCleanup.isCompleted
+            ) {
               scheduler.runCurrent()
               delay(10)
+              operatorCleanup = readField(operatorSession, "disconnectTail")
             }
           }
           assertEquals("Connecting…", runtime.gatewayConnectionDisplay.value.statusText)
