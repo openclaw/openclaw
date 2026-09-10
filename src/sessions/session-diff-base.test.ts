@@ -11,7 +11,7 @@ function createGitOut(responses: Record<string, string | null>) {
   return vi.fn(async (_cwd: string, args: string[]): Promise<string | null> => {
     const key = args.join(" ");
     if (key in responses) {
-      return responses[key];
+      return responses[key] ?? null;
     }
     return null;
   }) as unknown as GitOutput;
