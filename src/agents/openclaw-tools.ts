@@ -631,6 +631,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       sandboxed: options?.sandboxed,
       activeModelProvider: options?.modelProvider,
       activeModelId: options?.modelId,
+      activeElevatedLevel: options?.activeElevatedLevel,
       metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
       activeDeliveryContext: {
         channel: options?.agentChannel,

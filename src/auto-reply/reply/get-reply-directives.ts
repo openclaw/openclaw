@@ -8,7 +8,6 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
@@ -53,7 +52,10 @@ import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
-import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
+import {
+  formatElevatedUnavailableMessage,
+  resolveEffectiveElevatedState,
+} from "./reply-elevated.js";
 import {
   createReplyModelLevelResolver,
   type ReplyModelLevelResolver,
@@ -332,11 +334,21 @@ export async function resolveReplyDirectives(params: {
     : normalizeOptionalString(ctx.Provider)
       ? normalizeLowercaseStringOrEmpty(ctx.Provider)
       : "";
-  const elevated = resolveElevatedPermissions({
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
+    agentId,
+    cfg,
+    ctx,
+    sessionKey,
+  });
+  const elevated = resolveEffectiveElevatedState({
     cfg,
     agentId,
     ctx,
     provider: messageProviderKey,
+    sessionEntry: targetSessionEntry,
+    sessionKey,
+    classificationSessionKey: runtimePolicySessionKey,
+    requestedLevel: directives.elevatedLevel,
   });
   const elevatedEnabled = elevated.enabled;
   const elevatedAllowed = elevated.allowed;
@@ -344,22 +356,11 @@ export async function resolveReplyDirectives(params: {
   if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {
     typing.cleanup();
     recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "session-directive-rejected");
-    const runtimeSandboxed = resolveSandboxRuntimeStatus({
-      cfg,
-      agentId,
-      sessionKey,
-      classificationSessionKey: resolveRuntimePolicySessionKey({
-        agentId,
-        cfg,
-        ctx,
-        sessionKey,
-      }),
-    }).sandboxed;
     return {
       kind: "reply",
       reply: {
         text: formatElevatedUnavailableMessage({
-          runtimeSandboxed,
+          runtimeSandboxed: elevated.sandboxed,
           failures: elevatedFailures,
           sessionKey: ctx.SessionKey,
         }),
@@ -410,12 +411,7 @@ export async function resolveReplyDirectives(params: {
   if (reasoningUsesConfiguredDefault && !canUseReasoningState) {
     resolvedReasoningLevel = "off";
   }
-  const resolvedElevatedLevel = elevatedAllowed
-    ? (directives.elevatedLevel ??
-      (targetSessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
-      (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
-      "on")
-    : "off";
+  const resolvedElevatedLevel = elevated.level;
   const blockStreamingEnabled =
     opts?.disableBlockStreaming === false ||
     (opts?.disableBlockStreaming !== true && agentCfg?.blockStreamingDefault === "on");
@@ -526,6 +522,7 @@ export async function resolveReplyDirectives(params: {
     initialModelLabel,
     formatModelSwitchEvent,
     resolvedElevatedLevel,
+    currentElevatedLevel: elevated.currentLevel,
     defaultActivation: () => defaultActivation,
     contextTokens,
     effectiveModelDirective,
@@ -544,7 +541,7 @@ export async function resolveReplyDirectives(params: {
     provider,
     modelId: model,
     agentId,
-    sessionKey: resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey }),
+    sessionKey: runtimePolicySessionKey,
     sessionEntry: targetSessionEntry,
   });
   const thinkingExplicitlySet =

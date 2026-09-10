@@ -339,11 +339,10 @@ export async function handleDirectiveOnly(
       );
     }
     if (!directives.elevatedLevel) {
-      const level = currentElevatedLevel ?? "off";
       return acknowledgeIgnoredDirective(
         {
           text: [
-            withOptions(`Current elevated level: ${level}.`, "on, off, ask, full"),
+            withOptions(`Current elevated level: ${currentElevatedLevel}.`, "on, off, ask, full"),
             shouldHintDirectRuntime ? formatElevatedRuntimeHint() : null,
           ]
             .filter(Boolean)
@@ -376,13 +375,14 @@ export async function handleDirectiveOnly(
         cfg: params.cfg,
         sessionEntry,
         agentId: activeAgentId,
+        sessionKey: runtimePolicySessionKey,
         sandboxAvailable: runtimeIsSandboxed,
+        elevatedRequested: (params.effectiveElevatedLevel ?? currentElevatedLevel) !== "off",
       });
-      const nodeLabel = execDefaults.node ? `node=${execDefaults.node}` : "node=(unset)";
       return acknowledgeIgnoredDirective(
         {
           text: withOptions(
-            `Current exec defaults: host=${renderExecTargetLabel(execDefaults.host)}, effective=${execDefaults.effectiveHost}, security=${execDefaults.security}, ask=${execDefaults.ask}, ${nodeLabel}.`,
+            `Current exec defaults: host=${renderExecTargetLabel(execDefaults.host)}, effective=${execDefaults.effectiveHost}, security=${execDefaults.security}, ask=${execDefaults.ask}, ${execDefaults.node ? `node=${execDefaults.node}` : "node=(unset)"}.`,
             "host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>",
           ),
         },
@@ -390,7 +390,6 @@ export async function handleDirectiveOnly(
       );
     }
   }
-
   const queueAck = maybeHandleQueueDirective({
     directives,
     cfg: params.cfg,
@@ -437,7 +436,7 @@ export async function handleDirectiveOnly(
   const elevatedChanged =
     directives.hasElevatedDirective &&
     directives.elevatedLevel !== undefined &&
-    directives.elevatedLevel !== (currentElevatedLevel ?? sessionEntry.elevatedLevel ?? "off") &&
+    directives.elevatedLevel !== currentElevatedLevel &&
     elevatedEnabled &&
     elevatedAllowed;
   let modelSelectionUpdated = false;
