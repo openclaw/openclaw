@@ -158,6 +158,7 @@ data class WorkerDesktopObserveResult(
   val wsPath: String,
   val expiresAtMs: Long,
   val control: Boolean,
+  val canResize: Boolean? = null,
   val vncPassword: String? = null,
 )
 

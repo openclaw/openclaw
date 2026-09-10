@@ -5784,6 +5784,7 @@ public struct DesktopObserveResult: Codable, Sendable {
     public let wspath: String
     public let expiresatms: Int
     public let control: Bool
+    public let canresize: Bool?
     public let vncpassword: String?
     public let auth: String?
     public let preauthenticated: Bool?
@@ -5793,6 +5794,7 @@ public struct DesktopObserveResult: Codable, Sendable {
         wspath: String,
         expiresatms: Int,
         control: Bool,
+        canresize: Bool? = nil,
         vncpassword: String? = nil,
         auth: String? = nil,
         preauthenticated: Bool? = nil)
@@ -5801,6 +5803,7 @@ public struct DesktopObserveResult: Codable, Sendable {
         self.wspath = wspath
         self.expiresatms = expiresatms
         self.control = control
+        self.canresize = canresize
         self.vncpassword = vncpassword
         self.auth = auth
         self.preauthenticated = preauthenticated
@@ -5811,6 +5814,7 @@ public struct DesktopObserveResult: Codable, Sendable {
         case wspath = "wsPath"
         case expiresatms = "expiresAtMs"
         case control
+        case canresize = "canResize"
         case vncpassword = "vncPassword"
         case auth
         case preauthenticated
@@ -23177,6 +23181,7 @@ public struct WorkerDesktopObserveResult: Codable, Sendable {
     public let wspath: String
     public let expiresatms: Int
     public let control: Bool
+    public let canresize: Bool?
     public let vncpassword: String?
 
     public init(
@@ -23184,12 +23189,14 @@ public struct WorkerDesktopObserveResult: Codable, Sendable {
         wspath: String,
         expiresatms: Int,
         control: Bool,
+        canresize: Bool? = nil,
         vncpassword: String? = nil)
     {
         self.transport = transport
         self.wspath = wspath
         self.expiresatms = expiresatms
         self.control = control
+        self.canresize = canresize
         self.vncpassword = vncpassword
     }
 
@@ -23198,6 +23205,7 @@ public struct WorkerDesktopObserveResult: Codable, Sendable {
         case wspath = "wsPath"
         case expiresatms = "expiresAtMs"
         case control
+        case canresize = "canResize"
         case vncpassword = "vncPassword"
     }
 }

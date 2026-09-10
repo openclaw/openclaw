@@ -45,7 +45,7 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
     ).desktopClientFactory = () => ({
       async connect(options) {
         element.dataset.viewOnly = String(options.viewOnly);
-        element.dataset.scaleViewport = String(options.scaleViewport ?? true);
+        element.dataset.scaleViewport = String(options.sizingMode !== "actual");
         const remote = document.createElement("div");
         remote.dataset.testRemoteDesktop = "true";
         remote.textContent = "Remote desktop";
@@ -69,8 +69,8 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
           sendBackspace() {
             element.dataset.lastKeyboardText = "Backspace";
           },
-          setScaleViewport(enabled) {
-            element.dataset.scaleViewport = String(enabled);
+          setSizingMode(mode) {
+            element.dataset.scaleViewport = String(mode !== "actual");
           },
         };
       },
@@ -652,7 +652,7 @@ suite.define(() => {
       const viewRequest = await gateway.waitForRequest("desktop.observe");
       expect(viewRequest.params).toEqual({ source: { kind: "host" }, control: false });
       await expect.poll(() => panel.getAttribute("data-view-only")).toBe("true");
-      const touchActions = panel.locator(".desktop-touch-action");
+      const touchActions = panel.locator(".desktop-touch-action, .desktop-sizing");
       await expect.poll(() => touchActions.count()).toBe(4);
       await panel.getByRole("button", { name: "Back", exact: true }).waitFor();
 
@@ -664,7 +664,9 @@ suite.define(() => {
       });
       await expect.poll(() => panel.getAttribute("data-view-only")).toBe("false");
 
-      await panel.getByRole("button", { name: "Use actual size", exact: true }).click();
+      await panel
+        .getByRole("combobox", { name: "Desktop size", exact: true })
+        .selectOption("actual");
       await expect.poll(() => panel.getAttribute("data-scale-viewport")).toBe("false");
 
       await panel.getByRole("button", { name: "Keyboard", exact: true }).click();

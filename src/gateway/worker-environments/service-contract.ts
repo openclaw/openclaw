@@ -59,6 +59,8 @@ export type WorkerDesktopObserveResult = {
   wsPath: string;
   expiresAtMs: number;
   control: boolean;
+  /** Provider permission to request resizing, not negotiated RFB support. */
+  canResize?: boolean;
   vncPassword?: string;
 };
 

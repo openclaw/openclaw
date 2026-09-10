@@ -13307,12 +13307,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           return;
         }
         if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-          // A Gateway created by the suite's server factory supplies its own UI;
+          // A Gateway or Vite proxy acquired by the suite owns its UI server;
           // a separate backend in a test can still use the shared UI bundle.
           if (
             inSuiteServer &&
             (node.expression.text === "createOpenClawTestInstance" ||
-              node.expression.text === "startProductionControlUiE2eServer")
+              node.expression.text === "startProductionControlUiE2eServer" ||
+              node.expression.text === "createServer")
           ) {
             ownsPrivateServer = true;
             return;
@@ -13376,6 +13377,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/child-session-load-errors.e2e.test.ts",
       "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
       "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+      "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
       "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
       "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
       "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",

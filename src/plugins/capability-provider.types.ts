@@ -234,6 +234,8 @@ export class WorkerProviderError extends Error {
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
 export type WorkerProvider = {
   id: string;
+  /** Safe to request virtual desktop resizing; the RFB server still negotiates support. */
+  allowsDesktopResize?: boolean;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
   listOperatingSystems?: (profile: WorkerProfile) => Promise<readonly WorkerOperatingSystem[]>;
