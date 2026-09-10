@@ -206,4 +206,24 @@ describe("core/doctor/bootstrap-size", () => {
       }),
     );
   });
+
+  it("retains total-budget guidance when missing-file markers exhaust the USER.md budget", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-user-total-"));
+    await fs.writeFile(join(tmp, "USER.md"), "u".repeat(5_000), "utf-8");
+
+    const findings = await getBootstrapSizeCheck().detect({
+      mode: "lint",
+      runtime,
+      cfg: { agents: { defaults: { workspace: tmp, bootstrapTotalMaxChars: 256 } } },
+      cwd: tmp,
+    });
+
+    const userFinding = findings.find((finding) => finding.message.includes("USER.md"));
+    expect(userFinding?.fixHint).toContain("fixed 4,000-character bootstrap cap");
+    expect(userFinding?.fixHint).toContain("agents.entries.*.bootstrapTotalMaxChars");
+    expect(userFinding?.fixHint).not.toContain("tune `agents.entries.*.bootstrapMaxChars`");
+    expect(findings.some((finding) => finding.message.startsWith("Total bootstrap context"))).toBe(
+      false,
+    );
+  });
 });

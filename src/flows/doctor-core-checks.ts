@@ -643,15 +643,21 @@ const bootstrapSizeCheck: HealthCheck = {
     const fixedCapHint = `Reduce the file size; USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS.toLocaleString("en-US")}-character bootstrap cap that \`bootstrapMaxChars\` cannot raise.`;
     const findings: HealthFinding[] = [];
     for (const file of analysis.truncatedFiles) {
+      let fixHint =
+        "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.";
+      if (file.causes.includes("per-file-limit") && isFixedUserCapFile(file)) {
+        fixHint = fixedCapHint;
+        if (file.causes.includes("total-limit")) {
+          fixHint +=
+            " Also reduce total bootstrap size or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.";
+        }
+      }
       findings.push({
         checkId: "core/doctor/bootstrap-size",
         severity: "warning",
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
-        fixHint:
-          file.causes.includes("per-file-limit") && isFixedUserCapFile(file)
-            ? fixedCapHint
-            : "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
+        fixHint,
       });
     }
     for (const file of analysis.nearLimitFiles) {
