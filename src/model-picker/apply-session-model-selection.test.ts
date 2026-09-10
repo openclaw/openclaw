@@ -6,6 +6,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import {
   loadSessionEntryReadOnly,
+  patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -784,6 +785,129 @@ describe("applySessionModelSelection", () => {
     });
     expect(params.sessionEntry).toEqual(initial);
     expect(lifecycleEvents).toEqual([]);
+    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects caller authority revoked during runtime preparation", async () => {
+    const metadata = createDeferred<ModelCatalogEntry[]>();
+    vi.mocked(loadProviderScopedThinkingCatalog).mockReturnValueOnce(metadata.promise);
+    let authorized = true;
+    const params = createParams({
+      validateSelectionAuthorization: async () =>
+        authorized ? undefined : "Model selection authorization changed.",
+    });
+    const initial = structuredClone(params.sessionEntry);
+    const pending = applySessionModelSelection(params);
+    authorized = false;
+    metadata.resolve([]);
+
+    expect(await pending).toMatchObject({
+      status: "rejected",
+      message: "Model selection authorization changed.",
+    });
+    expect(params.sessionEntry).toEqual(initial);
+    expect(lifecycleEvents).toEqual([]);
+    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "locked",
+      concurrent: createEntry({ modelSelectionLocked: true }),
+      outcome: { status: "rejected", reason: "locked" },
+    },
+    {
+      name: "replaced",
+      concurrent: createEntry({ sessionId: "session-2" }),
+      outcome: { status: "conflict" },
+    },
+  ])(
+    "preserves an in-memory session $name during caller authorization",
+    async ({ concurrent, outcome }) => {
+      const authorizationEntered = createDeferred();
+      const authorization = createDeferred<string | undefined>();
+      const params = createParams({
+        validateSelectionAuthorization: async () => {
+          authorizationEntered.resolve();
+          return await authorization.promise;
+        },
+      });
+      const initial = structuredClone(params.sessionEntry);
+      const pending = applySessionModelSelection(params);
+      await authorizationEntered.promise;
+      params.sessionStore[params.sessionKey] = concurrent;
+      authorization.resolve(undefined);
+
+      expect(await pending).toMatchObject(outcome);
+      expect(params.sessionEntry).toEqual(initial);
+      expect(params.sessionStore[params.sessionKey]).toBe(concurrent);
+      expect(lifecycleEvents).toEqual([]);
+      expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
+      expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "existing-session update", create: false },
+    { name: "missing-session creation", create: true },
+  ])("rejects caller authority revoked while $name is queued", async ({ create }) => {
+    const tempRoot = tempDirs.make("openclaw-model-picker-authority-");
+    const storePath = path.join(tempRoot, "sessions.json");
+    const sessionKey = "agent:main:telegram:authority";
+    const sessionEntry = createEntry();
+    const initial = structuredClone(sessionEntry);
+    const sessionStore: Record<string, SessionEntry> = create ? {} : { [sessionKey]: sessionEntry };
+    if (!create) {
+      await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+    }
+    const persistenceEntered = createDeferred();
+    const releasePersistence = createDeferred();
+    const blocker = patchSessionEntryCore(
+      { sessionKey, storePath },
+      async () => {
+        persistenceEntered.resolve();
+        await releasePersistence.promise;
+        return null;
+      },
+      { ...(create ? { fallbackEntry: createEntry() } : {}), skipMaintenance: true },
+    );
+    await persistenceEntered.promise;
+    let authorized = true;
+    const authorizationChecked = createDeferred();
+    let authorizationChecks = 0;
+
+    const pending = applySessionModelSelection(
+      createParams({
+        allowCreate: create,
+        sessionEntry,
+        sessionKey,
+        sessionStore,
+        storePath,
+        validateSelectionAuthorization: async () => {
+          authorizationChecks += 1;
+          authorizationChecked.resolve();
+          return authorized ? undefined : "Model selection authorization changed.";
+        },
+      }),
+    );
+    await authorizationChecked.promise;
+    authorized = false;
+    releasePersistence.resolve();
+    await blocker;
+    const result = await pending;
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      message: "Model selection authorization changed.",
+    });
+    expect(authorizationChecks).toBe(2);
+    expect(loadSessionEntryReadOnly({ sessionKey, storePath })).toEqual(
+      create ? undefined : createEntry(),
+    );
+    expect(sessionEntry).toEqual(initial);
+    expect(sessionStore[sessionKey]).toEqual(create ? undefined : createEntry());
+    expect(lifecycleEvents).toEqual([]);
+    expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
     expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
   });
 

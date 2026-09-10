@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildPluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
@@ -38,6 +38,7 @@ import {
   startTelegramCallbackQueryAnswer,
   takeTelegramCallbackQueryAdmissionAnswer,
 } from "./callback-query-answer-state.js";
+import { buildModelSelectionCallbackData, buildModelsKeyboard } from "./model-buttons.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import type { TelegramPollRegistryEntry } from "./poll-registry.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -2014,6 +2015,366 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-opaque-1");
   });
 
+  const modelCallbackRepresentations = ["short", "opaque"] as const;
+  const shortAuthorizedModel = "gpt-5.5";
+  const opaqueAuthorizedModel = `model-${"m".repeat(70)}`;
+  const configureModelCallbackAuthorization = (params: {
+    representation: (typeof modelCallbackRepresentations)[number];
+    pairing: boolean;
+  }): string => {
+    loadConfig.mockReturnValue({
+      commands: {
+        native: true,
+        ownerAllowFrom: ["telegram:9"],
+        ...(params.pairing ? {} : { allowFrom: { telegram: ["9"] } }),
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          models: {
+            "openai/gpt-5.4": {},
+            [`openai/${shortAuthorizedModel}`]: {},
+            [`openai/${opaqueAuthorizedModel}`]: {},
+          },
+        },
+      },
+      channels: {
+        telegram: params.pairing
+          ? { dmPolicy: "pairing", allowFrom: [] }
+          : { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+    if (params.representation === "short") {
+      const callbackData = buildModelSelectionCallbackData({
+        provider: "openai",
+        model: shortAuthorizedModel,
+      });
+      expect(callbackData).toBe(`mdl_sel_openai/${shortAuthorizedModel}`);
+      return callbackData;
+    }
+    const callbackData = buildModelsKeyboard({
+      provider: "openai",
+      models: [opaqueAuthorizedModel],
+      currentPage: 1,
+      totalPages: 1,
+    })[0]?.[0]?.callback_data;
+    expect(callbackData).toMatch(/^mdl1~m:/);
+    return requireValue(callbackData, "opaque model callback data");
+  };
+
+  it.each(modelCallbackRepresentations)(
+    "routes a %s model callback through owner authorization before DM allowlist admission",
+    async (representation) => {
+      const callbackData = configureModelCallbackAuthorization({ representation, pairing: true });
+
+      createTelegramBot({ token: "tok" });
+      await getCallbackHandler()(
+        makeCallbackRetryContext({
+          id: `cbq-model-owner-${representation}`,
+          data: callbackData,
+          messageId: 10,
+        }),
+      );
+
+      const selectedModel =
+        representation === "short" ? shortAuthorizedModel : opaqueAuthorizedModel;
+      expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain(
+        `Model changed to <b>openai/${selectedModel}</b>`,
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("revalidates a legacy native-command model callback at synthetic command ingress", async () => {
+    const admittedConfig = {
+      commands: { native: true, ownerAllowFrom: ["telegram:9"] },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          models: { "openai/gpt-5.4": {} },
+        },
+      },
+      channels: { telegram: { dmPolicy: "pairing", allowFrom: [] } },
+    };
+    const revokedConfig = {
+      ...admittedConfig,
+      commands: { native: true },
+    };
+    loadConfig.mockReturnValue(admittedConfig);
+
+    createTelegramBot({ token: "tok" });
+    const callsBeforeCallback = loadConfig.mock.calls.length;
+    loadConfig.mockImplementation(() => {
+      const callbackCall = loadConfig.mock.calls.length - callsBeforeCallback;
+      return callbackCall <= 2 ? admittedConfig : revokedConfig;
+    });
+    await getCallbackHandler()(
+      makeCallbackRetryContext({
+        id: "cbq-model-owner-revoked-before-ingress",
+        data: "tgcmd:/model openai/gpt-5.4 -s",
+        messageId: 10,
+      }),
+    );
+
+    expect(loadConfig.mock.calls.length - callsBeforeCallback).toBeGreaterThanOrEqual(3);
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(modelCallbackRepresentations)(
+    "revalidates %s model callback owner authorization after catalog lookup",
+    async (representation) => {
+      const admittedConfig: OpenClawConfig = {
+        commands: { native: true, ownerAllowFrom: ["telegram:9"] },
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            models: {
+              "openai/gpt-5.4": {},
+              [`openai/${shortAuthorizedModel}`]: {},
+              [`openai/${opaqueAuthorizedModel}`]: {},
+            },
+          },
+        },
+        channels: { telegram: { dmPolicy: "pairing", allowFrom: [] } },
+      };
+      const revokedConfig: OpenClawConfig = {
+        ...admittedConfig,
+        commands: { native: true },
+      };
+      let currentConfig = admittedConfig;
+      loadConfig.mockImplementation(() => currentConfig);
+      const selectedModel =
+        representation === "short" ? shortAuthorizedModel : opaqueAuthorizedModel;
+      const callbackData = buildModelSelectionCallbackData({
+        provider: "openai",
+        model: selectedModel,
+      });
+      expect(callbackData).toMatch(representation === "short" ? /^mdl_sel_/ : /^mdl1~m:/);
+
+      const buildModelsProviderDataMock =
+        telegramBotDepsForTest.buildModelsProviderData as unknown as BuildModelsProviderDataMock;
+      const buildModelsProviderData = buildModelsProviderDataMock.getMockImplementation();
+      if (!buildModelsProviderData) {
+        throw new Error("buildModelsProviderData test implementation missing");
+      }
+      const catalogStarted = createDeferred<void>();
+      const finishCatalog = createDeferred<void>();
+      buildModelsProviderDataMock.mockImplementationOnce(async (...args) => {
+        catalogStarted.resolve();
+        await finishCatalog.promise;
+        return await buildModelsProviderData(...args);
+      });
+      const applySessionModelSelectionSpy = vi.spyOn(
+        modelSessionRuntime,
+        "applySessionModelSelection",
+      );
+
+      createTelegramBot({ token: "tok" });
+      const callbackPromise = getCallbackHandler()(
+        makeCallbackRetryContext({
+          id: `cbq-model-owner-revoked-after-admission-${representation}`,
+          data: callbackData,
+          messageId: 10,
+        }),
+      );
+      await catalogStarted.promise;
+      currentConfig = revokedConfig;
+      finishCatalog.resolve();
+      try {
+        await callbackPromise;
+        expect(applySessionModelSelectionSpy).not.toHaveBeenCalled();
+        expect(replySpy).not.toHaveBeenCalled();
+        expect(editMessageTextSpy).not.toHaveBeenCalled();
+      } finally {
+        finishCatalog.resolve();
+        applySessionModelSelectionSpy.mockRestore();
+      }
+    },
+  );
+
+  it("rebuilds routed model policy after opaque callback catalog lookup", async () => {
+    const selectedModelRef = `openai/${opaqueAuthorizedModel}`;
+    const admittedConfig: OpenClawConfig = {
+      commands: { native: true, ownerAllowFrom: ["telegram:9"] },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          models: { "openai/gpt-5.4": {}, [selectedModelRef]: {} },
+        },
+        list: [
+          {
+            id: "routed",
+            default: true,
+            modelPolicy: { allow: ["openai/gpt-5.4", selectedModelRef] },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "routed",
+          match: { channel: "telegram", accountId: "default" },
+        },
+      ],
+      channels: { telegram: { dmPolicy: "pairing", allowFrom: [] } },
+    };
+    const revokedConfig: OpenClawConfig = {
+      ...admittedConfig,
+      agents: {
+        ...admittedConfig.agents,
+        list: [
+          {
+            id: "routed",
+            default: true,
+            modelPolicy: { allow: ["openai/gpt-5.4"] },
+          },
+        ],
+      },
+    };
+    let currentConfig = admittedConfig;
+    loadConfig.mockImplementation(() => currentConfig);
+    const callbackData = buildModelsKeyboard({
+      provider: "openai",
+      models: [opaqueAuthorizedModel],
+      currentPage: 1,
+      totalPages: 1,
+    })[0]?.[0]?.callback_data;
+    expect(callbackData).toMatch(/^mdl1~m:/);
+
+    const buildModelsProviderDataMock =
+      telegramBotDepsForTest.buildModelsProviderData as unknown as BuildModelsProviderDataMock;
+    const buildModelsProviderData = buildModelsProviderDataMock.getMockImplementation();
+    if (!buildModelsProviderData) {
+      throw new Error("buildModelsProviderData test implementation missing");
+    }
+    const buildCurrentPolicyData: typeof telegramBotDepsForTest.buildModelsProviderData = async (
+      ...args
+    ) => {
+      const data = await buildModelsProviderData(...args);
+      const [cfg, agentId] = args;
+      const modelAllowed = cfg.agents?.list
+        ?.find((agent) => agent.id === agentId)
+        ?.modelPolicy?.allow?.includes(selectedModelRef);
+      if (modelAllowed !== false) {
+        return data;
+      }
+      const byProvider = new Map(data.byProvider);
+      const openaiModels = new Set(byProvider.get("openai") ?? []);
+      openaiModels.delete(opaqueAuthorizedModel);
+      byProvider.set("openai", openaiModels);
+      return {
+        ...data,
+        byProvider,
+        modelCatalog: data.modelCatalog.filter(
+          (entry) => `${entry.provider}/${entry.id}` !== selectedModelRef,
+        ),
+      };
+    };
+    buildModelsProviderDataMock.mockImplementation(buildCurrentPolicyData);
+    const catalogStarted = createDeferred<void>();
+    const finishCatalog = createDeferred<void>();
+    buildModelsProviderDataMock.mockImplementationOnce(async (...args) => {
+      catalogStarted.resolve();
+      await finishCatalog.promise;
+      return await buildCurrentPolicyData(...args);
+    });
+    const applySessionModelSelectionSpy = vi.spyOn(
+      modelSessionRuntime,
+      "applySessionModelSelection",
+    );
+
+    createTelegramBot({ token: "tok" });
+    const callbackPromise = getCallbackHandler()(
+      makeCallbackRetryContext({
+        id: "cbq-model-policy-revoked-after-admission",
+        data: requireValue(callbackData, "opaque model callback data"),
+        messageId: 10,
+      }),
+    );
+    await catalogStarted.promise;
+    currentConfig = revokedConfig;
+    finishCatalog.resolve();
+    try {
+      await callbackPromise;
+      expect(buildModelsProviderDataMock).toHaveBeenCalledWith(admittedConfig, "routed");
+      expect(buildModelsProviderDataMock).toHaveBeenCalledWith(revokedConfig, "routed");
+      expect(applySessionModelSelectionSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain(
+        "This model is no longer available",
+      );
+      expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).not.toContain("✅ Model");
+    } finally {
+      finishCatalog.resolve();
+      applySessionModelSelectionSpy.mockRestore();
+    }
+  });
+
+  it.each(modelCallbackRepresentations)(
+    "gives commands.ownerAllowFrom the same authority for %s model callbacks in an open group",
+    async (representation) => {
+      const callbackData = configureModelCallbackAuthorization({ representation, pairing: true });
+      loadConfig.mockReturnValue({
+        commands: { native: true, ownerAllowFrom: ["telegram:9"] },
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            models: {
+              "openai/gpt-5.4": {},
+              [`openai/${shortAuthorizedModel}`]: {},
+              [`openai/${opaqueAuthorizedModel}`]: {},
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "pairing",
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      });
+
+      createTelegramBot({ token: "tok" });
+      await getCallbackHandler()(
+        makeCallbackRetryContext({
+          id: `cbq-model-group-owner-${representation}`,
+          data: callbackData,
+          messageId: 10,
+          message: { chat: { id: -1001234, type: "supergroup", title: "OpenClaw Ops" } },
+        }),
+      );
+
+      const selectedModel =
+        representation === "short" ? shortAuthorizedModel : opaqueAuthorizedModel;
+      expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain(
+        `Model changed to <b>openai/${selectedModel}</b>`,
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(modelCallbackRepresentations)(
+    "rejects an unauthorized %s model callback before dispatch",
+    async (representation) => {
+      const callbackData = configureModelCallbackAuthorization({ representation, pairing: false });
+
+      createTelegramBot({ token: "tok" });
+      await getCallbackHandler()(
+        makeCallbackRetryContext({
+          id: `cbq-model-unauthorized-${representation}`,
+          data: callbackData,
+          messageId: 10,
+          from: { id: 999, first_name: "Mallory", username: "mallory" },
+        }),
+      );
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { name: "delimited", value: "env|prod" },
     { name: "trailing-whitespace", value: "env|prod " },
@@ -2120,6 +2481,34 @@ describe("createTelegramBot", () => {
     expect(payload.CommandBody).toBe("/fast status");
     expect(payload.CommandSource).toBe("native");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-1");
+  });
+
+  it("keeps compact model callbacks on the native command route", async () => {
+    loadConfig.mockReturnValue({
+      commands: { text: false, native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    await getCallbackHandler()(
+      makeCallbackRetryContext({
+        id: "cbq-native-model-compact",
+        data: "tgcmd:/model openrouter/short-model -s",
+        messageId: 10,
+      }),
+    );
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(requireValue(replySpy.mock.calls.at(0), "replySpy call")[0]).toMatchObject({
+      CommandBody: "/model openrouter/short-model -s",
+      CommandSource: "native",
+    });
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-model-compact");
   });
 
   it("keeps tgcmd native when a plugin registers the same namespace", async () => {
@@ -5728,7 +6117,7 @@ describe("createTelegramBot", () => {
     const callbackHandler = getOnHandler("callback_query");
     const getSessionEntrySpy = vi
       .spyOn(telegramBotDepsForTest, "getSessionEntry")
-      .mockImplementationOnce(() => {
+      .mockImplementation(() => {
         const entry = {
           sessionId: "locked-session",
           updatedAt: Date.now(),
