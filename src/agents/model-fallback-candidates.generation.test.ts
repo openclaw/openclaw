@@ -35,7 +35,8 @@ describe("fallback candidates across provider generations", () => {
             id: provider,
             label: "Fallback generation",
             auth: [],
-            normalizeModelId: ({ modelId }) => (modelId === "latest" ? model : undefined),
+            normalizeModelId: ({ modelId }) =>
+              modelId === "latest" ? model : modelId === model ? "renormalized-model" : undefined,
           },
         });
         return { metadataSnapshot, pluginRegistry };

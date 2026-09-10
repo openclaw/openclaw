@@ -102,7 +102,11 @@ describe("embedded run auth plan provider pin", () => {
       },
     };
     const stores = modelRuntime.createEmptyAgentDiscoveryStores();
-    vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({ ...stores, model });
+    vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({
+      ...stores,
+      model,
+      logicalRef: { provider: model.provider, model: model.id },
+    });
     const prepared = await withPluginRuntimeGenerationScope(
       { metadataSnapshot: createPluginMetadataSnapshotFixture() },
       () =>
@@ -136,86 +140,6 @@ describe("embedded run auth plan provider pin", () => {
     });
   });
 
-  it("does not materialize a raw alias as a different executable model", async () => {
-    const provider = "raw-auth-model";
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          [provider]: {
-            api: "openai-completions",
-            baseUrl: "https://raw-auth-model.example/v1",
-            apiKey: "synthetic-fixture",
-            models: [],
-          },
-        },
-      },
-    };
-    const stores = modelRuntime.createEmptyAgentDiscoveryStores();
-    stores.modelRegistry.registerProvider(provider, {
-      api: "openai-completions",
-      baseUrl: "https://raw-auth-model.example/v1",
-      models: [
-        {
-          id: "middle",
-          name: "middle",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 16_000,
-          maxTokens: 1_024,
-        },
-      ],
-    });
-    const metadataSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: provider,
-          providers: [provider],
-          modelIdNormalization: { providers: { [provider]: { aliases: { entry: "middle" } } } },
-        },
-      ],
-    });
-    await withPluginRuntimeGenerationScope({ metadataSnapshot }, async () => {
-      const resolution = await modelRuntime.resolveModelAsync(
-        provider,
-        "entry",
-        agentDir,
-        config,
-        stores,
-      );
-      expect(resolution.model?.id).toBe("middle");
-      const model = resolution.model!;
-      const prepared = await prepareEmbeddedRunAuthPlan({
-        runParams: {
-          sessionId: "raw-model-session",
-          runId: "raw-model-run",
-          workspaceDir: state.workspaceDir,
-          prompt: "Auth preparation only",
-          timeoutMs: 5_000,
-          config,
-        },
-        provider,
-        modelId: "entry",
-        model,
-        agentDir,
-        workspaceDir: state.workspaceDir,
-        nativeModelOwned: false,
-        ...stores,
-        getAgentHarness: () => openClawHarness,
-        setAgentHarness: () => {},
-        getRuntimeModel: () => model,
-        getEffectiveModel: () => model,
-        applyResolvedRuntimeModel: () => {},
-        selectHarnessForPreparedAttempts: () => openClawHarness,
-      });
-      await expect(
-        prepared.materializeAuthPlanUncached(prepared.activePreparedAuthPlan, true),
-      ).rejects.toThrow(
-        "Unable to rematerialize raw-auth-model/entry for its resolved auth profile.",
-      );
-    });
-  });
-
   it.each([
     { pin: true, authMode: "api-key", authRequirement: "api-key", kind: "direct" },
     { pin: false, authMode: "oauth", authRequirement: "subscription", kind: "profile" },
@@ -235,6 +159,7 @@ describe("embedded run auth plan provider pin", () => {
       vi.spyOn(modelRuntime, "resolveModelAsync").mockImplementation(
         async (_provider, _modelId, _agentDir, cfg) => ({
           ...stores,
+          logicalRef: { provider: _provider, model: _modelId },
           model:
             cfg?.models?.providers?.openai?.api === "openai-responses"
               ? platformModel
