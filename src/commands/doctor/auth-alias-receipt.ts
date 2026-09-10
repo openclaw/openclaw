@@ -178,10 +178,13 @@ export function recoverAuthAliasMigration(params: {
     if (archived) {
       // The import owner validates archived bytes, refreshed OAuth identity and ambiguity.
       const archive = params.archivedMappings?.get(mapping.from);
+      const recordedSources = report.mappings
+        .filter((entry) => entry.from === mapping.from && entry.to === mapping.to)
+        .flatMap((entry) => entry.sources ?? []);
       const verifiedStores = new Set(
         archive?.origins
           .filter((origin) =>
-            mapping.sources?.some(
+            recordedSources.some(
               (source) =>
                 source.path === origin.sourcePath && source.sha256 === origin.sourceSha256,
             ),

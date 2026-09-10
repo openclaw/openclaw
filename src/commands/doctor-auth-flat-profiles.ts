@@ -1885,6 +1885,11 @@ export function maybeRepairLegacyAuthProfileStores(params: {
   const targets = new Map<string, string | undefined>([
     [resolveSharedAuthStorePath(env), undefined],
   ]);
+  const mainAgentDir = resolveSharedMainAuthAgentDir(env);
+  const mainDatabasePath = resolveAuthProfileDatabasePath(mainAgentDir);
+  if (!targets.has(mainDatabasePath)) {
+    targets.set(mainDatabasePath, mainAgentDir);
+  }
   const candidates = listAuthProfileRepairCandidates(params.cfg, env, (pathname) => {
     warnings.push(
       `Skipped auth-profile alias migration because ${shortenHomePath(pathname)} is unavailable.`,
@@ -2269,32 +2274,41 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
     return true;
   };
   collectProfiles({ profiles: params.cfg.auth?.profiles ?? {}, order: params.cfg.auth?.order });
-  for (const candidate of candidates) {
-    if (candidate.agentDir && inspectAuthDatabaseFiles(candidate.agentDir) === "unreadable") {
+  // Legacy JSON has one shared-main import owner; relocated SQLite can also contain local main state.
+  const sqliteTargets = new Map<string, string | undefined>([
+    [resolveSharedAuthStorePath(env), undefined],
+  ]);
+  for (const agentDir of [
+    resolveSharedMainAuthAgentDir(env),
+    ...candidates.flatMap((candidate) => (candidate.agentDir ? [candidate.agentDir] : [])),
+  ]) {
+    const databasePath = resolveAuthProfileDatabasePath(agentDir);
+    if (!sqliteTargets.has(databasePath)) {
+      sqliteTargets.set(databasePath, agentDir);
+    }
+  }
+  for (const [databasePath, agentDir] of sqliteTargets) {
+    if (agentDir && inspectAuthDatabaseFiles(agentDir) === "unreadable") {
       return profileIdMap;
     }
-    const inspection = candidate.agentDir
-      ? inspectPersistedAuthProfileStoreRaw(candidate.agentDir)
+    const inspection = agentDir
+      ? inspectPersistedAuthProfileStoreRaw(agentDir)
       : inspectPersistedSharedAuthProfileStoreRaw(env);
-    const state = candidate.agentDir
-      ? inspectPersistedAuthProfileStateRaw(candidate.agentDir)
+    const state = agentDir
+      ? inspectPersistedAuthProfileStateRaw(agentDir)
       : inspectPersistedSharedAuthProfileStateRaw(env);
     if (inspection.status === "unreadable" || state.status === "unreadable") {
       return profileIdMap;
     }
     if (inspection.status === "missing") {
       sqliteStores.push({
-        databasePath: candidate.agentDir
-          ? resolveAuthProfileDatabasePath(candidate.agentDir)
-          : resolveSharedAuthStorePath(env),
+        databasePath,
         store: null,
       });
     }
     if (inspection.status === "readable") {
       sqliteStores.push({
-        databasePath: candidate.agentDir
-          ? resolveAuthProfileDatabasePath(candidate.agentDir)
-          : resolveSharedAuthStorePath(env),
+        databasePath,
         store: inspection.raw,
       });
       if (!collectProfiles(inspection.raw)) {
@@ -2322,6 +2336,8 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
         Object.keys(inspection.raw.profiles).forEach((id) => blocked.add(id));
       }
     }
+  }
+  for (const candidate of candidates) {
     if (
       fs.existsSync(candidate.authPath) &&
       !collectProfiles(loadJsonFileThroughSymlink(candidate.authPath))
