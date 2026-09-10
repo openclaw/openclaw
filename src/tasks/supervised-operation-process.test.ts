@@ -142,50 +142,11 @@ describe.skipIf(process.platform !== "linux")("independent durable command proce
 });
 
 describe("accepted command input identity", () => {
-  it("rejects changed oracle bytes before any process can be dispatched", async () => {
-    const { openSupervisedCommandInputs } = await import("./supervised-command-inputs.js");
-    const root = dirs.make("command-input-pins-");
-    const executable = `${root}/executable`;
-    const oracle = `${root}/oracle`;
-    await fs.writeFile(executable, "runtime");
-    await fs.writeFile(oracle, "accepted oracle");
-    const workflow = encodeSupervisedWorkflowContract({
-      version: 1,
-      workspace: `${root}/work`,
-      profiles: [
-        {
-          kind: "command",
-          id: "check",
-          executable,
-          executableSha256: createHash("sha256").update("runtime").digest("hex"),
-          readOnlyPaths: [
-            { path: oracle, sha256: createHash("sha256").update("accepted oracle").digest("hex") },
-          ],
-          argv: [],
-          timeoutMs: 1000,
-        },
-      ],
-      acceptance: [{ kind: "operator", criterionId: "correct" }],
-    }).contract;
-    const profile = workflow.profiles[0];
-    if (profile?.kind !== "command") {
-      throw new Error("Missing command fixture");
-    }
-    await fs.writeFile(oracle, "changed oracle");
-    await expect(openSupervisedCommandInputs(profile, workflow.workspace)).rejects.toThrow(
-      /pinned digest/,
-    );
-    await fs.writeFile(oracle, "accepted oracle");
-    const pinned = await openSupervisedCommandInputs(profile, workflow.workspace);
-    try {
-      expect(await fs.readFile(pinned.mounts[1]!.source, "utf8")).toBe("accepted oracle");
-      await pinned.verify();
-      await fs.writeFile(oracle, "changed while running");
-      await expect(pinned.verify()).rejects.toThrow(/pinned digest/);
-    } finally {
-      pinned.close();
-    }
-  });
+  // Changed accepted bytes are rejected at the live launch boundary: see
+  // supervised-command-workspace.test.ts, which drives
+  // prepareSupervisedCommandWorkspace through digest, symlink and hardlink
+  // violations. Inputs are frozen into a read-only input root before dispatch,
+  // so a mutation of the original cannot reach a running command.
   it("rejects path-only executable profiles instead of treating mutable paths as accepted bytes", () => {
     expect(() =>
       encodeSupervisedWorkflowContract({
