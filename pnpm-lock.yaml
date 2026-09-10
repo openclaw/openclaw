@@ -1837,6 +1837,9 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
+      '@openclaw/crabbox-provider':
+        specifier: workspace:*
+        version: link:../crabbox
       '@openclaw/discord':
         specifier: workspace:*
         version: link:../discord
