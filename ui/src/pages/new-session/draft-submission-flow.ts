@@ -474,17 +474,15 @@ export class DraftSubmissionFlow {
       const createParams =
         startup?.params ??
         this.buildDraftSessionCreateParams({
-          message: placementTarget ? "" : message,
-          titleSource:
-            placementTarget && this.visibilityValue !== "incognito" ? message : undefined,
-          mentions: placementTarget ? undefined : mentions,
+          message,
+          mentions,
           displayName: preparedTitle,
           visibility:
             this.visibilityValue === "draft" &&
             !this.capabilities.canStartAsDraft(this.read().context)
               ? "normal"
               : this.visibilityValue,
-          attachments: placementTarget ? undefined : draftAttachments,
+          attachments: draftAttachments,
         });
       const placementCreateParams = placementTarget
         ? pendingPlacement

@@ -12,12 +12,12 @@ const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
  */
 export type NewSessionVisibility = "normal" | "draft" | "incognito";
 export type DraftSessionCreateOverrides = Partial<
-  Pick<SessionCreateParams, "message" | "attachments" | "displayName" | "titleSource">
+  Pick<SessionCreateParams, "message" | "attachments" | "displayName">
 > & { mentions?: readonly HumanMention[]; visibility?: NewSessionVisibility };
 export type DraftSessionCreateSelection = Partial<
   Pick<
     SessionCreateParams,
-    "attachments" | "permissionMode" | "catalogId" | "category" | "displayName" | "titleSource"
+    "attachments" | "permissionMode" | "catalogId" | "category" | "displayName"
   >
 > & {
   message: string;
@@ -47,7 +47,7 @@ export function buildDraftSessionCreateParams(draft: {
   message: string;
   mentions?: readonly HumanMention[];
   displayName?: string;
-  titleSource?: string;
+  deferInitialTurn?: boolean;
   model?: string;
   contextWindow?: string;
   thinkingLevel?: string;
@@ -74,10 +74,17 @@ export function buildDraftSessionCreateParams(draft: {
   const model = normalizeOptionalString(draft.model);
   const contextWindow = normalizeOptionalString(draft.contextWindow);
   const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
+  const message = draft.deferInitialTurn ? "" : draft.message;
+  const titleSource =
+    draft.deferInitialTurn && draft.visibility !== "incognito"
+      ? truncateUtf16Safe(draft.message.trim(), 1_000)
+      : undefined;
   const repository = draft.repository;
   const projectId = repository ? undefined : normalizeOptionalString(draft.projectId);
   const projectGitUrl =
-    !repository && !projectId && (draft.message.trim() || draft.attachments?.length)
+    !repository &&
+    !projectId &&
+    (message.trim() || (!draft.deferInitialTurn && draft.attachments?.length))
       ? normalizeOptionalString(draft.projectGitUrl)
       : undefined;
   const customFolder =
@@ -85,19 +92,19 @@ export function buildDraftSessionCreateParams(draft: {
   return {
     ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
     agentId: normalizeAgentId(draft.agentId),
-    message: draft.message,
-    ...(draft.mentions?.length
+    message,
+    ...(!draft.deferInitialTurn && draft.mentions?.length
       ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
       : {}),
     ...(normalizeOptionalString(draft.displayName)
       ? { displayName: normalizeOptionalString(draft.displayName) }
       : {}),
-    ...(draft.titleSource?.trim()
-      ? { titleSource: truncateUtf16Safe(draft.titleSource.trim(), 1_000) }
-      : {}),
+    ...(titleSource ? { titleSource } : {}),
     ...(draft.visibility === "incognito" ? { incognito: true } : {}),
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
-    ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
+    ...(!draft.deferInitialTurn && draft.attachments?.length
+      ? { attachments: draft.attachments }
+      : {}),
     ...(catalogId ? { catalogId } : {}),
     ...(category ? { category } : {}),
     ...(!catalogId && model ? { model } : {}),

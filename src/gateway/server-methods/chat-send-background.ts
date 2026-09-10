@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -51,10 +52,36 @@ export function scheduleChatDashboardSessionTitle(params: DashboardSessionTitleR
   scheduleDashboardSessionTitle(params, "session");
 }
 
-export function scheduleCreatedDashboardSessionTitle(params: DashboardSessionTitleRequest): void {
+export function scheduleCreatedDashboardSessionTitle(
+  created: {
+    key: string;
+    agentId: string;
+    entry: SessionEntry;
+    storePath: string;
+    isNew: boolean;
+  },
+  cfg: OpenClawConfig,
+  context: GatewayRequestContext,
+  titleSource?: string,
+): void {
+  if (!created.isNew || created.entry.incognito || !titleSource) {
+    return;
+  }
   // Creation metadata must not hold the execution lease that cloud dispatch drains.
   // The title writer still checks the exact session generation and existing name.
-  scheduleDashboardSessionTitle(params, "gateway");
+  scheduleDashboardSessionTitle(
+    {
+      admittedSessionId: created.entry.sessionId,
+      agentId: created.agentId,
+      cfg,
+      context,
+      request: { rawMessage: titleSource, normalizedAttachments: [] },
+      sessionKey: created.key,
+      sessionLoadOptions: { agentId: created.agentId },
+      storePath: created.storePath,
+    },
+    "gateway",
+  );
 }
 
 function scheduleDashboardSessionTitle(
