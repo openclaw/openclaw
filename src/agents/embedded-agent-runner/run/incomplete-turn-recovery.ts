@@ -276,10 +276,19 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
       id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
     ),
   );
+  const hasStaleToolError = Boolean(
+    attempt.lastToolError &&
+    assistant?.stopReason === "toolUse" &&
+    allToolsProvenSettled &&
+    failedToolNames.size === 0,
+  );
   // ToolErrorSummary has no call id: its owner must match a failed result in the
   // proven terminal batch, or a stale/unrelated error could authorize continuation.
+  // A fully settled successful batch proves that a retained error belongs to an
+  // earlier tool and cannot block text-only finalization of the current batch.
   const hasUnsettledToolError = Boolean(
     attempt.lastToolError &&
+    !hasStaleToolError &&
     (assistant?.stopReason !== "toolUse" ||
       !allToolsProvenSettled ||
       !failedToolNames.has(attempt.lastToolError.toolName)),
@@ -288,7 +297,7 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
     allToolsProvenSettled &&
     assistant?.stopReason === "toolUse" &&
     failedToolNames.size === 0 &&
-    !attempt.lastToolError &&
+    !hasUnsettledToolError &&
     !hasAsyncActivity(attempt.toolMetas) &&
     requestedToolCalls.every(({ id, name }) => {
       const metadata = attempt.toolMetas.findLast(
@@ -302,6 +311,7 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
     allToolsProvenSettled,
     parkedCodeModeRun,
     failedToolNames,
+    hasStaleToolError,
     hasUnsettledToolError,
     intentionalTermination,
   };

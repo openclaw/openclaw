@@ -137,6 +137,44 @@ function settledSuccessfulAttempt(): EmbeddedRunAttemptWithReceiptEvidence {
   return attempt;
 }
 
+function settledSuccessfulAttemptAfterStaleError(): EmbeddedRunAttemptWithReceiptEvidence {
+  const progress = "I’ll inspect the file before answering.";
+  const failedAssistant = buildEmbeddedRunnerAssistant({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", id: "tool-failed", name: "exec", arguments: {} }],
+  });
+  const terminalAssistant = buildEmbeddedRunnerAssistant({
+    stopReason: "toolUse",
+    content: [
+      { type: "text", text: progress },
+      { type: "toolCall", id: "tool-succeeded", name: "read", arguments: {} },
+    ],
+  });
+  return makeEmbeddedRunnerAttempt({
+    terminal: { kind: "ok" },
+    sessionIdUsed: "session-settled",
+    assistantTexts: [progress],
+    messagesSnapshot: [
+      { role: "user", content: [{ type: "text", text: "Inspect the file." }] },
+      failedAssistant,
+      { role: "toolResult", toolCallId: "tool-failed", toolName: "exec", isError: true },
+      terminalAssistant,
+      { role: "toolResult", toolCallId: "tool-succeeded", toolName: "read", isError: false },
+    ] as never,
+    toolMetas: [
+      { toolName: "exec", toolCallId: "tool-failed", isError: true, replaySafe: false },
+      { toolName: "read", toolCallId: "tool-succeeded", isError: false, replaySafe: true },
+    ],
+    itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+    lastAssistant: terminalAssistant,
+    currentAttemptAssistant: terminalAssistant,
+    currentAttemptCompletedAssistant: terminalAssistant,
+    lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+    replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+  });
+}
+
 let admittedRunContext: AdmittedRunContext;
 
 function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
@@ -193,6 +231,39 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       }
     },
   );
+
+  it("uses a safe fallback when finalization fails after a stale tool error (#132762)", async () => {
+    const attempt = settledSuccessfulAttemptAfterStaleError();
+    const input = finalizationInput(attempt);
+    input.terminalBase.runParams.trigger = "user";
+    input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
+    backendMocks.runSettledFinalization.mockRejectedValue(new Error("finalizer unavailable"));
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
+    expect(result.attempt.lastToolError).toBeUndefined();
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+    ]);
+    expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
+  });
+
+  it("clears only a proven-stale error when finalization is unavailable (#132762)", async () => {
+    const attempt = settledSuccessfulAttemptAfterStaleError();
+    const input = finalizationInput(attempt);
+    input.terminalBase.runParams.trigger = "user";
+    input.finalization.harness.finalizeSettledTurn = undefined;
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(backendMocks.runSettledFinalization).not.toHaveBeenCalled();
+    expect(result.finalizationOutcome).toBe("not-attempted");
+    expect(result.attempt.lastToolError).toBeUndefined();
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: "I’ll inspect the file before answering." }),
+    ]);
+  });
 
   it.each([
     { reported: false, outcome: "answered" },

@@ -5,7 +5,10 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { isIncompleteTerminalAssistantTurn } from "./incomplete-turn-classification.js";
-import { resolveSettledToolTerminalContinuationInstruction } from "./incomplete-turn-recovery.js";
+import {
+  resolveSettledToolBatchEvidence,
+  resolveSettledToolTerminalContinuationInstruction,
+} from "./incomplete-turn-recovery.js";
 import { resolveReplayInvalidFlag, resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -508,6 +511,36 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     );
 
     expect(instruction).toBeNull();
+  });
+
+  it("keeps a successful terminating batch terminal with a stale earlier error (#132762)", () => {
+    const toolUseAssistant = makeLastAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool_1", name: "ask_user", arguments: {} }],
+    });
+    const evidence = resolveSettledToolBatchEvidence(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          { toolName: "ask_user", toolCallId: "tool_1", isError: false, terminate: true },
+        ],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "ask_user", isError: false },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "exec", error: "earlier failure" },
+      }),
+    );
+
+    expect(evidence).toMatchObject({
+      allToolsProvenSettled: true,
+      hasStaleToolError: true,
+      hasUnsettledToolError: false,
+      intentionalTermination: true,
+    });
   });
 
   it.each([

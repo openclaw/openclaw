@@ -87,7 +87,11 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   };
 }) {
   const initial = input.initial;
-  let attempt = initial.attempt;
+  const settledToolBatch = resolveSettledToolBatchEvidence(initial.attempt);
+  const settledAttempt = settledToolBatch.hasStaleToolError
+    ? { ...initial.attempt, lastToolError: undefined }
+    : initial.attempt;
+  let attempt = settledAttempt;
   let lastRunPromptUsage = input.lastRunPromptUsage;
   let prepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
@@ -115,6 +119,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   if (!prompt) {
     return {
       ...initial,
+      attempt,
       prepared,
       lastRunPromptUsage,
       finalizationOutcome: "not-attempted" as const,
@@ -145,7 +150,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   // A host summary cannot replace a tool failure. Keep its original warning
   // when recovery produces no answer, including for silent helper runs.
   const terminalFallbackAllowed =
-    input.finalization.preparedAttempt.silentExpected !== true && !initial.attempt.lastToolError;
+    input.finalization.preparedAttempt.silentExpected !== true && !settledAttempt.lastToolError;
   log.warn(
     `settled post-tool turn lacked a final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
       `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
@@ -166,7 +171,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
           sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
           sessionFile: initial.sessionFileUsed ?? input.finalization.preparedAttempt.sessionFile,
         },
-        settledAttempt: initial.attempt,
+        settledAttempt,
         harness: input.finalization.harness,
         prompt,
         createAttemptControls: input.finalization.createAttemptControls,
@@ -248,7 +253,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       };
     }
     attempt = buildSettledToolFallbackAttemptResult({
-      settledAttempt: initial.attempt,
+      settledAttempt,
       sourceAttempt: attempt,
       prompt,
       agentHarnessId: input.finalization.preparedAttempt.agentHarnessId,
@@ -258,7 +263,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   }
   // Only an actual recovery replaces a failed tool turn's terminal ownership.
   const completion =
-    finalizationOutcome !== "answered" && initial.attempt.lastToolError
+    finalizationOutcome !== "answered" && settledAttempt.lastToolError
       ? initial
       : {
           attempt,
