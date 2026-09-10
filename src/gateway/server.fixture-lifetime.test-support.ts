@@ -11,6 +11,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 
 export function createGatewayFixtureFork(
   registerCleanup: (cleanup: () => Promise<void>) => unknown,
+  maxBytes = 4 * 1024 * 1024,
 ) {
   const lifetime = createFixtureLifetime();
   registerCleanup(() => lifetime.cleanup());
@@ -54,7 +55,7 @@ export default defineConfig({
   return function runGatewayFixtureFork(
     context: Pick<TestContext, "signal" | "onTestFinished">,
     source: (repoRoot: string, root: string) => string,
-    assertJournal: (journal: unknown, text: string) => void,
+    assertJournal?: (journal: unknown, text: string) => void,
   ): Promise<void> {
     const run = lifetime.run(async () => {
       context.signal.throwIfAborted();
@@ -97,7 +98,7 @@ export default defineConfig({
           cwd: repoRoot,
           signal: context.signal,
           timeoutMs: 90_000,
-          maxBytes: 4 * 1024 * 1024,
+          maxBytes,
           env: {
             PATH: process.env.PATH,
             OPENCLAW_VITEST_FS_MODULE_CACHE: process.env.OPENCLAW_VITEST_FS_MODULE_CACHE,
@@ -138,8 +139,10 @@ export default defineConfig({
           numFailedTests: 0,
           success: true,
         });
-        const journal = await fs.readFile(path.join(root, "journal.json"), "utf8");
-        assertJournal(JSON.parse(journal), journal);
+        if (assertJournal) {
+          const journal = await fs.readFile(path.join(root, "journal.json"), "utf8");
+          assertJournal(JSON.parse(journal), journal);
+        }
       } finally {
         if (joined) {
           await fs.rm(root, { recursive: true, force: true });
