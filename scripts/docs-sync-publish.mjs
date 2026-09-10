@@ -18,7 +18,7 @@ const SLUGIFY_PACKAGE = "@sindresorhus/slugify";
 const INTERNAL_DOCS_DIRS = ["internal"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
-const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
+export const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
 const DEFAULT_CLAWHUB_REPO_CANDIDATES = [
   path.resolve(ROOT, "..", "clawhub-docs-clawhub"),
   path.resolve(ROOT, "..", "clawhub"),

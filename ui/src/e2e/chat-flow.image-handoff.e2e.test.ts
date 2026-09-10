@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
@@ -13,11 +14,13 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const orders = ["receipt-first", "event-first"] as const;
 
 suite.define(() => {
-  it("keeps a submitted image visible through custody and canonical history loading", async () => {
+  it.each(orders)("keeps image previews through the history handoff (%s)", async (order) => {
     const proofDir = captureUiProofEnabled ? suite.artifactDir : undefined;
     const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
     await suite.withPage(
@@ -95,6 +98,7 @@ suite.define(() => {
             buffer: imageBytes,
           });
           await page.getByRole("img", { name: "stable-preview.png" }).waitFor();
+          await gateway.deferNext("chat.history", { limit: 1000 });
           await gateway.deferNext("chat.send");
           await page.getByRole("button", { name: "Send message" }).click();
           const request = await gateway.waitForRequest("chat.send");
@@ -198,9 +202,30 @@ suite.define(() => {
             session: sessionInfo,
           });
           await gateway.waitForRequest("chat.history", { after: histories });
-          await expect.poll(() => page.locator(".chat-send-status").count()).toBe(0);
+          // Custody starts the canonical media read while the send acknowledgment is held.
+          await expect.poll(() => metadataRequested).toBe(true);
           await expectImageStillVisible("02-custody");
           await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+          await waitForCommittedState(
+            page,
+            ({ runId: expectedRunId }) => {
+              const state = document.querySelector<HTMLElement & { state: ChatHost }>(
+                "openclaw-chat-pane",
+              )?.state;
+              return state !== undefined && state.chatRunId === expectedRunId && !state.chatSending;
+            },
+            { runId },
+          );
+          // Another session's update wakes the outbox without hydrating this transcript.
+          const wakeSessionKey = "agent:main:image-handoff-wakeup";
+          await gateway.emitGatewayEvent("sessions.changed", {
+            sessionKey: wakeSessionKey,
+            sessionId: "image-handoff-wakeup-session",
+            reason: "send",
+            hasActiveRun: true,
+            session: { key: wakeSessionKey, kind: "direct", hasActiveRun: true, status: "running" },
+          });
+          await gateway.waitForRequest("chat.history", { match: { limit: 1000 } });
 
           const canonical = {
             ...pendingInput.message,
@@ -211,11 +236,20 @@ suite.define(() => {
               idempotencyKey: `${runId}:user`,
             },
           };
-          await gateway.setMethodResponse("chat.history", {
+          const canonicalHistory = {
             ...custodyHistory,
             messages: [canonical],
             pendingInputs: { items: [], total: 0 },
-          });
+          };
+          await gateway.setMethodResponse("chat.history", canonicalHistory);
+          if (order === "receipt-first") {
+            const followups = (await gateway.getRequests("chat.history", { limit: 80 })).length;
+            await gateway.resolveDeferred("chat.history", canonicalHistory);
+            await gateway.waitForRequest("chat.history", {
+              match: { limit: 80 },
+              after: followups,
+            });
+          }
           await gateway.emitGatewayEvent("session.message", {
             sessionKey,
             sessionId,
@@ -225,6 +259,9 @@ suite.define(() => {
             message: canonical,
           });
           await page.locator('.chat-bubble[data-entry-id="accepted-image-input"]').waitFor();
+          if (order === "event-first") {
+            await gateway.resolveDeferred("chat.history", canonicalHistory);
+          }
           await expect.poll(() => metadataRequested).toBe(true);
           await expectImageStillVisible("03-canonical-metadata-loading");
           releaseMetadata();

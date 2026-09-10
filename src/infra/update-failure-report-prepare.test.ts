@@ -14,6 +14,11 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it("records the running Node version in the reviewed report", async () => {
+    const report = await prepareDiagnosticReport("node-runtime-preflight");
+    expect(report.body).toContain(`- Node version: ${process.versions.node}\n`);
+  });
+
   it.each([
     'Command failed: python -c "private-customer-text"',
     'ruby -e "private-customer-text"',

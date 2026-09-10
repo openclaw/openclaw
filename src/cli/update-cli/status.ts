@@ -1,6 +1,7 @@
 // `openclaw update status`: combines install metadata, configured channel, and remote update checks.
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { collectNodeRuntimeFindings } from "../../commands/node-runtime-diagnostics.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
@@ -30,7 +31,11 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     return;
   }
 
-  const [root, config] = await Promise.all([resolveUpdateRoot(), readSourceConfigBestEffort()]);
+  const [root, config, runtimeFindings] = await Promise.all([
+    resolveUpdateRoot(),
+    readSourceConfigBestEffort(),
+    collectNodeRuntimeFindings(),
+  ]);
   const configChannel = normalizeUpdateChannel(config.update?.channel);
 
   const update = await checkUpdateStatus({
@@ -73,6 +78,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(runtimeFindings.length > 0 ? { runtimeFindings } : {}),
       ...(activeRun ? { activeRun } : {}),
       ...(lastRun ? { lastRun } : {}),
       ...(staleGuidance && activeRun
@@ -107,6 +113,19 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   defaultRuntime.log(theme.heading("OpenClaw update status"));
   defaultRuntime.log("");
+  for (const finding of runtimeFindings) {
+    const color =
+      finding.severity === "error"
+        ? theme.error
+        : finding.severity === "warning"
+          ? theme.warn
+          : theme.muted;
+    defaultRuntime.log(color(finding.message));
+    if (finding.fixHint) {
+      defaultRuntime.log(finding.fixHint);
+    }
+    defaultRuntime.log("");
+  }
   defaultRuntime.log(
     renderTable({
       width: tableWidth,

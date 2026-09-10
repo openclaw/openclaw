@@ -16,10 +16,16 @@ it("skips control-ui localization checks for test-only UI source", () => {
   );
 });
 
-it("runs control-ui localization checks for the canonical locale config", () => {
-  expect(detectChangedScope(["scripts/lib/control-ui-i18n-config.json"]).runControlUiI18n).toBe(
-    true,
-  );
+it.each([
+  "scripts/lib/control-ui-i18n-config.json",
+  "scripts/lib/control-ui-i18n-catalog-values.ts",
+  "src/config/schema.labels.ts",
+  "src/config/zod-schema.cloud-workers.ts",
+  "src/config/media-audio-field-metadata.ts",
+  "src/config/talk-defaults.ts",
+  "ui/src/lib/fnv1a.ts",
+])("runs control-ui localization checks for %s", (file) => {
+  expect(detectChangedScope([file]).runControlUiI18n).toBe(true);
 });
 
 it.each([

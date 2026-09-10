@@ -25,6 +25,6 @@ export function browserEvaluateDisabledMessage(action: "wait" | "evaluate"): str
     action === "wait"
       ? "wait --fn is disabled by config (browser.evaluateEnabled=false)."
       : "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
-    "Docs: /gateway/configuration#browser-openclaw-managed-browser",
+    "Docs: /tools/browser/configuration#configuration",
   ].join("\n");
 }

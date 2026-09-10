@@ -11,13 +11,15 @@ import type { TelegramDraftPreview } from "./draft-stream.js";
 
 describeTelegramDispatch("Telegram reasoning beside progress headlines", () => {
   it.each([
-    { richMessages: false, commentary: true },
-    { richMessages: true, commentary: true },
-    { richMessages: false, commentary: false },
-    { richMessages: true, commentary: false },
+    { richMessages: false, commentary: true, toolProgress: true },
+    { richMessages: true, commentary: true, toolProgress: true },
+    { richMessages: false, commentary: false, toolProgress: true },
+    { richMessages: true, commentary: false, toolProgress: true },
+    { richMessages: false, commentary: true, toolProgress: false },
+    { richMessages: true, commentary: true, toolProgress: false },
   ])(
-    "preserves the reasoning policy with richMessages=$richMessages, commentary=$commentary",
-    async ({ richMessages, commentary }) => {
+    "preserves the reasoning policy with richMessages=$richMessages, commentary=$commentary, toolProgress=$toolProgress",
+    async ({ richMessages, commentary, toolProgress }) => {
       const draftStream = createSequencedDraftStream(2001);
       createTelegramDraftStream.mockReturnValue(draftStream);
       const previews: Array<TelegramDraftPreview | undefined> = [];
@@ -50,7 +52,7 @@ describeTelegramDispatch("Telegram reasoning beside progress headlines", () => {
           richMessages,
           streaming: {
             mode: "progress",
-            progress: { commentary, toolProgress: true, label: false },
+            progress: { commentary, toolProgress, label: false },
           },
         },
       });
@@ -66,7 +68,12 @@ describeTelegramDispatch("Telegram reasoning beside progress headlines", () => {
           expect(preview?.text).toContain(reasoning);
           expect(visibleContent).toContain(reasoning);
           if (index === 2) {
-            expect(visibleContent).toContain("Thinking… (~200 tokens)");
+            // Token counters use the tool-progress lane; authored reasoning does not.
+            if (toolProgress) {
+              expect(visibleContent).toContain("Thinking… (~200 tokens)");
+            } else {
+              expect(visibleContent).not.toContain("Thinking…");
+            }
           }
         } else {
           // Headline-only mode intentionally buffers reasoning until the headline is gone.

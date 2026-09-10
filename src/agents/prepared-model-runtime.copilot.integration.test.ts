@@ -95,7 +95,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     preferPersisted: false,
   });
   const selection = { agentId: "worker", provider: "custom-proxy", modelId: "test-model" };
-  const { runtimePluginRegistry } = prepareWorkspacePluginRegistries(
+  const { runtimePluginRegistry } = await prepareWorkspacePluginRegistries(
     {
       config,
       env,

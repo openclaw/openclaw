@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
   clearSessionAuthProfileOverride,
@@ -152,11 +153,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          "amazon-bedrock:default": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "sk-drifted",
-          },
+          "amazon-bedrock:default": createApiKeyCredential("openrouter", "sk-drifted"),
         },
       });
 
@@ -211,16 +208,8 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-josh",
-          },
-          [TEST_SECONDARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-claude",
-          },
+          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-josh"),
+          [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-claude"),
         },
         order: {
           openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
@@ -259,11 +248,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-codex",
-          },
+          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-codex"),
         },
         order: {
           openai: [TEST_PRIMARY_PROFILE_ID],
@@ -301,11 +286,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-codex",
-          },
+          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-codex"),
         },
         order: {
           openai: [TEST_PRIMARY_PROFILE_ID],
@@ -343,16 +324,8 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          "openai:api-key-backup": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-openai",
-          },
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-codex",
-          },
+          "openai:api-key-backup": createApiKeyCredential("openai", "sk-openai"),
+          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-codex"),
         },
         order: {
           openai: [TEST_PRIMARY_PROFILE_ID],
@@ -391,16 +364,8 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-stale",
-          },
-          [TEST_SECONDARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-healthy",
-          },
+          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-stale"),
+          [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-healthy"),
         },
         order: {
           openai: [TEST_SECONDARY_PROFILE_ID, TEST_PRIMARY_PROFILE_ID],
@@ -476,16 +441,8 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-primary",
-          },
-          [TEST_SECONDARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-secondary",
-          },
+          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
+          [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-secondary"),
         },
         order: {
           openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
@@ -589,11 +546,10 @@ describe("resolveSessionAuthProfileOverride", () => {
         });
         const latestProfileId = crossProvider ? "anthropic:manual" : TEST_SECONDARY_PROFILE_ID;
         if (crossProvider) {
-          authStoreMocks.state.store.profiles[latestProfileId] = {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-anthropic",
-          };
+          authStoreMocks.state.store.profiles[latestProfileId] = createApiKeyCredential(
+            "anthropic",
+            "sk-anthropic",
+          );
         }
         const sessionKey = "agent:main:main";
         const scope = { storePath: path.join(state.sessionsDir(), "sessions.json"), sessionKey };

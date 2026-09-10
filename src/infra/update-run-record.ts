@@ -23,3 +23,10 @@ export function summarizeUpdateStepFailure(
 export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];
+
+export type UpdateFetchFailure = {
+  reason: "fetch-failed";
+  failedAtMs: number;
+  detail: string;
+  runId: string;
+};

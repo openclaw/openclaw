@@ -394,4 +394,6 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Millisecond run timeout override; takes precedence over seconds (0 = no timeout). */
+  timeoutOverrideMs?: number;
 };

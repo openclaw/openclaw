@@ -3,19 +3,30 @@ import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 // Match Gateway's harness/MCP shutdown grace; local-provider TERM/KILL already
 // consumes at most two 2-second waits. Keep command teardown bounded independently.
 const DISPOSER_TIMEOUT_MS = 5_000;
-const pendingDisposers = new Map<symbol, string>();
+const pendingDisposers = new Map<symbol, { name: string; operation: Promise<void> }>();
 
 export function getPendingCliDisposers(): string[] {
-  return [...pendingDisposers.values()];
+  return [...pendingDisposers.values()].map(({ name }) => name);
 }
 
-export async function runCliDisposer(name: string, dispose: () => Promise<void>): Promise<void> {
+/** Automatic process exit must join cleanup that outlived its reporting grace. */
+export async function waitForPendingCliDisposers(): Promise<void> {
+  while (pendingDisposers.size > 0) {
+    await Promise.allSettled([...pendingDisposers.values()].map(({ operation }) => operation));
+  }
+}
+
+export async function runCliDisposer(
+  name: string,
+  dispose: () => Promise<void>,
+  runCleanup?: (dispose: () => Promise<void>) => Promise<void>,
+): Promise<void> {
   const token = Symbol(name);
-  pendingDisposers.set(token, name);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const operation = Promise.resolve()
-    .then(dispose)
+    .then(() => (runCleanup ? runCleanup(dispose) : dispose()))
     .finally(() => pendingDisposers.delete(token));
+  pendingDisposers.set(token, { name, operation });
   try {
     await Promise.race([
       operation,
@@ -34,6 +45,7 @@ export async function runCliDisposer(name: string, dispose: () => Promise<void>)
 }
 
 export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<void> {
+  const runCleanup = cleanup?.pluginResources?.runCleanup;
   const finalizers: Record<string, () => Promise<void>> = {
     "agent-harnesses": async () => {
       const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
@@ -49,7 +61,7 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
       try {
         await Promise.all(
           [...cleanup.harnesses].map(([harness, dispose]) =>
-            runCliDisposer(`agent-harness/${harness.id}`, dispose),
+            runCliDisposer(`agent-harness/${harness.id}`, dispose, runCleanup),
           ),
         );
       } finally {
@@ -98,6 +110,6 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
     },
   };
   for (const [name, finalize] of Object.entries(finalizers)) {
-    await runCliDisposer(name, finalize);
+    await runCliDisposer(name, finalize, runCleanup);
   }
 }

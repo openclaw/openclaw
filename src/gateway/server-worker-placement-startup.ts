@@ -473,8 +473,8 @@ export function createGatewayWorkerPlacementRuntime(
     environments: params.environments,
     placements: params.placements,
     resolveWorkspace,
-    reconcileActivePlacement: async (environmentId) =>
-      await dispatchService.reconcileActive(environmentId),
+    reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
+    waitForInitialPlacement: rawDispatchService.waitForInitialPlacement,
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
       dispatch: dispatchService.dispatch,

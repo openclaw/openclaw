@@ -8,6 +8,8 @@ import type {
 } from "../../plugins/types.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import type { createWorkerProjectPreparation } from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentTransitionPatch } from "./store.js";
@@ -26,6 +28,7 @@ type WorkerNodeProvisioningOptions = Pick<
   | "prepareNodeEnrollment"
   | "closeNodeEnrollment"
   | "ensureNodeWorkerBundle"
+  | "registerPreparedWorkspace"
   | "move"
   | "saveError"
   | "serviceError"
@@ -73,6 +76,15 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       const nodeBootstrapSha256 = await options.prepareNodeBootstrap(record, signal);
       if (record.profileSnapshot.project) {
         installation = await prepareBundle(undefined, signal);
+      }
+      const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+      if (
+        preparation &&
+        (preparation.artifacts.nodeBootstrapSha256 !== nodeBootstrapSha256 ||
+          installation?.install !== "bundle" ||
+          preparation.artifacts.workerArchiveSha256 !== installation.tarballSha256)
+      ) {
+        throw new Error("Prepared project runtime artifacts changed after admission");
       }
       identity = {
         nodeBootstrapSha256,
@@ -244,11 +256,28 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     patch: { leaseId: string; sharedHost: boolean; desktop: WorkerLease["desktop"] | null },
     preparedInstallation?: WorkerInstallationArtifact,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
+    preparedWorkspace?: ReturnType<
+      ReturnType<typeof createWorkerProjectPreparation>["getPreparedWorkspace"]
+    >,
   ): Promise<WorkerEnvironmentRecord> => {
     const nodePatch = {
       ...patch,
       nodeDeviceId: lease.node.deviceId,
       sshEndpoint: null,
+    };
+    const assertCurrent = () => {
+      cancellation?.assertActive();
+      const current = options.store.get(record.environmentId);
+      if (
+        options.isStopping() ||
+        !current ||
+        current.state !== record.state ||
+        current.provisionOperationId !== record.provisionOperationId ||
+        current.ownerEpoch !== record.ownerEpoch ||
+        current.destroyRequestedAtMs !== null
+      ) {
+        throw new Error("Prepared worker provisioning owner is no longer current");
+      }
     };
     let nodeBuild: WorkerAdmissionHandshake;
     try {
@@ -264,7 +293,27 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         prewarm: record.profileSnapshot.executionMode !== "remote-exec",
         signal: cancellation?.signal,
       });
-      cancellation?.assertActive();
+      assertCurrent();
+      const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+      if (preparation) {
+        if (
+          lease.sharedHost !== false ||
+          !preparedWorkspace ||
+          preparedWorkspace.preparationKey !== preparation.key ||
+          preparedWorkspace.cacheKey !== preparation.cacheKey ||
+          !options.registerPreparedWorkspace
+        ) {
+          throw new Error("Prepared worker requires its dedicated registered workspace");
+        }
+        await options.registerPreparedWorkspace({
+          record: options.store.get(record.environmentId)!,
+          deviceId: lease.node.deviceId,
+          workspace: preparedWorkspace,
+          assertCurrent,
+          signal: cancellation?.signal,
+        });
+        assertCurrent();
+      }
     } catch (error) {
       return await options.failBootstrap(record, lease.leaseId, provider, error, nodePatch);
     }

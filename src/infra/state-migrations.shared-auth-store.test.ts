@@ -593,6 +593,8 @@ describe("shared auth store relocation", () => {
               OPENCLAW_AGENT_DIR: undefined,
               PI_CODING_AGENT_DIR: undefined,
               OPENCLAW_OAUTH_DIR: undefined,
+              // These auth owners have no plugin inventory; keep discovery inside the fixture.
+              OPENCLAW_BUNDLED_PLUGINS_DIR: tempDirs.make("openclaw-shared-auth-bundled-"),
             },
           });
           ownerStates.push(owner);

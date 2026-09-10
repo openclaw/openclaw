@@ -444,6 +444,9 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config schema for providers, models, and plugins.
   </Card>
+  <Card title="Fireworks" href="/providers/fireworks" icon="server">
+    Kimi models on Fireworks, including their thinking-off behavior.
+  </Card>
   <Card title="Moonshot Open Platform" href="https://platform.moonshot.ai" icon="globe">
     Moonshot API key management and documentation.
   </Card>

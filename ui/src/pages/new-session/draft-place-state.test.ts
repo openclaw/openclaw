@@ -27,12 +27,15 @@ function createRepositoryFixture(
   const persistPreference = vi.fn();
   const readPreference = vi.fn<() => NewSessionPreference>(() => ({ worktree: true }));
   const request = vi.fn<(method: string) => Promise<unknown>>(async (method) =>
-    method === "fs.listDir"
-      ? { path: "/plain", entries: [] }
-      : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
+    method === "models.list"
+      ? { models: [] }
+      : method === "fs.listDir"
+        ? { path: "/plain", entries: [] }
+        : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
   );
   const context = {
     gateway: {
+      subscribeEvents: () => () => undefined,
       snapshot: {
         phase: "connected",
         client: { request },

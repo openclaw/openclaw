@@ -88,8 +88,11 @@ envelope:
 ```
 
 A command may add domain-specific fields, such as per-item results, beside this
-envelope. Failure messages are sanitized. Human-readable diagnostics may also be
-written to stderr, so scripts should parse stdout and still check the exit status.
+envelope. Gateway-backed agent turns that fail after the Gateway accepted the run
+also record the accepted `runId` and `origin: "gateway"` beside the envelope, so
+scripts can report the in-flight run. Failure messages are sanitized. Human-readable
+diagnostics may also be written to stderr, so scripts should parse stdout and still
+check the exit status.
 
 ## Color palette
 

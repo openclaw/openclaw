@@ -2,7 +2,11 @@ import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "mar
 import markdownItTaskLists from "markdown-it-task-lists";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import { decodeGitHubPathSegment, parseGitHubItemPath } from "./github-link-target.ts";
+import {
+  decodeGitHubPathSegment,
+  parseGitHubItemPath,
+  parseGitHubLinkTarget,
+} from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -558,6 +562,7 @@ export function createMarkdownParser(): MarkdownItParser {
           open.markup === CODE_SPAN_LINK_MARKUP;
         const host = url.hostname.toLowerCase();
         const githubLink = isGitHubHost(host);
+        const githubPreview = githubLink ? parseGitHubLinkTarget(href) : null;
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
@@ -577,7 +582,7 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         if (githubLink && labelToken) {
           open.attrJoin("class", GITHUB_LINK_CLASS);
-          const item = parseGitHubItemPath(url);
+          const item = githubPreview ?? parseGitHubItemPath(url);
           const label =
             labelToken.type === "text" &&
             children[index + 1] === labelToken &&
@@ -596,7 +601,7 @@ export function createMarkdownParser(): MarkdownItParser {
           if (generatedUrlLabel) {
             labelToken.content = item ? `#${item.number}` : formatGitHubLinkLabel(url);
           }
-          if (generatedUrlLabel || itemChip) {
+          if (!githubPreview && (generatedUrlLabel || itemChip)) {
             open.attrSet("title", href);
           }
         }

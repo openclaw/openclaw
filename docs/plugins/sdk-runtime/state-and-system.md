@@ -78,6 +78,13 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
   <Accordion title="api.runtime.logging">
     Logging.
 
+    Generate private transport tokens with `generateSecureToken({ bytes: 32, redact: true })`
+    from `openclaw/plugin-sdk/secure-random-runtime`. The object form requires at least
+    16 random bytes and registers the generated value for exact diagnostic redaction
+    before returning it. Existing numeric calls keep their ordinary ID behavior.
+    This grants no credential access or request authority; preserve live protocol
+    values and redact only at presentation boundaries.
+
     ```typescript
     const verbose = api.runtime.logging.shouldLogVerbose();
     const childLogger = api.runtime.logging.getChildLogger({ plugin: "my-plugin" }, { level: "debug" });

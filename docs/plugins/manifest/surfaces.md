@@ -57,6 +57,12 @@ descriptor array. Candidate validation must bind those artifacts separately.
 Until then, Doctor records an explicit planning refusal instead of treating an
 installed manifest as write authority.
 
+A state migration returns `changes` and `warnings`, with optional `notices`. Warnings refuse later
+Doctor repairs by default. A migration may return `warningDisposition: "recoverable"` only when every
+warning is advisory and required state remains safe for later repairs. Doctor preserves those warnings
+in its receipts and continues. Detection errors, thrown failures, and unclassified warnings from another
+migration still refuse the combined step.
+
 The Codex plugin sets `doctorHealthChecks: true` when its public API exports
 health-check registration. Doctor checks the selected plugin's trust before
 loading this surface. Older installed versions without the declaration skip

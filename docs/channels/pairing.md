@@ -297,3 +297,4 @@ imported into SQLite at gateway startup and archived with a `.migrated` suffix.
   - iMessage: [iMessage](/channels/imessage)
   - Discord: [Discord](/channels/discord)
   - Slack: [Slack](/channels/slack)
+- [`openclaw pairing`](/cli/pairing) — drive pairing from the CLI

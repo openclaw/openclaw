@@ -279,6 +279,11 @@ export function isBlockedSpecialUseIpv6Address(
     // will use. Block the allocation instead of guessing a public decoy.
     return true;
   }
+  if (isCloudMetadataIpAddress(address.toString())) {
+    // Metadata endpoints stay blocked even when operators opt into the wider
+    // ULA range for fake-ip proxy compatibility.
+    return true;
+  }
   if (range === "uniqueLocal" && options.allowUniqueLocalRange === true) {
     // Operators running fake-ip proxy stacks (sing-box, Clash, Surge) opt in
     // to fc00::/7 reaching the network — same intent as
@@ -407,7 +412,12 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
     );
   }
   if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
-    return comparableIp.match([comparableBase, prefixLength]);
+    // A base normalized from IPv6 is mapped: its prefix includes 96 mapped bits.
+    // Shorter prefixes contain the whole mapped block, equivalent to IPv4 /0.
+    const ipv4PrefixLength = isIpv6Address(baseAddress)
+      ? Math.max(0, prefixLength - 96)
+      : prefixLength;
+    return comparableIp.match([comparableBase, ipv4PrefixLength]);
   }
   if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
     return comparableIp.match([comparableBase, prefixLength]);

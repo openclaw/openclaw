@@ -409,7 +409,9 @@ describe("managed plugin capability consent", () => {
         pluginId: "community-plugin",
         reviewToken: artifactReviewToken(record),
       },
-      message: expect.stringContaining("--accept-capabilities"),
+      message: expect.stringContaining(
+        'Run "openclaw plugins enable community-plugin --accept-capabilities"',
+      ),
     });
     expect(mocks.replaceConfig).not.toHaveBeenCalled();
   });

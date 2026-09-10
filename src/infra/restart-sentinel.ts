@@ -21,7 +21,6 @@ import {
   writeRestartSentinelRowSync,
   writeUpdateInstallReceiptRowSync,
   type RestartSentinel,
-  type RestartSentinelContinuation,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
 import {
@@ -451,17 +450,6 @@ export async function clearRestartSentinelIfRevision(
     { env },
     { operationLabel: "restart-sentinel.clear-if-revision" },
   );
-}
-
-export function buildRestartSuccessContinuation(params: {
-  sessionKey?: string;
-  continuationMessage?: string | null;
-}): RestartSentinelContinuation | null {
-  const message = params.continuationMessage?.trim();
-  if (message) {
-    return { kind: "agentTurn", message };
-  }
-  return null;
 }
 
 export async function readRestartSentinel(

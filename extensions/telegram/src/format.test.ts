@@ -179,9 +179,9 @@ describe("markdownToTelegramHtml", () => {
     const html = markdownToTelegramHtml(markdown, { tableMode: "block" });
     const chunks = markdownToTelegramChunks(markdown, 4096, { tableMode: "block" });
 
-    expect(html).toContain(`<pre><code>${table}\n</code></pre>`);
+    expect(html).toContain("<pre><code>| A   | B   |\n| --- | --- |\n| 1   | 2   |\n</code></pre>");
     expect(chunks.map((chunk) => chunk.html)).toEqual([html]);
-    expect(chunks[0]?.text).toContain("| 1 | 2 |");
+    expect(chunks[0]?.text).toContain("| 1   | 2   |");
     if (before) {
       expect(html).toContain("Before");
     }
@@ -303,24 +303,45 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toContain("report/draft.\n\n3. Cognee");
   });
 
-  it("does not insert Telegram list boundary spacing inside fenced code", () => {
-    const input = ["```", "  • literal bullet", "3. literal number", "```"].join("\n");
-
-    const res = markdownToTelegramHtml(input, { wrapFileRefs: false });
-
-    expect(res).toBe("<pre><code>  • literal bullet\n3. literal number\n</code></pre>");
-  });
-
-  it("does not insert Telegram list boundary spacing inside indented code", () => {
-    const input = ["    • literal bullet", "    3. literal number"].join("\n");
-
+  it.each([
+    {
+      name: "fenced code",
+      input: "```\n  • literal bullet\n3. literal number\n```",
+      html: "<pre><code>  • literal bullet\n3. literal number\n</code></pre>",
+    },
+    {
+      name: "a shorter fence inside code",
+      input: "````\n```\n• literal bullet\n3. literal number\n````",
+      html: "<pre><code>```\n• literal bullet\n3. literal number\n</code></pre>",
+    },
+    {
+      name: "a different fence marker inside code",
+      input: "```\n~~~\n• literal bullet\n3. literal number\n```",
+      html: "<pre><code>~~~\n• literal bullet\n3. literal number\n</code></pre>",
+    },
+    {
+      name: "a fence with a trailing word inside code",
+      input: "```\n```example\n• literal bullet\n3. literal number\n```",
+      html: "<pre><code>```example\n• literal bullet\n3. literal number\n</code></pre>",
+    },
+    {
+      name: "multiline inline code",
+      input: "`start\n• literal bullet\n3. literal number`",
+      html: "<code>start • literal bullet 3. literal number</code>",
+    },
+    {
+      name: "indented code",
+      input: "    • literal bullet\n    3. literal number",
+      html: "<pre><code>• literal bullet\n3. literal number\n</code></pre>",
+    },
+  ])("does not insert Telegram list boundary spacing inside $name", ({ input, html }) => {
     const res = markdownToTelegramHtml(input, { wrapFileRefs: false });
     const chunks = markdownToTelegramChunks(input, 4096)
       .map((chunk) => chunk.html)
       .join("");
 
-    expect(res).toBe("<pre><code>• literal bullet\n3. literal number\n</code></pre>");
-    expect(chunks).toBe(res);
+    expect(res).toBe(html);
+    expect(chunks).toBe(html);
   });
 
   it("does not treat single pipe as spoiler", () => {

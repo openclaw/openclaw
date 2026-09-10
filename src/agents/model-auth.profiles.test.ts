@@ -9,8 +9,11 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { clearAuthProfileMigrationRequired } from "./auth-profiles/legacy-source-diagnostic.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { clearAuthProfileMigrationDiagnostics } from "./auth-profiles/legacy-source-diagnostic.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "./auth-profiles/runtime-snapshots.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
@@ -119,26 +122,6 @@ vi.mock("../plugins/setup-registry.js", async () => {
     },
   };
 });
-
-vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderAuthAliasMap: () => ({}),
-  resolveProviderIdForAuth: (provider: string) => {
-    const normalized = provider.trim().toLowerCase();
-    if (normalized === "modelstudio" || normalized === "qwencloud") {
-      return "qwen";
-    }
-    if (normalized === "z.ai" || normalized === "z-ai") {
-      return "zai";
-    }
-    if (normalized === "opencode-go-auth") {
-      return "opencode-go";
-    }
-    if (normalized === "bedrock" || normalized === "aws-bedrock") {
-      return "amazon-bedrock";
-    }
-    return normalized;
-  },
-}));
 
 vi.mock("./model-auth-env-vars.js", () => {
   // Workspace-provided auth evidence is only trusted when the plugin is in the
@@ -2072,6 +2055,102 @@ describe("getApiKeyForModelCore", () => {
 });
 
 describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID reference", () => {
+  it.each(["cold", "shared", "local", "both", "invalid persisted"])(
+    "isolates legacy migration to its providers with %s snapshots",
+    async (snapshot) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-provider-migration-" },
+        async (state) => {
+          const agentDir = state.agentDir("worker");
+          await fs.mkdir(agentDir, { recursive: true });
+          const legacyPath = path.join(agentDir, "auth-profiles.json");
+          const legacyBytes = JSON.stringify({
+            version: 1,
+            profiles: {
+              "anthropic:default": { type: "api_key", provider: "anthropic", key: "legacy-key" },
+            },
+          });
+          await fs.writeFile(legacyPath, legacyBytes);
+          const persistedProfiles =
+            snapshot === "invalid persisted"
+              ? { "invalid:default": { type: "invalid", provider: "invalid" } }
+              : {};
+          writePersistedAuthProfileStoreRaw({ version: 1, profiles: persistedProfiles }, agentDir);
+          replaceRuntimeAuthProfileStoreSnapshots([
+            ...(snapshot === "shared" || snapshot === "both"
+              ? [{ store: { version: 1, profiles: {} } }]
+              : []),
+            ...(snapshot === "local" || snapshot === "both"
+              ? [{ agentDir, store: { version: 1, profiles: {} } }]
+              : []),
+          ]);
+          const cfg: OpenClawConfig = {
+            models: {
+              providers: {
+                litellm: {
+                  baseUrl: "https://litellm.example.test/v1",
+                  apiKey: "litellm-key",
+                  models: [],
+                },
+                anthropic: {
+                  baseUrl: "https://anthropic.example.test/v1",
+                  apiKey: "fallback-key",
+                  models: [],
+                },
+              },
+            },
+          };
+          try {
+            for (const store of [undefined, { version: 1, profiles: {} }]) {
+              await expect(
+                resolveApiKeyForProviderCore({ provider: "litellm", agentDir, cfg, store }),
+              ).resolves.toMatchObject({ apiKey: "litellm-key" });
+              await expect(
+                resolveApiKeyForProviderCore({ provider: "anthropic", agentDir, cfg, store }),
+              ).rejects.toMatchObject({
+                code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+                affectedProviders: ["anthropic"],
+                message: expect.stringContaining(
+                  "affected providers: anthropic; run openclaw doctor --fix",
+                ),
+              });
+            }
+            expect(await fs.readFile(legacyPath, "utf8")).toBe(legacyBytes);
+            expect(inspectPersistedAuthProfileStoreRaw(agentDir)).toMatchObject({
+              status: "readable",
+              raw: { profiles: persistedProfiles },
+            });
+            await fs.writeFile(
+              legacyPath,
+              JSON.stringify({
+                version: 1,
+                profiles: {
+                  "nvidia:default": { type: "api_key", provider: "nvidia", key: "new-legacy-key" },
+                },
+              }),
+            );
+            for (const removeSource of [false, true]) {
+              if (removeSource) {
+                await fs.rm(legacyPath);
+              }
+              await expect(
+                resolveApiKeyForProviderCore({ provider: "litellm", agentDir, cfg }),
+              ).resolves.toMatchObject({ apiKey: "litellm-key" });
+              for (const provider of ["anthropic", "nvidia"]) {
+                await expect(
+                  resolveApiKeyForProviderCore({ provider, agentDir, cfg }),
+                ).rejects.toMatchObject({ affectedProviders: ["anthropic", "nvidia"] });
+              }
+            }
+          } finally {
+            clearAuthProfileMigrationDiagnostics();
+            clearRuntimeAuthProfileStoreSnapshots();
+          }
+        },
+      );
+    },
+  );
+
   const resolvers = [
     { name: "general provider auth", resolveAuth: resolveApiKeyForProviderCore },
     { name: "provider-entry auth", resolveAuth: resolveProviderEntryApiKeyAuth },
@@ -2111,7 +2190,7 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
                   },
                 },
               },
-            }).finally(() => clearAuthProfileMigrationRequired(agentDir)),
+            }).finally(() => clearAuthProfileMigrationDiagnostics()),
           ).rejects.toMatchObject({
             code: "AUTH_PROFILE_MIGRATION_REQUIRED",
             action: "openclaw doctor --fix",

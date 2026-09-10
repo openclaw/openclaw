@@ -1,8 +1,13 @@
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  normalizeOpenAIServiceTier,
+  supportsOpenAIResponsesFastMode,
+} from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelApi,
   ModelProviderConfig,
+  ProviderFastModePolicyContext,
   ProviderModelRouteCandidate,
   ProviderModelRouteResolution,
   ProviderModelRouteSource,
@@ -27,6 +32,16 @@ import {
 } from "./model-route-contract.js";
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
+
+export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
+  if (!ctx.api || !ctx.baseUrl || ctx.runtimeId !== "openclaw") {
+    return undefined;
+  }
+  return (
+    normalizeOpenAIServiceTier(ctx.params?.serviceTier ?? ctx.params?.service_tier) === undefined &&
+    supportsOpenAIResponsesFastMode(ctx)
+  );
+}
 
 const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_COMPLETIONS_API = "openai-completions";

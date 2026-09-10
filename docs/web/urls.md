@@ -398,53 +398,59 @@ With `gateway.controlUi.basePath: "/openclaw"`, use
 This table lists every Control UI application route. A dash means the route has
 no route-specific URL parameters.
 
-| Page                | Canonical path                  | Aliases                   | Parameters or dynamic forms                                       |
-| ------------------- | ------------------------------- | ------------------------- | ----------------------------------------------------------------- |
-| Chat                | `/chat`                         | -                         | Key-backed session forms above; `?draft=<text>`                   |
-| Dashboard           | `/dashboard`                    | -                         | Key-backed session forms above; `?draft=<text>`                   |
-| Beam transcript     | `/beam/<title>-<beam-id>`       | `/beam/<beam-id>`         | Optional title slug and 12-32 lowercase hexadecimal id characters |
-| Dashboards          | `/dashboards`                   | -                         | -                                                                 |
-| Ask OpenClaw        | `/custodian`                    | -                         | `?intent=new-agent`, `?onboarding=1`                              |
-| New session         | `/new`                          | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                        |
-| Activity            | `/activity`                     | -                         | `?view=run&run=<run-id>`, `?view=run&execution=<execution-id>`    |
-| Person activity     | `/activity/<name>-<profile-id>` | -                         | Optional name slug and 8-32 lowercase hexadecimal id characters   |
-| Apps                | `/apps`                         | -                         | -                                                                 |
-| Portals             | `/portals`                      | -                         | -                                                                 |
-| Agents              | `/settings/agents`              | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`                            |
-| Channels            | `/settings/channels`            | `/channels`               | Shared settings parameters below                                  |
-| Connection          | `/settings/connection`          | -                         | Shared settings parameters below                                  |
-| Legacy General      | `/settings/general`             | `/config`                 | Redirects to Appearance → Language                                |
-| Profile             | `/settings/profile`             | `/profile`                | Shared settings parameters below                                  |
-| Communications      | `/settings/communications`      | `/communications`         | Shared settings parameters below                                  |
-| Appearance          | `/settings/appearance`          | `/appearance`             | Shared settings parameters below                                  |
-| Notifications       | `/settings/notifications`       | -                         | Shared settings parameters below                                  |
-| Security            | `/settings/security`            | -                         | Shared settings parameters below                                  |
-| Secrets             | `/settings/secrets`             | -                         | Shared settings parameters below                                  |
-| Advanced            | `/settings/advanced`            | -                         | Shared settings parameters below                                  |
-| Approvals           | `/settings/approvals`           | -                         | Shared settings parameters below                                  |
-| Automation settings | `/settings/automation`          | `/automation`             | Shared settings parameters below                                  |
-| MCP                 | `/settings/mcp`                 | `/mcp`                    | Shared settings parameters below                                  |
-| Memory              | `/settings/memory`              | -                         | `/settings/memory/memories\|dreams\|settings`                     |
-| Infrastructure      | `/settings/infrastructure`      | `/infrastructure`         | Shared settings parameters below                                  |
-| Labs                | `/settings/labs`                | -                         | Shared settings parameters below                                  |
-| About               | `/settings/about`               | -                         | Shared settings parameters below                                  |
-| AI and agents       | `/settings/ai-agents`           | `/ai-agents`              | Shared settings parameters below                                  |
-| Model setup         | `/settings/model-setup`         | `/model-setup`            | `?firstRun=1`                                                     |
-| Model providers     | `/settings/model-providers`     | `/model-providers`        | Shared settings parameters below                                  |
-| Import memory       | `/memory-import`                | `/settings/memory-import` | -                                                                 |
-| Workboard           | `/workboard`                    | -                         | `/workboard/<boardId>`                                            |
-| Worktrees           | `/worktrees`                    | `/settings/worktrees`     | -                                                                 |
-| Sessions            | `/sessions`                     | `/settings/sessions`      | `?session=<sessionKey>`, `?status=archived\|all`                  |
-| Usage               | `/usage`                        | -                         | -                                                                 |
-| Debug               | `/debug`                        | -                         | -                                                                 |
-| Logs                | `/logs`                         | -                         | -                                                                 |
-| Skill Workshop      | `/skills/workshop`              | -                         | -                                                                 |
-| Skills              | `/skills`                       | -                         | -                                                                 |
-| Plugins             | `/settings/plugins`             | -                         | `/settings/plugins/discover`                                      |
-| Automations         | `/automations`                  | `/cron`                   | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                        |
-| Tasks               | `/tasks`                        | -                         | -                                                                 |
-| Devices             | `/settings/devices`             | `/nodes`                  | Shared settings parameters below                                  |
-| Plugin tab host     | `/plugin`                       | -                         | `?plugin=<pluginId>&id=<tabId>`                                   |
+| Page                | Canonical path                                 | Aliases                   | Parameters or dynamic forms                                                       |
+| ------------------- | ---------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------- |
+| Chat                | `/chat`                                        | -                         | Key-backed session forms above; `?draft=<text>`                                   |
+| Dashboard           | `/dashboard`                                   | -                         | Key-backed session forms above; `?draft=<text>`                                   |
+| Beam transcript     | `/beam/<title>-<beam-id>`                      | `/beam/<beam-id>`         | Optional title slug and 12-32 lowercase hexadecimal id characters                 |
+| Dashboards          | `/dashboards`                                  | -                         | -                                                                                 |
+| Ask OpenClaw        | `/custodian`                                   | -                         | `?intent=new-agent`, `?onboarding=1`                                              |
+| New session         | `/new`                                         | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                                        |
+| Activity            | `/activity`                                    | -                         | `?view=run&run=<run-id>`, `?view=run&execution=<execution-id>`                    |
+| Person activity     | `/activity/<name>-<profile-id>`                | -                         | Optional name slug and 8-32 lowercase hexadecimal id characters                   |
+| Apps                | `/apps`                                        | -                         | -                                                                                 |
+| Portals             | `/portals`                                     | -                         | -                                                                                 |
+| Agents              | `/settings/agents`                             | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`                                            |
+| Channels            | `/settings/channels`                           | `/channels`               | Shared settings parameters below                                                  |
+| Connection          | `/settings/connection`                         | -                         | Shared settings parameters below                                                  |
+| Legacy General      | `/settings/general`                            | `/config`                 | Redirects to Appearance → Language                                                |
+| Profile             | `/settings/profile`                            | `/profile`                | Shared settings parameters below                                                  |
+| Communications      | `/settings/communications`                     | `/communications`         | Shared settings parameters below                                                  |
+| Appearance          | `/settings/appearance`                         | `/appearance`             | Shared settings parameters below                                                  |
+| Notifications       | `/settings/notifications`                      | -                         | Shared settings parameters below                                                  |
+| Security            | `/settings/security`                           | -                         | Shared settings parameters below                                                  |
+| Secrets             | `/settings/secrets`                            | -                         | Shared settings parameters below                                                  |
+| Advanced            | `/settings/advanced`                           | -                         | Shared settings parameters below                                                  |
+| Approvals           | `/settings/approvals`                          | -                         | Shared settings parameters below                                                  |
+| Automation settings | `/settings/automation`                         | `/automation`             | Shared settings parameters below                                                  |
+| MCP                 | `/settings/mcp`                                | `/mcp`                    | Shared settings parameters below                                                  |
+| Memory              | `/settings/memory`                             | -                         | `/settings/memory/memories\|dreams\|settings`                                     |
+| Infrastructure      | `/settings/infrastructure`                     | `/infrastructure`         | Shared settings parameters below                                                  |
+| Labs                | `/settings/labs`                               | -                         | Shared settings parameters below                                                  |
+| About               | `/settings/about`                              | -                         | Shared settings parameters below                                                  |
+| AI and agents       | `/settings/ai-agents`                          | `/ai-agents`              | Shared settings parameters below                                                  |
+| Model setup         | `/settings/model-setup`                        | `/model-setup`            | `?firstRun=1`                                                                     |
+| Model providers     | `/settings/model-providers`                    | `/model-providers`        | Shared settings parameters below                                                  |
+| Import memory       | `/memory-import`                               | `/settings/memory-import` | -                                                                                 |
+| Workboard           | `/workboard`                                   | -                         | `/workboard/<boardId>`                                                            |
+| Worktrees           | `/worktrees`                                   | `/settings/worktrees`     | -                                                                                 |
+| Sessions            | `/sessions`                                    | `/settings/sessions`      | `?session=<sessionKey>`, `?status=archived\|all`                                  |
+| Usage               | `/usage`                                       | -                         | -                                                                                 |
+| Debug               | `/debug`                                       | -                         | -                                                                                 |
+| Logs                | `/logs`                                        | -                         | -                                                                                 |
+| Skill Workshop      | `/skills/workshop`                             | -                         | -                                                                                 |
+| Skills              | `/skills`                                      | -                         | -                                                                                 |
+| Plugins             | `/settings/plugins`                            | -                         | `/settings/plugins/discover`                                                      |
+| Automations         | `/automations`                                 | `/cron`                   | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                                        |
+| Tasks               | `/tasks`                                       | -                         | -                                                                                 |
+| Devices             | `/settings/devices`                            | `/nodes`                  | Shared settings parameters below                                                  |
+| Plugin tab host     | `/<slug>` when advertised; `/plugin` otherwise | -                         | Generic host: `?plugin=<pluginId>&id=<tabId>`; tab parameters: `?p.<key>=<value>` |
+
+Once plugin tabs are known, a generic `/plugin?plugin=<pluginId>&id=<tabId>` link
+for a tab with an available slug is replaced once in browser history with
+`/<slug>`, preserving `p.*` parameters and the fragment. Tabs without an available
+slug keep the generic URL. Both forms mount the same plugin page inside the
+Control UI shell; slugs do not create plugin HTTP routes.
 
 Automation links open the exact job independently of the current list filters or
 loaded page. Adding `run` opens its run history and highlights the matching loaded

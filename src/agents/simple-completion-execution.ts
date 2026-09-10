@@ -13,6 +13,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   bindModelLlmRuntime,
+  getModelCompletionOwner,
   getModelCompletionTransport,
   getModelLlmRuntime,
 } from "../llm/model-runtime-binding.js";
@@ -34,14 +35,34 @@ type SimpleCompletionModelOptions = {
   signal?: AbortSignal;
 };
 
-export async function completeWithPreparedSimpleCompletionModel(params: {
+type PreparedCompletionParams = {
   assertCurrent?: () => void;
   model: Model;
   auth: ResolvedProviderAuth;
   context: Parameters<typeof completeSimple>[1];
   cfg?: OpenClawConfig;
   options?: SimpleCompletionModelOptions;
-}): Promise<AssistantMessage> {
+};
+
+export async function completeWithPreparedSimpleCompletionModel(
+  params: PreparedCompletionParams,
+): Promise<AssistantMessage> {
+  const owner = getModelCompletionOwner(params.model);
+  if (!owner) {
+    return await completePreparedModel(params);
+  }
+  return await owner.run(() =>
+    completePreparedModel({
+      ...params,
+      assertCurrent: () => {
+        owner.assertCurrent();
+        params.assertCurrent?.();
+      },
+    }),
+  );
+}
+
+async function completePreparedModel(params: PreparedCompletionParams): Promise<AssistantMessage> {
   const runtime = getModelLlmRuntime(params.model);
   let completionModel =
     getModelCompletionTransport(params.model) ??

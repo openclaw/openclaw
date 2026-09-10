@@ -9,13 +9,11 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionParticipantIdentity } from "../../config/sessions/session-participant-identity.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
-import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -51,7 +49,6 @@ const createReplyMediaPathNormalizerMock = vi.fn();
 const runSessionCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const executeAgentTurnMock = vi.fn();
-const prepareGitCoauthorAttributionMock = vi.fn();
 const resetReplyRunSessionMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 
@@ -99,17 +96,6 @@ vi.mock("./agent-runner-execution.js", async () => {
   return {
     ...actual,
     executeAgentTurn: (...args: unknown[]) => executeAgentTurnMock(...args),
-  };
-});
-
-vi.mock("../../agents/git-coauthor-attribution.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/git-coauthor-attribution.js")>(
-    "../../agents/git-coauthor-attribution.js",
-  );
-  return {
-    ...actual,
-    prepareGitCoauthorAttribution: (...args: unknown[]) =>
-      prepareGitCoauthorAttributionMock(...args),
   };
 });
 
@@ -256,7 +242,6 @@ describe("runReplyAgent runtime config", () => {
     runSessionCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
     executeAgentTurnMock.mockReset();
-    prepareGitCoauthorAttributionMock.mockReset();
     resetReplyRunSessionMock.mockReset();
     enqueueFollowupRunMock.mockReset();
 
@@ -273,7 +258,6 @@ describe("runReplyAgent runtime config", () => {
       runId: "runtime-config-test",
       outcome: { kind: "rejected", payload: { text: "main reply" } },
     });
-    prepareGitCoauthorAttributionMock.mockReturnValue(undefined);
     resetReplyRunSessionMock.mockResolvedValue(false);
   });
 
@@ -346,70 +330,6 @@ describe("runReplyAgent runtime config", () => {
     expect(memoryCall.sessionKey).toBe("agent:main:main");
     expect(memoryCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
   });
-
-  it.each([
-    { identity: { type: "profile", id: "profile-ada" }, expectedProfileId: "profile-ada" },
-    {
-      identity: {
-        type: "remote",
-        pluginId: "slack",
-        domain: "workspace",
-        idKind: "user",
-        id: "profile-ada",
-      },
-      expectedProfileId: undefined,
-    },
-    { identity: undefined, expectedProfileId: undefined },
-  ] satisfies Array<{
-    identity: SessionParticipantIdentity | undefined;
-    expectedProfileId: string | undefined;
-  }>)(
-    "takes co-author context from accepted input $identity, not the session creator",
-    async ({ identity, expectedProfileId }) => {
-      const attribution =
-        "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
-      prepareGitCoauthorAttributionMock.mockImplementation(
-        (params: { currentProfileId?: string }) =>
-          params.currentProfileId === "profile-ada" ? attribution : undefined,
-      );
-      runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
-      await withTestDir({ prefix: "openclaw-coauthor-input-" }, async (tempDir) => {
-        const storePath = join(tempDir, "sessions.json");
-        const sessionKey = "agent:main:chat:attribution";
-        const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-        const { replyParams } = createDirectRuntimeReplyParams({
-          shouldFollowup: false,
-          isActive: false,
-        });
-        replyParams.sessionKey = sessionKey;
-        replyParams.storePath = storePath;
-        replyParams.sessionEntry = sessionEntry;
-        replyParams.sessionStore = { [sessionKey]: sessionEntry };
-        replyParams.sessionCtx.SessionCreation = {
-          via: "operator",
-          actor: { type: "human", source: "profile", id: "profile-creator" },
-        };
-        if (identity) {
-          prepareSessionParticipantInput(replyParams.sessionCtx, identity, 1);
-        }
-        await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-        await runReplyAgent(replyParams);
-        expect(prepareGitCoauthorAttributionMock).toHaveBeenLastCalledWith({
-          agentId: "main",
-          config: freshCfg,
-          currentProfileId: expectedProfileId,
-          sessionKey,
-          storePath,
-        });
-        const call = executeAgentTurnMock.mock.calls.at(-1)?.[0];
-        if (expectedProfileId) {
-          expect(call).toMatchObject({ opts: { gitCoauthorAttribution: attribution } });
-        } else {
-          expect(call).not.toHaveProperty("opts.gitCoauthorAttribution");
-        }
-      });
-    },
-  );
 
   it("continues the main reply after a recorded memory-flush failure", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({

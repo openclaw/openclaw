@@ -264,6 +264,13 @@ effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
 applied through launch environment or staged configuration; the same field is
 available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
+`resolveExecutionArgs(ctx)` also receives optional `ctx.fastMode`, the effective
+boolean for this invocation. Core resolves automatic mode after CLI and process
+scope admission and backend preparation, so elapsed waits count toward its cutoff. Explicit on
+and off remain unchanged. The field follows the session, agent, and model fast-mode
+settings; backends may map it to their native arguments or ignore it. A spawned
+process keeps that decision for the invocation; it does not receive raw `"auto"`.
+
 `prepareExecution(ctx)` may also return an optional `execute` transport when a
 backend owns the installed CLI's protocol or SDK integration. The transport
 receives the exact prepared command, arguments, optional `argv0`, environment,

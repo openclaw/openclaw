@@ -90,6 +90,7 @@ describe("anthropic provider replay hooks", () => {
     if (!backend) {
       throw new Error("Expected claude-cli backend");
     }
+    expect(backend.modelProvider).toBe("anthropic");
     expect(backend.bundleMcp).toBe(true);
     expectFields(backend.config, {
       command: "claude",

@@ -225,6 +225,8 @@ struct OpenClawTypographyTests {
         #expect(gatewayProblem.contains("Text(\"Connection problem\")"))
         #expect(gatewayProblem.contains("Text(\"Copy request ID\")"))
         #expect(gatewayProblem.contains("Text(\"Copy command\")"))
+        #expect(gatewayProblem.contains("? \"Set up Tailscale\" : \"Details\""))
+        #expect(gatewayProblem.contains("onSecondaryAction: self.secondaryAction"))
         #expect(gatewayProblem.contains(".font(OpenClawType.subheadSemiBold)"))
 
         #expect(onboardingSteps.contains("title: \"Connect Gateway\""))

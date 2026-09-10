@@ -1,6 +1,7 @@
 const GITHUB_URL_PREFIX = "https://github.com/";
 
 export const GITHUB_HOVERCARD_OPEN_DELAY_MS = 250;
+export const GITHUB_HOVERCARD_PROVIDER_TAG = "openclaw-github-link-hovercard-provider";
 
 type GitHubItemTarget = {
   kind: "issue" | "pull";

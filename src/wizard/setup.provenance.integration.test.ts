@@ -48,7 +48,7 @@ vi.mock("./setup.gateway-config.js", () => ({
   },
 }));
 vi.mock("./setup.migration-import.js", () => ({
-  detectSetupMigrationSources: async () => [],
+  detectSetupMigrationSources: async () => ({ detections: [], providerDescriptors: [] }),
   listSetupMigrationOptions: async () => [],
   runSetupMigrationImport: vi.fn(),
 }));

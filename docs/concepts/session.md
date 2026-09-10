@@ -309,6 +309,10 @@ until physical usage exceeds `maxDiskBytes`; disk-budget cleanup may then delete
 the oldest cap archives after cheaper artifacts and unreferenced history are
 exhausted. Sessions without a recorded archive reason remain protected.
 
+After skipping a history generation or archived session, disk-budget cleanup
+rechecks physical usage before considering another deletion. A measurement
+failure stops the sweep.
+
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with
 `openclaw sessions cleanup --dry-run --fix-dm-scope`. Applying the same flag
@@ -343,3 +347,4 @@ Preview any maintenance run with `openclaw sessions cleanup --dry-run`.
 - [Session pruning](/concepts/session-pruning)
 - [Session tools](/concepts/session-tool)
 - [Command queue](/concepts/queue)
+- [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) - per-agent sandbox and tool restrictions, including session visibility

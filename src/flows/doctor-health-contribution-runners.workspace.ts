@@ -40,7 +40,7 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     return;
   }
   const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
-  const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
+  const { readPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
   const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
     await import("../agents/model-selection.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
@@ -54,7 +54,7 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await readPreparedModelCatalog({
     config: ctx.cfg,
     readOnly: true,
     providerDiscoveryProviderIds: [],

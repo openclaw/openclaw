@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
-openclaw_resolve_frozen_core_harness_capabilities "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
+openclaw_resolve_frozen_mcp_code_mode_contract "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-mcp-code-mode-gateway-e2e" OPENCLAW_IMAGE)"
 PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_MCP_CODE_MODE_GATEWAY_PORT 18789)"

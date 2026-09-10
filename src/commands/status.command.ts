@@ -13,6 +13,7 @@ import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { collectNodeRuntimeFindings } from "./node-runtime-diagnostics.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
@@ -108,6 +109,12 @@ export async function statusCommand(
   runtime: RuntimeEnv,
 ) {
   assertStatusUsageAgentScope(opts);
+  for (const finding of await collectNodeRuntimeFindings()) {
+    const write = opts.json ? runtime.error : runtime.log;
+    write(
+      `[${finding.severity}] ${finding.message}${finding.fixHint ? `\n${finding.fixHint}` : ""}`,
+    );
+  }
   if (opts.all && !opts.json) {
     // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
     await statusAllModuleLoader

@@ -3,19 +3,12 @@ import {
   INTERNAL_PLUGINS_PATH_PARAM,
   pathForPluginsHubTab,
   pluginsHubTabFromPath,
+  restoreBridgedRouteLocation,
   type PluginsHubRouteTab,
 } from "../../app-route-paths.ts";
 
 export function pluginsRouteLocation(location: RouteLocation): RouteLocation {
-  const searchParams = new URLSearchParams(location.search);
-  const pathname = searchParams.get(INTERNAL_PLUGINS_PATH_PARAM) ?? location.pathname;
-  searchParams.delete(INTERNAL_PLUGINS_PATH_PARAM);
-  const search = searchParams.toString();
-  return {
-    pathname,
-    search: search ? `?${search}` : "",
-    hash: location.hash,
-  };
+  return restoreBridgedRouteLocation(location, INTERNAL_PLUGINS_PATH_PARAM);
 }
 
 export function pluginsHubTabForRoute(location: RouteLocation, basePath = ""): PluginsHubRouteTab {

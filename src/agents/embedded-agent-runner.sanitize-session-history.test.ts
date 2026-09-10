@@ -24,7 +24,7 @@ import {
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
-import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
+import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
@@ -404,12 +404,7 @@ describe("sanitizeSessionHistory", () => {
     const sessionManager = makeInMemorySessionManager(sessionEntries);
 
     const result = await sanitizeSessionHistory({
-      messages: castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "hello from previous turn" }],
-        },
-      ]),
+      messages: castAgentMessages([textAssistant("hello from previous turn")]),
       modelApi: "google-generative-ai",
       provider: "google-vertex",
       sessionManager,
@@ -485,12 +480,7 @@ describe("sanitizeSessionHistory", () => {
   it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {
     const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "hello from previous turn" }],
-      },
-    ]);
+    const messages = castAgentMessages([textAssistant("hello from previous turn")]);
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -583,10 +573,7 @@ describe("sanitizeSessionHistory", () => {
     const assistant = await getSingleAssistantUsage(
       castAgentMessages([
         { role: "user", content: "question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "answer without usage" }],
-        },
+        textAssistant("answer without usage"),
       ]),
     );
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Openclaw Npm Postpublish Verify script supports OpenClaw repository automation.
 
-import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -26,6 +26,7 @@ import {
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
+import { verifyNpmRegistrySignatures } from "./lib/npm-registry-signatures.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   comparePackageDistInventory,
@@ -260,50 +261,6 @@ type FetchRegistryJsonOptions = {
   maxBodyBytes?: number;
   timeoutMs?: number;
 };
-
-export function verifyNpmRegistrySignatures(params: {
-  integrity: string;
-  keys: NpmRegistryKey[];
-  packageName: string;
-  signatures: NpmRegistrySignature[];
-  version: string;
-}): void {
-  if (!params.integrity.startsWith("sha512-")) {
-    throw new Error(`npm registry integrity is missing a sha512 digest for ${params.packageName}.`);
-  }
-  if (params.signatures.length === 0) {
-    throw new Error(
-      `npm registry returned no signatures for ${params.packageName}@${params.version}.`,
-    );
-  }
-
-  const payload = `${params.packageName}@${params.version}:${params.integrity}`;
-  for (const signature of params.signatures) {
-    const key = params.keys.find((candidate) => candidate.keyid === signature.keyid);
-    if (!key) {
-      continue;
-    }
-    const publicKey = createPublicKey({
-      key: Buffer.from(key.key, "base64"),
-      format: "der",
-      type: "spki",
-    });
-    if (
-      verifySignature(
-        "sha256",
-        Buffer.from(payload, "utf8"),
-        publicKey,
-        Buffer.from(signature.sig, "base64"),
-      )
-    ) {
-      return;
-    }
-  }
-
-  throw new Error(
-    `npm registry signatures did not verify for ${params.packageName}@${params.version}.`,
-  );
-}
 
 function resolveNpmProvenanceVerificationPolicy(
   statement: NpmProvenanceStatement,

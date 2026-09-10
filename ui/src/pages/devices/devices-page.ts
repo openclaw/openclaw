@@ -25,6 +25,7 @@ import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { presenceConnectivitySignature } from "../../lib/nodes/inventory.ts";
 import {
   approveDevicePairing,
   approveNodePairingRequest,
@@ -38,8 +39,7 @@ import {
   updateExecApprovalsFormValue,
   type ExecApprovalsTarget,
   type DevicesPageDataState,
-} from "../../lib/nodes/index.ts";
-import { presenceConnectivitySignature } from "../../lib/nodes/inventory.ts";
+} from "../../lib/nodes/page-operations.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,

@@ -10,7 +10,7 @@ import { createAssistantErrorTranscript } from "./assistant-error-transcript.js"
 import { buildExecForegroundResult } from "./bash-tools.exec-support.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
-import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
+import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
@@ -285,12 +285,7 @@ describe("installSessionToolResultGuard", () => {
         isError: false,
       }),
     );
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "after tools" }],
-      }),
-    );
+    sm.appendMessage(asAppendMessage(textAssistant("after tools")));
 
     const messages = expectPersistedRoles(sm, [
       "assistant", // tool calls

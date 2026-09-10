@@ -7,10 +7,9 @@ import { waitForFile } from "../../test/helpers/process-wait.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
 import { writeTriageUpdateFailure } from "../commands/triage-update.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
 import { writeRestartSentinel } from "./restart-sentinel.js";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import {
@@ -22,6 +21,7 @@ import {
 import {
   createManagedServiceCancellationPreload,
   createManagedServiceLaunchdClockPreload,
+  prepareManagedServiceTriageClockPreload,
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
   type ManagedServiceCommandTiming,
@@ -38,8 +38,6 @@ import { prepareManagedServiceRuntimeFixture } from "./update-managed-service-ha
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
-type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
-
 export async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -49,19 +47,13 @@ export async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): unknown {
-  const { db } = openOpenClawStateDatabase({ env });
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("gateway_restart_sentinel")
-      .select(["version", "payload_json", "updated_at_ms"])
-      .where("sentinel_key", "=", key),
-  );
-  return row
-    ? { version: row.version, payload: JSON.parse(row.payload_json), revision: row.updated_at_ms }
-    : null;
+// The JSON shadow can retain fields that the Gateway's typed reader cannot see.
+function readRestartSentinelPayload(env: NodeJS.ProcessEnv): unknown {
+  const current = readRestartSentinelRowSync(openOpenClawStateDatabase({ env }).db);
+  if (current.kind === "invalid") {
+    throw new Error("Expected a valid typed restart sentinel fixture");
+  }
+  return current.kind === "valid" ? current.sentinel : null;
 }
 
 export function createManagedServiceManagerBoundary({
@@ -329,7 +321,8 @@ export function createManagedServiceManagerBoundary({
             ? {}
             : { parentExitDeadlineAt: Date.now() + options.systemdHandoffDeadlineMs }),
           ...commandFixture,
-          ...(options?.recoveryHang || options?.triageHang ? { recoveryTimeoutMs: 1000 } : {}),
+          // Triage hangs must reach the diagnostic cap without timing out healthy recovery.
+          ...(options?.recoveryHang ? { recoveryTimeoutMs: 1000 } : {}),
           recovery: { serviceRestartSafe: true, version: "1.0.0" },
           recoveryModulePath,
           commandArgv: [process.execPath, "-e", updaterScript],
@@ -355,6 +348,15 @@ export function createManagedServiceManagerBoundary({
       let helperEnv = options?.repair
         ? await prepareManagedRepairSpawnEnv(root, childEnv)
         : childEnv;
+      const triageDeadlinePath = path.join(root, "triage-deadline.json");
+      if (options?.triageHang) {
+        helperEnv = await prepareManagedServiceTriageClockPreload(
+          { root, scriptPath, statePath },
+          commandFixture.triageCommandArgv,
+          String(generated.triageInputPath),
+          helperEnv,
+        );
+      }
       if (options?.launchdTeardown?.clockEachCommandMs || options?.recoveryClockAdvanceMs) {
         const preloadPath = path.join(root, "launchd-clock-preload.cjs");
         await fs.writeFile(
@@ -670,6 +672,9 @@ export function createManagedServiceManagerBoundary({
         >,
         sentinel: readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
         log: await fs.readFile(String(generated.logPath), "utf8"),
+        ...(options?.triageHang
+          ? { triageDeadline: JSON.parse(await fs.readFile(triageDeadlinePath, "utf8")) }
+          : {}),
         savedFailure,
         sensitiveFilesRemoved: (
           await Promise.all((generated.sensitivePaths as string[]).map(pathExists))

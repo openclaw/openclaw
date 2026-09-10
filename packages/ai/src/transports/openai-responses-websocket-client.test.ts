@@ -276,6 +276,7 @@ async function run(
     sessionId?: string;
     timeoutMs?: number;
     headers?: Record<string, string>;
+    cacheRetention?: "none" | "short";
     observations?: ResponsesPromptObservation[];
     onCompactionRejected?: () => void;
     acceptanceObserver?: (acceptance: ProviderAcceptance) => void;
@@ -288,6 +289,7 @@ async function run(
     reasoningEffort: "low",
     timeoutMs: overrides.timeoutMs,
     headers: overrides.headers,
+    cacheRetention: overrides.cacheRetention,
     onCompactionRejected: overrides.onCompactionRejected,
   };
   if (overrides.acceptanceObserver) {
@@ -355,18 +357,34 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     configureAiTransportHost(initialHost);
   });
 
-  it("reports WebSocket acceptance without fabricated HTTP metadata", async () => {
-    transportState.responseBatches.push([message(completedEvent("resp_accepted", "ok"))]);
-    const acceptanceObserver = vi.fn();
+  it.each([undefined, "short", "none"] as const)(
+    "preserves affinity policy and WebSocket acceptance with %s retention",
+    async (cacheRetention) => {
+      transportState.responseBatches.push([message(completedEvent("resp_accepted", "ok"))]);
+      const acceptanceObserver = vi.fn();
 
-    const result = await run(
-      { messages: [userMessage("hello", 1)], tools: [] },
-      { acceptanceObserver },
-    );
+      const result = await run(
+        { messages: [userMessage("hello", 1)], tools: [] },
+        {
+          acceptanceObserver,
+          cacheRetention,
+          model:
+            cacheRetention === undefined
+              ? model
+              : { ...model, compat: { sendSessionIdHeader: true } },
+        },
+      );
 
-    expect(result.stopReason).toBe("stop");
-    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
-  });
+      expect(result.stopReason).toBe("stop");
+      expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
+      expect(transportState.websocketOptions[0]?.headers?.session_id).toBe(
+        cacheRetention === "short" ? "session-1" : undefined,
+      );
+      expect(transportState.websocketOptions[0]?.headers?.["x-client-request-id"]).toBe(
+        "session-1",
+      );
+    },
+  );
 
   it("closes the WebSocket when acceptance observation fails", async () => {
     transportState.responseBatches.push([message(completedEvent("resp_rejected", "ignored"))]);
@@ -612,7 +630,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     });
     transportState.responseBatches.push([{ type: "error", error: cause }]);
     const response = createOpenAIResponsesWebSocketStream({
-      client: createOpenAIResponsesClient(model, { messages: [], tools: [] }, "test-key"),
+      client: createOpenAIResponsesClient(model, "test-key", {}),
       request: { model: model.id, input: [] },
       mode: "websocket",
     });

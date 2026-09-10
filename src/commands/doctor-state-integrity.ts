@@ -726,7 +726,7 @@ export function detectStateIntegrityHealthIssues(
     ? resolveSessionTranscriptsDirForAgent(agentId, env, homedir)
     : undefined;
   const storePath = agentId
-    ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
+    ? resolveSessionStorePathCore(cfg.session?.store, { agentId, env })
     : undefined;
   const storeDir = storePath ? path.dirname(storePath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
@@ -1472,7 +1472,7 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (!resolvedWorkspaceDir || findGitRoot(resolvedWorkspaceDir)) {
     return null;
   }
-  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
+  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
 }
 
 /** Emits the workspace backup tip when applicable. */

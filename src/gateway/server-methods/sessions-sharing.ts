@@ -19,7 +19,6 @@ import {
 import {
   addSessionMember,
   listSessionMembers,
-  loadCombinedSessionStoreForGatewayCore,
   removeSessionMember,
 } from "../../config/sessions.js";
 import {
@@ -47,6 +46,7 @@ import {
   resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "../session-sharing.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";

@@ -61,6 +61,7 @@ export async function captureManifest(params: {
   manifestHome: string;
   baseCommit: string | null;
   referenceManifestRef: string;
+  baseManifestRef?: string;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -76,7 +77,12 @@ export async function captureManifest(params: {
         params.workspaceDir,
         params.baseCommit ?? "",
         params.baseCommit ? "eligible" : "all",
-        params.referenceManifestRef.slice("sha256:".length),
+        ...new Set(
+          [
+            params.referenceManifestRef,
+            ...(params.baseManifestRef ? [params.baseManifestRef] : []),
+          ].map((ref) => ref.slice("sha256:".length)),
+        ),
         ...(memoMode ? ["memo-v1"] : []),
       ],
       ...(params.hashMemo === undefined

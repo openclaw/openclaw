@@ -10,22 +10,28 @@ import {
   type resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
 import {
-  checkpointCaptureTimeoutMs,
-  WARM_IMAGE_CAPTURE_TIMEOUT_MS,
+  resolveCrabboxCheckpointCaptureTimeoutMs,
+  WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
   WARM_IMAGE_COMMAND_TIMEOUT_MS,
+  WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
 import {
+  createCheckpointCommands,
+  CrabboxCheckpointCreateError,
   parseCheckpointAvailability,
   parseForkedCheckpoint,
   parseCreatedCheckpoint,
+  type CheckpointContext,
+  type MaintenanceContext,
 } from "./crabbox-worker-warm-image-checkpoint.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import {
   assertCrabboxWarmImageMigrationReady,
   crabboxWarmImageCaptureStatus,
   crabboxWarmImageRecoveryHint,
+  CRABBOX_WARM_IMAGE_WAIT_HINT,
   clearCrabboxWarmImageCapture,
-  isCrabboxWarmImageCapturePaused,
+  isCrabboxWarmImageCaptureUncertain,
   openCrabboxWarmImageStore,
   WARM_IMAGE_MAX_ENTRIES,
   WARM_IMAGE_MAX_ALLOCATIONS,
@@ -36,11 +42,7 @@ import {
 } from "./crabbox-worker-warm-image-store.js";
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
-type CheckpointContext = {
-  binary: string;
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
-};
+type RetirementContext = CheckpointContext | MaintenanceContext;
 type LeaseContext = CheckpointContext & {
   id: string;
   provider: string;
@@ -65,12 +67,12 @@ export function createCrabboxWarmImageManager(dependencies: {
   let store: ReturnType<typeof openCrabboxWarmImageStore> | undefined;
   const warned = new Set<string>();
   const openStore = () => (store ??= openCrabboxWarmImageStore());
-  const assertCurrent = (context: CheckpointContext) => {
+  const assertCurrent = (context: RetirementContext) => {
     context.assertCurrent?.();
     context.signal?.throwIfAborted();
   };
-  const warnOnce = (action: string, error: unknown) => {
-    const message = `Crabbox warm image ${action} failed: ${coerceErrorMessage(error)}`;
+  const warnOnce = (action: string, error: unknown, failed = true) => {
+    const message = `Crabbox warm image ${action}${failed ? " failed" : ""}: ${coerceErrorMessage(error)}`;
     if (!warned.has(message)) {
       // Periodic failures can carry changing request IDs; never retain an unbounded log cache.
       if (warned.size >= WARM_IMAGE_MAX_ENTRIES) {
@@ -80,28 +82,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       dependencies.warn(message);
     }
   };
-  const checkpointCommand = async (
-    context: CheckpointContext,
-    action: "create" | "delete" | "fork" | "inspect" | "scrub",
-    args: string[],
-    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
-    input?: string,
-  ): Promise<string> => {
-    assertCurrent(context);
-    const result = await runCrabboxCommand({
-      action: action === "scrub" ? action : `checkpoint ${action}`,
-      args,
-      binary: context.binary,
-      runCommand: dependencies.runCommand,
-      timeoutMs,
-      ...(context.signal ? { signal: context.signal } : {}),
-      ...(input === undefined ? {} : { input }),
-    });
-    if (result.termination !== "exit" || result.code !== 0) {
-      throw crabboxCommandError(action === "scrub" ? action : `checkpoint ${action}`, result);
-    }
-    return result.stdout;
-  };
+  const { checkpointCommand, deleteCheckpoint } = createCheckpointCommands(dependencies.runCommand);
   const sameImage = (left: WarmImageRecord | undefined, right: WarmImageRecord | undefined) =>
     left?.checkpointId === right?.checkpointId && left?.createdAtMs === right?.createdAtMs;
   const pinned = (record: WarmProfileRecord, checkpointId: string) =>
@@ -134,10 +115,10 @@ export function createCrabboxWarmImageManager(dependencies: {
   };
 
   const retireImage = async (
-    context: CheckpointContext,
+    context: RetirementContext,
     key: string,
     record: WarmProfileRecord,
-    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
+    remainingMs: () => number = () => WARM_IMAGE_COMMAND_TIMEOUT_MS,
   ): Promise<void> => {
     const operation = record.operation;
     if (operation?.type !== "retire" || pinned(record, operation.checkpointId)) {
@@ -152,12 +133,9 @@ export function createCrabboxWarmImageManager(dependencies: {
       return;
     }
     try {
-      await checkpointCommand(
-        context,
-        "delete",
-        ["checkpoint", "delete", operation.checkpointId],
-        timeoutMs,
-      );
+      if (!(await deleteCheckpoint(context, operation.checkpointId, remainingMs))) {
+        return;
+      }
     } catch (error) {
       assertCurrent(context);
       if (matches(openStore().lookup(key))) {
@@ -183,10 +161,10 @@ export function createCrabboxWarmImageManager(dependencies: {
   };
 
   const deleteImage = async (
-    context: CheckpointContext,
+    context: RetirementContext,
     key: string,
     record: WarmProfileRecord,
-    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
+    remainingMs: () => number = () => WARM_IMAGE_COMMAND_TIMEOUT_MS,
   ) => {
     if (!record.image || record.operation || pinned(record, record.image.checkpointId)) {
       return;
@@ -202,18 +180,24 @@ export function createCrabboxWarmImageManager(dependencies: {
         JSON.stringify(current) === JSON.stringify(record) ? retiring : undefined,
       )
     ) {
-      await retireImage(context, key, retiring, timeoutMs);
+      await retireImage(context, key, retiring, remainingMs);
     }
   };
 
-  const collectImages = async (context: CheckpointContext, phase: "allocation" | "teardown") => {
+  const collectImages = async (context: RetirementContext, phase: "allocation" | "teardown") => {
     const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
     for (const { key, value } of openStore().entries()) {
       assertCurrent(context);
       const capture = crabboxWarmImageCaptureStatus(key, value);
       if (capture) {
-        if (isCrabboxWarmImageCapturePaused(capture)) {
+        if (isCrabboxWarmImageCaptureUncertain(capture)) {
           warnOnce("capture paused", crabboxWarmImageRecoveryHint(capture.selector));
+        } else if (capture.stale) {
+          warnOnce(
+            `capture ${capture.selector} still pending`,
+            CRABBOX_WARM_IMAGE_WAIT_HINT,
+            false,
+          );
         }
         continue;
       }
@@ -228,7 +212,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (remaining() <= 0) {
         break;
       }
-      await retireImage(context, key, value, remaining());
+      await retireImage(context, key, value, remaining);
       const current = openStore().lookup(key);
       if (
         current?.image &&
@@ -237,7 +221,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         Date.now() - current.image.lastUsedAtMs >= WARM_IMAGE_RETENTION_MS &&
         remaining() > 0
       ) {
-        await deleteImage(context, key, current, remaining());
+        await deleteImage(context, key, current, remaining);
       }
     }
   };
@@ -252,8 +236,8 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (openStore().entries().length < WARM_IMAGE_MAX_ENTRIES) {
         return;
       }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
+      const remaining = () => deadline - Date.now();
+      if (remaining() <= 0) {
         break;
       }
       if (value.image) {
@@ -413,10 +397,13 @@ export function createCrabboxWarmImageManager(dependencies: {
   };
 
   return {
-    maintain: async (context: CheckpointContext) => {
+    maintain: async (context: MaintenanceContext) => {
       assertCurrent(context);
       assertCrabboxWarmImageMigrationReady();
-      await collectImages(context, "teardown");
+      await collectImages(
+        { ...context, binaries: [...new Set(context.binaries)].toSorted() },
+        "teardown",
+      );
     },
     lookupLease,
     markPrepared: (id: string, baseCommit: string) => markPhase(id, "prepared", baseCommit),
@@ -445,7 +432,11 @@ export function createCrabboxWarmImageManager(dependencies: {
     },
 
     async capture(
-      context: LeaseContext & { profile: CrabboxProfile; forkedCheckpointId?: string },
+      context: LeaseContext & {
+        profile: CrabboxProfile;
+        forkedCheckpointId?: string;
+        projectCaptureRequired?: true;
+      },
       prepareSource?: () => Promise<void>,
     ): Promise<boolean> {
       assertCurrent(context);
@@ -489,7 +480,7 @@ export function createCrabboxWarmImageManager(dependencies: {
             // A different publication won after this allocation chose its source. An opaque
             // digest is not a newer-version claim; only that source's borrowers may refresh it.
             if (
-              !runtimeMatches &&
+              (!runtimeMatches || context.projectCaptureRequired) &&
               (owner.choice.kind !== "checkpoint" ||
                 owner.choice.checkpointId !== existing.image.checkpointId)
             ) {
@@ -511,6 +502,7 @@ export function createCrabboxWarmImageManager(dependencies: {
               state !== "missing" &&
               Date.now() - existing.image.createdAtMs < WARM_IMAGE_REFRESH_MS &&
               runtimeMatches &&
+              !context.projectCaptureRequired &&
               (!owner.projectKey || existing.image.baseCommit === owner.baseCommit)
             ) {
               return;
@@ -551,7 +543,7 @@ export function createCrabboxWarmImageManager(dependencies: {
             context,
             "scrub",
             dependencies.runArgs(context),
-            WARM_IMAGE_CAPTURE_TIMEOUT_MS,
+            WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
             SCRUB_WORKER_STATE,
           );
           // A stopped allocation or manual recovery must not start another paid operation.
@@ -583,14 +575,16 @@ export function createCrabboxWarmImageManager(dependencies: {
                 "--mode",
                 "native",
                 // Crabbox owns pending capture recovery; wait for the exact checkpoint
-                // before enrollment. The command deadline still bounds the whole operation.
+                // before enrollment. Reserve command overhead and separate source recovery too.
                 "--wait",
+                "--wait-timeout",
+                `${WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS}ms`,
                 "--json",
                 // Daytona requires explicit permission to stop the scrubbed source for capture.
                 ...(context.provider === "daytona" ? ["--no-reboot=false"] : []),
                 ...(context.provider === "machine0" ? ["--strategy", "image"] : []),
               ],
-              checkpointCaptureTimeoutMs(context.provider),
+              resolveCrabboxCheckpointCaptureTimeoutMs(context.provider),
             ),
             context.id,
           );
@@ -633,9 +627,12 @@ export function createCrabboxWarmImageManager(dependencies: {
             await retireImage(context, key, replacement);
           }
         } catch (error) {
+          const notSubmitted =
+            creating && CrabboxCheckpointCreateError.wasNotSubmitted(error, context);
+          let recoveryRequired = creating;
           if (claimed && key) {
             try {
-              if (creating) {
+              if (creating && !notSubmitted) {
                 openStore().update(key, (current) =>
                   current?.operation?.type === "capture" && current.operation.id === captureId
                     ? { ...current, operation: { ...current.operation, phase: "uncertain" } }
@@ -643,17 +640,20 @@ export function createCrabboxWarmImageManager(dependencies: {
                 );
               } else {
                 clearCrabboxWarmImageCapture(key, captureId);
+                recoveryRequired = false;
               }
             } catch {
               // Keep persisted ownership recoverable; physical lease cleanup still belongs to stop.
             }
           }
-          if (preparing) {
+          // Required project captures must fail before enrollment. Optional teardown
+          // captures can warn and let source deletion complete.
+          if (preparing || (notSubmitted && owner?.projectKey)) {
             throw error;
           }
           warnOnce(
             "capture",
-            creating
+            recoveryRequired
               ? `${coerceErrorMessage(error)}. ${crabboxWarmImageRecoveryHint(captureId)}`
               : error,
           );

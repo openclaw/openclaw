@@ -5,7 +5,6 @@ import {
   readStringParam,
   withNormalizedTimestamp,
 } from "openclaw/plugin-sdk/channel-actions";
-import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -755,7 +754,6 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
-      inspectAccount: adaptScopedAccountAccessor(inspectMattermostAccount),
       isConfigured: isMattermostConfigured,
       describeAccount: describeMattermostAccount,
     },

@@ -3,7 +3,7 @@ import { setImmediate } from "node:timers/promises";
 import { createReadToolDefinition } from "./read.js";
 
 const mode = process.argv[2];
-assert.ok(mode === "line" || mode === "range" || mode === "cursor");
+assert.ok(mode === "line" || mode === "range" || mode === "cursor" || mode === "eof");
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
 const inputUnits = 2 * 1024 * 1024;
@@ -22,7 +22,12 @@ const tool = createReadToolDefinition(process.cwd(), {
       const index = readIndex++ % 8;
       const bytes = Buffer.alloc(inputUnits * 2);
       bytes.fill(Buffer.from([65 + index, 0]));
-      bytes.write(`${line(index)}\n${line(index)}\n${line(index)}\n`, 0, "utf16le");
+      if (mode === "eof") {
+        const tail = `\n${line(index)}`;
+        bytes.write(tail, bytes.length - tail.length * 2, "utf16le");
+      } else {
+        bytes.write(`${line(index)}\n${line(index)}\n${line(index)}\n`, 0, "utf16le");
+      }
       return bytes;
     },
   },
@@ -36,7 +41,7 @@ async function makeResults() {
         `read-${index}`,
         {
           path: "synthetic-large.txt",
-          offset: mode === "range" ? 2 : 1,
+          offset: mode === "range" || mode === "eof" ? 2 : 1,
           limit: mode === "range" ? 2 : 1,
           ...(mode === "cursor" ? { cursor: 10 } : {}),
         },
@@ -68,6 +73,11 @@ for (const [index, result] of results.entries()) {
     mode === "range"
       ? `${line(index)}\n${line(index)}`
       : line(index).slice(mode === "cursor" ? 10 : 0);
+  if (mode === "eof") {
+    assert.deepEqual(result.details, { kind: "text", content: expected });
+    assert.deepEqual(result.content, [{ type: "text", text: expected }]);
+    continue;
+  }
   assert.equal(result.details?.kind, "truncated");
   assert.equal(result.details?.content, expected);
   assert.deepEqual(result.details?.continuation, {

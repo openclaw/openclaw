@@ -15,6 +15,7 @@ import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "../state/openclaw-state-sche
 import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "../state/openclaw-state-schema-v11-retirement.test-support.js";
 import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v12-foldin.test-support.js";
 import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v13-widerow.test-support.js";
+import { removePreparedWorkerOwnershipColumns } from "../state/openclaw-state-schema-v17.test-support.js";
 import { recordAuditEvent } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
@@ -280,14 +281,17 @@ describe("outbound message progress companion", () => {
     const repositoryRoot = process.cwd();
     ensurePinnedReaderCommit(repositoryRoot);
     const projectedDatabase = openOpenClawStateDatabase(database).db;
-    // Only audit rows belong to this proof. Restore the empty binding and Workshop
-    // proposal tables from the immutable reader's schema without inventing a
-    // production downgrade.
+    // Only audit rows belong to this proof. Restore empty unrelated owner tables
+    // for the immutable reader without inventing a production downgrade.
     expect(
       projectedDatabase
         .prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings")
         .get(),
     ).toEqual({ count: 0 });
+    expect(
+      projectedDatabase.prepare("SELECT COUNT(*) AS count FROM worker_environments").get(),
+    ).toEqual({ count: 0 });
+    removePreparedWorkerOwnershipColumns(projectedDatabase);
     const pinnedSchemaDatabase = openNodeSqliteDatabase(":memory:");
     try {
       pinnedSchemaDatabase.exec(

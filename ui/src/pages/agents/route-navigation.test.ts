@@ -15,12 +15,12 @@ function context() {
 }
 
 describe("Agents route navigation", () => {
-  it("pushes agent and panel selections without mutating route state", () => {
+  it.each(["files", "tools"] as const)("preserves the %s panel when switching agents", (panel) => {
     const navigation = context();
 
-    navigateToAgent(navigation, "research", "main", "tools");
+    navigateToAgent(navigation, "research", "main", panel);
     expect(navigation.navigate).toHaveBeenCalledWith("agents", {
-      pathname: "/ui/settings/agents/research/tools",
+      pathname: `/ui/settings/agents/research/${panel}`,
     });
 
     navigateToAgentPanel(navigation, "main", "tools", "memory");
@@ -32,12 +32,12 @@ describe("Agents route navigation", () => {
   it("uses the concise agent path for the default panel and ignores no-op selections", () => {
     const navigation = context();
 
-    navigateToAgent(navigation, "research", "main", "files");
+    navigateToAgent(navigation, "research", "main", "overview");
     expect(navigation.navigate).toHaveBeenCalledWith("agents", {
       pathname: "/ui/settings/agents/research",
     });
-    navigateToAgent(navigation, "main", "main", "files");
-    navigateToAgentPanel(navigation, "main", "files", "files");
+    navigateToAgent(navigation, "main", "main", "overview");
+    navigateToAgentPanel(navigation, "main", "overview", "overview");
     expect(navigation.navigate).toHaveBeenCalledOnce();
   });
 

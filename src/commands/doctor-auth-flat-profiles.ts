@@ -9,8 +9,13 @@ import { readNonBlankString as readNonEmptyString } from "@openclaw/normalizatio
 import { note } from "../../packages/terminal-core/src/note.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
+  coerceLegacyFlatCredential,
+  hasUsableAuthProfileCredential,
+} from "../agents/auth-profiles/legacy-flat-credential.js";
+import {
   clearAuthProfileMigrationDiagnostics,
   listLegacyAuthProfileArchives,
+  readLegacyAuthProfileProviders,
   resolveLegacyOAuthPath,
 } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import {
@@ -217,54 +222,6 @@ function collectLegacyConfigAuthProfileProviderHints(
     }
   }
   return hints;
-}
-
-function inferLegacyCredentialType(
-  record: Record<string, unknown>,
-): AuthProfileCredential["type"] | undefined {
-  const explicit = readNonEmptyString(record.type) ?? readNonEmptyString(record.mode);
-  if (explicit === "api_key" || explicit === "token" || explicit === "oauth") {
-    return explicit;
-  }
-  if (readNonEmptyString(record.key) ?? readNonEmptyString(record.apiKey)) {
-    return "api_key";
-  }
-  if (coerceSecretRef(record.keyRef)) {
-    return "api_key";
-  }
-  if (readNonEmptyString(record.token)) {
-    return "token";
-  }
-  if (coerceSecretRef(record.tokenRef)) {
-    return "token";
-  }
-  if (
-    readNonEmptyString(record.access) &&
-    readNonEmptyString(record.refresh) &&
-    typeof record.expires === "number"
-  ) {
-    return "oauth";
-  }
-  return undefined;
-}
-
-function coerceLegacyFlatCredential(
-  providerId: string,
-  raw: unknown,
-): AuthProfileCredential | null {
-  if (!isRecord(raw)) {
-    return null;
-  }
-  const type = inferLegacyCredentialType(raw);
-  if (!type) {
-    return null;
-  }
-  const provider = readNonEmptyString(raw.provider) ?? providerId;
-  const credential = parseLegacyCredentialEntry({ ...raw, type, provider }, providerId);
-  if (!credential || !hasUsableAuthProfileCredential(credential)) {
-    return null;
-  }
-  return credential;
 }
 
 function coerceLegacyFlatAuthProfileStore(raw: unknown): AuthProfileStore | null {
@@ -476,20 +433,6 @@ function stripImportedConfigAuthProfileCredentials(
     changed = true;
   }
   return changed;
-}
-
-function hasUsableAuthProfileCredential(credential: AuthProfileCredential): boolean {
-  if (credential.type === "api_key") {
-    return Boolean(readNonEmptyString(credential.key) || credential.keyRef);
-  }
-  if (credential.type === "token") {
-    return Boolean(readNonEmptyString(credential.token) || credential.tokenRef);
-  }
-  return (
-    Boolean(readNonEmptyString(credential.access)) &&
-    Boolean(readNonEmptyString(credential.refresh)) &&
-    typeof credential.expires === "number"
-  );
 }
 
 function mergeImportedAuthProfiles(params: {
@@ -971,10 +914,17 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
 
   note(
     [
-      ...detected.map(
-        (candidate) =>
-          `- ${shortenHomePath(candidate.authPath)} / ${shortenHomePath(candidate.statePath)}`,
-      ),
+      ...detected.map((candidate) => {
+        const hasCredentials =
+          fs.existsSync(candidate.authPath) || fs.existsSync(candidate.legacyPath);
+        const providers = readLegacyAuthProfileProviders([
+          { kind: "auth-profiles", path: candidate.authPath },
+          ...(fs.existsSync(candidate.legacyPath)
+            ? [{ kind: "legacy-auth" as const, path: candidate.legacyPath }]
+            : []),
+        ]);
+        return `- ${shortenHomePath(candidate.authPath)} / ${shortenHomePath(candidate.statePath)}${hasCredentials ? ` (affected providers: ${providers?.join(", ") ?? "unknown; provider scope unavailable"})` : ""}`;
+      }),
       ...(hasLegacyOAuth ? [`- ${shortenHomePath(oauthPath)} (shared-main owner)`] : []),
       `- ${formatCliCommand("openclaw doctor --fix")} imports legacy auth profile JSON into SQLite, verifies it, records a receipt, and archives the original bytes.`,
     ].join("\n"),

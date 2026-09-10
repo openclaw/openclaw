@@ -1532,10 +1532,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   justify-items: start;
 }
 
-.lobsterdex__open {
-  text-decoration: none;
-}
-
 .lobsterdex__tooltip {
   display: grid;
   max-width: 230px;

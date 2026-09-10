@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -49,11 +50,7 @@ async function withAdmittedInput(
         stopReason: "stop",
       }),
     );
-    const retained = source.appendMessage({
-      role: "user",
-      content: "Keep the Cedar project receipt.",
-      timestamp: 3,
-    });
+    const retained = source.appendMessage(makeUserMessage("Keep the Cedar project receipt.", 3));
     source.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Cedar receipt is maple-17." }],
@@ -129,11 +126,9 @@ it.each([false, true])(
         }
         checkpoint.sessionManager.branch(first.id);
       }
-      const instruction = checkpoint.sessionManager.appendMessage({
-        role: "user",
-        content: "Checkpoint instruction",
-        timestamp: 5,
-      });
+      const instruction = checkpoint.sessionManager.appendMessage(
+        makeUserMessage("Checkpoint instruction", 5),
+      );
       checkpoint.sessionManager.appendMessage(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "NO_REPLY" }],

@@ -216,12 +216,17 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       sizeBytes: assetSize(fileName),
     },
   });
-  const sectionTitle = (text: string, timestamp: number) => ({
+  const textMessage = (text: string, timestamp: number) => ({
     role: "assistant",
     content: [{ type: "text", text }],
     timestamp,
   });
+  const leadIn = Array.from({ length: 20 }, (_, index) => ({
+    ...textMessage(`Attachment review ${index + 1}.`, baseTime - (20 - index) * 60_000),
+    role: index % 2 === 0 ? "user" : "assistant",
+  }));
   return [
+    ...leadIn,
     {
       role: "assistant",
       content: [
@@ -246,7 +251,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime,
     },
-    sectionTitle("Documents", baseTime + 1),
+    textMessage("Documents", baseTime + 1),
     {
       role: "assistant",
       content: [
@@ -263,7 +268,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 2,
     },
-    sectionTitle("File icon families", baseTime + 3),
+    textMessage("File icon families", baseTime + 3),
     {
       role: "assistant",
       content: [
@@ -278,13 +283,13 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 4,
     },
-    sectionTitle("HTML", baseTime + 5),
+    textMessage("HTML", baseTime + 5),
     {
       role: "assistant",
       content: [documentAttachment("preview.html", "text/html")],
       timestamp: baseTime + 6,
     },
-    sectionTitle("CSV / XLSX", baseTime + 7),
+    textMessage("CSV / XLSX", baseTime + 7),
     {
       role: "assistant",
       content: [
@@ -297,7 +302,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 8,
     },
-    sectionTitle("Before — current generic delivery cards", baseTime + 9),
+    textMessage("Before — current generic delivery cards", baseTime + 9),
     {
       role: "assistant",
       content: [
@@ -314,7 +319,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 10,
     },
-    sectionTitle("After — approved playback and silent fallback", baseTime + 11),
+    textMessage("After — approved playback and silent fallback", baseTime + 11),
     {
       role: "assistant",
       content: [
@@ -361,13 +366,13 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 12,
     },
-    sectionTitle("Archive", baseTime + 13),
+    textMessage("Archive", baseTime + 13),
     {
       role: "assistant",
       content: [documentAttachment("bundle.zip", "application/zip")],
       timestamp: baseTime + 14,
     },
-    sectionTitle("Unavailable / failed / removed", baseTime + 15),
+    textMessage("Unavailable / failed / removed", baseTime + 15),
     {
       role: "assistant",
       content: [

@@ -56,10 +56,10 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 Before changing CI, collect current pressure:
 
 ```bash
-ghx api rate_limit --jq '{core:.resources.core,graphql:.resources.graphql,search:.resources.search,actions_runner_registration:.resources.actions_runner_registration}'
-ghx run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
-ghx run list -R openclaw/clawsweeper --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
-ghx api repos/openclaw/clawsweeper/actions/runs/<run-id>/jobs --paginate --jq '.jobs[] | {id,name,status,conclusion,labels,created_at,started_at,completed_at,runner_name,runner_group_name}'
+gh api rate_limit --jq '{core:.resources.core,graphql:.resources.graphql,search:.resources.search,actions_runner_registration:.resources.actions_runner_registration}'
+gh run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+gh run list -R openclaw/clawsweeper --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+gh api repos/openclaw/clawsweeper/actions/runs/<run-id>/jobs --paginate --jq '.jobs[] | {id,name,status,conclusion,labels,created_at,started_at,completed_at,runner_name,runner_group_name}'
 blacksmith testbox list --all
 curl -fsS https://clawsweeper.openclaw.ai/api/status | jq '{generated_at,fleet,diagnostics:{errors:.diagnostics.errors}}'
 curl -fsS https://clawsweeper.openclaw.ai/api/exact-review-queue | jq '{generated_at,review:.lanes.review,publication:.lanes.publication,state_writer,state_append}'
@@ -380,11 +380,12 @@ git diff --check
 If `pnpm docs:list` tries to reconcile dependencies in a linked Codex worktree,
 stop and use `node scripts/docs-list.js`.
 
-For a PR before requesting maintainer approval:
+For a PR before requesting maintainer approval, bind the watcher to the PR's
+full 40-character head SHA:
 
 ```bash
 .agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main
-ghx pr checks <pr> -R openclaw/openclaw --watch --interval 15
+node scripts/watch-pr-ci.mjs <pr> <head-sha> --repo openclaw/openclaw
 ```
 
 Use hosted exact-head gates for CI workflow tuning. Do not burn local
@@ -409,9 +410,9 @@ land the PR. Both commands mutate GitHub state.
 After merge, watch at least one fresh main cycle and the adjacent repos:
 
 ```bash
-ghx run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+gh run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
 for repo in openclaw/clawsweeper openclaw/clawhub openclaw/clownfish openclaw/openclaw-rtt openclaw/clawbench; do
-  ghx run list -R "$repo" --limit 12 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+  gh run list -R "$repo" --limit 12 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
 done
 curl -fsS https://clawsweeper.openclaw.ai/api/exact-review-queue | jq '.'
 ```

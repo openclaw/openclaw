@@ -17,6 +17,7 @@ export type DraftBranches = {
   branches: Array<{ name: string; kind: "local" | "remote" }>;
   defaultBranch?: string;
   headBranch?: string;
+  branchesUnavailable?: boolean;
 };
 
 export type DraftRepositoryState =

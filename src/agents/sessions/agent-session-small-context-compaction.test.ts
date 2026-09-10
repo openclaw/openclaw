@@ -2,6 +2,7 @@ import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/ll
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { applyAgentCompactionSettingsFromConfig } from "../agent-settings.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
@@ -205,11 +206,9 @@ describe("AgentSession small-context compaction", () => {
       });
       const sessionManager = SessionManager.inMemory();
       const file = "/workspace/archive.md";
-      sessionManager.appendMessage({
-        role: "user",
-        content: "Read the archive and preserve its project decisions.",
-        timestamp: 1,
-      });
+      sessionManager.appendMessage(
+        makeUserMessage("Read the archive and preserve its project decisions.", 1),
+      );
       sessionManager.appendMessage(
         createAssistant(
           model,
@@ -220,11 +219,7 @@ describe("AgentSession small-context compaction", () => {
       sessionManager.appendMessage(
         makeTextToolResult("archive-read", "read", "The project uses blue buttons.", false, 3),
       );
-      sessionManager.appendMessage({
-        role: "user",
-        content: "Continue the project.",
-        timestamp: 4,
-      });
+      sessionManager.appendMessage(makeUserMessage("Continue the project.", 4));
       sessionManager.appendMessage(
         createAssistant(model, [{ type: "text", text: "Ready to continue." }]),
       );
@@ -282,11 +277,7 @@ describe("AgentSession small-context compaction", () => {
       retry: { enabled: false },
     });
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({
-      role: "user",
-      content: "Read the large archive.",
-      timestamp: 1,
-    });
+    sessionManager.appendMessage(makeUserMessage("Read the large archive.", 1));
     sessionManager.appendMessage(
       createAssistant(
         model,

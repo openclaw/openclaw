@@ -9,8 +9,13 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";
+import {
+  resolveProviderModelCatalogId,
+  resolveProviderModelPolicySurface,
+} from "../plugins/provider-model-routes.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import { canonicalizeProviderModelId } from "./provider-model-route.js";
 
@@ -151,8 +156,16 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
   const providerCatalog = catalog.filter(
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider,
   );
-  const identity = resolveModelCatalogIdentityKey({ provider, id: modelId.trim() });
-  const exact = providerCatalog.find((entry) => resolveModelCatalogIdentityKey(entry) === identity);
+  // One synchronous lookup uses one policy owner instead of reloading it for every row.
+  const surface = resolveProviderModelPolicySurface(normalizedProvider);
+  const identityOf = (id: string) =>
+    resolveProviderModelCatalogId({
+      provider: normalizedProvider,
+      modelId: splitTrailingAuthProfile(id).model,
+      surface,
+    }) ?? id;
+  const identity = identityOf(modelId.trim());
+  const exact = providerCatalog.find((entry) => identityOf(entry.id) === identity);
   if (exact) {
     return exact;
   }

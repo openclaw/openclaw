@@ -37,6 +37,7 @@ import {
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
 import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
+import { buildCodexParentLocalInstructions } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 function isRestrictivePromptToolsAllow(toolsAllow: string[] | undefined): boolean {
@@ -370,14 +371,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     promptBuild: firstPromptBuild,
     codexTurnPromptText: decorateCodexTurnPromptText(firstPromptBuild),
   };
+  let parentLocalEgress = false;
+  const parentLocalContext = {
+    turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+    skillsCollaborationInstructions,
+    memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+  };
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
       turnState.promptBuild.developerInstructions,
-      buildTurnCollaborationMode(params, {
-        turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-        skillsCollaborationInstructions,
-        memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
-      }).settings.developer_instructions ?? undefined,
+      (parentLocalEgress
+        ? buildCodexParentLocalInstructions(params, parentLocalContext)
+        : buildTurnCollaborationMode(params, parentLocalContext).settings.developer_instructions) ??
+        undefined,
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async () => {
     turnState.promptBuild = await buildPromptFromCurrentInputs();
@@ -571,6 +577,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         Object.assign(systemPromptReport, buildSystemPromptReport(!include));
         workspaceReferencesIncluded = include;
       }
+    },
+    setParentLocalEgress: () => {
+      parentLocalEgress = true;
+      Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
     buildRenderedCodexDeveloperInstructions,
     rebuildCodexTurnPromptTextFromCurrentProjection,

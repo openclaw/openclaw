@@ -27,17 +27,34 @@ const { retiredRegistries, activatedRegistries, registryEpochs, recordEpochs, re
     revokedRecordEpoch: Object.freeze({}),
   }));
 
+function retirePluginRegistryIdentity(registry: PluginRegistry): AbortController | undefined {
+  const previous = registryEpochs.get(registry);
+  retiredRegistries.add(registry);
+  registryEpochs.delete(registry);
+  // Retired registrations cannot be reused and retain their Gateway/cache generation.
+  // Release every cache key now, including keys that will never be looked up again.
+  pluginLoaderCacheState.deleteValue(registry);
+  return previous?.controller;
+}
+
 /** Marks a registry retired so late runtime calls can reject stale plugin state. */
 export function markPluginRegistryRetired(registry: PluginRegistry | null | undefined): void {
   if (registry) {
-    const previous = registryEpochs.get(registry);
-    retiredRegistries.add(registry);
-    registryEpochs.delete(registry);
-    // Retired registrations cannot be reused and retain their Gateway/cache generation.
-    // Release every cache key now, including keys that will never be looked up again.
-    pluginLoaderCacheState.deleteValue(registry);
-    // Reentrant abort listeners must observe revoked authority and released cache aliases.
-    previous?.controller.abort();
+    retirePluginRegistryIdentity(registry)?.abort();
+  }
+}
+
+/** Revoke every owned view before any native abort listener can reenter its owner. */
+export function markPluginRegistriesRetired(registries: Iterable<PluginRegistry>): void {
+  const controllers: AbortController[] = [];
+  for (const registry of registries) {
+    const controller = retirePluginRegistryIdentity(registry);
+    if (controller) {
+      controllers.push(controller);
+    }
+  }
+  for (const controller of controllers) {
+    controller.abort();
   }
 }
 

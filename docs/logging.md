@@ -312,6 +312,40 @@ integrity check; resumed validation and repair can still run on the opener.
 Correlate the process ID with the log timestamp and current process; PIDs can be
 reused after exit.
 
+SQLite reclamation Workers also emit `slow SQLite reclamation Worker operation`
+at `warn` when their joined operation takes at least one second. The record is
+emitted after Worker exit and parent admission settlement. It includes the
+parent's `pid`, `threadId` and `isMainThread`, the actual Node `workerThreadId`,
+`reclamationKind`, `elapsedMs`, terminal `outcome` (`resolved` or `rejected`), and
+`exitCode`. Timing starts after admission to the archive Worker queue and includes
+startup, validation, admission waits, work, and cleanup. It does not measure CPU
+time or isolate a validation phase. Short writer sections can therefore remain
+quiet while this whole-operation warning exposes slow preparation between them.
+The record inherits an existing parent trace when available; it contains no
+database path, session identifier, plan content, or raw error.
+
+### SQLite session writes
+
+The `session-sqlite` subsystem emits `slow SQLite session write` when total
+elapsed time reaches 1000 ms, and `SQLite session write failed` when a write
+fails. Both warnings include `operation`, a label from a fixed set of semantic
+operation names identifying the callback that owns the SQLite writer lane.
+
+The timing fields separate the elapsed interval into:
+
+- `queueWaitMs`: time waiting to enter the writer lane.
+- `writerExecutionMs`: the owning callback's duration, including asynchronous waits.
+- `completionDelayMs`: time between callback completion and the caller resuming.
+
+These fields are available when the queued callback started and finished;
+`elapsedMs` records the total duration. Inspect the original `raw` record in
+`openclaw logs --json` to see the structured fields.
+
+Use `operation` to locate the owning code path. It does not identify a specific
+SQL statement, measure CPU time or lock contention, or establish that a nearby
+RPC caused the delay. Older records may lack `operation`; do not infer it from
+adjacent log messages.
+
 ### Slow reply preparation
 
 When a reply spends a long time preparing, inspect the normal Gateway logs:
@@ -454,3 +488,4 @@ For OTLP export to a collector, see [OpenTelemetry export](/gateway/opentelemetr
 - [Diagnostics flags](/diagnostics/flags) — targeted debug-log flags
 - [Gateway logging internals](/gateway/logging) — WS log styles, subsystem prefixes, and console capture
 - [Configuration reference](/gateway/config-observability#diagnostics) — full `diagnostics.*` field reference
+- [`openclaw logs`](/cli/logs) — tail Gateway logs over RPC from the CLI

@@ -70,13 +70,11 @@ async function resolveSpawnModelError(params: {
   const provider = selected.provider ?? defaults.provider;
   let catalog: ModelCatalogEntry[];
   try {
-    catalog = await getSubagentSpawnDeps().loadPreparedModelCatalog({
+    catalog = await getSubagentSpawnDeps().readPreparedModelCatalog({
       config: params.cfg,
       agentDir: params.targetAgentDir,
       workspaceDir: params.workspaceDir,
       readOnly: true,
-      providerDiscoveryProviderIds: [provider],
-      scopedLiveProviderDiscovery: true,
     });
   } catch (error) {
     return `sessions_spawn could not verify ${requestedModel ? "the requested model" : "outputSchema model capabilities"}: ${summarizeSpawnError(error)}`;

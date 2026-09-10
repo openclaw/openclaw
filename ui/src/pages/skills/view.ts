@@ -533,14 +533,8 @@ function renderClawHubDetailDialog(props: SkillsProps) {
       style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
       @modal-cancel=${props.onClawHubDetailClose}
     >
-      <div
-        class="md-preview-dialog__panel ${
-          props.clawhubDetailError && !props.clawhubDetailLoading
-            ? "md-preview-dialog__panel--message-only"
-            : ""
-        }"
-      >
-        <div class="md-preview-dialog__header">
+      <div class="exec-approval-card skill-reader-dialog">
+        <div class="exec-approval-header">
           <div class="clawhub-skill-detail__identity">
             ${
               detailImageUrl
@@ -553,75 +547,96 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                   />`
                 : nothing
             }
-            <div class="md-preview-dialog__title">
+            <div class="exec-approval-title">
               ${detail?.skill?.displayName ?? props.clawhubDetailRef}
             </div>
           </div>
-          <button class="btn btn--sm" @click=${props.onClawHubDetailClose}>
-            ${t("skillsPage.close")}
+          <button
+            type="button"
+            class="btn btn--icon btn--ghost"
+            aria-label=${t("skillsPage.close")}
+            @click=${props.onClawHubDetailClose}
+          >
+            ${icons.x}
           </button>
         </div>
-        <div class="md-preview-dialog__body" style="display: grid; gap: 16px;">
+        <div class="skill-reader-dialog__body clawhub-skill-detail__body">
           ${
             props.clawhubDetailLoading
               ? html`<div class="muted">${t("common.loading")}</div>`
               : props.clawhubDetailError
-                ? html`<div class="callout danger">${props.clawhubDetailError}</div>`
+                ? html`<div class="callout danger skill-reader-dialog__error" role="alert">
+                    <span aria-hidden="true">${icons.alertTriangle}</span>
+                    <span>${props.clawhubDetailError}</span>
+                  </div>`
                 : detail?.skill
                   ? html`
-                      <div style="font-size: 14px; line-height: 1.5;">
-                        ${detail.skill.summary ?? ""}
-                      </div>
+                      <div>${detail.skill.summary ?? ""}</div>
                       ${
-                        detail.owner?.displayName
-                          ? html`<div class="muted" style="font-size: 13px;">
-                              ${t("skillsPage.by")}
-                              ${detail.owner.displayName}${
-                                detail.owner.handle ? html` (@${detail.owner.handle})` : nothing
+                        detail.owner?.displayName || detail.latestVersion
+                          ? html`<div
+                              class="clawhub-skill-detail__meta muted"
+                              style="letter-spacing: normal;"
+                            >
+                              ${
+                                detail.owner?.displayName
+                                  ? html`${t("skillsPage.by")}
+                                    ${detail.owner.displayName}${
+                                      detail.owner.handle
+                                        ? html` (@${detail.owner.handle})`
+                                        : nothing
+                                    }`
+                                  : nothing
+                              }
+                              ${detail.owner?.displayName && detail.latestVersion ? " · " : nothing}
+                              ${
+                                detail.latestVersion
+                                  ? t("skillsPage.latest", {
+                                      version: detail.latestVersion.version,
+                                    })
+                                  : nothing
                               }
                             </div>`
                           : nothing
                       }
                       ${
-                        detail.latestVersion
-                          ? html`<div class="muted" style="font-size: 13px;">
-                              ${t("skillsPage.latest", { version: detail.latestVersion.version })}
-                            </div>`
-                          : nothing
-                      }
-                      ${
                         detail.latestVersion?.changelog
-                          ? html`<div
-                              style="font-size: 13px; border-top: 1px solid var(--border); padding-top: 12px; white-space: pre-wrap;"
-                            >
-                              ${detail.latestVersion.changelog}
-                            </div>`
+                          ? html`<article class="clawhub-skill-detail__changelog sidebar-markdown">
+                              ${unsafeHTML(
+                                toSanitizedMarkdownHtml(detail.latestVersion.changelog, {
+                                  codeBlockChrome: "none",
+                                  mode: "document",
+                                }),
+                              )}
+                            </article>`
                           : nothing
                       }
                       ${
                         detail.metadata?.os
-                          ? html`<div class="muted" style="font-size: 12px;">
+                          ? html`<div class="clawhub-skill-detail__meta muted">
                               ${t("skillsPage.platforms", { platforms: detail.metadata.os.join(", ") })}
                             </div>`
                           : nothing
                       }
-                      <button
-                        class="btn primary"
-                        ?disabled=${skillInstallLocked(props)}
-                        @click=${() => {
-                          if (props.clawhubDetailRef) {
-                            props.onClawHubInstall(props.clawhubDetailRef);
+                      <div class="exec-approval-actions" style="margin-top: 0;">
+                        <button
+                          class="btn primary"
+                          ?disabled=${skillInstallLocked(props)}
+                          @click=${() => {
+                            if (props.clawhubDetailRef) {
+                              props.onClawHubInstall(props.clawhubDetailRef);
+                            }
+                          }}
+                        >
+                          ${
+                            activeClawHubMutation(props, props.clawhubDetailRef ?? "")
+                              ? t("skillsPage.installing")
+                              : props.personalImport
+                                ? t("skillLibrary.import")
+                                : t("skillsPage.installNamed", { name: detail.skill.displayName })
                           }
-                        }}
-                      >
-                        ${
-                          activeClawHubMutation(props, props.clawhubDetailRef ?? "")
-                            ? t("skillsPage.installing")
-                            : props.personalImport
-                              ? t("skillLibrary.import")
-                              : t("skillsPage.installNamed", { name: detail.skill.displayName })
-                        }
-                      </button>
+                        </button>
+                      </div>
                     `
                   : html`<div class="muted">${t("skillsPage.notFound")}</div>`
           }
@@ -692,21 +707,23 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
       style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
       @modal-cancel=${props.onDetailClose}
     >
-      <div class="md-preview-dialog__panel">
-        <div class="md-preview-dialog__header">
-          <div
-            class="md-preview-dialog__title"
-            style="display: flex; align-items: center; gap: 8px;"
-          >
+      <div class="exec-approval-card skill-reader-dialog">
+        <div class="exec-approval-header">
+          <div class="exec-approval-title" style="display: flex; align-items: center; gap: 8px;">
             <span class="statusDot ${skillStatusClass(skill)}"></span>
             ${skill.emoji ? html`<span style="font-size: 18px;">${skill.emoji}</span>` : nothing}
             <span>${skill.name}</span>
           </div>
-          <button class="btn btn--sm" @click=${props.onDetailClose}>
-            ${t("skillsPage.close")}
+          <button
+            type="button"
+            class="btn btn--icon btn--ghost"
+            aria-label=${t("skillsPage.close")}
+            @click=${props.onDetailClose}
+          >
+            ${icons.x}
           </button>
         </div>
-        <div class="md-preview-dialog__body" style="display: grid; gap: 16px;">
+        <div class="skill-reader-dialog__body" style="display: grid; gap: var(--space-4);">
           <div>
             <div style="font-size: 14px; line-height: 1.5; color: var(--text);">
               ${skill.description}

@@ -3634,7 +3634,7 @@ describe("browser tool act compatibility", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(80_000);
+    expect(options.timeoutMs).toBe(126_250);
     expect(request.params?.path).toBe("/act");
     expect(request.params?.body).toEqual({
       kind: "wait",
@@ -3642,7 +3642,7 @@ describe("browser tool act compatibility", () => {
       text: "ready",
       timeoutMs: "45000",
     });
-    expect(request.params?.timeoutMs).toBe(70_000);
+    expect(request.params?.timeoutMs).toBe(116_250);
   });
 
   it("sizes node proxy calls for recursively nested batch execution", async () => {
@@ -5062,12 +5062,16 @@ describe("browser observation actions and tab previews", () => {
     browserClientMocks.browserOpenTab.mockResolvedValueOnce({
       targetId: "t".repeat(128),
       title: "a".repeat(600),
-      url: "u".repeat(3000),
+      url: `https://example.com/${"u".repeat(3000)}`,
     });
     const tool = createBrowserTool();
     const opened = await tool.execute("open", { action: "open", url: "https://example.com" });
     expect(opened.details).toMatchObject({
-      browserTab: { targetId: "t".repeat(128), title: "a".repeat(512), url: "u".repeat(2048) },
+      browserTab: {
+        targetId: "t".repeat(128),
+        title: "a".repeat(512),
+        url: `https://example.com/${"u".repeat(3000)}`.slice(0, 2048),
+      },
     });
     browserClientMocks.browserFocusTab.mockResolvedValueOnce({ ok: true, title: 42, url: {} });
     const focused = await tool.execute("focus", { action: "focus", targetId: "known" });
@@ -5078,6 +5082,37 @@ describe("browser observation actions and tab previews", () => {
       profile: "openclaw",
     });
   });
+
+  it.each([
+    ["about:blank", false],
+    ["chrome://newtab/", false],
+    ["data:text/html,hello", false],
+    ["file:///tmp/page.html", false],
+    ["not a URL", false],
+    ["http://example.com/page", true],
+    ["https://example.com/page", true],
+    ["HTTPS://example.com/page", true],
+  ])(
+    "keeps the browser route but only attaches HTTP(S) display URLs (%s)",
+    async (url, eligible) => {
+      browserClientMocks.browserOpenTab.mockResolvedValueOnce({ targetId: "known", url });
+      const result = await createBrowserTool().execute("open", {
+        action: "open",
+        url: "https://example.com",
+      });
+      expect(result.details).toEqual({
+        targetId: "known",
+        url,
+        browserTab: {
+          targetId: "known",
+          target: "host",
+          profile: "openclaw",
+          ...(eligible ? { url } : {}),
+        },
+      });
+      expect(firstResultText(result)).toContain(url);
+    },
+  );
 
   it.each([
     {

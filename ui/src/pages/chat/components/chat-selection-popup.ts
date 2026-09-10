@@ -1,10 +1,10 @@
-// Floating toolbar over selected chat text: "Ask in side chat" pre-fills the
-// session rail.
+// Floating toolbar over selected chat text, targeting the main or side chat.
 // Mirrors the imperative reply-context-menu pattern in chat-thread.ts.
 
 import { t } from "../../../i18n/index.ts";
 
 type ChatSelectionPopupActions = {
+  onAddToChat?: (selection: string) => void;
   onAskSideChat: (selection: string) => void;
 };
 
@@ -71,6 +71,12 @@ function showChatSelectionPopup(
     window.getSelection()?.removeAllRanges();
     action(selectionText);
   };
+  if (actions.onAddToChat) {
+    const onAddToChat = actions.onAddToChat;
+    popup.append(
+      createSelectionPopupButton(t("chat.messages.addToChat"), () => activate(onAddToChat)),
+    );
+  }
   popup.append(
     createSelectionPopupButton(t("chat.messages.askInSideChat"), () =>
       activate(actions.onAskSideChat),

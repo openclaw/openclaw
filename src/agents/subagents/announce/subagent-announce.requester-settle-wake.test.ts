@@ -3,22 +3,18 @@
 // nested/cron/single-delivered paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import {
+  promoteRequesterFinalAttachment,
+  registerRequesterFinalAttachment,
+} from "../requester-final-attachment.js";
+import type { SubagentAnnounceDeliveryResult as Result } from "./subagent-announce-dispatch.js";
 
-const deliverSpy = vi.fn(
-  async (
-    _params: Record<string, unknown>,
-  ): Promise<{
-    delivered: boolean;
-    path: string;
-    disposition?: "ambiguous" | "permanent_failure" | "intentional_non_delivery";
-    reason?: string;
-  }> => ({
-    delivered: true,
-    path: "direct",
-  }),
-);
+const deliverSpy = vi.fn(async (_params: Record<string, unknown>): Promise<Result> => ({
+  delivered: true,
+  path: "direct",
+}));
 
 let sessionStore: Record<string, { sessionId?: string; lastChannel?: string; lastTo?: string }>;
 
@@ -135,7 +131,7 @@ function transitionBatch(
 function completeBatch(
   batch: readonly SubagentRunRecord[],
   rearmGeneration?: number,
-  outcome?: SubagentAnnounceDeliveryResult,
+  outcome?: Result,
 ): void {
   const runIds = batch.map((entry) => entry.runId).toSorted();
   if (outcome) {
@@ -238,7 +234,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       }),
     );
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
-    const deliveryGate = createDeferred<{ delivered: boolean; path: string }>();
+    const deliveryGate = createDeferred<Result>();
     deliverSpy.mockReturnValueOnce(deliveryGate.promise);
 
     const wakeA = maybeWakeRequesterAfterAllChildrenSettled(
@@ -753,52 +749,55 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("retains a yielded wake after a silent final and retries its visible reply", async () => {
-    const child = makeSettledChild({
-      runId: "run-b",
-      delivery: { status: "delivered" },
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: ["run-b"],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
-    });
+    const child = makeSettledChild({ runId: "run-b" });
+    const yieldState = {
+      batchRunIds: ["run-b"],
+      requesterYieldBatch: true,
+      rearmGeneration: 1,
+    };
+    Object.assign(child.requesterSettleWake!, yieldState);
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-    deliverSpy.mockResolvedValueOnce({
-      delivered: false,
-      path: "direct",
-      reason: "visible_reply_missing",
+    const append = vi.fn(() => true);
+    const owner = { requesterAgentId: "main", requesterSessionKey: REQUESTER } as const;
+    const requesterTurnRunId = "run-requester";
+    registerRequesterFinalAttachment({
+      ...owner,
+      requesterSessionId: "sess-main",
+      requesterTurnRunId,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      timeoutMs: 60_000,
+      append,
     });
+    promoteRequesterFinalAttachment({
+      ...owner,
+      requesterTurnRunId,
+      batchRunIds: ["run-b"],
+      rearmGeneration: 1,
+    });
+    const path = "direct" as const;
+    const missing: Result = { delivered: false, path, reason: "visible_reply_missing" };
+    const visible = { delivered: true, path, finalAssistantVisibleText: "consolidated final" };
+    deliverSpy.mockResolvedValueOnce(missing).mockResolvedValueOnce(visible);
 
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    const settle = () =>
+      maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child }));
+    vi.useFakeTimers({ now: 0 });
     try {
-      await expect(
-        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-      ).resolves.toBe(false);
+      await expect(settle()).resolves.toBe(false);
       expect(completeBatchSpy).not.toHaveBeenCalled();
       expect(child.requesterSettleWake).toMatchObject({
-        status: "pending",
         attemptCount: 1,
         nextAttemptAt: 30_000,
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
         lastError: "visible_reply_missing",
       });
 
       await vi.advanceTimersByTimeAsync(30_000);
-      await expect(
-        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-      ).resolves.toBe(true);
-      expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
-        requesterSettleKey("run-b:yield-1"),
-        requesterSettleKey("run-b:yield-1:retry-1"),
-      ]);
-      expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
-        delivered: true,
-        path: "direct",
-      });
+      await expect(settle()).resolves.toBe(true);
+      expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual(
+        ["run-b:yield-1", "run-b:yield-1:retry-1"].map(requesterSettleKey),
+      );
+      expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, visible);
+      expect(append).toHaveBeenCalledExactlyOnceWith(visible.finalAssistantVisibleText);
     } finally {
       vi.useRealTimers();
     }

@@ -24,6 +24,10 @@ export function withArtifactPreservingStateReads<T>(operation: () => T): T {
   return artifactPreservingReads.run(true, operation);
 }
 
+export function isArtifactPreservingStateRead(): boolean {
+  return artifactPreservingReads.getStore() === true;
+}
+
 type OpenClawStateReadOnlyDatabase = {
   db: DatabaseSync;
   path: string;
@@ -86,7 +90,7 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   // Even read-only SQLite opens can create a missing WAL. The existing worker
   // snapshots committed WAL pages without touching source sidecars or caller-held locks.
-  const prepared = artifactPreservingReads.getStore()
+  const prepared = isArtifactPreservingStateRead()
     ? prepareSqliteReadOnlyLocationSync(pathname)
     : undefined;
   try {

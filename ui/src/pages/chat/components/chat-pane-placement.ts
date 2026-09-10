@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import "../../../components/elapsed-time.ts";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
 import { icons } from "../../../components/icons.ts";
@@ -37,6 +38,9 @@ export function renderChatPanePlacement(props: {
   const hasFacts = Boolean(providerId || profileId || environmentId);
   const runner = placement?.state === "active" ? placement.runner : undefined;
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
+  const workspaceResultReconciling =
+    (placement?.state === "active" || placement?.state === "draining") &&
+    placement.workspaceResultReconciling === true;
   const restartable = placement?.state === "failed" && placement.recoveryAction === "restart";
   const worker = resolveChatPaneWorkerPresentation(session, props.placementStartupStatus);
   const moveTarget =
@@ -57,7 +61,11 @@ export function renderChatPanePlacement(props: {
           ? t("sessionsView.movingSessionGeneric")
           : deviceOffline
             ? t("sessionsView.deviceOffline")
-            : worker.label;
+            : workspaceResultReconciling ||
+                placementState === "draining" ||
+                placementState === "reconciling"
+              ? t("sessionsView.syncingCloudFiles")
+              : worker.label;
   const moveDisabledReason = props.placementMoveDisabledReason;
   const reclaimDisabledReason = props.placementReclaimDisabledReason;
   const restartDisabledReason = props.placementRestartDisabledReason;
@@ -173,7 +181,18 @@ export function renderChatPanePlacement(props: {
           ? html`<div class="chat-pane__placement-note" role="status">
               ${t("sessionsView.waitingForDevice")}
             </div>`
-          : nothing
+          : workspaceResultReconciling
+            ? html`<div class="chat-pane__placement-note" role="status">
+                ${t("sessionsView.syncingCloudFilesDetail")}
+              </div>`
+            : placement && (placement.state === "draining" || placement.state === "reconciling")
+              ? html`<div class="chat-pane__placement-note" role="status">
+                  ${t("sessionsView.syncingCloudFilesDetail")} ·
+                  <openclaw-elapsed-time
+                    .startMs=${placement.stateChangedAtMs}
+                  ></openclaw-elapsed-time>
+                </div>`
+              : nothing
       }
     </div>
   `;

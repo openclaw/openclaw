@@ -11,6 +11,7 @@ import {
   fallbackAttemptOptions,
   initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
+  createRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
@@ -53,28 +54,7 @@ describe("executeAgentTurn: session state", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
@@ -114,28 +94,7 @@ describe("executeAgentTurn: session state", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     // After two retries the loop must break instead of continuing
     // forever. The result should be a final error, not an infinite hang.
@@ -202,28 +161,7 @@ describe("executeAgentTurn: session state", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     // Two switches (within the limit of 2) then success on third attempt
     expect(result.kind).toBe("success");

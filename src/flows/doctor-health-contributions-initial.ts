@@ -63,6 +63,15 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:node-runtime",
+      label: "Node runtime",
+      healthCheckIds: ["core/doctor/node-runtime"],
+      async run(ctx) {
+        const { runCoreHealthFindingNote } = await import("./doctor-health-contribution-core.js");
+        await runCoreHealthFindingNote(ctx, "core/doctor/node-runtime");
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:gateway-config",
       label: "Gateway config",
       healthCheckIds: ["core/doctor/gateway-config"],
@@ -268,6 +277,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:active-tool-schema-warnings",
       label: "Active tool schema warnings",
+      updatePolicy: "standalone",
       run: runActiveToolSchemaWarningsHealth,
     }),
     createDoctorHealthContribution({
@@ -293,6 +303,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:project-clone-shape",
       label: "Project clones",
+      updatePolicy: "standalone",
       healthChecks: {
         description: "Partial and shallow registry-owned project clones need manual repair.",
         defaultEnabled: false,
@@ -310,6 +321,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:db-bloat",
       label: "SQLite database size",
+      updatePolicy: "standalone",
       run: runDatabaseBloatHealth,
     }),
     createDoctorHealthContribution({
@@ -328,7 +340,7 @@ export function resolveInitialDoctorHealthContributions(params: {
             await import("../commands/doctor-state-integrity.js");
           return detectStateIntegrityHealthIssues(ctx.cfg, {
             configPath: ctx.configPath,
-            env: process.env,
+            env: ctx.env ?? process.env,
           }).map(stateIntegrityIssueToHealthFinding);
         },
         repair: legacyOwnedRepair(async (ctx) => {
@@ -336,7 +348,7 @@ export function resolveInitialDoctorHealthContributions(params: {
             await import("../commands/doctor-state-integrity.js");
           return detectStateIntegrityHealthIssues(ctx.cfg, {
             configPath: ctx.configPath,
-            env: process.env,
+            env: ctx.env ?? process.env,
           }).map(stateIntegrityIssueToRepairEffect);
         }, "legacy doctor state integrity contribution owns state repairs"),
       },

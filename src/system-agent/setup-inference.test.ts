@@ -36,6 +36,7 @@ import {
   resolvePluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import * as providerAuthPersistence from "../plugins/provider-auth-persistence.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { capturePluginRegistryLifecycleEpoch } from "../plugins/registry-lifecycle.js";
 import {
@@ -1719,6 +1720,18 @@ describe("activateSetupInference", () => {
     });
   }
 
+  function mockProtectedStorageReleaseFailure(releaseError: Error) {
+    return vi
+      .spyOn(providerAuthPersistence, "stageProviderAuthProfilesForPersistence")
+      .mockImplementationOnce(async ({ profiles }) => ({
+        profiles: [...profiles],
+        rollback: vi.fn(async () => {}),
+        commit: vi.fn(async () => {
+          throw releaseError;
+        }),
+      }));
+  }
+
   it("surfaces an invalid existing config without probing or persisting", async () => {
     const runEmbeddedAgent = vi.fn();
     const transformConfig = vi.fn();
@@ -2632,33 +2645,6 @@ describe("activateSetupInference", () => {
     });
   });
 
-  it("returns an auth failure when the verified owner drifts during persistence", async () => {
-    const configHarness = createPreRosterConfigTransformHarness();
-    const result = await activateSetupInference({
-      kind: "openai-api-key",
-      deps: {
-        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
-        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
-        // The real revalidation throws when the current route owner no longer
-        // matches the probe credential (e.g. a Codex-imported OAuth profile
-        // outranking the probed env key). The ladder needs a failure result.
-        createSystemAgentVerifiedInferenceBinding: vi.fn(async () => {
-          throw new Error(
-            "The successful inference credential is no longer the active route owner.",
-          );
-        }) as never,
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      status: "auth",
-      error: expect.stringContaining("verified inference owner changed"),
-    });
-    expect(result).not.toHaveProperty("disposition");
-    expect(configHarness.current()).toEqual({});
-  });
-
   it("revalidates a stable CLI runtime owner at the config commit boundary", async () => {
     const configHarness = createPreRosterConfigTransformHarness();
     const resolveCliRuntimeOwnerFingerprint = vi.fn(async () => "test-runtime-owner");
@@ -2744,6 +2730,10 @@ describe("activateSetupInference", () => {
       ok: false,
       status: "auth",
       error: expect.stringContaining("active route owner"),
+    });
+    expect(result).not.toHaveProperty("disposition");
+    expect(result).toMatchObject({
+      error: expect.stringContaining("verified inference owner changed"),
     });
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(configHarness.current()).toEqual({});
@@ -4082,6 +4072,126 @@ describe("activateSetupInference", () => {
       expect(profileId).toBeDefined();
       expect(currentConfig.auth?.profiles?.[profileId!]).toMatchObject({ provider: "groq" });
       expect(currentConfig.agents?.defaults?.model).toContain(`@${profileId}`);
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("preserves indeterminate activation guidance when protected storage release fails", async () => {
+    const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
+    resolveAgentDir(initialConfig, "main");
+    const releaseError = new Error("simulated protected release failure");
+    let currentConfig: OpenClawConfig = initialConfig;
+    const readConfigFileSnapshot = vi.fn(async () => ({
+      exists: true,
+      valid: true,
+      config: currentConfig,
+      sourceConfig: currentConfig,
+      runtimeConfig: currentConfig,
+    }));
+    const transformConfig = vi.fn(async (params: { transform: Function }) => {
+      const transformed = await params.transform(initialConfig, {
+        snapshot: {
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        },
+        previousHash: null,
+        attempt: 0,
+      });
+      currentConfig = {
+        ...transformed.nextConfig,
+        agents: {
+          ...transformed.nextConfig.agents,
+          defaults: {
+            ...transformed.nextConfig.agents?.defaults,
+            params: { temperature: 0.25 },
+          },
+        },
+      };
+      throw new Error("simulated post-write failure after concurrent edit");
+    });
+    mockProtectedStorageReleaseFailure(releaseError);
+
+    try {
+      const failure = await activateGroqSetup({
+        apiKey: "candidate-key",
+        deps: {
+          readConfigFileSnapshot: readConfigFileSnapshot as never,
+          transformConfigWithPendingPluginInstalls: transformConfig as never,
+        },
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({
+        message: expect.stringMatching(
+          /credential was retained.*run openclaw doctor --fix before retrying.*protected storage could not be released/i,
+        ),
+      });
+      const profileId = Object.keys(readInMemoryAuthProfileStore(agentDir).profiles).find((id) =>
+        id.startsWith("groq:setup-"),
+      );
+      expect(profileId).toBeDefined();
+      expect(currentConfig.auth?.profiles?.[profileId!]).toMatchObject({ provider: "groq" });
+      expect(readInMemoryAuthProfileStore(agentDir).profiles[profileId!]).toMatchObject({
+        key: "candidate-key",
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("preserves a committed activation error when protected storage release fails", async () => {
+    const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
+    resolveAgentDir(initialConfig, "main");
+    const primaryError = new Error("simulated committed post-write failure");
+    const releaseError = new Error("simulated protected release failure");
+    let currentConfig: OpenClawConfig = initialConfig;
+    const readConfigFileSnapshot = vi.fn(async () => ({
+      exists: true,
+      valid: true,
+      config: currentConfig,
+      sourceConfig: currentConfig,
+      runtimeConfig: currentConfig,
+    }));
+    const transformConfig = vi.fn(async (params: { transform: Function }) => {
+      const transformed = await params.transform(initialConfig, {
+        snapshot: {
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        },
+        previousHash: null,
+        attempt: 0,
+      });
+      currentConfig = transformed.nextConfig;
+      throw primaryError;
+    });
+    mockProtectedStorageReleaseFailure(releaseError);
+
+    try {
+      const failure = await activateGroqSetup({
+        apiKey: "candidate-key",
+        deps: {
+          readConfigFileSnapshot: readConfigFileSnapshot as never,
+          transformConfigWithPendingPluginInstalls: transformConfig as never,
+        },
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({
+        message: expect.stringContaining(
+          "activation committed despite a post-write error, but protected storage could not be released",
+        ),
+      });
+      const profileId = Object.keys(currentConfig.auth?.profiles ?? {}).find((id) =>
+        id.startsWith("groq:setup-"),
+      );
+      expect(profileId).toBeDefined();
+      expect(currentConfig.agents?.defaults?.model).toContain(`@${profileId}`);
+      expect(readInMemoryAuthProfileStore(agentDir).profiles[profileId!]).toMatchObject({
+        key: "candidate-key",
+      });
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }

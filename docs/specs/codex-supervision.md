@@ -620,3 +620,7 @@ surfaces remain the recovery path for archived threads.
 - Legacy Supervisor config migrates to the canonical Codex config shape.
 - Legacy list is loaded-only by default, stored enumeration obeys its per-endpoint
   cap, and compatibility send never starts or resumes an idle thread.
+
+## Related
+
+- [Codex supervision](/plugins/codex-supervision) - the user-facing guide for this spec

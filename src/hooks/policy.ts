@@ -11,55 +11,18 @@ type HookEnableState = {
   reason?: HookEnableStateReason;
 };
 
-type HookSourcePolicy = {
-  precedence: number;
-  trustedLocalCode: boolean;
-  defaultEnableMode: "default-on" | "explicit-opt-in";
-  canOverride: HookSource[];
-  canBeOverriddenBy: HookSource[];
-};
-
 type HookResolutionCollision<T> = {
   name: string;
   kept: T;
   ignored: T;
 };
 
-const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
-  "openclaw-bundled": {
-    precedence: 10,
-    trustedLocalCode: true,
-    defaultEnableMode: "default-on",
-    canOverride: ["openclaw-bundled"],
-    canBeOverriddenBy: ["openclaw-managed", "openclaw-plugin"],
-  },
-  "openclaw-plugin": {
-    precedence: 20,
-    trustedLocalCode: true,
-    defaultEnableMode: "default-on",
-    canOverride: ["openclaw-bundled", "openclaw-plugin"],
-    canBeOverriddenBy: ["openclaw-managed"],
-  },
-  "openclaw-managed": {
-    precedence: 30,
-    trustedLocalCode: true,
-    defaultEnableMode: "default-on",
-    canOverride: ["openclaw-bundled", "openclaw-managed", "openclaw-plugin"],
-    canBeOverriddenBy: ["openclaw-managed"],
-  },
-  "openclaw-workspace": {
-    precedence: 40,
-    trustedLocalCode: true,
-    defaultEnableMode: "explicit-opt-in",
-    canOverride: ["openclaw-workspace"],
-    canBeOverriddenBy: ["openclaw-workspace"],
-  },
+const HOOK_SOURCE_PRECEDENCE: Record<HookSource, number> = {
+  "openclaw-bundled": 10,
+  "openclaw-plugin": 20,
+  "openclaw-managed": 30,
+  "openclaw-workspace": 40,
 };
-
-/** Resolve source trust, precedence, default enablement, and override rules. */
-function getHookSourcePolicy(source: HookSource): HookSourcePolicy {
-  return HOOK_SOURCE_POLICIES[source];
-}
 
 /** Resolve explicit per-hook config by hook key. */
 export function resolveHookConfig(
@@ -94,21 +57,11 @@ export function resolveHookEnableState(params: {
     return { enabled: false, reason: "disabled in config" };
   }
 
-  const sourcePolicy = getHookSourcePolicy(entry.hook.source);
-  if (sourcePolicy.defaultEnableMode === "explicit-opt-in" && hookConfig?.enabled !== true) {
+  if (entry.hook.source === "openclaw-workspace" && hookConfig?.enabled !== true) {
     return { enabled: false, reason: "workspace hook (disabled by default)" };
   }
 
   return { enabled: true };
-}
-
-function canOverrideHook(candidate: HookPolicyEntry, existing: HookPolicyEntry): boolean {
-  const candidatePolicy = getHookSourcePolicy(candidate.hook.source);
-  const existingPolicy = getHookSourcePolicy(existing.hook.source);
-  return (
-    candidatePolicy.canOverride.includes(existing.hook.source) &&
-    existingPolicy.canBeOverriddenBy.includes(candidate.hook.source)
-  );
 }
 
 /** Merge hook entries by name using source precedence and override policy. */
@@ -122,8 +75,7 @@ export function resolveHookEntries<T extends HookPolicyEntry>(
     .map((entry, index) => ({ entry, index }))
     .toSorted((a, b) => {
       const precedenceDelta =
-        getHookSourcePolicy(a.entry.hook.source).precedence -
-        getHookSourcePolicy(b.entry.hook.source).precedence;
+        HOOK_SOURCE_PRECEDENCE[a.entry.hook.source] - HOOK_SOURCE_PRECEDENCE[b.entry.hook.source];
       return precedenceDelta !== 0 ? precedenceDelta : a.index - b.index;
     });
 
@@ -134,9 +86,13 @@ export function resolveHookEntries<T extends HookPolicyEntry>(
       merged.set(entry.hook.name, entry);
       continue;
     }
-    // Source policy is asymmetric: higher precedence alone is not enough unless
-    // both source policies agree the candidate may replace the existing hook.
-    if (canOverrideHook(entry, existing)) {
+    // Precedence orders sources, but workspace code is isolated and bundled/plugin ties keep the first entry.
+    const sameSource = entry.hook.source === existing.hook.source;
+    if (
+      entry.hook.source === "openclaw-workspace"
+        ? sameSource
+        : !sameSource || entry.hook.source === "openclaw-managed"
+    ) {
       merged.set(entry.hook.name, entry);
       continue;
     }

@@ -91,12 +91,16 @@ export async function createSessionEntryWithTranscript<TError = string>(
       sessionId: created.entry.sessionId,
       sessionKey: normalizedKey,
     });
-    await runExclusiveSqliteSessionWrite(transcriptScope, async () => {
-      runOpenClawAgentWriteTransaction((database) => {
-        commitGuard?.();
-        ensureTranscriptHeader(database, transcriptScope, cwd);
-      }, toDatabaseOptions(transcriptScope));
-    });
+    await runExclusiveSqliteSessionWrite(
+      transcriptScope,
+      async () => {
+        runOpenClawAgentWriteTransaction((database) => {
+          commitGuard?.();
+          ensureTranscriptHeader(database, transcriptScope, cwd);
+        }, toDatabaseOptions(transcriptScope));
+      },
+      "session.entry.create-with-transcript",
+    );
   } catch (err) {
     // Preserve authority errors from the commit guard instead of projecting
     // them as transcript failures at the Gateway boundary.

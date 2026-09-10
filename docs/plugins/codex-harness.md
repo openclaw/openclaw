@@ -41,7 +41,7 @@ authored provider request override. Valid model-scoped `params.fastMode` /
 `params.fast_mode` values and valid cutoff keys are typed agent-runtime
 controls, so they do not count as authored provider request params or select a
 runtime by themselves. See
-[OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+[OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime).
 If Codex owns auth before Platform versus ChatGPT routing is known, OpenClaw
 still requires every candidate route to declare Codex compatibility. Native
 auth ownership alone never bypasses that route check.
@@ -53,7 +53,7 @@ dynamic tools routed through the app-server `item/tool/call` bridge. An
 ordinary OpenClaw sandbox or restricted tool policy disables native code mode
 unless you opt into the experimental sandbox exec-server path. Node-backed
 `remote-exec` on a paired device or cloud worker instead uses its
-placement-owned environment without that experimental flag.
+placement-owned environment without that experimental flag. A dedicated cloud worker with a completed project preparation keeps the bound workspace and `HOME` paths, so native commands can reuse setup caches. The node exec-server still uses a separate temporary `CODEX_HOME` for each connection; ending the connection removes that Codex state and preserves the prepared project home.
 
 Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
 as a distinct OpenClaw execution path. Use `gateway_exec` only when a command
@@ -304,7 +304,10 @@ nine child pages below. The anchors from the single-page version still resolve h
 - [OpenAI provider](/providers/openai)
 - [OpenAI Codex help](https://help.openai.com/en/collections/14937394-codex)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
+- [Copilot SDK harness](/plugins/copilot)
 - [Plugin hooks](/plugins/hooks)
 - [Diagnostics export](/gateway/diagnostics)
 - [Status](/cli/status)
 - [Testing](/help/testing-live#live-codex-app-server-harness-smoke)
+- [ACP agents](/tools/acp-agents) — how ACP agents are configured and bound
+- [ACP agents — setup](/tools/acp-agents-setup) — configuring this harness as an ACP agent
