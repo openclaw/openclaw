@@ -24,6 +24,7 @@ import {
   setSubagentAnnounceDeliveryDepsForTest,
   type SubagentAnnounceDeliveryDeps,
 } from "./subagent-announce-delivery.runtime.js";
+import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 const fixture = useSubagentControlFixture();
 afterEach(() => setSubagentAnnounceDeliveryDepsForTest());
@@ -91,7 +92,8 @@ it.each([
     const waitBeforeExecution =
       phase === "admitted" || phase === "requester reset" || phase === "requester replacement";
     type Dispatch = SubagentAnnounceDeliveryDeps["dispatchGatewayMethodInProcess"];
-    const completed = vi.fn<Dispatch>().mockResolvedValue({
+    const completion = { dispatch: dispatchGatewayMethodInProcess };
+    vi.spyOn(completion, "dispatch").mockResolvedValue({
       status: "ok",
       result: { payloads: [{ text: "The child has settled." }], meta: {} },
     });
@@ -109,7 +111,7 @@ it.each([
       }
       options?.onExecutionStarted?.();
       startedTurns.push(String(params?.sessionKey));
-      return await completed<T>(...args);
+      return await completion.dispatch<T>(...args);
     };
     setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
 
