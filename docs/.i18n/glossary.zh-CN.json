@@ -1249,7 +1249,7 @@
   },
   {
     "source": "troubleshooting",
-    "target": "故障排除"
+    "target": "故障排查"
   },
   {
     "source": "FAQ",
@@ -1877,7 +1877,7 @@
   },
   {
     "source": "Multi-agent sandbox and tools",
-    "target": "多 Agent 沙盒和工具"
+    "target": "多智能体沙箱与工具"
   },
   {
     "source": "Exec tool",

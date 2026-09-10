@@ -571,5 +571,5 @@ openclaw logs --follow
 
 - [Sandboxing](/gateway/sandboxing) - modes, scopes, and backend comparison
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) - debugging blocked tools
-- [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) - per-agent overrides
+- [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) - per-agent overrides
 - [Sandbox CLI](/cli/sandbox) - `openclaw sandbox` commands

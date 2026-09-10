@@ -598,7 +598,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
 
 ## Related
 
-- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channel routing](/channels/channel-routing) - session routing for messages
 - [Channels Overview](/channels) - all supported channels
 - [Groups](/channels/groups) - group chat behavior and mention gating
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
