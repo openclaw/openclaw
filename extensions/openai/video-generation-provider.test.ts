@@ -222,19 +222,20 @@ describe("openai video generation provider", () => {
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "vid_123",
           model: "sora-2",
           status: "completed",
           seconds: "4",
           size: "720x1280",
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/webm" }),
-        arrayBuffer: async () => Buffer.from("webm-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("webm-bytes"), {
+          headers: new Headers({ "content-type": "video/webm" }),
+        }),
+      );
 
     const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     const result = await provider.generateVideo({
@@ -591,13 +592,13 @@ describe("openai video generation provider", () => {
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "vid_too_large",
           model: "sora-2",
           status: "completed",
         }),
-      })
+      )
       .mockResolvedValueOnce(streamedVideoResponse("too-large"));
 
     const provider = buildOpenAIVideoGenerationProvider(modelAuth);
@@ -621,17 +622,18 @@ describe("openai video generation provider", () => {
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "vid_456",
           model: "sora-2",
           status: "completed",
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mp4-bytes"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     const input = Buffer.from("!png-bytes?").subarray(1, -1);
@@ -670,17 +672,18 @@ describe("openai video generation provider", () => {
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "vid_local",
           model: "sora-2",
           status: "completed",
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mp4-bytes"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     await provider.generateVideo({
@@ -716,13 +719,13 @@ describe("openai video generation provider", () => {
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "vid_local",
           model: "sora-2",
           status: "completed",
         }),
-      })
+      )
       .mockResolvedValueOnce({
         headers: new Headers({ "content-type": "video/mp4" }),
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
@@ -777,9 +780,8 @@ describe("openai video generation provider", () => {
     const secondRelease = vi.fn(async () => {});
     assertOkOrThrowHttpErrorMock
       .mockImplementationOnce(async () => {})
-      .mockImplementationOnce(async () => {})
       .mockImplementationOnce(async (_response, label) => {
-        throw new Error(label);
+        throw Object.assign(new Error(label), { status: _response.status });
       })
       .mockImplementationOnce(async () => {});
     postMultipartRequestMock.mockResolvedValueOnce({
@@ -790,13 +792,13 @@ describe("openai video generation provider", () => {
       }),
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({
         id: "vid_local",
         model: "sora-2",
         status: "completed",
       }),
-    });
+    );
     fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
         response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
@@ -834,6 +836,7 @@ describe("openai video generation provider", () => {
     expect(executeProviderOperationWithRetryMock).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", stage: "download" }),
     );
+    expect(postMultipartRequestMock).toHaveBeenCalledOnce();
     expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
     expect(firstRelease).toHaveBeenCalledTimes(1);
     expect(secondRelease).toHaveBeenCalledTimes(1);
@@ -844,12 +847,11 @@ describe("openai video generation provider", () => {
     const secondRelease = vi.fn(async () => {});
     assertOkOrThrowHttpErrorMock
       .mockImplementationOnce(async () => {})
-      .mockImplementationOnce(async () => {})
       .mockImplementationOnce(async (_response, label) => {
-        throw new Error(label);
+        throw Object.assign(new Error(label), { status: _response.status });
       })
       .mockImplementationOnce(async (_response, label) => {
-        throw new Error(label);
+        throw Object.assign(new Error(label), { status: _response.status });
       });
     postMultipartRequestMock.mockResolvedValueOnce({
       response: streamedJsonResponse({
@@ -859,13 +861,13 @@ describe("openai video generation provider", () => {
       }),
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({
         id: "vid_local",
         model: "sora-2",
         status: "completed",
       }),
-    });
+    );
     fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
         response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
@@ -898,6 +900,7 @@ describe("openai video generation provider", () => {
       }),
     ).rejects.toThrow("OpenAI video download failed");
 
+    expect(postMultipartRequestMock).toHaveBeenCalledOnce();
     expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
     expect(firstRelease).toHaveBeenCalledTimes(1);
     expect(secondRelease).toHaveBeenCalledTimes(1);
@@ -919,10 +922,11 @@ describe("openai video generation provider", () => {
           status: "completed",
         }),
       )
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mp4-bytes"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     const input = Buffer.from("!mp4-bytes?").subarray(1, -1);
@@ -983,10 +987,11 @@ describe("openai video generation provider", () => {
       .mockResolvedValueOnce(
         streamedJsonResponse({ id: "vid_edit_completed", model: "sora-2", status: "completed" }),
       )
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("completed-edit"),
-      });
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("completed-edit"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const result = await buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
       provider: "openai",
