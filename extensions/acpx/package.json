@@ -22,6 +22,7 @@
       "./index.ts"
     ],
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/acpx",
       "npmSpec": "@openclaw/acpx",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.25",
