@@ -168,4 +168,62 @@ describe("session create filesystem root", () => {
       }),
     ).toEqual({ ok: true, value: { sessionCwd } });
   });
+
+  it("rejects a container workdir instead of probing it on the Gateway host", () => {
+    // A Docker-sandboxed agent reports its container workdir; `suggest_task` persists
+    // that value, so the Host must classify it instead of failing on a raw lstat.
+    expect(
+      prepareSessionCreateFilesystemRoot({
+        cfg,
+        targetAgentId: "main",
+        enforceSandboxContainment: true,
+        sessionCwd: "/workspace",
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message:
+          "sessions.create cwd is a container path that does not exist on the Gateway host: /workspace",
+      },
+    });
+  });
+
+  it("still probes host-owned POSIX-style paths so missing ones stay unavailable", () => {
+    // Inside the workspace, a missing entry is a Host problem and must keep reporting
+    // as unavailable rather than being misread as a container path.
+    expect(
+      prepareSessionCreateFilesystemRoot({
+        cfg,
+        targetAgentId: "main",
+        enforceSandboxContainment: true,
+        sessionCwd: path.join(workspace, "missing"),
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("cwd is unavailable:") },
+    });
+  });
+
+  it.each([
+    ["sandbox is off", "off"],
+    ["containment is not enforced", undefined],
+  ] as const)("keeps the container-path shape unrejected when %s", (_name, mode) => {
+    if (mode) {
+      cfg.agents!.defaults!.sandbox = { mode };
+    }
+    // Without an active sandbox there is no container namespace to classify against,
+    // so the pre-existing host probe behavior must be preserved unchanged.
+    const result = prepareSessionCreateFilesystemRoot({
+      cfg,
+      targetAgentId: "main",
+      enforceSandboxContainment: mode !== undefined,
+      sessionCwd: "/workspace",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain("cwd is unavailable:");
+      expect(result.error.message).not.toContain("container path");
+    }
+  });
 });
