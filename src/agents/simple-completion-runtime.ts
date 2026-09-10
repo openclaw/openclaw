@@ -522,6 +522,31 @@ async function withPreparedSimpleCompletionRuntime<T>(
   }
 }
 
+type AcquiredSimpleCompletionModel =
+  | (Extract<PreparedSimpleCompletionModel, { model: Model }> & { release: () => void })
+  | Extract<PreparedSimpleCompletionModel, { error: string }>;
+
+/** Acquire the exact provider/model already selected by a finite internal caller. */
+export async function acquireSimpleCompletionModel(
+  params: Omit<Parameters<typeof prepareSimpleCompletionModel>[0], "preparedModelRuntime">,
+): Promise<AcquiredSimpleCompletionModel> {
+  return await acquirePreparedSimpleCompletionModel(
+    params,
+    [
+      {
+        provider: params.provider,
+        modelId: params.modelId,
+        ...(params.agentRuntimeId ? { runtime: params.agentRuntimeId } : {}),
+      },
+    ],
+    (context) =>
+      prepareSimpleCompletionModelCore(
+        { ...params, agentDir: context.preparedModelRuntime.agentDir },
+        context,
+      ),
+  );
+}
+
 type AcquiredSimpleCompletionModelForAgent =
   | (Extract<PreparedSimpleCompletionModelForAgent, { model: Model }> & { release: () => void })
   | Extract<PreparedSimpleCompletionModelForAgent, { error: string }>;
@@ -602,7 +627,40 @@ export async function acquireSimpleCompletionModelForAgent(
       return { error: `No model configured for agent ${params.agentId}.` };
     }
   }
-  const result = createDeferredCore<AcquiredSimpleCompletionModelForAgent>();
+  const acquired = await acquirePreparedSimpleCompletionModel(
+    { ...params, agentDir: selection.agentDir, pluginMetadataSnapshot: metadataSnapshot },
+    [{ provider: selection.provider, modelId: selection.modelId }],
+    (context) =>
+      prepareSimpleCompletionModelCore(
+        {
+          cfg: params.cfg,
+          agentId: params.agentId,
+          provider: selection.provider,
+          modelId: selection.modelId,
+          agentDir: selection.agentDir,
+          profileId: selection.profileId,
+          preferredProfile: params.preferredProfile,
+          allowMissingApiKeyModes: params.allowMissingApiKeyModes,
+          ...(params.allowBundledStaticCatalogFallback !== undefined
+            ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+            : {}),
+          skipAgentDiscovery: params.skipAgentDiscovery,
+          bindAuthOwner: params.bindAuthOwner,
+        },
+        context,
+      ),
+  );
+  return { ...acquired, selection };
+}
+
+async function acquirePreparedSimpleCompletionModel(
+  params: Parameters<typeof acquirePreparedSimpleCompletionRuntime>[0],
+  runtimePluginSelections: readonly AgentHarnessPluginSelection[],
+  prepareModel: (
+    context: PreparedSimpleCompletionResolverContext,
+  ) => Promise<PreparedSimpleCompletionModel>,
+): Promise<AcquiredSimpleCompletionModel> {
+  const result = createDeferredCore<AcquiredSimpleCompletionModel>();
   const trackOwner = captureAsyncWorkTracker();
   const parentSignal = getAsyncWorkSignal();
   const work = new AsyncWorkScope();
@@ -619,12 +677,8 @@ export async function acquireSimpleCompletionModelForAgent(
   };
   const prepare = async () => {
     const runtime = await acquirePreparedSimpleCompletionRuntime(
-      {
-        ...params,
-        agentDir: selection.agentDir,
-        pluginMetadataSnapshot: metadataSnapshot,
-      },
-      [{ provider: selection.provider, modelId: selection.modelId }],
+      params,
+      runtimePluginSelections,
       (release) => {
         releaseRuntime = release;
       },
@@ -633,33 +687,15 @@ export async function acquireSimpleCompletionModelForAgent(
       runtime.context.preparedModelRuntime,
       () => {
         runInContext = AsyncLocalStorage.snapshot();
-        return prepareSimpleCompletionModelCore(
-          {
-            cfg: params.cfg,
-            agentId: params.agentId,
-            provider: selection.provider,
-            modelId: selection.modelId,
-            agentDir: selection.agentDir,
-            profileId: selection.profileId,
-            preferredProfile: params.preferredProfile,
-            allowMissingApiKeyModes: params.allowMissingApiKeyModes,
-            ...(params.allowBundledStaticCatalogFallback !== undefined
-              ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-              : {}),
-            skipAgentDiscovery: params.skipAgentDiscovery,
-            bindAuthOwner: params.bindAuthOwner,
-          },
-          runtime.context,
-        );
+        return prepareModel(runtime.context);
       },
     );
     if ("error" in prepared) {
-      return { ...prepared, selection };
+      return prepared;
     }
     callerReleased = false;
     return {
       ...prepared,
-      selection,
       release: () => {
         callerReleased = true;
         releaseWhenUnused();
