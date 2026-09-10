@@ -182,7 +182,7 @@ vi.mock("../../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
-vi.mock("../onboard-helpers.js", () => ({
+vi.mock("../../infra/browser-open.js", () => ({
   openUrl: mocks.openUrl,
 }));
 

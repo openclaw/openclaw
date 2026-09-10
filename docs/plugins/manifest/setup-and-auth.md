@@ -91,6 +91,15 @@ expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
 when the local service is reachable but no model qualifies for automatic setup.
 The availability probe is also read-only.
 
+Browser-based `channelLogin` methods use `ctx.oauth.authorize` when the host
+supplies it. Pass the provider-generated `state`, a `timeoutMs` deadline, and
+`buildAuthorizationUrl(redirectUrl)`. The host owns the HTTPS callback, consumes
+each response once, and returns `{ code, state }`. The plugin retains its PKCE
+verifier and exchanges the code. Forward `ctx.signal` and recheck
+`ctx.assertCurrent` before external effects. Keep local and remote CLI completion
+when this capability is absent. A received code is not a persisted credential;
+the host reports success only after saving it.
+
 When `personalAccount` is true, the method runs through the shared wizard protocol
 with a credential-free environment/config, no agent directory or preseeded secret,
 and plaintext input mode. It must return exactly one inline credential for its

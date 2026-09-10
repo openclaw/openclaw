@@ -12,6 +12,7 @@ import {
   ProviderCredentialsSavedError,
 } from "../../shared/provider-auth-result.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
+import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
@@ -388,6 +389,73 @@ describe("handleLoginCommand", () => {
         isRemote: true,
       }),
     );
+  });
+
+  it("delivers the OpenRouter sign-in button before login completes", async () => {
+    const url = "https://openrouter.ai/auth?code_challenge=test-challenge";
+    let finishLogin!: () => void;
+    const approval = new Promise<void>((resolve) => {
+      finishLogin = resolve;
+    });
+    let receiveReply!: (reply: ReplyPayload) => void;
+    const preview = new Promise<ReplyPayload>((resolve) => {
+      receiveReply = resolve;
+    });
+    runModelsAuthLoginFlowMock.mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
+      await opts.openUrl?.(url);
+      await approval;
+      return {
+        providerId: "openrouter",
+        methodId: "oauth",
+        authRefresh: "refreshed",
+        profiles: [{ profileId: "openrouter:default", provider: "openrouter", mode: "api_key" }],
+      };
+    });
+    const login = handleLoginCommand(
+      buildLoginParams("/login openrouter", {
+        opts: { onBlockReply: async (reply) => receiveReply(reply) },
+      }),
+      true,
+    );
+    try {
+      const first = await Promise.race([
+        preview.then((reply) => ({ state: "preview", reply })),
+        login.then((result) => ({ state: "completed", reply: result?.reply })),
+      ]);
+      expect(first).toMatchObject({
+        state: "preview",
+        reply: {
+          text: expect.stringContaining(url),
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: expect.arrayContaining([
+              {
+                type: "buttons",
+                buttons: [{ label: "Sign in with OpenRouter", action: { type: "url", url } }],
+              },
+            ]),
+          },
+        },
+      });
+    } finally {
+      finishLogin();
+      await login;
+    }
+  });
+
+  it("cancels pending provider login with the initiating chat turn", async () => {
+    const controller = new AbortController();
+    const options = { ...blockReplyOpts(), abortSignal: controller.signal };
+    let providerSignal: AbortSignal | undefined;
+    runModelsAuthLoginFlowMock.mockImplementationOnce(async (flow: ModelsAuthLoginFlowOptions) => {
+      providerSignal = flow.signal;
+      controller.abort(new Error("chat cancelled"));
+      await flow.prompter.note("Do not deliver this stale sign-in link.");
+      return { profiles: [], providerId: "openai", methodId: "device-code" };
+    });
+    await handleLoginCommand(buildLoginParams("/login codex", { opts: options }), true);
+    expect(providerSignal?.aborted).toBe(true);
+    expect(options.onBlockReply).not.toHaveBeenCalled();
   });
 
   it.each(["web", "discord", "slack"] as const)(
@@ -820,11 +888,67 @@ describe("handleLoginCommand", () => {
     expect(second).toEqual({
       shouldContinue: false,
       reply: {
-        text: "OpenAI login is already active for this chat or channel. Complete it, or wait for it to expire before requesting a new one.",
+        text: "A provider login is already active for this chat. Complete it, or send `/login cancel` before requesting a new one.",
       },
     });
     resolveLogin();
     await first;
+  });
+
+  it("cancels only the initiating Control UI session when chats have no delivery target", async () => {
+    let finishLogin!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finishLogin = resolve;
+    });
+    const signals: AbortSignal[] = [];
+    runModelsAuthLoginFlowMock.mockImplementation(async (opts: ModelsAuthLoginFlowOptions) => {
+      if (!opts.signal) {
+        throw new Error("expected login signal");
+      }
+      signals.push(opts.signal);
+      await pending;
+      return {
+        providerId: "openai",
+        methodId: "device-code",
+        authRefresh: "refreshed",
+        profiles: [],
+      };
+    });
+    const params = (sessionKey: string, command = "/login codex") =>
+      buildLoginParams(command, {
+        sessionKey,
+        ctx: {
+          Provider: "internal",
+          Surface: "internal",
+          OriginatingChannel: "internal",
+          OriginatingTo: undefined,
+          To: undefined,
+          AccountId: undefined,
+          MessageThreadId: undefined,
+        },
+        command: {
+          channel: "internal",
+          channelId: "internal",
+          accountId: undefined,
+          to: undefined,
+        },
+        opts: { ...blockReplyOpts(), assertProviderLoginAuthority: vi.fn() },
+      });
+    const first = handleLoginCommand(params("agent:main:chat:first"), true);
+    const other = handleLoginCommand(params("agent:main:chat:other"), true);
+    try {
+      await vi.waitFor(() => expect(signals).toHaveLength(2));
+      const cancelled = await handleLoginCommand(
+        params("agent:main:chat:first", "/login cancel"),
+        true,
+      );
+      expect(cancelled?.reply?.text).toBe("Provider login cancelled for this chat.");
+      expect(signals[0]?.aborted).toBe(true);
+      expect(signals[1]?.aborted).toBe(false);
+    } finally {
+      finishLogin();
+      await Promise.all([first, other]);
+    }
   });
 
   it("cancels an expired flow before replacing its reservation", async () => {

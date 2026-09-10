@@ -37,7 +37,6 @@ import {
 } from "../../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
-import { isRemoteEnvironment } from "../../infra/remote-env.js";
 import {
   applyProviderAuthConfigPatch,
   applyDefaultModel,
@@ -46,8 +45,9 @@ import {
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
+import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-auth-method.js";
 import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
-import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
+import type { ProviderAuthContext } from "../../plugins/provider-authentication.types.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
   resolvePluginSetupProviderCore,
@@ -650,6 +650,7 @@ async function runProviderAuthMethod(params: {
   isRemote?: boolean;
   signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
+  browserAuthorization?: ProviderAuthContext["oauth"]["authorize"];
   beforePersistentEffect?: () => void | Promise<void>;
   refreshAfterLogin?: ModelsAuthLoginFlowOptions["refreshAfterLogin"];
 }): Promise<{
@@ -659,7 +660,8 @@ async function runProviderAuthMethod(params: {
 }> {
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
-  const result = await params.method.run({
+  const result = await runProviderPluginAuthMethodUnpersisted({
+    method: params.method,
     config: params.config,
     credentialOnly: params.credentialOnly,
     assertCurrent: params.assertCurrent,
@@ -669,17 +671,10 @@ async function runProviderAuthMethod(params: {
     prompter: params.prompter,
     runtime: params.runtime,
     allowSecretRefPrompt: false,
-    isRemote: params.isRemote ?? isRemoteEnvironment(),
+    isRemote: params.isRemote,
     signal: params.signal,
-    openUrl:
-      params.openUrl ??
-      (async (url) => {
-        const { openUrl } = await import("../onboard-helpers.js");
-        await openUrl(url);
-      }),
-    oauth: {
-      createVpsAwareHandlers: (runtimeParams) => createVpsAwareOAuthHandlers(runtimeParams),
-    },
+    openUrl: params.openUrl,
+    browserAuthorization: params.browserAuthorization,
   });
   params.signal?.throwIfAborted();
   const connectionResult = params.credentialOnly
@@ -1053,6 +1048,7 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   isRemote?: boolean;
   signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
+  browserAuthorization?: ProviderAuthContext["oauth"]["authorize"];
   beforePersistentEffect?: () => void | Promise<void>;
   /** Publish a hosted login through its current Gateway instead of a separate CLI connection. */
   refreshAfterLogin?: (agentId: string) => Promise<void>;
@@ -1290,6 +1286,7 @@ export async function runModelsAuthLoginFlowCore(
     isRemote: opts.isRemote,
     signal: opts.signal,
     openUrl: opts.openUrl,
+    browserAuthorization: opts.browserAuthorization,
     beforePersistentEffect: opts.beforePersistentEffect,
     refreshAfterLogin: opts.refreshAfterLogin,
   });
