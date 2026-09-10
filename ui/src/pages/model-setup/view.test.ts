@@ -2,7 +2,7 @@
 
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WizardStep } from "../../api/types.ts";
+import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import {
   detected,
@@ -697,7 +697,7 @@ describe("renderModelSetup", () => {
 
   it("keeps saved replacement credentials selectable without repeating the current route", () => {
     const onActivateCandidate = vi.fn();
-    const savedCandidate = {
+    const savedCandidate: SystemAgentSetupDetectResult["candidates"][number] = {
       kind: "saved-auth:openai:replacement",
       brandId: "openai",
       label: "Saved OpenAI credentials",
