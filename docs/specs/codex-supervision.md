@@ -20,6 +20,24 @@ fleet catalog, authenticated operator UI, session binding, and channel delivery.
 The feature belongs to the official `codex` plugin. There is no separate
 Supervisor plugin or second Codex protocol implementation.
 
+This spec uses these stage names:
+
+- **Gateway-local branch**: the new supervised Chat that OpenClaw creates from a
+  stored or idle local Codex source instead of resuming that source thread.
+- **Pending harness branch**: that branch before its first turn, when the bounded
+  history is projected but no canonical Codex thread exists yet.
+- **Chat mirror** (visible history mirror): the bounded copy of visible user and
+  assistant messages projected into the Chat.
+- **Visible-history branch**: an unmapped Gateway-local source that carries only
+  that mirrored history, so its canonical harness thread never resumes the
+  source.
+- **Canonical appServer-source branch**: the native Codex thread the plugin
+  creates with `threadSource: "appServer"` after pinning the source snapshot.
+- **Canonical full Codex harness thread**: that canonical thread once it runs
+  with OpenClaw's full harness tool surface; every later model turn runs on it.
+- **Supervised model-locked Chat**: an OpenClaw Chat bound to a supervised
+  thread under the Codex-only model and runtime lock.
+
 ## Product boundary
 
 The catalog registers whenever the Codex plugin is active unless native session

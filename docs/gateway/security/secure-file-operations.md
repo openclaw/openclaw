@@ -16,7 +16,7 @@ OpenClaw sets fs-safe's optional native helper to **off** by default:
 - the guarded JavaScript paths support OpenClaw's normal filesystem operations.
 - disabling native loading keeps runtime behavior deterministic across desktop, Docker, CI, and bundled-app environments.
 
-fs-safe publishes prebuilt native helpers as optional platform packages for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. A normal package install selects the matching package without a compiler. OpenClaw loads it through fs-safe's own dependency scope, including nested pnpm installs. Installs that omit optional dependencies retain the guarded JavaScript path; `require` mode fails when the binding is unavailable.
+fs-safe publishes prebuilt native helpers as optional platform packages for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. A normal package install selects the matching package without a compiler. OpenClaw loads it through fs-safe's own dependency scope, including nested pnpm installs. Installs that omit optional dependencies retain the guarded JavaScript path. The `require` mode fails when the binding is unavailable.
 
 OpenClaw only changes the _default_. An explicit setting always wins:
 
@@ -33,7 +33,7 @@ OPENCLAW_FS_SAFE_NATIVE_MODE=require
 
 The generic fs-safe environment name also works: `FS_SAFE_NATIVE_MODE`.
 
-fs-safe still maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` values to native modes with a deprecation warning. Replace them with `FS_SAFE_NATIVE_MODE` or `OPENCLAW_FS_SAFE_NATIVE_MODE`; Python interpreter path settings are no longer used.
+fs-safe still maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` values to native modes with a deprecation warning. Replace them with `FS_SAFE_NATIVE_MODE` or `OPENCLAW_FS_SAFE_NATIVE_MODE`. Python interpreter path settings are no longer used.
 
 Use `require` (not `auto`) when native primitives are part of your security posture. `auto` uses the guarded JavaScript implementation when the platform binding is unavailable.
 
@@ -53,9 +53,9 @@ This covers OpenClaw's normal threat model: trusted gateway code handling untrus
 
 ## What native acceleration adds
 
-The native helper provides policy-free filesystem primitives used by fs-safe for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`; macOS uses descriptor-relative component checks and `renameatx_np`; Windows uses handle-relative operations and replacement-disabled rename.
+The native helper provides policy-free filesystem primitives. fs-safe uses them for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`. macOS uses descriptor-relative component checks and `renameatx_np`. Windows uses handle-relative operations and replacement-disabled rename.
 
-The TypeScript layer still owns policy, validation, retries, cleanup, and fallback decisions. Native support narrows filesystem race windows; it does not turn fs-safe into a sandbox.
+The TypeScript layer still owns policy, validation, retries, cleanup, and fallback decisions. Native support narrows filesystem race windows. It does not turn fs-safe into a sandbox.
 
 If your package deployment requires those native primitives, set:
 
@@ -63,14 +63,14 @@ If your package deployment requires those native primitives, set:
 OPENCLAW_FS_SAFE_NATIVE_MODE=require
 ```
 
-In `require` mode, an unavailable or unloadable helper causes `helper-unavailable` instead of silently using the JavaScript path. Standalone sealed worker bundles have no dependency tree and explicitly disable native loading, even when the host sets a mode override.
+In `require` mode, an unavailable or unloadable helper causes `helper-unavailable` instead of silently using the JavaScript path. Standalone sealed worker bundles have no dependency tree. They explicitly disable native loading, even when the host sets a mode override.
 
 ## Plugin and core guidance
 
-- Plugin-facing file access should go through `openclaw/plugin-sdk/*` helpers, not raw `fs`, when a path comes from a message, model output, config, or plugin input.
+- Plugin-facing file access should go through `openclaw/plugin-sdk/*` helpers, not raw `fs`. This applies when a path comes from a message, model output, config, or plugin input.
 - Core code should use the fs-safe wrappers under `src/infra/*` so OpenClaw's process policy applies consistently.
 - Archive extraction should use the fs-safe archive helpers with explicit size, entry-count, link, and destination limits.
-- Secrets should use OpenClaw secret helpers or fs-safe secret/private-state helpers; do not hand-roll mode checks around `fs.writeFile`.
+- Secrets should use OpenClaw secret helpers or fs-safe secret/private-state helpers. Do not hand-roll mode checks around `fs.writeFile`.
 - For hostile local-user isolation, do not rely on fs-safe alone. Run separate gateways under separate OS users/hosts, or use sandboxing.
 
 Related: [Security](/gateway/security), [Sandboxing](/gateway/sandboxing), [Exec approvals](/tools/exec-approvals), [Secrets](/gateway/secrets).

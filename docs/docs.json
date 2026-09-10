@@ -1354,7 +1354,9 @@
                   "start/why-openclaw/versioned-state-guarded-upgrades",
                   "start/why-openclaw/provenance",
                   "start/why-openclaw/openclaw-and-hermes-agent",
-                  "concepts/features"
+                  "concepts/features",
+                  "start/hubs",
+                  "start/docs-directory"
                 ]
               },
               {
@@ -3165,6 +3167,7 @@
                   },
                   "reference/rich-output-protocol",
                   "reference/secretref-credential-surface",
+                  "reference/secret-placeholder-conventions",
                   "date-time",
                   "concepts/timezone"
                 ]
@@ -3384,9 +3387,7 @@
               {
                 "group": "Community and meta",
                 "pages": [
-                  "start/lore",
-                  "start/hubs",
-                  "start/docs-directory"
+                  "start/lore"
                 ]
               }
             ]

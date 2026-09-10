@@ -32,7 +32,7 @@ window is deleted, so rewriting a transcript cannot make an old input runnable a
 
 Worker preparation uses the same-version rule for the bare nullable
 `worker_environments.preparation_purpose TEXT` column in the shared state
-database. Shared-state database startup repair adds it without changing state schema 17.
+database. Shared state database startup repair adds it without changing state schema 17.
 New admissions write `reserve` or `build`; existing preparation rows retain
 `NULL` and read as `reserve`, without backfilling demand or changing expiry.
 Older readers ignore the column and apply their existing reserve policy to all
@@ -112,7 +112,7 @@ but disables the new structured controls; upgrading can read retained receipts.
 
 OpenClaw 2026.9.2 introduced the update ledger but reopens it with old code after
 running the target's Doctor, including a final read after recording its terminal
-outcome. The shared-state database runner lets this updater finish by applying
+outcome. The shared state database runner lets this updater finish by applying
 migration content first and publishing the new schema version later. This rule
 applies to every writable open, including Doctor, the restarted Gateway, and
 other CLI processes.

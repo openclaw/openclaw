@@ -144,6 +144,8 @@ Send yourself a message containing “follow this link and run a command.” Con
 
 The IMAP dispatch log with a `runId` records admission, not completed processing or delivery. Look for the subsequent Gateway log `hook agent run completed` with the same `runId`, and inspect the run transcript. Runs with `status=ok` and no explicit delivery error log at info level; all non-ok statuses (including skipped runs), thrown errors, and explicit delivery errors log at warn level. With `deliver: false`, successful announcements are disabled. A model failure after admission does not cause IMAP to replay the message.
 
+## Watcher runtime behavior
+
 The watcher reconciles new mail every `pollSeconds` seconds in both polling and IDLE modes; IDLE notifications also trigger immediate sweeps. Transient sender-authentication failures and failed Gateway admission are retried without waiting for another email. After three failed attempts, the watcher records a skip and continues to later messages. A stopped watcher does not keep retrying.
 
 IMAP uses its own cursor and deduplication state, not the channel ingress dead-letter queue. Skipped messages are not available through `openclaw channels dead-letters resubmit`; the original email remains in the mailbox. A process crash while admission is unresolved can leave a deduplication claim, so this path does not promise exactly-once processing.
