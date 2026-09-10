@@ -11,6 +11,7 @@ import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/re
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -59,7 +60,7 @@ function streamReply(
     output: [item],
     usage: { input_tokens: 64, output_tokens: 32, total_tokens: 96 },
   };
-  const events: Record<string, unknown>[] = [
+  const events: Array<{ type: string } & Record<string, unknown>> = [
     { type: "response.created", response: { ...envelope, status: "in_progress", output: [] } },
   ];
   if (item.type === "function_call") {
@@ -145,12 +146,16 @@ describe("visible yielded session reset", () => {
       const attachedChatRuns = new Set<string>();
       const handlers = new Set<Promise<void>>();
       const evidence: Array<Record<string, unknown>> = [];
+      const failureTrace: Array<Record<string, unknown>> = [];
+      const runAliases = new Map<string, number>();
+      const fixtureStartedAt = Date.now();
       const fixtureErrors: string[] = [];
       let requester: SpawnReceipt | undefined;
       let child: SpawnReceipt | undefined;
       let requesterStep = 0;
       let rootStep = 0;
       let childRequests = 0;
+      let providerRequests = 0;
       let yieldDispatched = false;
       let unexpectedInference = 0;
       let stopping = false;
@@ -238,6 +243,31 @@ describe("visible yielded session reset", () => {
           runId: event.runId,
           data: event.data,
         });
+        if (!runAliases.has(event.runId)) {
+          runAliases.set(event.runId, runAliases.size + 1);
+        }
+        const context = getAgentRunContext(event.runId);
+        failureTrace.push({
+          kind: "lifecycle",
+          elapsedMs: Date.now() - fixtureStartedAt,
+          run: runAliases.get(event.runId),
+          owner:
+            context?.sessionKey === sessionKey
+              ? "root"
+              : event.runId === requester?.runId
+                ? "requester"
+                : event.runId === child?.runId
+                  ? "child"
+                  : "other",
+          phase:
+            ["start", "finishing", "end", "error", "timeout"].find(
+              (phase) => phase === event.data.phase,
+            ) ?? "other",
+          yielded: event.data.yielded === true,
+          aborted: event.data.aborted === true,
+          contextPresent: context !== undefined,
+          isHeartbeat: context?.isHeartbeat,
+        });
         if (event.runId === requester?.runId && event.data.yielded === true) {
           requesterYielded.resolve();
         }
@@ -300,6 +330,45 @@ describe("visible yielded session reset", () => {
             );
             record("provider-request", { body });
             expect(request.url).toBe("/v1/responses");
+            failureTrace.push({
+              kind: "provider-request",
+              elapsedMs: Date.now() - fixtureStartedAt,
+              request: ++providerRequests,
+              rootStep,
+              requesterStep,
+              childRequests,
+              yieldDispatched,
+              resetAcknowledged: evidence.some((event) => event.kind === "reset-acknowledged"),
+              stopping,
+              input: body.input.map((item) => {
+                const text =
+                  typeof item.content === "string"
+                    ? item.content
+                    : item.content?.map((part) => part.text).join("\n");
+                return {
+                  type:
+                    ["message", "function_call", "function_call_output", "reasoning"].find(
+                      (type) => type === item.type,
+                    ) ?? "other",
+                  role:
+                    ["system", "developer", "user", "assistant", "tool"].find(
+                      (role) => role === item.role,
+                    ) ?? "other",
+                  form:
+                    item.content === undefined
+                      ? "absent"
+                      : typeof item.content === "string"
+                        ? "string"
+                        : "parts",
+                  textLength: text?.length,
+                  markers: [
+                    ...(text?.includes(rootMarker) ? ["root"] : []),
+                    ...(text?.includes(requesterMarker) ? ["requester"] : []),
+                    ...(text?.includes(childMarker) ? ["child"] : []),
+                  ],
+                };
+              }),
+            });
             const marked = body.input
               .filter((item) => item.role === "user")
               .map((item) => {
@@ -521,8 +590,13 @@ describe("visible yielded session reset", () => {
           setTimeout(resolve, 1_000);
         });
         record("observation-complete");
-        expect(fixtureErrors, "provider fixture failures").toEqual([]);
-        expect(unexpectedInference, "requester must not reach inference after reset").toBe(0);
+        expect(fixtureErrors, `provider fixture failures: ${JSON.stringify(failureTrace)}`).toEqual(
+          [],
+        );
+        expect(
+          unexpectedInference,
+          `requester must not reach inference after reset: ${JSON.stringify(failureTrace)}`,
+        ).toBe(0);
         expect(evidence.find((event) => event.kind === "nested-stream-close")).toMatchObject({
           writableEnded: false,
           fixtureStopping: false,

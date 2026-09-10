@@ -1267,11 +1267,17 @@ describe("abort detection", () => {
     ]) {
       addSubagentFixture(fixture);
     }
-    let writes = 0;
+    let failedTombstone = false;
     subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDiskOrThrow: () => {
-        writes += 1;
-        if (writes === 2) {
+      persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
+        const first = runs.get("run-persistence-failure-first");
+        if (
+          !failedTombstone &&
+          changedRunIds?.includes("run-persistence-failure-first") &&
+          first?.execution.status === "terminal" &&
+          first.endedReason === "subagent-killed"
+        ) {
+          failedTombstone = true;
           throw new Error("sqlite busy");
         }
       },
@@ -1283,6 +1289,7 @@ describe("abort detection", () => {
         requesterSessionKey: sessionKey,
       }),
     ).resolves.toEqual({ stopped: 1, failed: 1 });
+    expect(failedTombstone).toBe(true);
     expect(getSubagentRunByChildSessionKey(firstChildKey)?.killIntent).toBeDefined();
     expect(getSubagentRunByChildSessionKey(secondChildKey)?.endedReason).toBe("subagent-killed");
     expectSessionLaneCleared(firstChildKey);
