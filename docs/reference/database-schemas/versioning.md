@@ -29,6 +29,15 @@ already validate the optional pending-input table may reject the added column
 despite sharing version 19. Consumed source receipts remain until their session
 window is deleted, so rewriting a transcript cannot make an old input runnable again.
 
+Worker preparation uses the same-version rule for the bare nullable
+`worker_environments.preparation_purpose TEXT` column in the shared state
+database. Shared-state database startup repair adds it without changing state schema 17.
+New admissions write `reserve` or `build`; existing preparation rows retain
+`NULL` and read as `reserve`, without backfilling demand or changing expiry.
+Older readers ignore the column and apply their existing reserve policy to all
+prepared workers; stop pending builds before downgrading if they must complete.
+Reopening preserves purpose, consumption, demand, and cleanup ownership.
+
 The placement-move table uses this same-version rule for its bare nullable
 `abandon_source INTEGER`, `target_machine_class TEXT`, and `target_os TEXT`
 columns. The feature ensures these columns only on first move use; database

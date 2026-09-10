@@ -1878,6 +1878,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   profile_snapshot_json TEXT NOT NULL,
   last_activated_at_ms INTEGER,
   preparation_key TEXT,
+  preparation_purpose TEXT,
   preparation_demand_at_ms INTEGER,
   preparation_expires_at_ms INTEGER,
   preparation_consumed_at_ms INTEGER CHECK (

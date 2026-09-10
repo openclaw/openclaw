@@ -1,13 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { SecretRef } from "../../config/types.secrets.js";
-import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
 import {
   WorkerProviderError,
   type WorkerExecutionMode,
   type WorkerLease,
   type WorkerNodeRuntimeIdentity,
-  type WorkerProfile,
   type WorkerProvider,
 } from "../../plugins/types.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
@@ -32,6 +30,7 @@ import {
   requireProviderOperationTimeoutMs,
   requireWorkerLease,
   requireWorkerLeaseStatus,
+  requireWorkerProfile as validateWorkerProfile,
   resolveWorkerLeaseTransportError,
 } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -44,13 +43,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const now = options.now ?? Date.now;
   const { commitReady, ensurePendingCredential } = options.credentialBroker;
 
-  function requireWorkerProfile(value: unknown): WorkerProfile {
-    const error = validateCloudWorkerProfileSettings(value);
-    if (error) {
-      throw serviceError("invalid_profile", error);
-    }
-    return value as WorkerProfile;
-  }
+  const requireWorkerProfile = (value: unknown) => validateWorkerProfile(value, serviceError);
 
   const identityResolverFor = (
     record: WorkerEnvironmentRecord,

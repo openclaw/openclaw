@@ -93,6 +93,8 @@ export {
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResultSchema,
+  EnvironmentsPrepareParamsSchema,
+  EnvironmentsPrepareResultSchema,
   EnvironmentsDestroyParamsSchema,
   EnvironmentsDestroyResultSchema,
   EnvironmentsListParamsSchema,

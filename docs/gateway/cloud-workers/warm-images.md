@@ -56,6 +56,19 @@ A ready-worker hit bypasses provisioning. A foreground miss uses ordinary
 snapshot refresh and may wait for a required capture before enrollment; disabling
 reserves preserves that refresh behavior.
 
+**Build on demand.** Call `environments.prepare` with `{ profileId, projectPath }`
+and `operator.admin` scope to prepare the local Git checkout's `HEAD` without a
+session. The profile must support project preparation. This authorizes the
+committed project setup recipe and returns `{ environmentId, preparationKey,
+reused }`; a matching live, unconsumed build or reserve is reused. An unfinished
+reserve becomes a build without renewing its expiry. A build can finish
+when `readyWorkers` is zero, but admission still requires room under
+`preparedPool.maxTotal`. Once ready, ordinary reserve policy keeps it or retires
+it as surplus on the next pool pass. Its demand starts the normal refill and
+provider idle-timeout window. Track its `preparation: { purpose, key }` in
+`environments.list` or `environments.status`; `environments.destroy` cancels it
+and waits for provider work to settle and cleanup to finish.
+
 Set `cloudWorkers.profiles.<id>.readyWorkers` to change the per-project target and
 `cloudWorkers.preparedPool.maxTotal` to change the shared cap. Zero disables the
 corresponding reserves and drains unused capacity while preserving active
@@ -63,8 +76,8 @@ sessions and image reuse. Preparing workers and workers awaiting confirmed
 cleanup count against the limits. Ready workers incur running-machine charges
 until the provider confirms deletion.
 
-Each reserve expires from the successful activation that created its demand,
-using the provider's existing idle timeout. Refill and Gateway restart do not
+Each reserve expires from the successful activation or explicit build that
+created its demand, using the provider's existing idle timeout. Refill and Gateway restart do not
 extend that window. An already-admitted capture can finish within its provider
 budget after expiry, while its worker remains counted. Expiry blocks subsequent
 enrollment, readiness, and consumption; cleanup follows settled capture custody.

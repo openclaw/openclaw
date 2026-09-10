@@ -91,7 +91,14 @@ function preparedHarness(
     profileSnapshot: intent.profileSnapshot,
     provisionOperationId: `provision:${environmentId}`,
     ...(reserve
-      ? { preparation: { key: PREPARATION_KEY, demandAtMs: 900, expiresAtMs: 10_000 } }
+      ? {
+          preparation: {
+            purpose: "reserve",
+            key: PREPARATION_KEY,
+            demandAtMs: 900,
+            expiresAtMs: 10_000,
+          },
+        }
       : {}),
   });
   store.transition({ environmentId, from: "requested", to: "provisioning" });
