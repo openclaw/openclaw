@@ -112,6 +112,55 @@
   background: var(--danger);
 }
 
+.gateway-isolation-command {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.gateway-isolation-command code {
+  flex: 1 1 20rem;
+  min-width: min(100%, 20rem);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.gateway-isolation-command .chat-copy-btn__icon {
+  position: relative;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.gateway-isolation-command .chat-copy-btn__icon-copy,
+.gateway-isolation-command .chat-copy-btn__icon-check {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  transition: opacity 150ms ease;
+}
+
+.gateway-isolation-command .chat-copy-btn__icon-check,
+.gateway-isolation-command .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
+  opacity: 0;
+}
+
+.gateway-isolation-command .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
+  opacity: 1;
+}
+
 @media (max-width: 640px) {
   .config-host {
     grid-template-columns: 1fr;

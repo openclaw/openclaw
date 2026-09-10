@@ -39,10 +39,10 @@ const enSettings = {
       toggleSecretVisibility: "Toggle secret visibility",
     },
     gatewayIsolation: {
-      title: "Gateway isolation",
+      title: "Gateway Isolation",
       reportedState: "Reported Gateway isolation",
       changeWithCli: "Change with CLI",
-      instruction: "Run from the signed-in Gateway user session.",
+      instruction: "Run from your signed-in Windows user session.",
     },
   },
   cloudWorkersPage: {

@@ -1,10 +1,10 @@
 import { html, nothing } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { renderCopyButton } from "../../components/copy-button.ts";
 import {
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsStatus,
-  renderSettingsValue,
   type SettingsSectionProps,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -177,7 +177,13 @@ function renderGatewayIsolationSection(info: SystemInfoResult | null | undefined
     renderSettingsRow({
       title: t("connection.gatewayIsolation.changeWithCli"),
       description: t("connection.gatewayIsolation.instruction"),
-      control: renderSettingsValue(command, { mono: true }),
+      control: html`
+        <div class="gateway-isolation-command">
+          <code translate="no">${command}</code>
+          ${renderCopyButton(command, t("connection.help.copyCommand"))}
+        </div>
+      `,
+      stacked: true,
     }),
   ]);
 }

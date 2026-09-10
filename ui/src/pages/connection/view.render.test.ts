@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
@@ -291,26 +291,55 @@ describe("connection view rendering", () => {
       expectedCommand: "clawctl gateway-isolation enable",
     },
   ])(
-    "shows the reported $gatewayIsolation Gateway isolation posture",
-    ({ gatewayIsolation, expectedState, expectedCommand }) => {
-      const container = document.createElement("div");
-      render(
-        renderConnection(
-          createConnectionProps({
-            systemInfo: { ...deviceSystemInfo, gatewayIsolation },
-          }),
-        ),
-        container,
-      );
+    "shows the reported $gatewayIsolation Gateway Isolation posture",
+    async ({ gatewayIsolation, expectedState, expectedCommand }) => {
+      const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      const container = document.body.appendChild(document.createElement("div"));
 
-      const isolationHeading = Array.from(
-        container.querySelectorAll<HTMLElement>(".settings-section__heading"),
-      ).find((heading) => heading.textContent?.trim() === "Gateway isolation");
-      const isolationSection = isolationHeading?.closest(".settings-section");
-      expect(isolationSection).not.toBeNull();
-      expect(isolationSection?.textContent).toContain("Reported Gateway isolation");
-      expect(isolationSection?.textContent).toContain(expectedState);
-      expect(isolationSection?.textContent).toContain(expectedCommand);
+      try {
+        render(
+          renderConnection(
+            createConnectionProps({
+              systemInfo: { ...deviceSystemInfo, gatewayIsolation },
+            }),
+          ),
+          container,
+        );
+
+        const isolationHeading = Array.from(
+          container.querySelectorAll<HTMLElement>(".settings-section__heading"),
+        ).find((heading) => heading.textContent?.trim() === "Gateway Isolation");
+        const isolationSection = isolationHeading?.closest(".settings-section");
+        expect(isolationSection).not.toBeNull();
+        expect(isolationSection?.textContent).toContain("Reported Gateway isolation");
+        expect(isolationSection?.textContent).toContain(expectedState);
+        expect(isolationSection?.textContent).toContain(
+          "Run from your signed-in Windows user session.",
+        );
+
+        const command = isolationSection?.querySelector("code");
+        expect(command?.textContent?.trim()).toBe(expectedCommand);
+        const copyButton = isolationSection?.querySelector<HTMLButtonElement>(
+          'button[aria-label="Copy command"]',
+        );
+        expect(copyButton).not.toBeNull();
+        copyButton?.click();
+        await vi.waitFor(() => {
+          expect(writeText).toHaveBeenCalledWith(expectedCommand);
+        });
+      } finally {
+        container.remove();
+        if (clipboardDescriptor) {
+          Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+        } else {
+          Reflect.deleteProperty(navigator, "clipboard");
+        }
+      }
     },
   );
 
