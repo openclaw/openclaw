@@ -675,10 +675,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (props.stream !== null) {
     const text = sanitizeStreamText(props.stream);
     const prefix = accumulatedStreamText(segments, sanitizeStreamText);
-    const visibleText = uncoveredStreamText(
-      trimAccumulatedStreamPrefix(text, prefix),
-      historyTexts,
-    );
+    const visibleText = trimAccumulatedStreamPrefix(text, prefix);
     if (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
       const liveProgress = resolveProgress();
       const liveRunId = props.runId ?? liveProgress.runId;

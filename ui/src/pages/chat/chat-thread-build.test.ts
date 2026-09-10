@@ -86,8 +86,14 @@ describe("buildChatItems pre-tool stream dedup", () => {
         { role: "user", content: "Read the file.", timestamp: 1 },
         { role: "assistant", content: "I'll inspect the file.", timestamp: 2 },
       ],
-      stream: "I'll inspect the file. It looks fine.",
-      streamStartedAt: 3,
+      streamSegments: [
+        {
+          text: "I'll inspect the file. It looks fine.",
+          ts: 3,
+          toolCallId: "call-read",
+          runId: "run",
+        },
+      ],
     });
 
     expect(streamTexts(items)).toEqual(["It looks fine."]);
