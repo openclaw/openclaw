@@ -41,6 +41,14 @@ export function resolveCliExecutionAuthProfileId(params: {
   config: OpenClawConfig;
   agentDir: string;
   selected?: CliExecutionAuthProfileSelection;
+  /**
+   * Callers that reuse an existing native session must not let automatic
+   * selection introduce a different stored account: the session keeps its
+   * original identity without a compatibility re-check, so discovery would
+   * hand that session to another credential. Such callers pass `false` and
+   * fall back to the CLI child's own login instead.
+   */
+  discoverFallbackAccount?: boolean;
   loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
 }): string | undefined {
   const loadStore = params.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
@@ -89,6 +97,13 @@ export function resolveCliExecutionAuthProfileId(params: {
         `CLI backend "${params.cliExecutionProvider}" cannot use auth profile "${selectedAuthProfileId}" owned by "${credential.provider}".`,
       );
     }
+  }
+
+  // Fallback discovery may only introduce a stored account when the caller
+  // revalidates the resulting identity against the session it resumes.
+  // Callers that decline discovery keep the CLI child's own login.
+  if (params.discoverFallbackAccount === false) {
+    return undefined;
   }
 
   const cliProfileId = resolveAuthProfileOrder({

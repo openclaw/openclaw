@@ -199,6 +199,40 @@ describe("native CLI manual compaction", () => {
     expect(forwarded?.authProfileId).toBeUndefined();
   });
 
+  it("keeps the native identity when dropping an auto pin despite an eligible CLI credential", async () => {
+    // Dropping the auto model-provider pin must fall back to the CLI child's
+    // own login, not to automatic discovery: control operations resume the
+    // recorded native session without an auth-profile compatibility re-check,
+    // so a discovered CLI-owned credential would receive a session produced
+    // under a different account.
+    registerBackend();
+    authStoreProfiles["anthropic:default"] = {
+      type: "api_key",
+      provider: "anthropic",
+      key: "test-anthropic-key",
+    };
+    authStoreProfiles["claude-cli:work"] = {
+      type: "oauth",
+      provider: "claude-cli",
+      access: "test-cli-work-token",
+      refresh: "test-cli-work-refresh",
+      expires: Date.now() + 3_600_000,
+    };
+
+    await testing.compactNativeCliSession({
+      runtime: "claude-cli",
+      compactParams: compactParams({
+        cliSessionBinding: { sessionId: "native-session" },
+        authProfileId: "anthropic:default",
+        authProfileIdSource: "auto",
+      }),
+    });
+
+    const forwarded = runCliAgentMock.mock.calls[0]?.[0] as { authProfileId?: string } | undefined;
+    expect(forwarded).toMatchObject({ provider: "claude-cli", controlOperation: "compact" });
+    expect(forwarded?.authProfileId).toBeUndefined();
+  });
+
   it("keeps an explicitly selected model-provider credential for compaction", async () => {
     registerBackend();
     authStoreProfiles["anthropic:default"] = {

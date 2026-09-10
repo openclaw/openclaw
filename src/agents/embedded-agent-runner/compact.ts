@@ -134,6 +134,11 @@ export async function compactNativeCliSession(params: {
           authProfileId: sessionAuthProfileId,
           authProfileIdSource: params.compactParams.authProfileIdSource,
         },
+        // Control operations resume the recorded native session without an
+        // auth-profile compatibility re-check, so automatic selection must not
+        // discover a different stored account here; dropping the pin leaves the
+        // compaction under the CLI child's own login.
+        discoverFallbackAccount: false,
       })
     : undefined;
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
