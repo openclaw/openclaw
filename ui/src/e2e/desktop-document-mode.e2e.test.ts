@@ -725,7 +725,7 @@ suite.define(() => {
     });
   });
 
-  it("auto-connects view-only and provides four working touch actions", async () => {
+  it("auto-connects view-only and keeps touch actions beside Picture-in-Picture", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const { gateway, panel } = await openDesktopDocument(
         page,
@@ -753,7 +753,10 @@ suite.define(() => {
       expect(viewRequest.params).toEqual({ source: { kind: "host" }, control: false });
       await expect.poll(() => panel.getAttribute("data-view-only")).toBe("true");
       const touchActions = panel.locator(".desktop-touch-action, .desktop-sizing");
-      await expect.poll(() => touchActions.count()).toBe(4);
+      await expect.poll(() => touchActions.count()).toBe(5);
+      await panel
+        .getByRole("button", { name: "Open desktop in Picture-in-Picture", exact: true })
+        .waitFor();
       await panel.getByRole("button", { name: "Back", exact: true }).waitFor();
 
       await panel.getByRole("button", { name: "Take control", exact: true }).click();

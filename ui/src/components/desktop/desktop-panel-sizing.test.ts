@@ -136,7 +136,7 @@ describe("desktop panel sizing", () => {
       if (documentMode) {
         expect(
           panel.renderRoot.querySelectorAll(".desktop-touch-action, .desktop-sizing"),
-        ).toHaveLength(4);
+        ).toHaveLength(5);
       }
     },
   );

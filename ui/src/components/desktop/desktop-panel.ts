@@ -17,11 +17,7 @@ import {
   DESKTOP_PANEL_TOGGLE_EVENT,
   type DesktopPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import {
-  DesktopClient,
-  type DesktopDisconnectDetail,
-  type DesktopSizingMode,
-} from "./desktop-client.ts";
+import * as desktopTransport from "./desktop-client.ts";
 import { renderDesktopDocumentView } from "./desktop-document-view.ts";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
 import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
@@ -39,10 +35,10 @@ import { type DesktopPanelState, renderDesktopPanelRecovery } from "./desktop-pa
 import { desktopPanelElementStyles } from "./desktop-panel-styles.ts";
 import {
   renderDesktopCredentials,
-  renderDesktopNotice,
   renderDesktopPanelView,
   renderDesktopPicker,
 } from "./desktop-panel-view.ts";
+import { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
 import { DesktopSessionController } from "./desktop-session-controller.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
@@ -70,7 +66,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     | null = null;
 
   /** Browser tests replace the transport without opening a real RFB socket. */
-  desktopClientFactory: () => Pick<DesktopClient, "connect"> = () => new DesktopClient();
+  desktopClientFactory: () => Pick<desktopTransport.DesktopClient, "connect"> = () =>
+    new desktopTransport.DesktopClient();
 
   @state() private environments: EnvironmentSummary[] = [];
   @state() private loading = false;
@@ -84,10 +81,11 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @state() private launchingApp: DesktopAppId | null = null;
   @state() private launchErrorText: string | null = null;
   @state() private desktopApps: DesktopAppId[] = [];
-  @state() private sizingMode: DesktopSizingMode = "fit";
+  @state() private sizingMode: desktopTransport.DesktopSizingMode = "fit";
   @state() private canResize = false;
 
   private readonly connection = new DesktopConnectionHandoff();
+  private readonly pictureInPicture = new DesktopPictureInPicture(this, () => this.state);
   private credentials: DesktopCredentials | undefined;
   private credentialAuth: "vnc-password" | "ard-account" | undefined;
   private pendingConnection: PendingDesktopConnection | null = null;
@@ -308,6 +306,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   private disconnectConnection(retainViewer = false): void {
+    this.pictureInPicture.close();
     this.operationId += 1;
     this.pendingConnection = null;
     this.connection.begin(retainViewer);
@@ -553,7 +552,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
 
   private handleDesktopDisconnect(
     environmentId: string,
-    { code, reason, clean }: DesktopDisconnectDetail,
+    { code, reason, clean }: desktopTransport.DesktopDisconnectDetail,
   ): void {
     this.disconnectConnection();
     this.clearLaunchState();
@@ -630,7 +629,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     if (!this.available || (!this.documentMode && !this.embedded && !this.dockLayout.open)) {
       return nothing;
     }
-    const notice = renderDesktopNotice(
+    const notice = this.pictureInPicture.renderNotice(
       this.fullscreenMode.errorText ?? this.launchErrorText ?? this.errorText,
       this.noticeText,
       this.sessionSource.desktopAvailability,
@@ -673,7 +672,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     const sizing = {
       mode: this.sizingMode,
       canResize: this.canResize && this.controlling && this.state === "connected",
-      onChange: (mode: DesktopSizingMode) => {
+      onChange: (mode: desktopTransport.DesktopSizingMode) => {
         this.sizingMode = mode;
         this.connection.setSizingMode(mode);
       },
@@ -684,6 +683,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         controlling: this.controlling,
         sizing,
         keyboardInputValue: this.mobileKeyboard.value,
+        pictureInPictureControl: this.pictureInPicture.renderButton(),
         onControlToggle: () => void this.connectEnvironment(this.environmentId, !this.controlling),
         onKeyboardFocus: (event) => this.mobileKeyboard.focus(event),
         onKeyboardEvent: (event) => this.mobileKeyboard.handleKeyboardEvent(event),
@@ -710,6 +710,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         launchingApp: this.launchingApp,
         showApps: this.source?.kind === "environment",
         sizing,
+        pictureInPictureControl: this.pictureInPicture.renderButton(),
         onLaunch: (app) => void this.launchApp(app),
         onTakeControl: () => void this.connectEnvironment(this.environmentId, true),
         onDisconnect: () => {

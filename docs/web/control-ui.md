@@ -34,6 +34,27 @@ the agent switcher.
 If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
 
+## Watch a desktop in Picture-in-Picture
+
+Connect the Desktop viewer, then choose **Open desktop in Picture-in-Picture** in
+its toolbar. The browser opens a view-only, always-on-top window so you can watch
+the remote computer while using other tabs or apps. The same action is available
+in the docked panel, chat side panel, and focused desktop window.
+
+This requires a secure context (HTTPS or localhost) and a desktop browser that
+exposes the Document Picture-in-Picture API, including supported Chrome and
+Firefox versions. The control is disabled when the API is unavailable or the
+desktop is not connected. Browser permissions can still deny the request; check
+those permissions and click the control again to retry. OpenClaw does not replace
+unsupported PiP with an ordinary popup.
+
+PiP mirrors the existing live connection without taking control or opening a
+second desktop connection. Closing PiP leaves the original viewer and remote task
+running. Disconnecting, changing the viewer's source or session, or closing the
+originating viewer closes PiP; it does not stop the remote task. Keep the opener
+tab open. A sleeping computer or a browser that suspends the entire page cannot
+continue streaming.
+
 ## Quick open (local)
 
 If the Gateway is running on the same computer, open [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/)).
