@@ -230,9 +230,19 @@ function resolveMcpLoopbackTools(
     mode === "exact"
       ? applyGrantToolsAllow(scoped.tools, toolsAllow)
       : applyPolicyToolsAllow(scoped.tools, toolsAllow);
+  // Node/native exec authority is bound to its current host. It must not be
+  // reinterpreted as generic exec authority after a session handoff.
+  const sessionSendTools = includeNodeExecTool
+    ? tools.filter((tool) => readMcpLoopbackToolName(tool) !== "exec")
+    : tools;
   sessionSendToolCapRef.current = captureRequesterToolCap(
     filterToolsByRequesterCap(
-      [...tools, ...(context.nativeCronCreatorToolAllowlist ?? []).map((name) => ({ name }))],
+      [
+        ...sessionSendTools,
+        ...(context.nativeCronCreatorToolAllowlist ?? [])
+          .filter((name) => normalizeToolPolicyName(name) !== "exec")
+          .map((name) => ({ name })),
+      ],
       context.requesterToolCap,
     ),
     sessionSendToolCapRef.current?.deny,

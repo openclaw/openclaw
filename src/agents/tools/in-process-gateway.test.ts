@@ -38,6 +38,7 @@ import {
 import {
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
+  withGatewayToolCallerApprovalSignal,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
@@ -58,11 +59,16 @@ describe("trusted in-process Gateway session creation", () => {
     mocks.callGatewayTool.mockReset().mockResolvedValue({ key: "agent:main:dashboard:child" });
   });
 
-  it.each([false, true])(
-    "keeps bounded follow-up after completion, but honors cancellation (%s)",
-    async (cancel) => {
+  it.each([
+    { label: "normal completion", cancelSource: false, cancelRequest: false },
+    { label: "source cancellation", cancelSource: true, cancelRequest: false },
+    { label: "individual request cancellation", cancelSource: false, cancelRequest: true },
+  ])(
+    "keeps bounded follow-up after completion, but honors $label",
+    async ({ cancelSource, cancelRequest }) => {
       const abort = new AbortController();
-      const runId = `source-${cancel}`;
+      const requestAbort = new AbortController();
+      const runId = `source-${cancelSource}-${cancelRequest}`;
       const source = prepareAgentRunAdmission({
         cfg: {},
         operationalRunInstance: createOperationalRunInstanceRef(runId),
@@ -94,30 +100,37 @@ describe("trusted in-process Gateway session creation", () => {
             sessionKey: "agent:main:main",
           },
           () =>
-            runWithGatewayToolContinuationContext({}, async () => {
-              expect(getGatewayToolCallerIdentity()?.operationalRunInstance?.runId).not.toBe(runId);
-              expect(getRequesterToolCap()).toBe(cap);
-              assertFollowup = captureGatewayToolCallerAssertion();
-              entered.resolve();
-              await resume.promise;
-              await callAgentToolGatewayRequest({
-                method: "agent",
-                params: {
-                  sessionKey: "agent:main:other",
-                  message: "follow-up",
-                  idempotencyKey: "follow-up",
-                },
-              });
-            }),
+            withGatewayToolCallerApprovalSignal(requestAbort.signal, () =>
+              runWithGatewayToolContinuationContext({}, async () => {
+                expect(getGatewayToolCallerIdentity()?.operationalRunInstance?.runId).not.toBe(
+                  runId,
+                );
+                expect(getRequesterToolCap()).toBe(cap);
+                assertFollowup = captureGatewayToolCallerAssertion();
+                entered.resolve();
+                await resume.promise;
+                await callAgentToolGatewayRequest({
+                  method: "agent",
+                  params: {
+                    sessionKey: "agent:main:other",
+                    message: "follow-up",
+                    idempotencyKey: "follow-up",
+                  },
+                });
+              }),
+            ),
         ),
       );
       await entered.promise;
       source.close();
-      if (cancel) {
+      if (cancelSource) {
         abort.abort(new Error("explicit cancellation"));
       }
+      if (cancelRequest) {
+        requestAbort.abort(new Error("individual request cancellation"));
+      }
       resume.resolve();
-      if (cancel) {
+      if (cancelSource || cancelRequest) {
         await expect(followup).rejects.toThrow();
         expect(mocks.dispatch).not.toHaveBeenCalled();
       } else {

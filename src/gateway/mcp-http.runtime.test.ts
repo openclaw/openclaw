@@ -183,12 +183,15 @@ describe("resolveMcpLoopbackScopedTools", () => {
   ])(
     "advertises remote exec only with an eligible target: $name",
     async ({ nodes, node, exposed }) => {
+      let source: RequesterToolCapRef | undefined;
       listNodes.mockResolvedValue(nodes);
       resolveGatewayScopedTools.mockImplementation(
-        ({ includeNodeExecTool, nodeExecAvailable, execOverrides }) =>
-          scopedToolFixture(
+        ({ includeNodeExecTool, nodeExecAvailable, execOverrides, sessionSendToolCapRef }) => {
+          source = sessionSendToolCapRef;
+          return scopedToolFixture(
             includeNodeExecTool && nodeExecAvailable?.(execOverrides?.node) ? ["exec"] : [],
-          ),
+          );
+        },
       );
       const scoped = await resolveMcpLoopbackScopedTools(
         scopeParams({
@@ -198,6 +201,7 @@ describe("resolveMcpLoopbackScopedTools", () => {
         }),
       );
       expect(scoped.tools.map((tool) => tool.name)).toEqual(exposed ? ["exec"] : []);
+      expect(source?.current?.names).not.toContain("exec");
     },
   );
 
@@ -222,7 +226,7 @@ describe("resolveMcpLoopbackScopedTools", () => {
       const scoped = await resolveMcpLoopbackScopedTools(
         scopeParams({
           toolsAllow: ["sessions_send", "read"],
-          nativeCronCreatorToolAllowlist: ["read", "write"],
+          nativeCronCreatorToolAllowlist: ["read", "write", "exec"],
           ...(delegated
             ? {
                 requesterToolCap: captureRequesterToolCap([

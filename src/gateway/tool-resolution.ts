@@ -578,18 +578,20 @@ function resolveGatewayScopedToolsWithinCap(
       params.delegationCapability,
     ),
   );
-  sessionSendToolCapRef.current = captureRequesterToolCap(
-    filterToolsByRequesterCap([
-      ...filterRequesterYieldTools(tools, params.sessionKey),
-      ...(params.nativeCronCreatorToolAllowlist ?? []).map((name) => ({ name })),
-    ]),
-    explicitDenylist,
-  );
-  // The loopback exec tool is node-only. Do not let a raw `exec` capability get
-  // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
+  // A node-only exec tool is valid on this loopback request but cannot become
+  // generic exec authority in a receiving session or scheduled child.
   const inheritableTools = includeNodeExecTool
     ? tools.filter((tool) => tool.name.trim().toLowerCase() !== "exec")
     : tools;
+  sessionSendToolCapRef.current = captureRequesterToolCap(
+    filterToolsByRequesterCap([
+      ...filterRequesterYieldTools(inheritableTools, params.sessionKey),
+      ...(params.nativeCronCreatorToolAllowlist ?? [])
+        .filter((name) => normalizeToolPolicyName(name) !== "exec")
+        .map((name) => ({ name })),
+    ]),
+    explicitDenylist,
+  );
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
   }

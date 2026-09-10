@@ -28,6 +28,7 @@ import {
 } from "../admitted-run-context.js";
 import { getRequesterToolCap } from "../requester-tool-cap.js";
 import {
+  captureGatewayToolCallerContinuationAssertion,
   getGatewayToolCallerIdentity,
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -136,7 +137,8 @@ export async function runWithGatewayToolContinuationContext<T>(
   if (!source?.operationalRunInstance) {
     return runWithGatewayToolCleanupContext(run);
   }
-  if (!source.continuationAuthorityCheck) {
+  const assertSourceCurrent = captureGatewayToolCallerContinuationAssertion();
+  if (!assertSourceCurrent) {
     throw new Error("Source run cannot transfer follow-up authority");
   }
   const runId = randomUUID();
@@ -148,7 +150,7 @@ export async function runWithGatewayToolContinuationContext<T>(
       agentId: source.agentId,
       ingress: { kind: "system", boundary: "sessions-send-followup", state: "present" },
     },
-    assertSourceCurrent: source.continuationAuthorityCheck,
+    assertSourceCurrent,
   });
   try {
     const admittedRunContext = await admission.admit("embedded");
