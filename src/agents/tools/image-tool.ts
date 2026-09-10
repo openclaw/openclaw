@@ -34,10 +34,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
-import {
-  resolveImageFallbackCandidates,
-  resolveImageFallbackDefaultProvider,
-} from "../model-fallback-candidates.js";
+import { resolveImageFallbackCandidates } from "../model-fallback-candidates.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { optionalFiniteNumberSchema, optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "./common.js";
@@ -438,10 +435,7 @@ function resolveCompressionModelCandidates(params: {
   const effectiveCfg = effectiveImageModelConfig
     ? applyImageModelConfigDefaults(params.cfg, effectiveImageModelConfig)
     : params.cfg;
-  return resolveImageFallbackCandidates({
-    cfg: effectiveCfg,
-    defaultProvider: resolveImageFallbackDefaultProvider(effectiveCfg),
-  });
+  return resolveImageFallbackCandidates({ cfg: effectiveCfg });
 }
 
 async function resolveCompressionModelPolicyWithHooks(params: {
