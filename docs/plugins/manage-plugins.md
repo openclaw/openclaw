@@ -32,6 +32,10 @@ the full inventory or choose **Show all** to browse every installed plugin. Each
 card shows the plugin description. Choose a card to open its settings, where
 administrators can enable or disable it and read-only operators can inspect it.
 
+A package installed from another ClawHub registry stays manageable under
+**Installed plugins**. It does not mark a same-name package in the current
+catalog as installed.
+
 Choose a card to open `/settings/plugins/<plugin-id>`.
 That routed page uses the plugin's declared schema for configuration, explains
 effective access in plain language, and keeps raw capability declarations and

@@ -21,29 +21,6 @@ function normalizedAlias(value: string | null | undefined): string | undefined {
   return normalized || undefined;
 }
 
-function localIdentityAliases(plugin: PluginCatalogEntry): string[] {
-  const aliases = [plugin.id, plugin.packageName, plugin.clawhubPackage];
-  if (plugin.install?.source === "clawhub") {
-    aliases.push(plugin.install.packageName);
-  }
-  return aliases.flatMap((value) => {
-    const normalized = normalizedAlias(value);
-    return normalized ? [normalized] : [];
-  });
-}
-
-function indexLocalPlugins(
-  plugins: readonly PluginCatalogEntry[],
-): Map<string, PluginCatalogEntry> {
-  const index = new Map<string, PluginCatalogEntry>();
-  for (const plugin of plugins) {
-    for (const alias of localIdentityAliases(plugin)) {
-      index.set(alias, plugin);
-    }
-  }
-  return index;
-}
-
 function indexClawHubPlugins(
   plugins: readonly PluginCatalogEntry[],
 ): Map<string, PluginCatalogEntry> {
@@ -263,7 +240,7 @@ export function findLocalPluginByIdentity(
 ): PluginCatalogEntry | undefined {
   return origin === "local"
     ? local.plugins.find((plugin) => plugin.id === identity)
-    : indexLocalPlugins(local.plugins).get(normalizedAlias(identity) ?? "");
+    : indexClawHubPlugins(local.plugins).get(normalizedAlias(identity) ?? "");
 }
 
 export function joinLocalPluginDetail(params: {

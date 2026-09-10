@@ -566,6 +566,47 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
+  it.each([
+    {
+      label: "package-name alias",
+      plugin: { ...workboard, packageName: "memory-plus" },
+      matches: false,
+    },
+    { label: "runtime-id alias", plugin: { ...workboard, id: "memory-plus" }, matches: false },
+    {
+      label: "proven counterpart",
+      plugin: { ...workboard, clawhubPackage: "memory-plus" },
+      matches: true,
+    },
+  ])(
+    "uses only proven ClawHub identity for offline detail: $label",
+    async ({ plugin, matches }) => {
+      managementMocks.list.mockResolvedValue({
+        plugins: [plugin],
+        diagnostics: [],
+        mutationAllowed: true,
+      });
+      managementMocks.inspect.mockResolvedValue({
+        declared: { mcpServers: [], skills: ["Local planning"] },
+      });
+      catalogMocks.detail.mockRejectedValue(new Error("ClawHub offline"));
+
+      const result = await callHandler("plugins.catalog.get", { id: "ch_bWVtb3J5LXBsdXM" });
+
+      expect(result.ok).toBe(matches);
+      if (matches) {
+        expect(result.response).toMatchObject({
+          plugin: { local: { pluginId: "workboard", installed: true, action: "manage" } },
+          detail: { origin: "local", skills: [{ name: "Local planning" }] },
+        });
+      } else {
+        expect(result.response).toBeUndefined();
+        expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
+        expect(managementMocks.inspect).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("does not misclassify local catalog entries when ordinary ClawHub browse fails", async () => {
     catalogMocks.browse.mockRejectedValue(new Error("service unavailable"));
     managementMocks.list.mockResolvedValue({
