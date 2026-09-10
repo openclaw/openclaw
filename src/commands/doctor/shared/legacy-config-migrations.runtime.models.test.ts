@@ -151,8 +151,8 @@ describe("explicit model allow policy migration", () => {
           agentId,
         });
         expect(policy.allowAny).toBe(false);
-        expect(policy.allowsKey(`${agentId}/bare`)).toBe(true);
-        expect(policy.allowsKey("unrelated/denied")).toBe(false);
+        expect(policy.allows({ provider: agentId, model: "bare" })).toBe(true);
+        expect(policy.allows({ provider: "unrelated", model: "denied" })).toBe(false);
       }
     },
   );

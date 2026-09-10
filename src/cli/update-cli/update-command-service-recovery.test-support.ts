@@ -7,10 +7,6 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/confi
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
-import type {
-  VerifyUpdateServingParams,
-  UpdateServingVerificationResult,
-} from "../../infra/update-serving-verification.js";
 import { captureEnv } from "../../test-utils/env.js";
 import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
@@ -70,33 +66,6 @@ export async function createServiceActivationFixture() {
   return { root, configPath, envSnapshot };
 }
 
-export async function verifiedServingResult(
-  params: VerifyUpdateServingParams,
-): Promise<UpdateServingVerificationResult> {
-  return {
-    status: "verified",
-    receipt: {
-      runId: params.runId,
-      gateway: {
-        bootId: "service-boot",
-        version: params.expectedVersion,
-        buildId: params.expectedBuildId ?? null,
-      },
-      agentId: "main",
-      sessionKey: "service-session",
-      sessionId: "service-session-id",
-      agentRunId: "00000000-0000-4000-8000-000000000002",
-      verifiedAtMs: Date.now(),
-      transcript: {
-        generation: "service-generation",
-        maxSeq: 2,
-        user: { entryId: "user-entry", seq: 1 },
-        assistant: { entryId: "assistant-entry", seq: 2 },
-      },
-    },
-  };
-}
-
 export function readyRecoveryHealth(
   port: number,
   running: boolean,
@@ -105,9 +74,9 @@ export function readyRecoveryHealth(
 > {
   return {
     healthy: true,
-    gatewayBootId: "service-boot",
     staleGatewayPids: [],
-    runtime: { status: running ? "running" : "stopped" },
+    runtime: { status: running ? "running" : "stopped", pid: running ? 4242 : undefined },
+    gatewayBootId: "service-boot",
     portUsage: { port, status: "busy", listeners: [], hints: [] },
   };
 }
@@ -230,6 +199,7 @@ export function registerRecoveryTests(params: {
         refreshServiceEnv: true,
         serviceInstallEnv: process.env,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
         gatewayPort: 19305,
         requireRunningServiceAfterRestart: true,

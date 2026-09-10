@@ -39,7 +39,7 @@ import {
 } from "./doctor-state-integrity.test-support.js";
 
 const WORKSPACE_BACKUP_TIP =
-  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
+  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
 
 describe("workspace backup tip", () => {
   it("recognizes direct, deeply nested, and symlinked Git workspaces without duplicate tips", async () => {
@@ -256,6 +256,59 @@ describe("structured state integrity findings", () => {
       ]),
     );
   });
+
+  it.each([undefined, "~/custom-store/sessions.json"])(
+    "checks the source session store when process state is isolated (store=%s)",
+    (store) => {
+      const sourceHome = path.join(tempHome, "source-home");
+      const sourceState = path.join(sourceHome, ".openclaw");
+      const storeDir = store
+        ? path.join(sourceHome, "custom-store")
+        : path.join(sourceState, "agents", "main", "sessions");
+      fs.mkdirSync(sourceState, { recursive: true, mode: 0o700 });
+      fs.mkdirSync(storeDir, { recursive: true, mode: 0o700 });
+      const accessSync = fs.accessSync;
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+        if (target === storeDir) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        return accessSync(target, mode);
+      });
+      const readFileSync = fs.readFileSync;
+      const mountInfo = vi.spyOn(fs, "readFileSync");
+      try {
+        // Source isolation is independent of the temporary directory's backing filesystem.
+        mountInfo.mockImplementation(
+          (target, options?: fs.ReadFileSyncOptions | BufferEncoding | null) => {
+            if (typeof options === "string") {
+              if (target === "/proc/self/mountinfo" && options === "utf8") {
+                return "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw";
+              }
+              return readFileSync(target, options);
+            }
+            if (options == null) {
+              return readFileSync(target, options);
+            }
+            return readFileSync(target, options);
+          },
+        );
+        const issues = detectStateIntegrityHealthIssues(
+          withMainAgentRoster({ session: { store } }),
+          { env: { HOME: sourceHome, OPENCLAW_STATE_DIR: sourceState } },
+        );
+        expect(issues).toEqual([
+          expect.objectContaining({
+            kind: "runtime-dir-not-writable",
+            label: "Session store dir",
+            path: storeDir,
+          }),
+        ]);
+      } finally {
+        mountInfo.mockRestore();
+        accessSpy.mockRestore();
+      }
+    },
+  );
 
   it("reports an existing session directory that is not writable", () => {
     const stateDir = path.join(tempHome, ".openclaw");

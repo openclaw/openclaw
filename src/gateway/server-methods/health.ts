@@ -1,7 +1,6 @@
 // Health gateway methods return cached or refreshed status summaries while
 // detecting stale channel runtime state against live gateway snapshots.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
@@ -11,32 +10,11 @@ import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
-import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { shouldScheduleBackgroundHealthRefresh } from "../server/health-refresh-admission.js";
+import { respondUnavailableOnThrow } from "./response.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
-const requestRefreshStartedAt = new WeakMap<
-  GatewayRequestContext["refreshHealthSnapshot"],
-  number
->();
-
-function shouldScheduleRequestRefresh(
-  refresh: GatewayRequestContext["refreshHealthSnapshot"],
-  now: number,
-): boolean {
-  const startedAt = requestRefreshStartedAt.get(refresh);
-  if (
-    startedAt !== undefined &&
-    !isFutureDateTimestampMs(startedAt, { nowMs: now }) &&
-    now - startedAt < HEALTH_REFRESH_INTERVAL_MS
-  ) {
-    return false;
-  }
-  // Scope the throttle to the Gateway refresh owner so independent servers do
-  // not suppress each other while request bursts share one cadence.
-  requestRefreshStartedAt.set(refresh, now);
-  return true;
-}
 
 function cachedLifecycleDiffersFromRuntime(params: {
   cachedAccount: ChannelHealthSummary | undefined;
@@ -170,19 +148,17 @@ export const healthHandlers: GatewayRequestHandlers = {
         undefined,
         { cached: true },
       );
-      if (shouldScheduleRequestRefresh(refreshHealthSnapshot, now)) {
+      if (shouldScheduleBackgroundHealthRefresh(refreshHealthSnapshot, now)) {
         void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err: unknown) =>
           logHealth.error(`background health refresh failed: ${formatError(err)}`),
         );
       }
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
       respond(true, snap, undefined);
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
   status: async ({ respond, client, params, context }) => {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];

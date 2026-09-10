@@ -234,7 +234,7 @@ async function applyCustomApiRetryChoice(params: {
   return { baseUrl, apiKey, resolvedApiKey, modelId };
 }
 
-/** Prompts for a custom API provider and prepares its verified endpoint config without writing it. */
+/** Prompts for a custom API provider and prepares its endpoint config without writing it. */
 export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -242,6 +242,8 @@ export async function promptCustomApiConfig(params: {
   target?: OnboardingAgentTarget;
   secretInputMode?: SecretInputMode;
   setAsPrimary?: boolean;
+  /** Setup owns its single confirmation turn after saving the credential. */
+  verification?: "immediate" | "deferred";
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
   const manifestPlugins = loadManifestMetadataSnapshot({
@@ -261,7 +263,9 @@ export async function promptCustomApiConfig(params: {
 
   const compatibilityChoice = await prompter.select({
     message: t("wizard.customProvider.compatibility"),
-    options: COMPATIBILITY_OPTIONS.map((option) => ({
+    options: COMPATIBILITY_OPTIONS.filter(
+      (option) => params.verification !== "deferred" || option.value !== "unknown",
+    ).map((option) => ({
       value: option.value,
       label: t(option.labelKey),
       hint: t(option.hintKey),
@@ -273,7 +277,7 @@ export async function promptCustomApiConfig(params: {
   let compatibility: CustomApiCompatibility | null =
     compatibilityChoice === "unknown" ? null : compatibilityChoice;
 
-  while (true) {
+  while (params.verification !== "deferred") {
     let verifiedFromProbe = false;
     if (!compatibility) {
       // Probe in a fixed order so unknown endpoints converge to a concrete

@@ -31,9 +31,7 @@ const {
 
 let buildOpenAIVideoGenerationProvider: typeof import("./video-generation-provider.js").buildOpenAIVideoGenerationProvider;
 
-let modelAuth: Parameters<
-  typeof import("./video-generation-provider.js").buildOpenAIVideoGenerationProvider
->[0];
+let modelAuth: Parameters<typeof buildOpenAIVideoGenerationProvider>[0];
 
 beforeAll(async () => {
   modelAuth = createCapturedPluginRegistration().api.runtime.modelAuth;
@@ -106,12 +104,6 @@ function streamedVideoResponse(bytes: string): Response {
     }),
     { headers: { "content-type": "video/mp4" } },
   );
-}
-
-// Response.json keeps object fixtures on the standard Response body path so the
-// create read exercises the byte-bounded reader instead of an unbounded res.json().
-function streamedJsonResponse(payload: unknown): Response {
-  return Response.json(payload);
 }
 
 describe("openai video generation provider", () => {
@@ -213,55 +205,61 @@ describe("openai video generation provider", () => {
   });
 
   it("uses SDK-compatible multipart for text-only Sora requests", async () => {
-    postMultipartRequestMock.mockResolvedValueOnce({
-      response: streamedJsonResponse({
-        id: "vid_123",
-        model: "sora-2",
-        status: "queued",
-      }),
-      release: vi.fn(async () => {}),
-    });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      postMultipartRequestMock.mockResolvedValueOnce({
+        response: Response.json({
           id: "vid_123",
           model: "sora-2",
-          status: "completed",
-          seconds: "4",
-          size: "720x1280",
+          status: "queued",
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/webm" }),
-        arrayBuffer: async () => Buffer.from("webm-bytes"),
+        release: vi.fn(async () => {}),
+      });
+      fetchWithTimeoutMock
+        .mockResolvedValueOnce(
+          Response.json({
+            id: "vid_123",
+            model: "sora-2",
+            status: "completed",
+            seconds: "4",
+            size: "720x1280",
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(Buffer.from("webm-bytes"), {
+            headers: new Headers({ "content-type": "video/webm" }),
+          }),
+        );
+
+      const provider = buildOpenAIVideoGenerationProvider(modelAuth);
+      const result = await provider.generateVideo({
+        provider: "openai",
+        model: "sora-2",
+        prompt: "A paper airplane gliding through golden hour light",
+        cfg: {},
+        durationSeconds: 4,
       });
 
-    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
-    const result = await provider.generateVideo({
-      provider: "openai",
-      model: "sora-2",
-      prompt: "A paper airplane gliding through golden hour light",
-      cfg: {},
-      durationSeconds: 4,
-    });
-
-    const createRequest = postMultipartRequest();
-    expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
-    const form = createRequest.body as FormData;
-    expect(form.get("prompt")).toBe("A paper airplane gliding through golden hour light");
-    expect(form.get("model")).toBe("sora-2");
-    expect(form.get("seconds")).toBe("4");
-    expect(form.get("input_reference")).toBeNull();
-    const [pollUrl, pollInit, pollTimeout, pollFetch] = fetchWithTimeoutCall(0);
-    expect(pollUrl).toBe("https://api.openai.com/v1/videos/vid_123");
-    expect(pollInit?.method).toBe("GET");
-    expect(pollTimeout).toBe(120000);
-    expect(pollFetch).toBe(fetch);
-    expect(result.videos).toHaveLength(1);
-    expect(result.videos[0]?.mimeType).toBe("video/webm");
-    expect(result.videos[0]?.fileName).toBe("video-1.webm");
-    expect(result.metadata?.videoId).toBe("vid_123");
-    expect(result.metadata?.status).toBe("completed");
+      const createRequest = postMultipartRequest();
+      expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
+      const form = createRequest.body as FormData;
+      expect(form.get("prompt")).toBe("A paper airplane gliding through golden hour light");
+      expect(form.get("model")).toBe("sora-2");
+      expect(form.get("seconds")).toBe("4");
+      expect(form.get("input_reference")).toBeNull();
+      const [pollUrl, pollInit, pollTimeout, pollFetch] = fetchWithTimeoutCall(0);
+      expect(pollUrl).toBe("https://api.openai.com/v1/videos/vid_123");
+      expect(pollInit?.method).toBe("GET");
+      expect(pollTimeout).toBe(120000);
+      expect(pollFetch).toBe(fetch);
+      expect(result.videos).toHaveLength(1);
+      expect(result.videos[0]?.mimeType).toBe("video/webm");
+      expect(result.videos[0]?.fileName).toBe("video-1.webm");
+      expect(result.metadata?.videoId).toBe("vid_123");
+      expect(result.metadata?.status).toBe("completed");
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it.each(["vid_failed", undefined])(
@@ -269,7 +267,7 @@ describe("openai video generation provider", () => {
     async (videoId) => {
       const release = vi.fn(async () => {});
       postMultipartRequestMock.mockResolvedValueOnce({
-        response: streamedJsonResponse({
+        response: Response.json({
           ...(videoId ? { id: videoId } : {}),
           status: "failed",
           error: { message: "OpenAI video generation was rejected" },
@@ -296,7 +294,7 @@ describe("openai video generation provider", () => {
     const release = vi.fn(async () => {});
     const cancel = vi.fn();
     postMultipartRequestMock.mockResolvedValueOnce({
-      response: streamedJsonResponse({
+      response: Response.json({
         id: "vid_completed",
         model: "sora-2",
         status: "completed",
@@ -355,7 +353,7 @@ describe("openai video generation provider", () => {
       const submissionRelease = vi.fn(async () => {});
       const downloadRelease = vi.fn(async () => {});
       postMultipartRequestMock.mockResolvedValueOnce({
-        response: streamedJsonResponse({
+        response: Response.json({
           id: "vid_malformed",
           model: "sora-2",
           status: "completed",
@@ -411,7 +409,7 @@ describe("openai video generation provider", () => {
         },
         async (baseUrl) => {
           postMultipartRequestMock.mockResolvedValueOnce({
-            response: streamedJsonResponse({ id: "vid_unread", status: "completed" }),
+            response: Response.json({ id: "vid_unread", status: "completed" }),
             release: vi.fn(async () => {}),
           });
           const upstreamUrl = `${baseUrl}/videos/vid_unread/content`;
@@ -484,7 +482,7 @@ describe("openai video generation provider", () => {
       const submissionRelease = vi.fn(async () => {});
       const downloadRelease = vi.fn(async () => {});
       postMultipartRequestMock.mockResolvedValueOnce({
-        response: streamedJsonResponse({ id: "vid_cloned", status: "completed" }),
+        response: Response.json({ id: "vid_cloned", status: "completed" }),
         release: submissionRelease,
       });
       if (allowPrivateNetwork) {
@@ -551,7 +549,7 @@ describe("openai video generation provider", () => {
       });
       const submissionRelease = vi.fn(async () => {});
       postMultipartRequestMock.mockResolvedValueOnce({
-        response: streamedJsonResponse({ id: "vid_cancel_failed", status: "completed" }),
+        response: Response.json({ id: "vid_cancel_failed", status: "completed" }),
         release: submissionRelease,
       });
       fetchWithTimeoutMock.mockResolvedValueOnce(
@@ -583,7 +581,7 @@ describe("openai video generation provider", () => {
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     postMultipartRequestMock.mockResolvedValueOnce({
-      response: streamedJsonResponse({
+      response: Response.json({
         id: "vid_too_large",
         model: "sora-2",
         status: "queued",
@@ -591,13 +589,13 @@ describe("openai video generation provider", () => {
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "vid_too_large",
           model: "sora-2",
           status: "completed",
         }),
-      })
+      )
       .mockResolvedValueOnce(streamedVideoResponse("too-large"));
 
     const provider = buildOpenAIVideoGenerationProvider(modelAuth);
@@ -612,57 +610,63 @@ describe("openai video generation provider", () => {
   });
 
   it("uploads the SDK-compatible image reference in a multipart video request", async () => {
-    postMultipartRequestMock.mockResolvedValueOnce({
-      response: streamedJsonResponse({
-        id: "vid_456",
-        model: "sora-2",
-        status: "queued",
-      }),
-      release: vi.fn(async () => {}),
-    });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      postMultipartRequestMock.mockResolvedValueOnce({
+        response: Response.json({
           id: "vid_456",
           model: "sora-2",
-          status: "completed",
+          status: "queued",
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        release: vi.fn(async () => {}),
       });
+      fetchWithTimeoutMock
+        .mockResolvedValueOnce(
+          Response.json({
+            id: "vid_456",
+            model: "sora-2",
+            status: "completed",
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(Buffer.from("mp4-bytes"), {
+            headers: new Headers({ "content-type": "video/mp4" }),
+          }),
+        );
 
-    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
-    const input = Buffer.from("!png-bytes?").subarray(1, -1);
-    await provider.generateVideo({
-      provider: "openai",
-      model: "sora-2",
-      prompt: "Animate this frame",
-      cfg: {},
-      inputImages: [{ buffer: input, mimeType: "image/png" }],
-    });
-    input.fill(0);
+      const provider = buildOpenAIVideoGenerationProvider(modelAuth);
+      const input = Buffer.from("!png-bytes?").subarray(1, -1);
+      await provider.generateVideo({
+        provider: "openai",
+        model: "sora-2",
+        prompt: "Animate this frame",
+        cfg: {},
+        inputImages: [{ buffer: input, mimeType: "image/png" }],
+      });
+      input.fill(0);
 
-    const createRequest = postMultipartRequest();
-    expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
-    const form = createRequest.body as FormData;
-    const reference = form.get("input_reference");
-    expect(reference).toBeInstanceOf(File);
-    const referenceFile = reference as File;
-    expect(referenceFile.name).toBe("reference-image.png");
-    expect(referenceFile.type).toBe("image/png");
-    expect(Buffer.from(await referenceFile.arrayBuffer())).toEqual(Buffer.from("png-bytes"));
-    const [pollUrl, pollInit, pollTimeout, pollFetch] = fetchWithTimeoutCall(0);
-    expect(pollUrl).toBe("https://api.openai.com/v1/videos/vid_456");
-    expect(pollInit?.method).toBe("GET");
-    expect(pollTimeout).toBe(120000);
-    expect(pollFetch).toBe(fetch);
+      const createRequest = postMultipartRequest();
+      expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
+      const form = createRequest.body as FormData;
+      const reference = form.get("input_reference");
+      expect(reference).toBeInstanceOf(File);
+      const referenceFile = reference as File;
+      expect(referenceFile.name).toBe("reference-image.png");
+      expect(referenceFile.type).toBe("image/png");
+      expect(Buffer.from(await referenceFile.arrayBuffer())).toEqual(Buffer.from("png-bytes"));
+      const [pollUrl, pollInit, pollTimeout, pollFetch] = fetchWithTimeoutCall(0);
+      expect(pollUrl).toBe("https://api.openai.com/v1/videos/vid_456");
+      expect(pollInit?.method).toBe("GET");
+      expect(pollTimeout).toBe(120000);
+      expect(pollFetch).toBe(fetch);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("keeps configured local baseUrl private-network blocked unless explicitly enabled", async () => {
     postMultipartRequestMock.mockResolvedValueOnce({
-      response: streamedJsonResponse({
+      response: Response.json({
         id: "vid_local",
         model: "sora-2",
         status: "queued",
@@ -670,17 +674,18 @@ describe("openai video generation provider", () => {
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "vid_local",
           model: "sora-2",
           status: "completed",
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mp4-bytes"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     await provider.generateVideo({
@@ -708,7 +713,7 @@ describe("openai video generation provider", () => {
 
   it("honors configured request allowPrivateNetwork for local video providers", async () => {
     postMultipartRequestMock.mockResolvedValueOnce({
-      response: streamedJsonResponse({
+      response: Response.json({
         id: "vid_local",
         model: "sora-2",
         status: "queued",
@@ -716,13 +721,13 @@ describe("openai video generation provider", () => {
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "vid_local",
           model: "sora-2",
           status: "completed",
         }),
-      })
+      )
       .mockResolvedValueOnce({
         headers: new Headers({ "content-type": "video/mp4" }),
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
@@ -777,26 +782,25 @@ describe("openai video generation provider", () => {
     const secondRelease = vi.fn(async () => {});
     assertOkOrThrowHttpErrorMock
       .mockImplementationOnce(async () => {})
-      .mockImplementationOnce(async () => {})
       .mockImplementationOnce(async (_response, label) => {
-        throw new Error(label);
+        throw Object.assign(new Error(label), { status: _response.status });
       })
       .mockImplementationOnce(async () => {});
     postMultipartRequestMock.mockResolvedValueOnce({
-      response: streamedJsonResponse({
+      response: Response.json({
         id: "vid_local",
         model: "sora-2",
         status: "queued",
       }),
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({
         id: "vid_local",
         model: "sora-2",
         status: "completed",
       }),
-    });
+    );
     fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
         response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
@@ -834,6 +838,7 @@ describe("openai video generation provider", () => {
     expect(executeProviderOperationWithRetryMock).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", stage: "download" }),
     );
+    expect(postMultipartRequestMock).toHaveBeenCalledOnce();
     expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
     expect(firstRelease).toHaveBeenCalledTimes(1);
     expect(secondRelease).toHaveBeenCalledTimes(1);
@@ -844,28 +849,27 @@ describe("openai video generation provider", () => {
     const secondRelease = vi.fn(async () => {});
     assertOkOrThrowHttpErrorMock
       .mockImplementationOnce(async () => {})
-      .mockImplementationOnce(async () => {})
       .mockImplementationOnce(async (_response, label) => {
-        throw new Error(label);
+        throw Object.assign(new Error(label), { status: _response.status });
       })
       .mockImplementationOnce(async (_response, label) => {
-        throw new Error(label);
+        throw Object.assign(new Error(label), { status: _response.status });
       });
     postMultipartRequestMock.mockResolvedValueOnce({
-      response: streamedJsonResponse({
+      response: Response.json({
         id: "vid_local",
         model: "sora-2",
         status: "queued",
       }),
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({
         id: "vid_local",
         model: "sora-2",
         status: "completed",
       }),
-    });
+    );
     fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
         response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
@@ -898,6 +902,7 @@ describe("openai video generation provider", () => {
       }),
     ).rejects.toThrow("OpenAI video download failed");
 
+    expect(postMultipartRequestMock).toHaveBeenCalledOnce();
     expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
     expect(firstRelease).toHaveBeenCalledTimes(1);
     expect(secondRelease).toHaveBeenCalledTimes(1);
@@ -906,23 +911,24 @@ describe("openai video generation provider", () => {
   it("uses the video edits endpoint for video-to-video uploads", async () => {
     fetchWithTimeoutMock
       .mockResolvedValueOnce(
-        streamedJsonResponse({
+        Response.json({
           id: "vid_789",
           model: "sora-2",
           status: "queued",
         }),
       )
       .mockResolvedValueOnce(
-        streamedJsonResponse({
+        Response.json({
           id: "vid_789",
           model: "sora-2",
           status: "completed",
         }),
       )
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mp4-bytes"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     const input = Buffer.from("!mp4-bytes?").subarray(1, -1);
@@ -955,7 +961,7 @@ describe("openai video generation provider", () => {
   it("surfaces an immediately failed OpenAI video edit without polling it", async () => {
     const release = vi.fn(async () => {});
     postMultipartRequestMock.mockResolvedValueOnce({
-      response: streamedJsonResponse({
+      response: Response.json({
         id: "vid_edit_failed",
         status: "failed",
         error: { message: "OpenAI video edit was rejected" },
@@ -981,12 +987,13 @@ describe("openai video generation provider", () => {
   it("downloads an immediately completed OpenAI video edit without polling it again", async () => {
     fetchWithTimeoutMock
       .mockResolvedValueOnce(
-        streamedJsonResponse({ id: "vid_edit_completed", model: "sora-2", status: "completed" }),
+        Response.json({ id: "vid_edit_completed", model: "sora-2", status: "completed" }),
       )
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("completed-edit"),
-      });
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("completed-edit"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const result = await buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
       provider: "openai",
@@ -1004,14 +1011,14 @@ describe("openai video generation provider", () => {
   it("honors configured request allowPrivateNetwork for multipart video uploads", async () => {
     fetchWithTimeoutMock
       .mockResolvedValueOnce(
-        streamedJsonResponse({
+        Response.json({
           id: "vid_789",
           model: "sora-2",
           status: "queued",
         }),
       )
       .mockResolvedValueOnce(
-        streamedJsonResponse({
+        Response.json({
           id: "vid_789",
           model: "sora-2",
           status: "completed",

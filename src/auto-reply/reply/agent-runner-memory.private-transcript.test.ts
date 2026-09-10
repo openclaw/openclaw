@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -19,13 +20,17 @@ import {
   timestampOptsFromConfig,
 } from "../../gateway/server-methods/agent-timestamp.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import { onInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { clearMemoryPluginState, registerMemoryCapability } from "../../plugins/memory-state.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { runReplyAgent } from "./agent-runner.js";
-import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
+import {
+  createTestFollowupRun,
+  isModelRuntimeContextCarrier,
+} from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
 
 type ModelRequest = { messages: Array<{ role: string; content: unknown }> };
@@ -40,6 +45,16 @@ it.each(["completed", "interrupted"] as const)(
       const interrupted = new AbortController();
       const human = "Reply only FOREGROUND_READY. Preserve ünicode 🦞.\nThis is the human request.";
       const requests: ModelRequest[] = [];
+      const runtimeBudgets: number[] = [];
+      const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+        if (
+          event.type === "model.call.started" &&
+          event.model === "test-model" &&
+          event.contextTokenBudget !== undefined
+        ) {
+          runtimeBudgets.push(event.contextTokenBudget);
+        }
+      });
       const server = createServer((request, response) => {
         let body = "";
         request.setEncoding("utf8");
@@ -50,7 +65,9 @@ it.each(["completed", "interrupted"] as const)(
           const modelRequest = JSON.parse(body) as ModelRequest;
           requests.push(modelRequest);
           const isHuman = text(
-            modelRequest.messages.findLast((m) => m.role === "user")?.content,
+            modelRequest.messages.findLast(
+              (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
+            )?.content,
           ).endsWith(human);
           response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
           response.flushHeaders();
@@ -106,7 +123,7 @@ it.each(["completed", "interrupted"] as const)(
           list: [{ id: "main", default: true, workspace: state.workspaceDir }],
           defaults: {
             workspace: state.workspaceDir,
-            model: { primary: "test-provider/test-model" },
+            model: { primary: "test-provider/owner-model" },
           },
         },
         session: { store: scope.storePath },
@@ -119,12 +136,22 @@ it.each(["completed", "interrupted"] as const)(
               baseUrl: `http://127.0.0.1:${address.port}/v1`,
               models: [
                 {
+                  id: "owner-model",
+                  name: "Owner fixture",
+                  reasoning: false,
+                  input: ["text"],
+                  contextWindow: 128_000,
+                  contextTokens: 128_000,
+                  maxTokens: 8_192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+                {
                   id: "test-model",
                   name: "Fixture",
                   reasoning: false,
                   input: ["text"],
-                  contextWindow: 32_768,
-                  contextTokens: 32_768,
+                  contextWindow: 1_000_000,
+                  contextTokens: 1_000_000,
                   maxTokens: 8_192,
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 },
@@ -141,28 +168,24 @@ it.each(["completed", "interrupted"] as const)(
         await replaceSessionEntry(scope, {
           sessionId: scope.sessionId,
           updatedAt: Date.now(),
-          totalTokens: 21_000,
+          totalTokens: 120_000,
           totalTokensFresh: true,
           totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         });
         const transcript = SessionManager.open(scope, state.workspaceDir);
-        transcript.appendMessage({
-          role: "user",
-          content: "Remember the Cedar project receipt.",
-          timestamp: 1,
-        });
+        transcript.appendMessage(makeUserMessage("Remember the Cedar project receipt.", 1));
         transcript.appendMessage(
           makeAssistantMessageFixture({
             provider: "test-provider",
-            model: "test-model",
+            model: "owner-model",
             api: "openai-completions",
             content: [{ type: "text", text: "Cedar receipt saved." }],
             stopReason: "stop",
             errorMessage: undefined,
             usage: {
-              input: 21_000,
+              input: 120_000,
               output: 2,
-              totalTokens: 21_002,
+              totalTokens: 120_002,
               cacheRead: 0,
               cacheWrite: 0,
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -178,7 +201,7 @@ it.each(["completed", "interrupted"] as const)(
           workspaceDir: state.workspaceDir,
           config: cfg,
           provider: "test-provider",
-          model: "test-model",
+          model: "owner-model",
           messageProvider: "webchat",
           thinkLevel: "off",
           timeoutMs: 30_000,
@@ -190,7 +213,7 @@ it.each(["completed", "interrupted"] as const)(
           cfg,
           sessionKey: scope.sessionKey,
           provider: "test-provider",
-          model: "test-model",
+          model: "owner-model",
           auth: {},
         });
         registerMemoryCapability("memory-core", {
@@ -201,6 +224,7 @@ it.each(["completed", "interrupted"] as const)(
             prompt: "Checkpoint durable notes. Reply NO_REPLY.",
             systemPrompt: "Write durable notes only.",
             relativePath: "memory/checkpoint.md",
+            model: "test-provider/test-model",
           }),
         });
         admission = await beginSessionWorkAdmission({
@@ -217,7 +241,7 @@ it.each(["completed", "interrupted"] as const)(
             cfg,
             followupRun: maintenance,
             promptForEstimate: "",
-            defaultModel: "test-model",
+            defaultModel: "owner-model",
             resolvedVerboseLevel: "off",
             sessionEntry: entry,
             sessionStore: { [scope.sessionKey]: entry },
@@ -240,6 +264,7 @@ it.each(["completed", "interrupted"] as const)(
         admission.release();
         admission = undefined;
         expect(requests).toHaveLength(1);
+        expect(runtimeBudgets).toEqual([128_000]);
         expect.soft(await loadTranscriptEvents(scope)).toEqual(original);
         if (outcome === "interrupted") {
           expect.soft(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
@@ -266,7 +291,7 @@ it.each(["completed", "interrupted"] as const)(
           sessionStore: { [scope.sessionKey]: current },
           sessionKey: scope.sessionKey,
           storePath: scope.storePath,
-          defaultModel: "test-model",
+          defaultModel: "owner-model",
           resolvedVerboseLevel: "off",
           isNewSession: false,
           blockStreamingEnabled: false,
@@ -277,13 +302,19 @@ it.each(["completed", "interrupted"] as const)(
         expect(result).toMatchObject({ text: "FOREGROUND_READY" });
         const humanRequests = requests.filter((modelRequest) =>
           text(
-            modelRequest.messages.findLast((message) => message.role === "user")?.content,
+            modelRequest.messages.findLast(
+              (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
+            )?.content,
           ).endsWith(human),
         );
         expect(humanRequests).toHaveLength(1);
-        const nextUser = text(
-          humanRequests[0]!.messages.findLast((message) => message.role === "user")?.content,
+        const humanMessages = humanRequests[0]!.messages;
+        const userIndex = humanMessages.findLastIndex(
+          (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
         );
+        const nextUser = text(humanMessages[userIndex]?.content);
+        expect(humanMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
+        expect(humanMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(userIndex);
         const canonicalHuman = SessionManager.open(scope)
           .buildSessionContext()
           .messages.findLast(
@@ -305,6 +336,7 @@ it.each(["completed", "interrupted"] as const)(
         await waitForSessionMaintenance(scope.sessionKey);
         clearMemoryPluginState();
         clearRuntimeConfigSnapshot();
+        stopDiagnostics();
         server.closeAllConnections();
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));

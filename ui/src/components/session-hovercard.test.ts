@@ -61,6 +61,55 @@ function attributionSummary(container: ParentNode): string {
 }
 
 describe("renderSessionHovercard", () => {
+  it.each([
+    [
+      { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
+      "Linux · medium · 4 vCPU · 16 GB",
+    ],
+    [{ class: "medium" }, "medium"],
+    [{ os: "windows/wsl2", memoryGb: 8 }, "windows/wsl2 · 8 GB"],
+    [undefined, ""],
+    [{}, ""],
+  ] satisfies [SidebarRecentSession["placementMachine"], string][])(
+    "shows only known machine facts: %j",
+    (placementMachine: SidebarRecentSession["placementMachine"], summary) => {
+      const container = document.createElement("div");
+      render(
+        renderSessionHovercard({
+          row: row({
+            placementProviderId: "machine0",
+            placementProfileId: "team",
+            placementMachine,
+          }),
+        }),
+        container,
+      );
+      const machine = container.querySelector(".session-hovercard__machine");
+      if (summary) {
+        expect(machine?.getAttribute("aria-label")).toBe(`Machine: ${summary}`);
+        expect(
+          [...container.querySelectorAll(".session-hovercard__machine span")]
+            .map((item) => item.textContent)
+            .join(" · "),
+        ).toBe(summary);
+        expect(machine?.querySelector(".session-hovercard__machine-class")?.textContent).toBe(
+          placementMachine?.class,
+        );
+      } else {
+        expect(machine).toBeNull();
+      }
+    },
+  );
+
+  it("omits machine facts without a placement identity", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({ row: row({ placementMachine: { class: "medium" } }) }),
+      container,
+    );
+    expect(container.querySelector(".session-hovercard__machine")).toBeNull();
+  });
+
   it.each(["purple", undefined, "default"])(
     "reflects the session color %s without unset chrome",
     (color) => {

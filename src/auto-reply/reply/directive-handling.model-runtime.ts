@@ -1,9 +1,9 @@
+/** Resolves and applies explicit runtime selections attached to `/model`. */
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
-/** Resolves and applies explicit runtime selections attached to `/model`. */
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { isAppServerRuntimeModelBackendBinding } from "../../agents/app-server-runtime-bindings.js";
 import { resolveAgentHarnessOwnerPluginIds } from "../../agents/harness/runtime-plugin.js";

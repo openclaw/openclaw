@@ -286,10 +286,17 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/ty
 import type { Model } from "../../llm/types.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
-import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";
+import {
+  applyConfiguredProviderOverrides,
+  findInlineModelMatch,
+} from "./model.configured-overrides.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
-import { resolveModelAsync, resolveModelWithRegistry } from "./model.js";
+import {
+  createEmptyAgentDiscoveryStores,
+  resolveModelAsync,
+  resolveModelWithRegistry,
+} from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeOpenClawConfigFixture,
@@ -1262,7 +1269,7 @@ describe("resolveModel", () => {
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
       inlineProviderModels: [],
-      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+      createStores: createEmptyAgentDiscoveryStores,
     } satisfies PreparedModelRuntimeSnapshot;
     resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce({
       provider: "google",
@@ -2419,6 +2426,81 @@ describe("resolveModel", () => {
     expect(gptModel.api).toBe("openai-completions");
     expect(gptModel.baseUrl).toBe("http://localhost:8080/v1");
   });
+
+  it.each([false, true])(
+    "keeps exact configured routes ahead of legacy rows (reversed=%s)",
+    (reverse) => {
+      const exact = { ...makeModel("Model"), baseUrl: "https://exact.example.test/v1" };
+      const legacy = {
+        ...makeModel("custom/Model"),
+        baseUrl: "https://legacy.example.test/v1",
+        headers: { "x-route": "legacy" },
+      };
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://provider.example.test/v1",
+              models: reverse ? [exact, legacy] : [legacy, exact],
+            },
+          },
+        },
+      };
+      for (const row of [exact, legacy]) {
+        const resolved = resolveModelWithRegistry({
+          provider: "custom",
+          modelId: row.id,
+          cfg,
+          modelRegistry: createEmptyAgentDiscoveryStores().modelRegistry,
+          agentDir: state.agentDir(),
+          runtimeHooks: createRuntimeHooks(),
+        });
+        expect.soft(resolved?.id).toBe(row.id);
+        expect.soft(resolved?.baseUrl).toBe(row.baseUrl);
+        expect.soft(resolved?.headers).toEqual(row === legacy ? legacy.headers : undefined);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "merges exact rows before provider defaults (empty headers=%s)",
+    (emptyHeaders) => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            custom: {
+              api: "anthropic-messages",
+              baseUrl: "https://provider.example.test/v1",
+              models: [
+                { ...makeModel("Model"), ...(emptyHeaders ? { headers: {} } : {}) },
+                {
+                  ...makeModel(" Model "),
+                  api: "openai-completions",
+                  baseUrl: "https://duplicate.example.test/v1",
+                  headers: { "x-route": "duplicate" },
+                },
+              ],
+            },
+          },
+        },
+      };
+      const resolved = resolveModelWithRegistry({
+        provider: "custom",
+        modelId: "Model",
+        cfg,
+        modelRegistry: createEmptyAgentDiscoveryStores().modelRegistry,
+        agentDir: state.agentDir(),
+        runtimeHooks: createRuntimeHooks(),
+      });
+      expect.soft(resolved).toMatchObject({
+        id: "Model",
+        api: "openai-completions",
+        baseUrl: "https://duplicate.example.test/v1",
+      });
+      expect.soft(resolved?.headers).toEqual(emptyHeaders ? undefined : { "x-route": "duplicate" });
+    },
+  );
 
   it("preserves normalized inline provider transport when static metadata is merged", async () => {
     const cfg = makeProviderConfig("my-gemini", {
@@ -3998,6 +4080,45 @@ describe("resolveModel", () => {
       maxTokens: 16000,
     });
   });
+
+  it.each([
+    {
+      label: "exact provider literal",
+      exactId: "trinity-large-thinking",
+      otherId: "arcee-ai/trinity-large-thinking",
+      expectedProvider: "arcee",
+    },
+    {
+      label: "other spelling literal before exact provider equivalent",
+      exactId: "arcee-ai/trinity-large-thinking",
+      otherId: "trinity-large-thinking",
+      expectedProvider: "Arcee",
+    },
+  ])(
+    "preserves provider-spelling lookup order: $label",
+    ({ exactId, otherId, expectedProvider }) => {
+      const matched = findInlineModelMatch({
+        provider: "arcee",
+        modelId: "trinity-large-thinking",
+        providers: {
+          Arcee: {
+            api: "openai-completions",
+            baseUrl: "https://other.example.test/v1",
+            models: [makeModel(otherId)],
+          },
+          arcee: {
+            api: "openai-completions",
+            baseUrl: "https://exact.example.test/v1",
+            models: [makeModel(exactId)],
+          },
+        },
+      });
+      expect.soft(matched?.provider).toBe(expectedProvider);
+      expect
+        .soft(matched?.baseUrl)
+        .toBe(`https://${expectedProvider === "arcee" ? "exact" : "other"}.example.test/v1`);
+    },
+  );
 
   it("prefers exact provider config over normalized alias match when both keys exist", async () => {
     mockDiscoveredModel(discoverModels, {

@@ -1,3 +1,9 @@
+import type { PublicationObservation } from "./frv-publication-status.mts";
+
+export type FrvPublicationStatus = Partial<FrvContinuationStatus> & {
+  publication: PublicationObservation;
+};
+
 export interface FrvChildStatus extends Record<string, unknown> {
   effectiveRunAttempt: number | null;
   key: string;

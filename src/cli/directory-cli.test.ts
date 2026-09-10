@@ -38,6 +38,13 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite: async () => {
+    const snapshot = await mocks.readConfigFileSnapshot();
+    return {
+      snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
+      writeOptions: {},
+    };
+  },
   replaceConfigFile: mocks.replaceConfigFile,
 }));
 
@@ -111,6 +118,29 @@ describe("registerDirectoryCli", () => {
     });
   });
 
+  describe.each([
+    ["self", ["directory", "self"]],
+    ["peers", ["directory", "peers", "list"]],
+    ["groups", ["directory", "groups", "list"]],
+    ["members", ["directory", "groups", "members", "--group-id", "group-1"]],
+  ])("%s account input", (_leaf, args) => {
+    it.each(["", " \t\n "])("rejects blank %j before command startup", async (account) => {
+      const startup = vi.fn(() => {
+        throw new Error("Command startup reached");
+      });
+      const program = new Command().name("openclaw").hook("preAction", startup);
+      registerDirectoryCli(program);
+
+      await expect(
+        program.parseAsync([...args, "--channel", "slack", "--account", account], {
+          from: "user",
+        }),
+      ).rejects.toThrow("--account must not be blank");
+
+      expect(startup).not.toHaveBeenCalled();
+    });
+  });
+
   it("installs an explicit optional directory channel on demand", async () => {
     const tokenRef = {
       source: "env",
@@ -146,9 +176,9 @@ describe("registerDirectoryCli", () => {
       configChanged: true,
       pluginInstalled: true,
     }));
-    mocks.replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
+    mocks.replaceConfigFile.mockImplementation(async ({ sourceConfig: writtenSource }) => {
       postWriteRuntimeConfig = {
-        ...nextConfig,
+        ...writtenSource,
         messages: { responsePrefix: "runtime-default" },
       };
       runtimeConfig = postWriteRuntimeConfig;
@@ -169,11 +199,11 @@ describe("registerDirectoryCli", () => {
     expect(installArgs.cfg).toEqual(sourceConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
     const replaceArgs = firstRecordArg(mocks.replaceConfigFile);
-    expect(replaceArgs.nextConfig).toEqual({
+    expect(replaceArgs.sourceConfig).toEqual({
       channels: { slack: { botToken: tokenRef } },
       plugins: { entries: { slack: { enabled: true } } },
     });
-    expect(replaceArgs.nextConfig).not.toHaveProperty("messages");
+    expect(replaceArgs.sourceConfig).not.toHaveProperty("messages");
     expect(replaceArgs.baseHash).toBe("config-1");
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledOnce();
     expect(firstRecordArg(mocks.resolveCommandSecretRefsViaGateway)).toMatchObject({
@@ -193,6 +223,73 @@ describe("registerDirectoryCli", () => {
       JSON.stringify({ id: "self-1", name: "Family Phone" }, null, 2),
     );
     expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  describe("group member input", () => {
+    const listGroupMembers = vi.fn().mockResolvedValue([]);
+    const enabledConfig = {
+      channels: { slack: {} },
+      plugins: { entries: { slack: { enabled: true } } },
+    };
+
+    beforeEach(() => {
+      mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+        cfg: enabledConfig,
+        channelId: "slack",
+        plugin: { id: "slack", directory: { listGroupMembers } },
+        configChanged: true,
+      });
+      mocks.replaceConfigFile.mockImplementation(async ({ sourceConfig }) => {
+        mocks.loadConfig.mockReturnValue(sourceConfig);
+      });
+    });
+
+    it.each(["", " \t\n "])("rejects blank group ID %j before setup writes", async (groupId) => {
+      const program = new Command().name("openclaw");
+      registerDirectoryCli(program);
+
+      await expect(
+        program.parseAsync(
+          ["directory", "groups", "members", "--channel", "slack", "--group-id", groupId, "--json"],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("Missing --group-id");
+
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(listGroupMembers).not.toHaveBeenCalled();
+    });
+
+    it("keeps setup writes and trimmed group IDs for valid member lookups", async () => {
+      const program = new Command().name("openclaw");
+      registerDirectoryCli(program);
+
+      await program.parseAsync(
+        [
+          "directory",
+          "groups",
+          "members",
+          "--channel",
+          "slack",
+          "--group-id",
+          " group-1 ",
+          "--limit",
+          "5",
+          "--json",
+        ],
+        { from: "user" },
+      );
+
+      expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+        sourceConfig: enabledConfig,
+        baseHash: "config-1",
+        writeOptions: {},
+      });
+      expect(listGroupMembers).toHaveBeenCalledWith(
+        expect.objectContaining({ groupId: "group-1", limit: 5 }),
+      );
+    });
   });
 
   it.each([
@@ -279,8 +376,9 @@ describe("registerDirectoryCli", () => {
     expect(self).toHaveBeenCalledTimes(1);
     expect(firstRecordArg(self).cfg).toBe(autoEnabledConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: autoEnabledConfig,
+      sourceConfig: autoEnabledConfig,
       baseHash: "config-1",
+      writeOptions: {},
     });
   });
 
@@ -741,10 +839,19 @@ describe("registerDirectoryCli", () => {
   });
 
   it.each([
-    ["peers list", ["directory", "peers", "list", "--channel", "slack", "--limit", "5x"]],
-    ["groups list", ["directory", "groups", "list", "--channel", "slack", "--limit", "5x"]],
+    ["peers list", "5x", ["directory", "peers", "list", "--channel", "slack", "--limit", "5x"]],
+    ["peers list", "", ["directory", "peers", "list", "--channel", "slack", "--limit", ""]],
+    ["peers list", "   ", ["directory", "peers", "list", "--channel", "slack", "--limit", "   "]],
+    ["groups list", "5x", ["directory", "groups", "list", "--channel", "slack", "--limit", "5x"]],
+    ["groups list", "", ["directory", "groups", "list", "--channel", "slack", "--limit", ""]],
+    [
+      "group members with a blank group ID",
+      "5x",
+      ["directory", "groups", "members", "--channel", "slack", "--group-id", "", "--limit", "5x"],
+    ],
     [
       "group members",
+      "5x",
       [
         "directory",
         "groups",
@@ -757,7 +864,22 @@ describe("registerDirectoryCli", () => {
         "5x",
       ],
     ],
-  ])("rejects partial directory limit for %s", async (_label, args) => {
+    [
+      "group members",
+      "",
+      [
+        "directory",
+        "groups",
+        "members",
+        "--channel",
+        "slack",
+        "--group-id",
+        "group-1",
+        "--limit",
+        "",
+      ],
+    ],
+  ])("rejects invalid directory limit %s %j", async (_label, _limit, args) => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { slack: {} } },
       channelId: "slack",

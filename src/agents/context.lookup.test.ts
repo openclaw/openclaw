@@ -666,6 +666,24 @@ describe("lookupContextTokens", () => {
       expected: 900_000,
     },
     {
+      name: "prefers the exact bare row over an earlier self-prefixed row",
+      model: "kilo-auto/balanced",
+      configuredModels: [
+        createConfiguredModel("kilocode/kilo-auto/balanced", 2_000),
+        createConfiguredModel("kilo-auto/balanced", 128_000),
+      ],
+      expected: 128_000,
+    },
+    {
+      name: "keeps the exact bare row ahead of a later self-prefixed row",
+      model: "kilo-auto/balanced",
+      configuredModels: [
+        createConfiguredModel("kilo-auto/balanced", 128_000),
+        createConfiguredModel("kilocode/kilo-auto/balanced", 2_000),
+      ],
+      expected: 128_000,
+    },
+    {
       name: "does not strip another provider's prefix",
       model: "openrouter/anthropic/claude-sonnet-5",
       configuredModels: [createConfiguredModel("anthropic/claude-sonnet-5", 900_000)],

@@ -5,6 +5,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -145,7 +146,7 @@ suite.define(() => {
       : undefined;
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["chat.startup"],
+        deferredMethods: ["chat.startup", "models.list"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
@@ -214,17 +215,22 @@ suite.define(() => {
       for (const picker of [
         {
           menu: ".chat-controls__model-menu",
+          popup: '.chat-controls__model-picker wa-popup [part="popup"]',
           trigger: '[data-chat-model-select="true"]',
         },
         {
           menu: ".chat-controls__effort-menu",
+          popup: '.chat-controls__effort-picker wa-popup [part="popup"]',
           trigger: '[data-chat-thinking-select="true"]',
         },
       ]) {
         const visibleTrigger = composer.locator(picker.trigger);
         await expect.poll(() => visibleTrigger.isVisible()).toBe(true);
         await visibleTrigger.click();
-        await page.waitForTimeout(100);
+        // The popup scales while opening; measure its settled viewport bounds.
+        await waitForControlUiProofSurface(composer.locator(picker.popup), [
+          page.locator(picker.menu),
+        ]);
         const [composerBox, footerBox, menuBox, triggerBox] = await Promise.all([
           composer.boundingBox(),
           composer.locator(".agent-chat__composer-footer").boundingBox(),
@@ -414,7 +420,7 @@ suite.define(() => {
 
       await expect.poll(() => model.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      await gateway.waitForRequest("models.list");
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);

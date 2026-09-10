@@ -1,3 +1,5 @@
+import { isEmbeddedMode } from "../../infra/embedded-mode.js";
+import type { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
 import type { GatewayQuestionCall } from "../tools/gateway-question-lifecycle.js";
 
 export type AgentHarnessQuestionGatewayCall = (
@@ -45,6 +47,7 @@ export function resolveAgentQuestionGatewayCall(
   if (dispatcher && typeof dispatcher !== "function" && dispatcher.version !== 2) {
     throw new Error("unsupported question dispatcher version");
   }
+  let embeddedBroker: EmbeddedQuestionBroker | null = null;
   return async (...args) => {
     const [method, options, params, extra] = args;
     if (typeof dispatcher === "function") {
@@ -68,6 +71,16 @@ export function resolveAgentQuestionGatewayCall(
             ? { kind: "source-bound", assertCurrent: extra.dispatchAuthority.assertCurrent }
             : { kind: "unscoped" },
       });
+    }
+    if (!embeddedBroker && isEmbeddedMode()) {
+      const { getEmbeddedQuestionBroker } = await import("../../infra/embedded-question-broker.js");
+      embeddedBroker = getEmbeddedQuestionBroker();
+    }
+    if (embeddedBroker) {
+      // Cancellation/readback stay with the original owner during backend shutdown.
+      extra?.signal?.throwIfAborted();
+      extra?.dispatchAuthority?.assertCurrent();
+      return embeddedBroker.call(method, params, extra);
     }
     // Keep tool/runtime dependencies out of question registration and SDK imports.
     const { callGatewayTool } = await import("./gateway-question-dispatch.runtime.js");

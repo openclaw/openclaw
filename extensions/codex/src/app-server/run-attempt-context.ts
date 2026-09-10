@@ -114,6 +114,7 @@ export async function prepareCodexAttemptContext(
       ? { modelProviderId: params.provider, modelId: params.modelId }
       : {}),
     trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
     ...buildAgentHookContextChannelFields({
       sessionKey: contextSessionKey,
       messageChannel: params.messageChannel,
@@ -185,16 +186,20 @@ export async function prepareCodexAttemptContext(
     }),
     agentWorkspaceDeveloperInstructions,
   );
-  const openClawPromptContext = buildCodexOpenClawPromptContext({
-    params: runtimeParams,
-    workspacePromptContext: workspaceBootstrapContext.promptContext,
-    watchedSessionsContext: buildCodexWatchedSessionsContext({
-      attempt: runtimeParams,
-      dynamicTools: toolBridge.availableSpecs,
-      sessionKey: contextSessionKey,
-      sandboxed: sandbox?.enabled === true,
-    }),
+  const watchedSessionsContext = buildCodexWatchedSessionsContext({
+    attempt: runtimeParams,
+    dynamicTools: toolBridge.availableSpecs,
+    sessionKey: contextSessionKey,
+    sandboxed: sandbox?.enabled === true,
   });
+  const buildOpenClawPromptContext = (includeWorkspaceReferences: boolean) =>
+    buildCodexOpenClawPromptContext({
+      params: runtimeParams,
+      workspacePromptContext: includeWorkspaceReferences
+        ? workspaceBootstrapContext.promptContext
+        : undefined,
+      watchedSessionsContext,
+    });
   const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
@@ -234,7 +239,7 @@ export async function prepareCodexAttemptContext(
     workspaceBootstrapContext,
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
-    openClawPromptContext,
+    buildOpenClawPromptContext,
     skillsCollaborationInstructions,
     promptState,
     codexContextProjectionMaxChars,

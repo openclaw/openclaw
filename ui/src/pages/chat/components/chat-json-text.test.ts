@@ -4,6 +4,7 @@ import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
 
@@ -48,11 +49,11 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
     const container = createContainer();
     render(
       renderGroupedMessage(
-        {
+        prepareChatMessageRender({
           role,
           content: text,
           ...(role === "toolResult" ? { toolName: "lookup", toolCallId: "json-result" } : {}),
-        },
+        }),
         "json-message",
         { isStreaming, showReasoning: false, isToolMessageExpanded: () => true },
       ),

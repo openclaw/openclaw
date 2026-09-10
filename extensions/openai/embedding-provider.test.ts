@@ -345,7 +345,7 @@ describe("OpenAI embedding provider HTTP contract", () => {
         if (mode === "first request failure") {
           server.requests[0]?.response.writeHead(503).end("fixture rejected");
           await expect(outcome).resolves.toMatchObject({
-            error: { message: expect.stringContaining("openai embeddings failed: 503") },
+            error: { message: expect.stringContaining("openai embeddings failed (503)") },
           });
           // Promise.all rejects early; it must not cancel the still-running sibling.
           expect(server.requests[1]?.closed).toBe(false);

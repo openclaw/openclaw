@@ -65,7 +65,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     core.channel.debounce.resolveInboundDebounceMs({ cfg: readConfig(), channel: "msteams" });
 
   const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
-    const facts = assembleMSTeamsInboundFacts({ entry: params, mediaMaxBytes });
+    const facts = assembleMSTeamsInboundFacts(params);
     const {
       context,
       activity,

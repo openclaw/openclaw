@@ -9,7 +9,7 @@ import {
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
-import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
+import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 
 type AimockRequestSnapshot = {
@@ -325,28 +325,13 @@ function createDebugMount(): Mountable {
         const url = new URL(req.url ?? "/", "http://127.0.0.1");
         const afterText = url.searchParams.get("after");
         if (afterText !== null) {
-          const after = parseQaDebugRequestCursor(afterText);
-          if (after === null) {
-            writeJson(res, 400, { error: "after must be a non-negative safe integer" });
-            return true;
-          }
-          const latestCursor = nextRequestCursor - 1;
-          const oldestCursor = selected[0]?.cursor ?? nextRequestCursor;
-          if (after > latestCursor) {
-            writeJson(res, 409, {
-              error: "request cursor is ahead of the latest recorded request",
-              after,
-              latestCursor,
-            });
-            return true;
-          }
-          if (after < oldestCursor - 1) {
-            writeJson(res, 409, {
-              error: "request cursor expired",
-              after,
-              oldestCursor,
-              latestCursor,
-            });
+          const after = resolveQaDebugRequestCursor(
+            afterText,
+            selected[0]?.cursor ?? nextRequestCursor,
+            nextRequestCursor - 1,
+          );
+          if (typeof after !== "number") {
+            writeJson(res, after.status, after.body);
             return true;
           }
           selected = selected.filter((request) => request.cursor > after);

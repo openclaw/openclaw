@@ -442,6 +442,44 @@ describe("Telegram native command built-ins", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
+  it.each(["high", "off"] as const)(
+    "uses the routed agent's per-model %s thinking default",
+    async (thinking) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            thinkingDefault: "medium",
+            models: { "openai/gpt-5.5": { params: { thinking: "low" } } },
+          },
+          entries: {
+            main: {},
+            alpha: {
+              models: { "openai/gpt-5.5": { params: { thinking } } },
+            },
+          },
+        },
+        bindings: [{ agentId: "alpha", match: { channel: "telegram", accountId: "default" } }],
+      };
+      const { handler, sendMessage } = registerAndResolveCommandHandler({
+        commandName: "think",
+        cfg,
+        allowFrom: ["*"],
+      });
+      await handler(createTelegramPrivateCommandContext());
+
+      expectSendMessageCall({
+        sendMessage,
+        chatId: 100,
+        textIncludes: `Current thinking level: ${thinking}.\nChoose level for /think.`,
+        requireReplyMarkup: true,
+        label: "routed agent model thinking menu",
+      });
+      expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not load the session store when a native argument menu is skipped", async () => {
     const { handler } = registerAndResolveCommandHandler({
       commandName: "think",

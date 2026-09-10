@@ -7,7 +7,7 @@ import {
   normalizeRequestInitHeadersForFetch,
   type HeadersLike,
 } from "../infra/fetch-headers.js";
-import { readChunkWithIdleTimeout } from "../infra/http-body.js";
+import { withResponseBodyTimeout } from "../infra/http-response-body-timeout.js";
 import {
   hasRegisteredSecretValuesForRedaction,
   redactRegisteredSecretValues,
@@ -15,11 +15,17 @@ import {
 import { resolveEnabledDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
 import {
-  closeDebugProxyCaptureStore,
-  getDebugProxyCaptureStore,
-  persistEventPayload,
-  safeJsonString,
-} from "./store.sqlite.js";
+  hasDebugProxyFetchPatch,
+  registerDebugProxyFetchPatch,
+  reportCapturePersistenceFailure,
+  resolveCaptureOwner,
+  resolveDebugProxyFetchTransport,
+  resolveRuntimeDeps,
+  uninstallDebugProxyGlobalFetchPatch,
+  type CaptureOwner,
+  type DebugProxyCaptureRuntimeDeps,
+} from "./runtime-owner.js";
+import { safeJsonString } from "./store.sqlite.js";
 import type {
   CaptureDirection,
   CaptureEventKind,
@@ -27,7 +33,13 @@ import type {
   CaptureProtocol,
 } from "./types.js";
 
-const DEBUG_PROXY_FETCH_PATCH_KEY = Symbol.for("openclaw.debugProxy.fetchPatch");
+export {
+  finalizeDebugProxyCapture,
+  isDebugProxyGlobalFetchPatchInstalled,
+  resolveDebugProxyFetchTransport,
+  type DebugProxyCaptureRuntimeDeps,
+} from "./runtime-owner.js";
+
 const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]", "utf8");
 // Cap captured response bodies so debug proxy capture cannot be turned into an
 // out-of-memory vector. The patched global fetch tees every outbound response
@@ -48,7 +60,9 @@ class CaptureReadIdleTimeoutError extends Error {}
 
 type CapturedResponseBodyResult =
   | { status: "captured"; buffer: Buffer }
-  | { status: "too-large" | "unavailable" | "stalled" };
+  | { status: "stalled" | "finalized"; buffer: Buffer }
+  | { status: "failed"; buffer: Buffer; error: unknown }
+  | { status: "too-large" | "unavailable" };
 
 // Reads a cloned capture response body under a byte cap. Oversized or
 // non-streaming Response-like bodies return a metadata-only status instead of
@@ -60,80 +74,112 @@ type CapturedResponseBodyResult =
 // settles (it only resolves once BOTH branches cancel). Awaiting it would hang
 // the capture pipeline and retain the buffered prefix forever, so we cancel
 // fire-and-forget, mirroring src/agents/tools/web-shared.ts#readResponseText.
-async function readCapturedResponseBodyBounded(
+function readCapturedResponseBodyBounded(
   response: Response,
   maxBytes: number,
-): Promise<CapturedResponseBodyResult> {
-  const clone = response.clone();
-  const body = clone.body;
-  if (!body || typeof body.getReader !== "function") {
-    // A real null-body Response consumes as empty. Response-like objects without
-    // a stream cannot be read under a byte cap, so never call arrayBuffer().
-    return clone instanceof Response && clone.body === null
-      ? { status: "captured", buffer: Buffer.alloc(0) }
-      : { status: "unavailable" };
-  }
-  const reader = body.getReader();
-  const chunks: Buffer[] = [];
+  owner: CaptureOwner,
+  record: (result: CapturedResponseBodyResult) => void,
+): void {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let chunks: Buffer[] = [];
   let total = 0;
-  let truncated = false;
-  let stalled = false;
-  try {
-    while (true) {
-      let next: Awaited<ReturnType<typeof readChunkWithIdleTimeout>>;
-      try {
-        next = await readChunkWithIdleTimeout(
-          reader,
-          CAPTURED_RESPONSE_BODY_IDLE_TIMEOUT_MS,
-          ({ chunkTimeoutMs }) =>
-            new CaptureReadIdleTimeoutError(
-              `capture read stalled: no data for ${chunkTimeoutMs}ms`,
-            ),
-        );
-      } catch (error) {
-        // The helper rejects for a failed read as well as for the deadline, and
-        // only the deadline is a capture decision: a reset or aborted stream is
-        // the exchange failing, and has to keep reaching the error handler.
-        if (!(error instanceof CaptureReadIdleTimeoutError)) {
-          throw error;
-        }
-        // The helper has already issued the branch cancel fire-and-forget, which
-        // is what lets the tee settle. Capture keeps what it has and records the
-        // exchange as metadata: a stalled remote must not turn a diagnostic read
-        // into a failure of the request being observed.
-        stalled = true;
-        break;
-      }
-      const { done, value } = next;
-      if (done) {
-        break;
-      }
-      if (!value?.length) {
-        continue;
-      }
-      if (total + value.length > maxBytes) {
-        truncated = true;
-        break;
-      }
-      chunks.push(Buffer.from(value));
-      total += value.length;
+  let finished = false;
+  let canceled = false;
+  const cancel = (reason?: unknown) => {
+    if (!reader || canceled) {
+      return;
     }
-  } finally {
-    if (truncated) {
-      void reader.cancel().catch(() => undefined);
-    }
+    canceled = true;
+    // A clone is one tee branch: awaiting cancel can wait for the live caller.
     try {
-      reader.releaseLock();
-    } catch {
-      // Some non-compliant/mocked streams reject releaseLock; ignore.
+      void reader.cancel(reason).catch(() => undefined);
+    } catch (error) {
+      owner.errors.push(error);
     }
-  }
-  if (stalled) {
-    return { status: "stalled" };
-  }
-  return truncated
-    ? { status: "too-large" }
-    : { status: "captured", buffer: Buffer.concat(chunks, total) };
+  };
+  const release = () => {
+    try {
+      reader?.releaseLock();
+    } catch {
+      // A pending read releases its lock when the canceled read settles.
+    }
+  };
+  const finish = (result: CapturedResponseBodyResult) => {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    owner.pending.delete(finalize);
+    try {
+      if (owner.store.isClosed) {
+        throw new Error("Capture store closed before its response could be finalized.");
+      }
+      record(result);
+    } catch (error) {
+      // Persistence failure is not a second stream error. Preserve it for close.
+      reportCapturePersistenceFailure(owner, error);
+    } finally {
+      chunks = [];
+      cancel();
+      release();
+    }
+  };
+  const finalize = () => finish({ status: "finalized", buffer: Buffer.concat(chunks, total) });
+  owner.pending.add(finalize);
+  void (async () => {
+    try {
+      const clone = response.clone();
+      const body = clone.body;
+      if (!body || typeof body.getReader !== "function") {
+        finish(
+          clone instanceof Response && clone.body === null
+            ? { status: "captured", buffer: Buffer.alloc(0) }
+            : { status: "unavailable" },
+        );
+        return;
+      }
+      reader = body.getReader();
+      for (;;) {
+        if (finished || !owner.active) {
+          return;
+        }
+        const { done, value } = await withResponseBodyTimeout({
+          timeoutMs: CAPTURED_RESPONSE_BODY_IDLE_TIMEOUT_MS,
+          onTimeout: ({ timeoutMs }) =>
+            new CaptureReadIdleTimeoutError(`capture read stalled: no data for ${timeoutMs}ms`),
+          cancel: async (error) => cancel(error),
+          read: () => reader!.read(),
+        });
+        // Finalize may have synchronously recorded and closed this exact store.
+        if (finished || !owner.active) {
+          return;
+        }
+        if (done) {
+          finish({ status: "captured", buffer: Buffer.concat(chunks, total) });
+          return;
+        }
+        if (!value?.length) {
+          continue;
+        }
+        if (total + value.length > maxBytes) {
+          finish({ status: "too-large" });
+          return;
+        }
+        chunks.push(Buffer.from(value));
+        total += value.length;
+      }
+    } catch (error) {
+      if (!finished && owner.active) {
+        finish(
+          error instanceof CaptureReadIdleTimeoutError
+            ? { status: "stalled", buffer: Buffer.concat(chunks, total) }
+            : { status: "failed", buffer: Buffer.concat(chunks, total), error },
+        );
+      }
+    } finally {
+      release();
+    }
+  })();
 }
 
 function parseDeclaredCaptureContentLength(raw: string | null | undefined): bigint | undefined {
@@ -145,45 +191,6 @@ function parseDeclaredCaptureContentLength(raw: string | null | undefined): bigi
     return undefined;
   }
   return BigInt(trimmed);
-}
-
-// Runtime capture records HTTP/fetch and websocket events into the SQLite store,
-// redacting sensitive headers and persisting bodies in capture_blobs.
-type GlobalFetchPatchedState = {
-  originalFetch: typeof globalThis.fetch;
-};
-
-type GlobalFetchPatchTarget = typeof globalThis & {
-  [DEBUG_PROXY_FETCH_PATCH_KEY]?: GlobalFetchPatchedState;
-};
-
-type DebugProxyCaptureStoreLike = Pick<
-  ReturnType<typeof getDebugProxyCaptureStore>,
-  "upsertSession" | "endSession" | "recordEvent"
->;
-
-export type DebugProxyCaptureRuntimeDeps = {
-  getStore?: () => DebugProxyCaptureStoreLike;
-  closeStore?: typeof closeDebugProxyCaptureStore;
-  persistEventPayload?: (
-    store: DebugProxyCaptureStoreLike,
-    payload: Parameters<typeof persistEventPayload>[1],
-  ) => ReturnType<typeof persistEventPayload>;
-  safeJsonString?: typeof safeJsonString;
-  fetchTarget?: typeof globalThis;
-};
-
-function resolveRuntimeDeps(deps: DebugProxyCaptureRuntimeDeps = {}) {
-  return {
-    getStore: deps.getStore ?? getDebugProxyCaptureStore,
-    closeStore: deps.closeStore ?? closeDebugProxyCaptureStore,
-    persistEventPayload:
-      deps.persistEventPayload ??
-      ((store, payload) =>
-        persistEventPayload(store as ReturnType<typeof getDebugProxyCaptureStore>, payload)),
-    safeJsonString: deps.safeJsonString ?? safeJsonString,
-    fetchTarget: deps.fetchTarget ?? globalThis,
-  };
 }
 
 function protocolFromUrl(rawUrl: string): CaptureProtocol {
@@ -334,29 +341,36 @@ function createHttpCaptureEventBase(params: {
 }
 
 function installDebugProxyGlobalFetchPatch(
-  settings: DebugProxySettings,
+  owner: CaptureOwner,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
   const runtime = resolveRuntimeDeps(deps);
-  const fetchTarget = runtime.fetchTarget as GlobalFetchPatchTarget;
+  const admission = owner.admission;
+  const fetchTarget = runtime.fetchTarget;
   if (typeof fetchTarget.fetch !== "function") {
     return;
   }
-  if (fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY]) {
+  if (hasDebugProxyFetchPatch(fetchTarget, admission)) {
     return;
   }
+  uninstallDebugProxyGlobalFetchPatch(deps);
   // Patch only once per target and keep the original fetch for deterministic
   // teardown in tests and nested capture sessions.
   const fetchImpl = fetchTarget.fetch;
-  const originalFetch = fetchImpl.bind(fetchTarget);
-  fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
+  const originalFetch = resolveDebugProxyFetchTransport(fetchImpl).bind(fetchTarget);
   const patchedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = resolveUrlString(input);
     const normalizedInit = normalizeRequestInitHeadersForFetch(init);
+    // Retain admission before awaiting transport; a late result cannot join a
+    // replacement capture session or reopen a store closed during shutdown.
+    const admitted = Boolean(admission.current);
+    let response: Response;
     try {
-      const response = await originalFetch(input, normalizedInit);
-      if (url && /^https?:/i.test(url)) {
-        captureHttpExchange(
+      response = await originalFetch(input, normalizedInit);
+    } catch (error) {
+      const current = admission.current;
+      if (admitted && current && url && /^https?:/i.test(url)) {
+        captureOwnedHttpError(
           {
             url,
             method:
@@ -365,78 +379,54 @@ function installDebugProxyGlobalFetchPatch(
                 : undefined) ??
               normalizedInit?.method ??
               "GET",
-            requestHeaders:
-              (typeof Request !== "undefined" && input instanceof Request
-                ? input.headers
-                : undefined) ??
-              (normalizedInit?.headers as Headers | Record<string, string> | undefined),
-            requestBody:
-              (typeof Request !== "undefined" && input instanceof Request
-                ? (input as Request & { body?: BodyInit | null }).body
-                : undefined) ??
-              (normalizedInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ??
-              null,
-            response,
-            transport: "http",
-            meta: {
-              captureOrigin: "global-fetch",
-              source: settings.sourceProcess,
-            },
+            error,
+            meta: { captureOrigin: "global-fetch" },
           },
-          settings,
-          deps,
+          current,
         );
       }
-      return response;
-    } catch (error) {
-      if (url && /^https?:/i.test(url)) {
-        const store = runtime.getStore();
-        const captureUrl = redactCaptureUrl(url);
-        const parsed = new URL(captureUrl);
-        store.recordEvent({
-          sessionId: settings.sessionId,
-          ts: Date.now(),
-          sourceScope: "openclaw",
-          sourceProcess: settings.sourceProcess,
-          protocol: protocolFromUrl(captureUrl),
-          direction: "local",
-          kind: "error",
-          flowId: randomUUID(),
+      throw error;
+    }
+    const current = admission.current;
+    if (admitted && current && url && /^https?:/i.test(url)) {
+      captureOwnedHttpExchange(
+        {
+          url,
           method:
             (typeof Request !== "undefined" && input instanceof Request
               ? input.method
               : undefined) ??
             normalizedInit?.method ??
             "GET",
-          host: parsed.host,
-          path: `${parsed.pathname}${parsed.search}`,
-          errorText: redactCaptureText(error instanceof Error ? error.message : String(error)),
-          metaJson: redactedCaptureJson({ captureOrigin: "global-fetch" }, runtime.safeJsonString),
-        });
-      }
-      throw error;
+          requestHeaders:
+            (typeof Request !== "undefined" && input instanceof Request
+              ? input.headers
+              : undefined) ??
+            (normalizedInit?.headers as Headers | Record<string, string> | undefined),
+          requestBody:
+            (typeof Request !== "undefined" && input instanceof Request
+              ? (input as Request & { body?: BodyInit | null }).body
+              : undefined) ??
+            (normalizedInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ??
+            null,
+          response,
+          transport: "http",
+          meta: {
+            captureOrigin: "global-fetch",
+            source: current.settings.sourceProcess,
+          },
+        },
+        current,
+      );
     }
+    return response;
   };
   const mockState = (fetchImpl as typeof globalThis.fetch & { mock?: unknown }).mock;
   if (typeof mockState === "object" && mockState !== null) {
     // Preserve Vitest mock metadata when patching mocked fetch targets.
     (patchedFetch as typeof globalThis.fetch & { mock?: unknown }).mock = mockState;
   }
-  fetchTarget.fetch = patchedFetch as typeof globalThis.fetch;
-}
-
-function uninstallDebugProxyGlobalFetchPatch(deps: DebugProxyCaptureRuntimeDeps = {}): void {
-  const fetchTarget = resolveRuntimeDeps(deps).fetchTarget as GlobalFetchPatchTarget;
-  const state = fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY];
-  if (!state) {
-    return;
-  }
-  fetchTarget.fetch = state.originalFetch;
-  delete fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY];
-}
-
-export function isDebugProxyGlobalFetchPatchInstalled(): boolean {
-  return Boolean((globalThis as GlobalFetchPatchTarget)[DEBUG_PROXY_FETCH_PATCH_KEY]);
+  registerDebugProxyFetchPatch(fetchTarget, originalFetch, patchedFetch, admission);
 }
 
 export function initializeDebugProxyCapture(
@@ -448,7 +438,14 @@ export function initializeDebugProxyCapture(
   if (!settings) {
     return;
   }
-  resolveRuntimeDeps(deps).getStore().upsertSession({
+  const owner = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
+    initialize: true,
+    explicit: resolved !== undefined,
+  });
+  if (!owner) {
+    return;
+  }
+  owner.store.upsertSession({
     id: settings.sessionId,
     startedAt: Date.now(),
     mode,
@@ -456,45 +453,82 @@ export function initializeDebugProxyCapture(
     sourceProcess: settings.sourceProcess,
     proxyUrl: settings.proxyUrl,
   });
-  installDebugProxyGlobalFetchPatch(settings, deps);
+  installDebugProxyGlobalFetchPatch(owner, deps);
 }
 
-// Finalization closes the session and restores the fetch patch before closing
-// the cached store, preventing later normal requests from being captured.
-export function finalizeDebugProxyCapture(
+type HttpCaptureParams = {
+  url: string;
+  method: string;
+  requestHeaders?: HeadersLike | Record<string, string> | undefined;
+  requestBody?: BodyInit | Buffer | string | null;
+  response: Response;
+  transport?: "http" | "sse";
+  flowId?: string;
+  meta?: Record<string, unknown>;
+};
+
+type HttpCaptureErrorParams = Omit<HttpCaptureParams, "response"> & { error: unknown };
+
+/** Internal fetch seams retain this admission before awaiting network work. */
+export function prepareHttpCapture(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
-): void {
+) {
   const settings = resolveEnabledDebugProxySettings(resolved);
   if (!settings) {
-    return;
+    return undefined;
   }
-  const runtime = resolveRuntimeDeps(deps);
-  runtime.getStore().endSession(settings.sessionId);
-  uninstallDebugProxyGlobalFetchPatch(deps);
-  runtime.closeStore();
+  const admission = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
+    explicit: resolved !== undefined,
+  })?.admission;
+  return admission
+    ? (params: HttpCaptureParams | HttpCaptureErrorParams) => {
+        if (admission.current) {
+          if ("response" in params) {
+            captureOwnedHttpExchange(params, admission.current);
+          } else {
+            captureOwnedHttpError(params, admission.current);
+          }
+        }
+      }
+    : undefined;
 }
 
 export function captureHttpExchange(
-  params: {
-    url: string;
-    method: string;
-    requestHeaders?: HeadersLike | Record<string, string> | undefined;
-    requestBody?: BodyInit | Buffer | string | null;
-    response: Response;
-    transport?: "http" | "sse";
-    flowId?: string;
-    meta?: Record<string, unknown>;
-  },
+  params: HttpCaptureParams,
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
-  const settings = resolveEnabledDebugProxySettings(resolved);
-  if (!settings) {
-    return;
+  prepareHttpCapture(resolved, deps)?.(params);
+}
+
+function captureOwnedHttpError(params: HttpCaptureErrorParams, owner: CaptureOwner): void {
+  try {
+    const captureUrl = redactCaptureUrl(params.url);
+    owner.store.recordEvent({
+      ...createHttpCaptureEventBase({
+        settings: owner.settings,
+        rawUrl: captureUrl,
+        url: new URL(captureUrl),
+        transport: params.transport,
+        direction: "local",
+        kind: "error",
+        flowId: params.flowId ?? randomUUID(),
+        method: params.method,
+      }),
+      errorText: redactCaptureText(
+        params.error instanceof Error ? params.error.message : String(params.error),
+      ),
+      metaJson: redactedCaptureJson(params.meta, owner.runtime.safeJsonString),
+    });
+  } catch (error) {
+    // Diagnostic persistence cannot replace the caller's transport rejection.
+    reportCapturePersistenceFailure(owner, error);
   }
-  const runtime = resolveRuntimeDeps(deps);
-  const store = runtime.getStore();
+}
+
+function captureOwnedHttpExchange(params: HttpCaptureParams, owner: CaptureOwner): void {
+  const { settings, runtime, store } = owner;
   const flowId = params.flowId ?? randomUUID();
   const captureUrl = redactCaptureUrl(params.url);
   const url = new URL(captureUrl);
@@ -515,47 +549,58 @@ export function captureHttpExchange(
       : undefined;
   const responseContentType =
     rawResponseContentType === undefined ? undefined : redactCaptureText(rawResponseContentType);
-  const requestPayload = runtime.persistEventPayload(store, {
-    data: redactCapturePayload(requestBody),
-    contentType: requestContentType,
-  });
-  store.recordEvent({
-    ...createHttpCaptureEventBase({
-      settings,
-      rawUrl: captureUrl,
-      url,
-      transport: params.transport,
-      direction: "outbound",
-      kind: "request",
-      flowId,
-      method: params.method,
-    }),
-    contentType: requestContentType,
-    headersJson: runtime.safeJsonString(
-      redactedCaptureHeaders(
-        params.requestHeaders,
-        Array.isArray(params.meta?.sensitiveRequestHeaderNames)
-          ? params.meta.sensitiveRequestHeaderNames.filter(
-              (name): name is string => typeof name === "string",
-            )
-          : undefined,
-      ),
-    ),
-    metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
-    ...requestPayload,
-  });
-  // Records the response status/headers without a body. Used both when a
-  // Response-like object cannot be cloned and when capturing the body would be
-  // unsafe (over the cap), so the exchange is still observable without OOM risk.
-  const recordResponseMetadataOnly = (bodyCapture: "unavailable" | "too-large" | "stalled") => {
+  try {
+    const requestPayload = runtime.persistEventPayload(store, {
+      data: redactCapturePayload(requestBody),
+      contentType: requestContentType,
+    });
     store.recordEvent({
       ...createHttpCaptureEventBase({
         settings,
         rawUrl: captureUrl,
         url,
         transport: params.transport,
-        direction: "inbound",
-        kind: "response",
+        direction: "outbound",
+        kind: "request",
+        flowId,
+        method: params.method,
+      }),
+      contentType: requestContentType,
+      headersJson: runtime.safeJsonString(
+        redactedCaptureHeaders(
+          params.requestHeaders,
+          Array.isArray(params.meta?.sensitiveRequestHeaderNames)
+            ? params.meta.sensitiveRequestHeaderNames.filter(
+                (name): name is string => typeof name === "string",
+              )
+            : undefined,
+        ),
+      ),
+      metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
+      ...requestPayload,
+    });
+  } catch (error) {
+    reportCapturePersistenceFailure(owner, error);
+    return;
+  }
+  const recordTerminal = (result: CapturedResponseBodyResult) => {
+    const failed = result.status === "failed";
+    // Join first, then redact: secrets and UTF-8 code points can cross chunks.
+    const payload =
+      "buffer" in result
+        ? runtime.persistEventPayload(store, {
+            data: redactCapturePayload(result.buffer),
+            contentType: responseContentType,
+          })
+        : {};
+    store.recordEvent({
+      ...createHttpCaptureEventBase({
+        settings,
+        rawUrl: captureUrl,
+        url,
+        transport: params.transport,
+        direction: failed ? "local" : "inbound",
+        kind: failed ? "error" : "response",
         flowId,
         method: params.method,
       }),
@@ -565,13 +610,35 @@ export function captureHttpExchange(
         params.response.headers && typeof params.response.headers.entries === "function"
           ? runtime.safeJsonString(redactedCaptureHeaders(params.response.headers))
           : undefined,
-      metaJson: redactedCaptureJson({ ...params.meta, bodyCapture }, runtime.safeJsonString),
+      errorText: failed
+        ? redactCaptureText(
+            result.error instanceof Error ? result.error.message : String(result.error),
+          )
+        : undefined,
+      metaJson: redactedCaptureJson(
+        result.status === "captured"
+          ? params.meta
+          : {
+              ...params.meta,
+              bodyCapture: result.status,
+              ...(failed ? { stage: "response-body" } : {}),
+            },
+        runtime.safeJsonString,
+      ),
+      ...payload,
     });
+  };
+  const recordMetadata = (status: "unavailable" | "too-large") => {
+    try {
+      recordTerminal({ status });
+    } catch (error) {
+      reportCapturePersistenceFailure(owner, error);
+    }
   };
   if (typeof params.response.clone !== "function") {
     // Some Response-like objects cannot be cloned. Still record status/headers
     // rather than forcing capture to consume or mutate the original response.
-    recordResponseMetadataOnly("unavailable");
+    recordMetadata("unavailable");
     return;
   }
   // Fast path: when the provider declares an oversized Content-Length, skip the
@@ -583,54 +650,15 @@ export function captureHttpExchange(
       : undefined,
   );
   if (declaredLength !== undefined && declaredLength > BigInt(MAX_CAPTURED_RESPONSE_BODY_BYTES)) {
-    recordResponseMetadataOnly("too-large");
+    recordMetadata("too-large");
     return;
   }
-  void readCapturedResponseBodyBounded(params.response, MAX_CAPTURED_RESPONSE_BODY_BYTES)
-    .then((result) => {
-      if (result.status !== "captured") {
-        // The body either exceeded the cap or offered no bounded streaming path.
-        // Preserve the exchange as metadata instead of allocating the whole body.
-        recordResponseMetadataOnly(result.status);
-        return;
-      }
-      const responsePayload = runtime.persistEventPayload(store, {
-        data: redactCapturePayload(result.buffer),
-        contentType: responseContentType,
-      });
-      store.recordEvent({
-        ...createHttpCaptureEventBase({
-          settings,
-          rawUrl: captureUrl,
-          url,
-          transport: params.transport,
-          direction: "inbound",
-          kind: "response",
-          flowId,
-          method: params.method,
-        }),
-        status: params.response.status,
-        contentType: responseContentType,
-        headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.response.headers)),
-        metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
-        ...responsePayload,
-      });
-    })
-    .catch((error: unknown) => {
-      store.recordEvent({
-        ...createHttpCaptureEventBase({
-          settings,
-          rawUrl: captureUrl,
-          url,
-          transport: params.transport,
-          direction: "local",
-          kind: "error",
-          flowId,
-          method: params.method,
-        }),
-        errorText: redactCaptureText(error instanceof Error ? error.message : String(error)),
-      });
-    });
+  readCapturedResponseBodyBounded(
+    params.response,
+    MAX_CAPTURED_RESPONSE_BODY_BYTES,
+    owner,
+    recordTerminal,
+  );
 }
 
 // Websocket seams call this directly because Node fetch patching cannot observe
@@ -653,8 +681,13 @@ export function captureWsEvent(
   if (!settings) {
     return;
   }
-  const runtime = resolveRuntimeDeps(deps);
-  const store = runtime.getStore();
+  const owner = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
+    explicit: resolved !== undefined,
+  });
+  if (!owner) {
+    return;
+  }
+  const { runtime, store } = owner;
   const captureUrl = redactCaptureUrl(params.url);
   const url = new URL(captureUrl);
   const payload = runtime.persistEventPayload(store, {

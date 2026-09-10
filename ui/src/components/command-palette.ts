@@ -57,7 +57,7 @@ type CommandPaletteProps = {
   activeId: string | null;
   sessionItems: readonly PaletteItem[];
   catalogItems: readonly PaletteItem[];
-  modelSearchFailed: boolean;
+  modelSearchError: string | null;
   sessionSearchFailed: boolean;
   sessionSearchPartial: boolean;
   sessionSearchIncomplete: boolean;
@@ -220,34 +220,30 @@ function renderCommandPalette(props: CommandPaletteProps) {
         />
         <div id=${paletteListboxId} class="cmd-palette__results" role="listbox">
           ${
-            props.modelSearchFailed
-              ? html`<div class="cmd-palette__empty" role="status">
-                  ${t("palette.modelSearchFailed")}
-                </div>`
+            props.modelSearchError
+              ? html`<div class="cmd-palette__empty" role="status">${props.modelSearchError}</div>`
               : nothing
           }
           ${
-            props.sessionSearchPartial || props.sessionSearchIncomplete
+            props.sessionSearchFailed || props.sessionSearchPartial || props.sessionSearchIncomplete
               ? html`<div class="cmd-palette__empty" role="status">
                   ${t(
-                    props.sessionSearchIncomplete
-                      ? "palette.searchIncomplete"
-                      : "palette.searchPartial",
+                    props.sessionSearchFailed
+                      ? "palette.searchFailed"
+                      : props.sessionSearchIncomplete
+                        ? "palette.searchIncomplete"
+                        : "palette.searchPartial",
                   )}
                 </div>`
               : nothing
           }
           ${
-            grouped.length === 0
+            grouped.length === 0 && !props.sessionSearchFailed
               ? html`<div class="cmd-palette__empty">
                   <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
                     >${icons.search}</span
                   >
-                  <span
-                    >${
-                      props.sessionSearchFailed ? t("palette.searchFailed") : t("palette.noResults")
-                    }</span
-                  >
+                  <span>${t("palette.noResults")}</span>
                 </div>`
               : grouped.map(
                   ([category, groupedItems]) => html`
@@ -308,7 +304,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private activeId: string | null = null;
   @state() private sessionItems: readonly PaletteItem[] = [];
   @state() private catalogItems: readonly PaletteItem[] = [];
-  @state() private modelSearchFailed = false;
+  @state() private modelSearchError: string | null = null;
   @state() private sessionSearchFailed = false;
   @state() private sessionSearchPartial = false;
   @state() private sessionSearchIncomplete = false;
@@ -415,7 +411,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   private clearCatalogSearch() {
     this.catalogLoad = undefined;
     this.catalogItems = [];
-    this.modelSearchFailed = false;
+    this.modelSearchError = null;
   }
 
   private ensureCatalogItems(force = false): Promise<void> {
@@ -446,7 +442,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       agentId,
       agents: () => context.agents?.ensureList?.() ?? Promise.resolve(null),
       methodAvailable: (method) => Boolean(isGatewayMethodAdvertised(snapshot, method)),
-    }).then(({ items, modelSearchFailed }) => {
+    }).then(({ items, modelRequestFailed, modelSearchError }) => {
       if (
         this.catalogLoad?.promise === promise &&
         this.context?.gateway === gateway &&
@@ -455,10 +451,10 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       ) {
         this.catalogItems = [
           ...toCommandPaletteItems(items),
-          ...(modelSearchFailed ? previousModels : []),
+          ...(modelRequestFailed ? previousModels : []),
         ];
-        this.modelSearchFailed = modelSearchFailed;
-        this.catalogLoad.loadedAt = modelSearchFailed ? 0 : Date.now();
+        this.modelSearchError = modelSearchError;
+        this.catalogLoad.loadedAt = modelRequestFailed ? 0 : Date.now();
       }
     });
     this.catalogLoad = { client, agentId, promise };
@@ -622,7 +618,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       query: this.query,
       activeId: this.activeId,
       sessionItems: this.sessionItems,
-      modelSearchFailed: this.modelSearchFailed,
+      modelSearchError: this.modelSearchError,
       catalogItems: [
         ...toCommandPaletteItems(
           getStaticCommandPaletteCatalogItems(

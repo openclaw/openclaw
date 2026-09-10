@@ -1,4 +1,8 @@
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { mergeAgentModelEntryForConfig } from "../config/model-input.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
@@ -139,4 +143,73 @@ export async function applySystemAgentModelSelection(
 ): Promise<OpenClawConfig> {
   const update = await createSystemAgentModelSelectionUpdater(params);
   return update(params.config);
+}
+
+export function projectSetupInferenceConfig(params: {
+  base: OpenClawConfig;
+  prepared: OpenClawConfig;
+  modelRef: string;
+  sourceModelRef?: string;
+  agentId: string;
+  profileId?: string;
+  credential?: AuthProfileCredential;
+  pluginId?: string;
+}): OpenClawConfig {
+  const config = structuredClone(params.base);
+  if (params.profileId) {
+    const profile = params.prepared.auth?.profiles?.[params.profileId];
+    if (profile) {
+      config.auth = {
+        ...config.auth,
+        profiles: { ...config.auth?.profiles, [params.profileId]: structuredClone(profile) },
+      };
+    }
+  }
+  const provider = parseProviderModelRef(params.modelRef)?.provider ?? "";
+  const providerKey = findNormalizedProviderKey(params.prepared.models?.providers, provider);
+  const providerConfig = providerKey ? params.prepared.models?.providers?.[providerKey] : undefined;
+  if (providerKey && providerConfig) {
+    const selectedProvider = structuredClone(providerConfig);
+    if (params.profileId) {
+      delete selectedProvider.apiKey;
+    }
+    if (
+      selectedProvider.headers?.["api-key"] &&
+      params.credential?.type === "api_key" &&
+      params.credential.keyRef
+    ) {
+      selectedProvider.headers["api-key"] = params.credential.keyRef;
+    }
+    config.models = {
+      ...config.models,
+      providers: { ...config.models?.providers, [providerKey]: selectedProvider },
+    };
+  }
+  const plugin = params.pluginId ? params.prepared.plugins?.entries?.[params.pluginId] : undefined;
+  if (params.pluginId && plugin) {
+    config.plugins = {
+      ...config.plugins,
+      entries: { ...config.plugins?.entries, [params.pluginId]: structuredClone(plugin) },
+    };
+  }
+  const modelKey = params.sourceModelRef ?? params.modelRef;
+  const defaultModel = params.prepared.agents?.defaults?.models?.[modelKey];
+  if (defaultModel) {
+    const defaults = ((config.agents ??= {}).defaults ??= {});
+    const models = (defaults.models ??= {});
+    models[params.modelRef] = mergeAgentModelEntryForConfig(
+      models[params.modelRef],
+      structuredClone(defaultModel),
+    );
+  }
+  const agentModel = params.prepared.agents?.entries?.[params.agentId]?.models?.[modelKey];
+  if (agentModel) {
+    const entries = ((config.agents ??= {}).entries ??= {});
+    const models = ((entries[params.agentId] ??= {}).models ??= {});
+    models[params.modelRef] = mergeAgentModelEntryForConfig(
+      models[params.modelRef],
+      structuredClone(agentModel),
+    );
+  }
+  return config;
 }

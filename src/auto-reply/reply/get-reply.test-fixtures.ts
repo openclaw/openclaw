@@ -135,9 +135,11 @@ export function createGetReplyContinueDirectivesResult(params: {
       elevatedAllowed: false,
       elevatedFailures: [],
       defaultActivation: "always",
-      resolvedThinkLevel: params.resolvedThinkLevel,
+      resolveModelLevels: async () => ({
+        resolvedThinkLevel: params.resolvedThinkLevel ?? "off",
+        resolvedReasoningLevel: params.resolvedReasoningLevel ?? "off",
+      }),
       resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: params.resolvedReasoningLevel ?? "off",
       resolvedElevatedLevel: "off",
       execOverrides: undefined,
       blockStreamingEnabled: false,
@@ -146,7 +148,8 @@ export function createGetReplyContinueDirectivesResult(params: {
       provider: params.provider ?? "openai",
       model: params.model ?? "gpt-4o-mini",
       modelState: {
-        resolveDefaultThinkingLevel: async () => undefined,
+        resolveDefaultThinkingLevel: async () => "off",
+        resolveDefaultReasoningLevel: async () => "off",
         resolveThinkingCatalog: async () => [],
       },
       contextTokens: 0,

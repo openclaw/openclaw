@@ -26,7 +26,7 @@ openclaw workboard move <id> --status <status> [--json]
 openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--admin] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
-The command reads and writes the same plugin-owned SQLite database used by the dashboard and Workboard agent tools. Card ids are UUIDs; commands that accept a card id also accept an unambiguous id prefix (the compact text output shows the first 8 characters).
+The command reads and writes the same plugin-owned SQLite database used by the dashboard and Workboard agent tools. Card ids are UUIDs. Commands that accept a card id also accept an unambiguous id prefix. The compact text output shows the first 8 characters.
 
 Valid `status` values: `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`. Valid `priority` values: `low`, `normal`, `high`, `urgent`.
 
@@ -84,7 +84,7 @@ openclaw workboard show 7f4a2c10 --json
 Text output prints the compact card line and notes. JSON output returns the full card record, including execution metadata, attempts, comments, links, proof, artifacts, worker logs, protocol state, diagnostics, and automation metadata.
 
 Proof statuses in JSON are worker-reported outcomes. `passed` records the worker's
-self-assessment of the attached command or check; it is not an independent verification
+self-assessment of the attached command or check. It is not an independent verification
 result.
 
 ## `move`
@@ -94,7 +94,7 @@ openclaw workboard move 7f4a2c10 --status review
 openclaw workboard move 7f4a2c10 --status done --json
 ```
 
-`move` changes the card's status using the same manual-operator path as dragging a card in the dashboard. It accepts a full card id or an unambiguous prefix. Active dependency and schedule holds still apply. Operators may move a claimed card without its agent claim token; claim tokens remain scoped to agent-tool mutations and are redacted from JSON output.
+`move` changes the card's status using the same manual-operator path as dragging a card in the dashboard. It accepts a full card id or an unambiguous prefix. Active dependency and schedule holds still apply. Operators may move a claimed card without its agent claim token. Claim tokens remain scoped to agent-tool mutations, and JSON output redacts them.
 
 ## `dispatch`
 
@@ -106,7 +106,7 @@ openclaw workboard dispatch --admin
 openclaw workboard dispatch --url http://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
-`dispatch` first calls the running Gateway RPC method `workboard.cards.dispatch`, which uses the same subagent runtime as the dashboard dispatch action, so ready cards become task-tracked worker runs with linked session keys. `--max-starts` uses the additive `workboard.cards.dispatchWithOptions` method so an older Gateway rejects the option before starting any workers; restart the Gateway after upgrading before using the flag. Cards with an assigned agent use agent-scoped subagent session keys; unassigned cards keep an unscoped subagent key so the Gateway's configured default agent is preserved.
+`dispatch` first calls the running Gateway RPC method `workboard.cards.dispatch`. That method uses the same subagent runtime as the dashboard dispatch action. Ready cards therefore become task-tracked worker runs with linked session keys. `--max-starts` uses the additive `workboard.cards.dispatchWithOptions` method, so an older Gateway rejects the option before starting any workers. Restart the Gateway after upgrading, before you use the flag. Cards with an assigned agent use agent-scoped subagent session keys. Unassigned cards keep an unscoped subagent key, so the Gateway's configured default agent is preserved.
 
 The dispatch loop:
 
@@ -118,11 +118,16 @@ The dispatch loop:
 6. Starts a subagent worker run with bounded card context and the card claim token.
 7. Stores the worker run id, session key, task linkage when the Gateway task ledger reports it, execution status, and worker log on the card.
 
-Selection is conservative: one dispatch starts at most three workers by default, skips archived or already-claimed cards, and starts only one card per owner or agent in a single pass. Cards already owned by active running or review work are left for a later dispatch. Pass `--max-starts <count>` with a positive integer to change the per-pass cap; the one-card-per-owner rule still applies, so the effective number of starts can be lower.
+Selection is conservative. One dispatch starts at most three workers by default. It skips archived or already-claimed cards. It starts only one card per owner or agent in a single pass. Cards already owned by active running or review work are left for a later dispatch. Pass `--max-starts <count>` with a positive integer to change the per-pass cap. The one-card-per-owner rule still applies, so the effective number of starts can be lower.
 
-If worker start fails after a card is claimed, Workboard blocks that card, clears the claim, and records the failure in card execution and worker-log metadata, keeping failed starts visible instead of silently returning the card to the queue.
+If worker start fails after a card is claimed, Workboard blocks that card and clears the claim. It records the failure in card execution and worker-log metadata. Failed starts stay visible instead of returning the card to the queue silently.
 
-If no explicit Gateway target is given and the local Gateway is unavailable or does not expose the Workboard dispatch method yet, the CLI falls back to data-only dispatch against local Workboard state. Data-only dispatch can still promote dependencies, clean stale claims, and block timed-out runs, but it does not start workers. Auth, permission, and validation failures, and failures for an explicit `--url` or `--token` target, are reported directly instead of triggering the fallback.
+The CLI falls back to data-only dispatch against local Workboard state when both of these are true:
+
+- You give no explicit Gateway target.
+- The local Gateway is unavailable, or it does not expose the Workboard dispatch method yet.
+
+Data-only dispatch can still promote dependencies, clean stale claims, and block timed-out runs, but it does not start workers. Auth, permission, and validation failures, and failures for an explicit `--url` or `--token` target, are reported directly instead of triggering the fallback.
 
 Text output reports worker starts:
 
@@ -136,9 +141,9 @@ Fallback output is explicit:
 gateway unavailable; data dispatch only: promoted=1 blocked=0
 ```
 
-JSON output includes the dispatch result. Gateway-backed dispatch can include `started` and `startFailures`; data-only fallback includes `gatewayUnavailable: true`. Claim tokens are redacted from card JSON output.
+JSON output includes the dispatch result. Gateway-backed dispatch can include `started` and `startFailures`. Data-only fallback includes `gatewayUnavailable: true`. Claim tokens are redacted from card JSON output.
 
-In the dashboard, the same dispatch result is shown as a short summary so an operator can see how many cards started, promoted, blocked, reclaimed, or failed without opening card details.
+In the dashboard, the same dispatch result appears as a short summary. An operator can see how many cards started, promoted, blocked, reclaimed, or failed without opening card details.
 
 ## Slash command parity
 
@@ -152,13 +157,13 @@ Command-capable channels can use the matching slash command:
 /workboard dispatch
 ```
 
-Slash command dispatch also uses the Gateway subagent runtime, so it follows the same claim, worker-start, and failure behavior as the dashboard and CLI Gateway path.
+Slash command dispatch also uses the Gateway subagent runtime. It follows the same claim, worker-start, and failure behavior as the dashboard and CLI Gateway path.
 
 `/workboard list` and `/workboard show` are read commands for authorized command senders. `/workboard create`, `/workboard move`, and `/workboard dispatch` mutate board state and require owner status on chat surfaces or a Gateway client with `operator.write` or `operator.admin`.
 
 ## Permissions
 
-The CLI dispatch path normally requests Gateway `operator.write` and `operator.read` scopes. Workspace-bound cards run directly in an exact configured agent workspace; a worktree request is narrowed to that directory instead of letting the host materialize repository-controlled code. The selected worker must have writable, non-shared Docker sandbox access to that exact workspace, a live container hash matching the requested mounts and policy, and no host escape capability. Pass `--admin` to explicitly request `operator.admin`, allow another host checkout, and use normal managed-worktree setup; the connection fails if that scope is not approved for the client. A read-only Gateway token can inspect Workboard data through read methods, but it cannot create cards or dispatch workers. Workspace limits do not otherwise change manual card movement for callers with Workboard mutation permission.
+The CLI dispatch path normally requests Gateway `operator.write` and `operator.read` scopes. Workspace-bound cards run directly in an exact configured agent workspace. A worktree request is narrowed to that directory, so the host does not materialize repository-controlled code. The selected worker must have writable, non-shared Docker sandbox access to that exact workspace, a live container hash matching the requested mounts and policy, and no host escape capability. Pass `--admin` to explicitly request `operator.admin`, allow another host checkout, and use normal managed-worktree setup. The connection fails if that scope is not approved for the client. A read-only Gateway token can inspect Workboard data through read methods, but it cannot create cards or dispatch workers. Workspace limits do not otherwise change manual card movement for callers with Workboard mutation permission.
 
 Local `list`, `create`, `show`, and `move` commands operate on the local OpenClaw state directory used by the current profile. Use `--dev` or `--profile <name>` on the top-level `openclaw` command when you need a different state root.
 
@@ -166,7 +171,7 @@ Local `list`, `create`, `show`, and `move` commands operate on the local OpenCla
 
 ### No cards appear
 
-Confirm the plugin is enabled for the same profile and state root:
+Check that the plugin is enabled for the same profile and state root:
 
 ```bash
 openclaw plugins inspect workboard --runtime --json

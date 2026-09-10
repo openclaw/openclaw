@@ -59,6 +59,14 @@ function hasAllowedPluginForAuthTest(cfg: unknown, pluginId: string): boolean {
   return Array.isArray(plugins?.allow) && plugins.allow.includes(pluginId);
 }
 
+// Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
+vi.mock("../../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn(async () => ({
+    kind: "ready",
+    validate: () => undefined,
+  })),
+}));
+
 vi.mock("../../agents/auth-profiles.js", () => {
   const store = () => ({
     version: 1,
@@ -376,14 +384,52 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
-vi.mock("../../agents/prepared-model-catalog.js", () => {
-  const loadModelCatalog = vi.fn(async () => [
+vi.mock("../../agents/prepared-model-catalog.js", async () => {
+  const { setPreparedModelRuntimeAuthStore } = await vi.importActual<
+    typeof import("../../agents/prepared-model-runtime-auth.js")
+  >("../../agents/prepared-model-runtime-auth.js");
+  const { createPluginMetadataSnapshotFixture } =
+    await import("../../plugins/plugin-metadata.test-support.js");
+  const { loadPluginMetadataSnapshot } = await import("../../plugins/plugin-metadata-snapshot.js");
+  const entries = [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
     { provider: "localai", id: "ultra-chat", name: "Ultra Chat" },
-  ]);
+  ];
+  const loadModelCatalog = vi.fn(async () => entries);
   return {
-    loadPreparedModelCatalog: loadModelCatalog,
+    readPreparedModelCatalog: loadModelCatalog,
     loadProviderScopedThinkingCatalog: loadModelCatalog,
+    getPublishedPreparedModelCatalogOwnerSnapshot: (params: {
+      config: OpenClawConfig;
+      agentId?: string;
+      agentDir?: string;
+      workspaceDir?: string;
+    }) => {
+      const owner = {
+        config: params.config,
+        observationConfig: params.config,
+        agentId: params.agentId ?? "main",
+        agentDir: params.agentDir ?? "/tmp/agent",
+        workspaceDir: params.workspaceDir ?? "/tmp",
+        modelCatalog: { entries, routeVariants: entries },
+        authModes: {},
+        metadataSnapshot: params.workspaceDir
+          ? loadPluginMetadataSnapshot({
+              config: params.config,
+              workspaceDir: params.workspaceDir,
+              allowCurrent: false,
+              preferPersisted: false,
+            })
+          : createPluginMetadataSnapshotFixture(),
+        isCurrent: () => true,
+      };
+      setPreparedModelRuntimeAuthStore(owner, {
+        version: 1,
+        profiles: authProfilesStoreMock.profiles,
+      });
+      return owner;
+    },
+    materializePreparedModelCatalogOwner: (owner: object) => owner,
     withPreparedModelCatalogOwner: async (
       _params: unknown,
       read: (owner: {
@@ -392,9 +438,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
         isCurrent: () => boolean;
       }) => unknown,
     ) => {
-      const entries = await loadModelCatalog();
+      const catalog = await loadModelCatalog();
       return read({
-        modelCatalog: { entries, routeVariants: entries },
+        modelCatalog: { entries: catalog, routeVariants: catalog },
         authModes: {},
         isCurrent: () => true,
       });
@@ -1135,7 +1181,9 @@ describe("/model chat UX", () => {
       allowedModelCatalog: policy.allowedCatalog,
     });
 
-    expect(policy.allowsKey("openrouter/meta-llama/llama-3.3-70b-instruct:free")).toBe(true);
+    expect(
+      policy.allows({ provider: "openrouter", model: "meta-llama/llama-3.3-70b-instruct:free" }),
+    ).toBe(true);
     expect(reply?.text).toContain("openrouter/meta-llama/llama-3.3-70b-instruct:free");
     expect(reply?.text).not.toContain("anthropic/openrouter:free");
   });

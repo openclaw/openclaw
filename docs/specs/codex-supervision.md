@@ -20,6 +20,24 @@ fleet catalog, authenticated operator UI, session binding, and channel delivery.
 The feature belongs to the official `codex` plugin. There is no separate
 Supervisor plugin or second Codex protocol implementation.
 
+This spec uses these stage names:
+
+- **Gateway-local branch**: the new supervised Chat that OpenClaw creates from a
+  stored or idle local Codex source instead of resuming that source thread.
+- **Pending harness branch**: that branch before its first turn, when the bounded
+  history is projected but no canonical Codex thread exists yet.
+- **Chat mirror** (visible history mirror): the bounded copy of visible user and
+  assistant messages projected into the Chat.
+- **Visible-history branch**: an unmapped Gateway-local source that carries only
+  that mirrored history, so its canonical harness thread never resumes the
+  source.
+- **Canonical appServer-source branch**: the native Codex thread the plugin
+  creates with `threadSource: "appServer"` after pinning the source snapshot.
+- **Canonical full Codex harness thread**: that canonical thread once it runs
+  with OpenClaw's full harness tool surface; every later model turn runs on it.
+- **Supervised model-locked Chat**: an OpenClaw Chat bound to a supervised
+  thread under the Codex-only model and runtime lock.
+
 ## Product boundary
 
 The catalog registers whenever the Codex plugin is active unless native session
@@ -175,7 +193,7 @@ previews. The returned native cursor lets callers continue the scan.
 The plugin registers three Gateway-backed shell commands:
 
 ```text
-openclaw codex sessions [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [gateway-options]
+openclaw codex sessions [--agent <id>] [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [gateway-options]
 openclaw codex continue <thread-id> [--agent <id>] [--host <id>] [--json] [gateway-options]
 openclaw codex archive <thread-id> --confirm-no-other-runner [--agent <id>] [--host <id>] [--json] [gateway-options]
 ```
@@ -552,7 +570,7 @@ The standalone legacy MCP adapter resolves these same tools from the official
 plugin and is the only path that honors the retained legacy policy environment
 variables.
 
-The July catalog UI, Gateway method, node capability, and CLI registration had
+The 2026.8.1 catalog UI, Gateway method, node capability, and CLI registration had
 not shipped under the old plugin id. They move directly to `codex` ownership
 without a second runtime facade.
 
@@ -620,3 +638,7 @@ surfaces remain the recovery path for archived threads.
 - Legacy Supervisor config migrates to the canonical Codex config shape.
 - Legacy list is loaded-only by default, stored enumeration obeys its per-endpoint
   cap, and compatibility send never starts or resumes an idle thread.
+
+## Related
+
+- [Codex supervision](/plugins/codex-supervision) - the user-facing guide for this spec

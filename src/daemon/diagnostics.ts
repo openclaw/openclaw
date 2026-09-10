@@ -89,8 +89,9 @@ export async function readLastGatewayErrorLine(
 ): Promise<string | null> {
   const platform = options?.platform ?? process.platform;
   const readStderr = platform !== "darwin";
-  // launchd supervisor mode combines child stderr into stdout; other platforms
-  // keep stderr as the strongest failure signal.
+  // launchd combines child stderr into stdout only because the plist points both
+  // handles at one file (buildLaunchAgentPlist); break that and darwin startup
+  // crashes stop reaching this reader. Other platforms keep stderr separate.
   const { stdoutPath, stderrPath } =
     platform === "darwin"
       ? resolveGatewaySupervisorLogPaths(env, { platform })

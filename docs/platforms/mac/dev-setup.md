@@ -9,12 +9,22 @@ title: "macOS dev setup"
 
 Build and run the OpenClaw macOS application from source.
 
+The packaged app requires macOS 15.0 or later. The build host must also meet
+the Xcode requirements below.
+
 ## Prerequisites
 
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
-- **Node.js 24.15+ & pnpm** for the gateway, CLI, and packaging scripts. Node
-  22.22.3+ also works.
+- **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
+
+macOS shell tooling uses the system `/bin/bash` (3.2); Homebrew Bash is not
+required. Run scripts directly or with `/bin/bash`. Bash 5.3+ can stall on a
+heredoc before its reader starts, leaving packaging or signing logs empty under
+pipe-buffer pressure. Portable script entrypoints switch to `/bin/bash` on
+macOS, and the streamed installers (`curl ... | bash`) do the same by capturing
+the rest of their input into a private temporary file before re-executing, so
+the documented install commands need no change.
 
 ## 1. Install dependencies
 
@@ -38,8 +48,14 @@ private Node worker from the canonical package artifact for every requested
 pnpm packer; Corepack-only setups are supported. Packaging verifies native
 capabilities and worker readiness in temporary state before and after signing,
 then replaces the previous app. `scripts/restart-mac.sh` uses
-the same path; `SKIP_TSC=1` no longer bypasses the runtime build. Existing
+the same path; `SKIP_TSC=1` does not bypass the runtime build. Existing
 content-checked build caches still avoid unnecessary declaration work.
+
+Each worker keeps native binaries that support its architecture and omits
+incompatible macOS, Linux, and Windows prebuilds. This prevents unused Intel-only
+dependencies from triggering macOS compatibility warnings in Apple silicon
+builds. Compatible universal binaries, JavaScript, WASM, and other resources
+remain intact.
 
 Universal builds require both arm64 and x86_64 runtimes to execute during
 validation. Building x86_64 on Apple Silicon requires Rosetta; a missing
@@ -80,7 +96,9 @@ The packaged app embeds the canonical `scripts/install-cli.sh` installer. On a
 fresh profile, choose **This Mac** during onboarding; the app installs the
 matching user-space CLI and runtime before starting the Gateway wizard.
 
-For manual development recovery, install the matching CLI yourself:
+For manual development recovery, install the matching CLI yourself. Read the
+version from the app: choose **About OpenClaw** in the menu bar, or run
+`openclaw-mac status --json`, which reports the app version and build.
 
 The npm command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
 omit `--allow-scripts=openclaw`.

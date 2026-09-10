@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createCoreHealthChecks } from "../flows/doctor-core-checks.js";
+import { exitCodeFromFindings, runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { importLegacySkillProposal } from "../skills/workshop/store.js";
@@ -9,7 +11,10 @@ import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { inspectLegacySkillWorkshopMigration } from "./doctor-skill-workshop-sqlite.js";
+import {
+  inspectLegacySkillWorkshopMigration,
+  migrateLegacySkillWorkshopProposals,
+} from "./doctor-skill-workshop-sqlite.js";
 import {
   createAppliedLegacyProposal,
   seedLegacyV15ProposalRows,
@@ -37,6 +42,155 @@ async function snapshotDatabase(databasePath: string) {
 }
 
 describe("read-only Skill Workshop migration inspection", () => {
+  it("identifies remaining targets after retargeting without recommending an identical repair", async () => {
+    await withOpenClawTestState({ label: "workshop-remaining-targets" }, async (state) => {
+      const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+      const blockedWorkspace = state.path("old-workspace");
+      await fs.mkdir(path.join(blockedWorkspace, ".openclaw"), { recursive: true });
+      await fs.writeFile(path.join(blockedWorkspace, ".openclaw", "workspace-state.json"), "{}");
+      const records = [
+        { name: "eligible", workspaceDir: state.workspaceDir },
+        { name: "blocked", workspaceDir: blockedWorkspace },
+      ].map(({ name, workspaceDir }) => {
+        const record: SkillProposalRecord = createAppliedLegacyProposal({
+          id: `${name}-20260901-1234567890`,
+          title: name,
+          description: "Saved procedure",
+          content: "# Saved\n",
+          target: { skillKey: name, skillDir: path.join(workspaceDir, "skills", name) },
+        });
+        record.status = "pending";
+        delete record.appliedAt;
+        return record;
+      });
+      for (const record of records) {
+        importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+      }
+      const [eligible, blocked] = records;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const migration = await migrateLegacySkillWorkshopProposals({ config, env: state.env });
+        if (attempt === 0) {
+          expect(migration.changes.join("\n")).toContain("retargeted 1 proposal");
+        } else {
+          expect(migration.changes).toEqual([]);
+        }
+        expect(migration.warnings.join("\n")).toContain(
+          "Legacy workspace setup state requires migration",
+        );
+        const result = await runDoctorLintChecks(
+          { mode: "doctor", runtime: { log() {}, error() {}, exit() {} }, cfg: config },
+          { checks: createCoreHealthChecks(), onlyIds: ["core/doctor/skill-workshop-relocation"] },
+        );
+        expect(result.findings).toHaveLength(1);
+        const finding = result.findings[0]!;
+        expect(finding.message).toContain(blocked!.id);
+        expect(finding.message).toContain(blocked!.target.skillDir);
+        expect(finding.message).not.toContain(eligible!.id);
+        expect(finding.fixHint).not.toContain("Run `openclaw doctor --fix`");
+        expect(finding.fixHint).toContain("migration warnings");
+      }
+    });
+  });
+
+  it.each([
+    { roots: [], proposal: false, preserved: 0, automatic: false },
+    { roots: ["eligible"], proposal: false, preserved: 0, automatic: true },
+    { roots: ["ambiguous"], proposal: false, preserved: 1, automatic: false },
+    { roots: ["invalid"], proposal: false, preserved: 1, automatic: false },
+    { roots: ["eligible", "ambiguous", "invalid"], proposal: false, preserved: 2, automatic: true },
+    { roots: ["ambiguous"], proposal: true, preserved: 1, automatic: true },
+  ])(
+    "gives truthful read-only lint remediation for roots=$roots proposal=$proposal",
+    async ({ roots, proposal, preserved, automatic }) => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const config = {
+          agents: {
+            entries: {
+              main: { workspace: state.workspaceDir },
+              alpha: { workspace: path.join(state.root, "shared-workspace") },
+              beta: { workspace: path.join(state.root, "shared-workspace") },
+            },
+          },
+        };
+        await state.writeConfig(config);
+        const configBefore = await fs.readFile(state.configPath);
+        const manifests = await Promise.all(
+          roots.map(async (kind, index) => {
+            const contents = JSON.stringify({
+              schema: kind === "invalid" ? "invalid" : "openclaw.skill-collection-backup.v1",
+              id: "legacy-backup",
+              createdAt: "2026-09-01T00:00:00.000Z",
+              workspaceDir:
+                kind === "ambiguous" ? config.agents.entries.alpha.workspace : state.workspaceDir,
+              skillDirs: [],
+              resultSkillDirs: [],
+              resultSkillHashes: {},
+            });
+            const file = await state.writeText(
+              `skill-workshop/collection-backups/${index.toString(16).padStart(16, "0")}/legacy-backup/manifest.json`,
+              contents,
+            );
+            return { file, contents };
+          }),
+        );
+        if (proposal) {
+          importLegacySkillProposal({
+            record: createAppliedLegacyProposal({
+              id: "readonly-workshop-20260907-1234567890",
+              title: "Legacy Workshop",
+              description: "Pending relocation",
+              content: "# Preserved\n",
+              target: {
+                skillKey: "legacy",
+                skillDir: path.join(state.workspaceDir, "skills", "legacy"),
+              },
+            }),
+            ownerAgentId: "main",
+            store: { env: state.env },
+          });
+        }
+        closeOpenClawStateDatabaseForTest();
+        const databasePath = resolveOpenClawStateSqlitePath(state.env);
+        const databaseBefore = proposal ? await snapshotDatabase(databasePath) : undefined;
+        const filesBefore = await fs.readdir(state.stateDir, { recursive: true });
+
+        const result = await runDoctorLintChecks(
+          { mode: "lint", runtime: { log() {}, error() {}, exit() {} }, cfg: config },
+          {
+            checks: createCoreHealthChecks().filter((check) => "detect" in check),
+            onlyIds: ["core/doctor/skill-workshop-relocation"],
+          },
+        );
+
+        expect(result.checksRun).toBe(1);
+        expect(result.findings).toHaveLength(roots.length || proposal ? 1 : 0);
+        expect(exitCodeFromFindings(result.findings)).toBe(roots.length || proposal ? 1 : 0);
+        if (result.findings.length > 0) {
+          const finding = result.findings[0]!;
+          expect(finding.severity).toBe("warning");
+          expect(finding.fixHint?.includes("Run `openclaw doctor --fix`")).toBe(automatic);
+          expect(finding.fixHint).not.toContain("retire legacy backup roots");
+          if (preserved > 0) {
+            expect(finding.message).toContain(`${preserved} preserved`);
+            expect(finding.fixHint).toMatch(/manual/i);
+            expect(finding.fixHint).toContain("workspace ownership");
+            expect(finding.fixHint).toContain("manifests");
+          }
+        }
+        expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(filesBefore);
+        expect(await fs.readFile(state.configPath)).toEqual(configBefore);
+        for (const manifest of manifests) {
+          expect(await fs.readFile(manifest.file, "utf8")).toBe(manifest.contents);
+        }
+        if (proposal) {
+          expect(await snapshotDatabase(databasePath)).toEqual(databaseBefore);
+        } else {
+          await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      });
+    },
+  );
+
   it.each([
     { version: 16, sourcePresent: true },
     { version: 16, sourcePresent: false },
@@ -92,8 +246,10 @@ describe("read-only Skill Workshop migration inspection", () => {
           inspectLegacySkillWorkshopMigration({ config, env: state.env }),
         ).resolves.toEqual({
           externalProposalCount: 1,
+          externalProposalDetails: expect.any(Array),
           externalProposalCountsByAgent: { main: 1 },
           legacyBackupRootCount: 0,
+          preservedLegacyBackupRootCount: 0,
         });
 
         closeOpenClawStateDatabaseForTest();
@@ -186,8 +342,10 @@ describe("read-only Skill Workshop migration inspection", () => {
         inspectLegacySkillWorkshopMigration({ config, env: state.env }),
       ).resolves.toEqual({
         externalProposalCount: 9,
+        externalProposalDetails: expect.any(Array),
         externalProposalCountsByAgent: { main: 5, other: 2, retired: 1, unknown: 1 },
         legacyBackupRootCount: 0,
+        preservedLegacyBackupRootCount: 0,
       });
     });
   });
