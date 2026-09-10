@@ -7,6 +7,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { safeParseJson } from "../packages/normalization-core/src/json-coercion.ts";
 import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number-coercion.ts";
@@ -267,12 +268,6 @@ export function parseArgs(argv: string[]) {
 
 function logStep(message: string) {
   console.log(`[memory-fd-repro] ${message}`);
-}
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, resolveTimerTimeoutMs(ms, 0, 0));
-  });
 }
 
 async function getFreePort() {
@@ -750,6 +745,7 @@ async function main() {
   const generatedAt = new Date().toISOString();
   const stop = new AbortController();
   const invokeStop = new AbortController();
+  const measurementSignal = AbortSignal.any([stop.signal, invokeStop.signal]);
   const outputState: GatewayReadyOutputState = {};
   const errors: unknown[] = [];
   const outputErrors: unknown[] = [];
@@ -803,6 +799,8 @@ async function main() {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       signal: stop.signal,
+      // Cancel measurement without replacing the managed owner's signal outcome.
+      onSignal: () => invokeStop.abort(),
       // The shared owner adds its separate 5s output/group drainage allowance.
       abortKillGraceMs: 5_000,
       requireProcessTreeExit: process.platform !== "win32",
@@ -863,13 +861,13 @@ async function main() {
       port,
       token,
       timeoutMs: options.invokeTimeoutMs,
-      signal: invokeStop.signal,
+      signal: measurementSignal,
     });
-    await sleep(options.sampleDelayMs);
+    await sleep(options.sampleDelayMs, undefined, { signal: measurementSignal });
     samples.push(sample("during"));
     const invoke = await pendingInvoke;
     logStep(`invoke=${JSON.stringify(invoke)}`);
-    await sleep(options.settleDelayMs);
+    await sleep(options.settleDelayMs, undefined, { signal: measurementSignal });
     samples.push(sample("settled"));
     measurement = { pid, samples, invoke };
   } catch (error) {

@@ -31,6 +31,11 @@ type OwnershipScenario =
   | "owned-success-inherited-root"
   | "stdout-error"
   | "stderr-error"
+  | "sample-sigterm"
+  | "settle-sigterm"
+  | "sample-pipe"
+  | "settle-pipe"
+  | "delayed-success"
   | "foreign-ready"
   | "exited-ready"
   | "replaced-during"
@@ -70,9 +75,39 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "import { PassThrough } from 'node:stream';",
         `const scenario = ${JSON.stringify(scenario)};`,
         `const ownedPid = ${OWNED_PID}, foreignPid = ${FOREIGN_PID};`,
+        "const cancellation = /^(sample|settle)-(sigterm|pipe)$/.exec(scenario);",
         "const samples = [], signals = [], events = [];",
         "let child, syntheticRoot, launch, attemptedSummary, closed = false, replaced = false;",
+        "let wait, requestSettled = false, guardFired = false;",
         "const write = fs.writeFileSync, remove = fs.rmSync;",
+        "const nativeKill = process.kill.bind(process), output = process.stdout.write.bind(process.stdout);",
+        "const record = () => write(" + JSON.stringify(journalPath) + ", JSON.stringify({",
+        "  samples, signals, events, launch, attemptedSummary, closed, alive: Boolean(alive()),",
+        "  rootExists: Boolean(syntheticRoot && fs.existsSync(syntheticRoot)),",
+        "  wait, requestSettled, guardFired,",
+        "}));",
+        "const enterWait = (phase) => {",
+        "  if (cancellation?.[1] !== phase) return;",
+        // The next turn follows the invoke/log boundary and reaches the wait
+        // without observing or replacing either timer implementation.
+        "  setImmediate(() => {",
+        "    wait = { phase, samples: samples.length, requestSettled };",
+        "    if (cancellation[2] === 'sigterm') {",
+        "      events.push('parent:SIGTERM'); nativeKill(process.pid, 'SIGTERM');",
+        "    } else {",
+        "      const channel = phase === 'sample' ? 'stdout' : 'stderr';",
+        "      child[channel].destroy(Object.assign(",
+        "        new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
+        "    }",
+        "  });",
+        "};",
+        "process.stdout.write = (chunk, ...args) => {",
+        "  const result = output(chunk, ...args);",
+        "  if (String(chunk).startsWith('[memory-fd-repro] invoke=')) {",
+        "    requestSettled = true; enterWait('settle');",
+        "  }",
+        "  return result;",
+        "};",
         "fs.writeFileSync = (target, ...args) => {",
         "  if (String(target).endsWith('/summary.json')) {",
         "    events.push('summary'); attemptedSummary = JSON.parse(String(args[0]));",
@@ -105,6 +140,14 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "  setImmediate(() => {",
         "    child.stdout.destroy(); child.stderr.destroy();",
         "    closed = true; events.push('close'); child.emit('close', code, signal);",
+        "    if (cancellation) setTimeout(() => {",
+        "      guardFired = true; record();",
+        "      fs.writeSync(2, 'measurement wait outlived owned close: ' + JSON.stringify({",
+        "        wait, requestSettled, closed, alive: Boolean(alive()),",
+        "        rootExists: fs.existsSync(syntheticRoot), events,",
+        "      }) + '\\n');",
+        "      nativeKill(process.pid, 'SIGKILL');",
+        "    }, 2_000).unref();",
         "  });",
         "};",
         // Live groups have live leaders; terminal groups return ESRCH. These
@@ -154,7 +197,15 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "  }",
         "  return success('COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\\n');",
         "};",
-        "globalThis.fetch = async () => {",
+        "globalThis.fetch = async (_url, options) => {",
+        "  if (cancellation?.[1] === 'sample') {",
+        "    enterWait('sample');",
+        "    return await new Promise((_resolve, reject) => {",
+        "      options.signal.addEventListener('abort', () => {",
+        "        requestSettled = true; reject(options.signal.reason);",
+        "      }, { once: true });",
+        "    });",
+        "  }",
         "  if (scenario === 'replaced-during') { replaced = true; finish(23); }",
         "  if (scenario === 'stdout-error' || scenario === 'stderr-error') {",
         "    const channel = scenario === 'stdout-error' ? 'stdout' : 'stderr';",
@@ -163,10 +214,7 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "  }",
         "  return new Response(JSON.stringify({ ok: true, result: { results: [] } }), { status: 200 });",
         "};",
-        "process.on('exit', () => write(" + JSON.stringify(journalPath) + ", JSON.stringify({",
-        "  samples, signals, events, launch, attemptedSummary, closed, alive: Boolean(alive()),",
-        "  rootExists: Boolean(syntheticRoot && fs.existsSync(syntheticRoot)),",
-        "})));",
+        "process.on('exit', record);",
         "syncBuiltinESMExports();",
       ].join("\n"),
     );
@@ -185,9 +233,9 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "--files",
         "1",
         "--sample-delay-ms",
-        "0",
+        scenario.startsWith("sample-") ? "31003" : scenario === "delayed-success" ? "25" : "0",
         "--settle-delay-ms",
-        "0",
+        scenario.startsWith("settle-") ? "32009" : scenario === "delayed-success" ? "40" : "0",
         "--output-dir",
         outputDir,
       ],
@@ -211,14 +259,14 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         maxBuffer: 1024 * 1024,
       },
     );
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.signal, result.stderr).toBeNull();
     expect(fs.readdirSync(path.join(root, ".vitest-resource-owner", "claims"))).toHaveLength(1);
     if (scenario === "ignored-stop") {
       expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
     } else {
       expect(() => owner.assertReleased(), result.stderr).not.toThrow();
     }
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.signal, result.stderr).toBeNull();
     const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
       samples: { pid: number; alive: boolean }[];
       signals: [number, string][];
@@ -227,6 +275,9 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
       closed: boolean;
       alive: boolean;
       rootExists: boolean;
+      wait?: { phase: string; samples: number; requestSettled: boolean };
+      requestSettled: boolean;
+      guardFired: boolean;
       attemptedSummary?: GatewaySummary;
     };
     const summaryPath = path.join(outputDir, "summary.json");
@@ -535,7 +586,38 @@ describe("check-memory-fd-repro", () => {
       },
     );
 
-    it.each(["owned-success", "owned-success-inherited-root"] as const)(
+    it.each([
+      { scenario: "sample-sigterm", phase: "sample", count: 1, diagnostic: "code 143" },
+      { scenario: "settle-sigterm", phase: "settle", count: 2, diagnostic: "code 143" },
+      { scenario: "sample-pipe", phase: "sample", count: 1, diagnostic: "stdout read EIO" },
+      { scenario: "settle-pipe", phase: "settle", count: 2, diagnostic: "stderr read EIO" },
+    ] as const)(
+      "cancels measurement waits and joins the owner ($scenario)",
+      ({ scenario, phase, count, diagnostic }) => {
+        const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
+        expect(journal.wait).toEqual({
+          phase,
+          samples: count,
+          requestSettled: phase === "settle",
+        });
+        expect(journal.guardFired).toBe(false);
+        expect(journal.requestSettled).toBe(true);
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain(diagnostic);
+        expect(result.stderr).not.toContain("Unhandled 'error' event");
+        expect(journal.samples).toEqual(
+          Array.from({ length: count }, () => ({ pid: OWNED_PID, alive: true })),
+        );
+        expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
+        expect(journal.closed).toBe(true);
+        expect(journal.alive).toBe(false);
+        expect(journal.rootExists).toBe(false);
+        expect(journal.events.indexOf("close")).toBeLessThan(journal.events.indexOf("cleanup"));
+        expect(summary).toBeUndefined();
+      },
+    );
+
+    it.each(["owned-success", "owned-success-inherited-root", "delayed-success"] as const)(
       "joins the launched process before publishing success (%s)",
       (scenario) => {
         const { result, journal, summary, fixtureRoot } = runGatewayOwnershipFixture(scenario);
