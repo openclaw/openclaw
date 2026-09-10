@@ -270,7 +270,7 @@ suite.define(() => {
     await expect
       .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("0");
-    const restingWidth = await preview.evaluate((element) => element.getBoundingClientRect().width);
+    const restingBox = (await preview.boundingBox())!;
     const pin = preview.getByRole("button", { name: "Pin to dashboard" });
     const more = preview.getByRole("button", { name: "Widget actions", exact: true });
     await pin.focus();
@@ -289,14 +289,14 @@ suite.define(() => {
       return {
         gap: pinBox.left - box.right,
         top: pinBox.top - box.top,
-        width: box.width,
+        box: { x: box.x, y: box.y, width: box.width, height: box.height },
         panelWidth: panelBox.width,
       };
     });
     expect(geometry.gap).toBeGreaterThan(0);
     expect(geometry.top).toBe(0);
-    expect(geometry.width).toBe(restingWidth);
-    expect(geometry.panelWidth).toBe(restingWidth);
+    expect(geometry.box).toEqual(restingBox);
+    expect(geometry.panelWidth).toBe(restingBox.width);
     const pinBox = (await pin.boundingBox())!;
     await page.mouse.move(pinBox.x - geometry.gap / 2, pinBox.y + pinBox.height / 2);
     await page.mouse.move(pinBox.x + pinBox.width / 2, pinBox.y + pinBox.height / 2);
@@ -315,16 +315,23 @@ suite.define(() => {
     await page.keyboard.press("Enter");
     await expect.poll(() => preview.locator("wa-dropdown[open]").count()).toBe(1);
     await page.keyboard.press("Escape");
-    await page.setViewportSize({ width: 800, height: 900 });
-    await expect
-      .poll(() =>
-        preview.evaluate((element) => {
-          const box = element.getBoundingClientRect();
-          const actions = element.querySelector("[data-widget-actions]")!.getBoundingClientRect();
-          return actions.left >= box.left && actions.right <= box.right && actions.top >= box.top;
-        }),
-      )
-      .toBe(true);
+    for (const width of [796, 794, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect
+        .poll(() =>
+          preview.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const actions = element.querySelector("[data-widget-actions]")!.getBoundingClientRect();
+            const thread = element.closest(".chat-thread")!;
+            const edge =
+              thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
+            return edge - box.right >= 40
+              ? actions.left >= box.right && actions.right <= edge && actions.top === box.top
+              : actions.right <= box.right && actions.bottom === box.top;
+          }),
+        )
+        .toBe(true);
+    }
     await page.setViewportSize({ width: 1440, height: 900 });
     await pin.focus();
     await pin.hover();
@@ -461,7 +468,7 @@ suite.define(() => {
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     const pin = preview.getByRole("button", { name: "Pin to dashboard" });
-    await preview.hover();
+    await pin.focus();
     await pin.click();
 
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
@@ -470,6 +477,7 @@ suite.define(() => {
     expect(await toast.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await pin.isEnabled()).toBe(true);
     await page.mouse.move(0, 0);
+    await pin.focus();
     await pin.hover();
     const hint = page.locator("wa-tooltip[open]");
     await hint.locator('[part="body"]').waitFor({ state: "visible" });

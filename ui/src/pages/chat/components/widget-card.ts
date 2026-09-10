@@ -534,18 +534,15 @@ function widgetActionsPlacementRef() {
     }
     observer = new ResizeObserver(() => {
       const thread = element.closest<HTMLElement>(".chat-thread");
-      const actions = element.querySelector<HTMLElement>("[data-widget-actions]");
-      if (!thread || !actions) {
+      if (!thread) {
         return;
       }
       observer?.observe(thread);
-      observer?.observe(actions);
       const clipRight =
         thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
-      element.toggleAttribute(
-        "data-widget-actions-inside",
-        element.getBoundingClientRect().right + actions.getBoundingClientRect().width > clipRight,
-      );
+      const availableWidth = clipRight - element.getBoundingClientRect().right;
+      element.style.setProperty("--widget-actions-space", `${Math.max(0, availableWidth)}px`);
+      element.toggleAttribute("data-widget-actions-above", availableWidth < 40);
     });
     observer.observe(element);
   };
