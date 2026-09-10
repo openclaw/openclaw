@@ -18,6 +18,10 @@ export class AsyncWorkScope {
     return this.controller.signal;
   }
 
+  get hasPendingWork(): boolean {
+    return this.pending.size > 0;
+  }
+
   get isClosing(): boolean {
     return this.phase !== "open";
   }
