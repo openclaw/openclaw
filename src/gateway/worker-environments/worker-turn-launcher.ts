@@ -169,14 +169,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       let admissionReported = false;
       let userMessagePersisted = inputTurn.suppressNextUserMessagePersistence === true;
       for (;;) {
-        let turn: typeof inputTurn = {
-          ...inputTurn,
-          ...(userMessagePersisted ? { suppressNextUserMessagePersistence: true } : {}),
-          onUserMessagePersisted: (message) => {
-            userMessagePersisted = true;
-            inputTurn.onUserMessagePersisted?.(message);
-          },
-        };
+        // Remote-exec temporarily updates the caller's prompt for attachments.
+        let turn = inputTurn;
         assertAdmissionCurrent();
         if (
           ["requested", "provisioning", "syncing", "starting"].includes(routablePlacement.state)
@@ -333,7 +327,15 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               turn,
             });
             activeWorkerTurn.signal.throwIfAborted();
-            turn = { ...turn, abortSignal: activeWorkerTurn.signal };
+            turn = {
+              ...turn,
+              abortSignal: activeWorkerTurn.signal,
+              ...(userMessagePersisted ? { suppressNextUserMessagePersistence: true } : {}),
+              onUserMessagePersisted: (message) => {
+                userMessagePersisted = true;
+                inputTurn.onUserMessagePersisted?.(message);
+              },
+            };
             activeWorkerTurns.set(turnClaim.sessionId, activeWorkerTurn);
           }
           // Release queued-context retention only after the placement claim is durable.
