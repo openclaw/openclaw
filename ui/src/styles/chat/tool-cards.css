@@ -838,7 +838,6 @@
 }
 
 .chat-tool-card__preview[data-has-widget-actions] {
-  margin-top: 40px;
   overflow: visible;
 }
 
@@ -852,11 +851,12 @@
 .chat-tool-card__preview-actions {
   position: absolute;
   z-index: 2;
-  top: -34px;
-  right: 0;
+  top: 0;
+  left: 100%;
   display: flex;
   align-items: center;
   gap: 4px;
+  padding-left: 6px;
 }
 
 .chat-tool-card__preview-panel {
@@ -869,9 +869,13 @@
   flex-shrink: 0;
 }
 
-/* Chromium can retain a skipped row's pre-menu geometry. Fully lay out the
-   active widget row so closing its top-layer menu cannot move the disclosure. */
-.chat-virtual-row:has(.chat-tool-card__widget-actions[open]) {
+/* Keep outside actions reachable and avoid restoring stale row geometry when
+   the active widget's top-layer menu closes. */
+.chat-virtual-row:has(
+  .chat-tool-card__preview:hover,
+  .chat-tool-card__preview:focus-within,
+  .chat-tool-card__widget-actions[open]
+) {
   content-visibility: visible;
 }
 
@@ -919,13 +923,37 @@
 }
 
 [data-widget-actions] {
-  opacity: 0.45;
+  opacity: 0;
+  pointer-events: none;
   transition: opacity 120ms ease-out;
 }
 
 .chat-tool-card__preview:hover [data-widget-actions],
-.chat-tool-card__preview:focus-within [data-widget-actions] {
+.chat-tool-card__preview:focus-within [data-widget-actions],
+[data-widget-actions]:has(.chat-tool-card__widget-actions[open]) {
   opacity: 1;
+  pointer-events: auto;
+}
+
+/* Match inline image actions: touch keeps content controls directly reachable. */
+@media (hover: none) {
+  [data-widget-actions] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .chat-virtual-row:has(
+    .chat-tool-card__preview[data-has-widget-actions]:not([data-widget-actions-inside])
+  ) {
+    content-visibility: visible;
+  }
+}
+
+.chat-tool-card__preview[data-widget-actions-inside] .chat-tool-card__preview-actions {
+  left: auto;
+  right: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
 }
 
 .chat-tool-card__widget-action[data-pinned] {

@@ -524,6 +524,33 @@ function handleWidgetExportAction(
     });
 }
 
+function widgetActionsPlacementRef() {
+  let observer: ResizeObserver | undefined;
+  return (element: Element | undefined) => {
+    observer?.disconnect();
+    observer = undefined;
+    if (!(element instanceof HTMLElement) || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    observer = new ResizeObserver(() => {
+      const thread = element.closest<HTMLElement>(".chat-thread");
+      const actions = element.querySelector<HTMLElement>("[data-widget-actions]");
+      if (!thread || !actions) {
+        return;
+      }
+      observer?.observe(thread);
+      observer?.observe(actions);
+      const clipRight =
+        thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
+      element.toggleAttribute(
+        "data-widget-actions-inside",
+        element.getBoundingClientRect().right + actions.getBoundingClientRect().width > clipRight,
+      );
+    });
+    observer.observe(element);
+  };
+}
+
 function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean) {
   const canExportImage = !preview.mcpApp && isInternalCanvasEntryUrl(preview.url);
   if (!canExportImage && !hasRawDetails) {
@@ -650,6 +677,7 @@ function renderWidgetCard(
         </div>`;
   return html`
     <div
+      ${actions !== nothing ? ref(widgetActionsPlacementRef()) : nothing}
       class="chat-tool-card__preview"
       data-content-kind=${contentKind}
       ?data-has-widget-actions=${actions !== nothing}
