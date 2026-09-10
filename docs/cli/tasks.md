@@ -32,9 +32,15 @@ openclaw tasks maintenance --apply
 openclaw tasks flow list
 openclaw tasks flow show <lookup>
 openclaw tasks flow cancel <lookup>
+openclaw tasks supervise run <definition.json>
+openclaw tasks supervise show <flowId>
 ```
 
 ## Root Options
+
+The opt-in `tasks supervise` PoC has its own JSON definition and always-JSON
+output. See [supervised episodes](/automation/taskflow#experimental-supervised-episodes)
+for runtime setup, admission, status, recovery, and its experimental limits.
 
 | Flag               | Description                                                                                                   |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- |

@@ -1674,6 +1674,30 @@ CREATE TABLE IF NOT EXISTS task_delivery_state (
   FOREIGN KEY (task_id) REFERENCES task_runs(task_id) ON DELETE CASCADE
 ) STRICT;
 
+-- Opt-in supervised TaskFlow episodes have one SQL-owned continuation. Legacy
+-- flow_runs remain tracking-only; their snapshot writer cannot overwrite custody.
+CREATE TABLE IF NOT EXISTS task_flow_episodes (
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL CHECK (episode > 0),
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  phase TEXT NOT NULL CHECK (phase IN ('ready', 'waiting', 'running', 'succeeded', 'partial', 'input_required', 'failed', 'cancelled')),
+  due_at_ms INTEGER NOT NULL,
+  deadline_at_ms INTEGER NOT NULL,
+  record_json TEXT NOT NULL CHECK (json_valid(record_json) AND length(CAST(record_json AS BLOB)) <= 65536),
+  PRIMARY KEY (flow_id, episode)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_task_flow_episodes_due
+  ON task_flow_episodes(phase, due_at_ms, deadline_at_ms);
+
+CREATE TABLE IF NOT EXISTS task_flow_supervisors (
+  owner_id TEXT NOT NULL PRIMARY KEY,
+  flow_id TEXT,
+  observed_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  stopped_at_ms INTEGER
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS flow_runs (
   flow_id TEXT NOT NULL PRIMARY KEY,
   shape TEXT,
