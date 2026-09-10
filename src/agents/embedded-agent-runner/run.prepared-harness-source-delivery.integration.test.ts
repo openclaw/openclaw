@@ -42,7 +42,10 @@ import {
   getPreparedModelRuntimeBorrowedSnapshot,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
-import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeLeaseOptions,
+  PreparedModelRuntimePluginGeneration,
+} from "../prepared-model-runtime.types.js";
 import { markCoreTtsAttemptResult } from "../tools/tts-tool-result-provenance.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -879,7 +882,8 @@ describe("prepared harness source delivery", () => {
       let acquisitionSignal: AbortSignal | undefined;
       mockedAcquireAgentRunPreparedModelRuntime.mockClear();
       mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
-        async (_input, signal?: AbortSignal) => {
+        async (_input, options?: PreparedModelRuntimeLeaseOptions) => {
+          const signal = options?.abortSignal;
           acquisitionSignal = signal;
           acquisitionStarted.resolve();
           await resumeAcquisition.promise;
@@ -936,8 +940,7 @@ describe("prepared harness source delivery", () => {
         expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
         expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ config, loadRuntimePlugins: true, workspaceDir }),
-          acquisitionSignal,
-          "static",
+          { abortSignal: acquisitionSignal, catalogMode: "static" },
         );
 
         if (outcome === "complete") {
