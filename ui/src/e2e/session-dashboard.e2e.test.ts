@@ -283,11 +283,16 @@ suite.define(() => {
     const geometry = await preview.evaluate((element) => {
       const box = element.getBoundingClientRect();
       const pinBox = element.querySelector("[data-pin-widget]")!.getBoundingClientRect();
+      const moreBox = element
+        .querySelector(".chat-tool-card__widget-actions-trigger")!
+        .getBoundingClientRect();
       const panelBox = element
         .querySelector(".chat-tool-card__preview-panel")!
         .getBoundingClientRect();
       return {
         gap: pinBox.left - box.right,
+        actionLeftOffset: moreBox.left - pinBox.left,
+        actionVerticalGap: moreBox.top - pinBox.bottom,
         top: pinBox.top - box.top,
         box: { x: box.x, y: box.y, width: box.width, height: box.height },
         panelWidth: panelBox.width,
@@ -295,6 +300,8 @@ suite.define(() => {
     });
     expect(geometry.gap).toBeGreaterThan(0);
     expect(geometry.top).toBe(0);
+    expect(geometry.actionLeftOffset).toBe(0);
+    expect(geometry.actionVerticalGap).toBeGreaterThan(0);
     expect(geometry.box).toEqual(restingBox);
     expect(geometry.panelWidth).toBe(restingBox.width);
     const pinBox = (await pin.boundingBox())!;
@@ -468,6 +475,22 @@ suite.define(() => {
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     const pin = preview.getByRole("button", { name: "Pin to dashboard" });
+    await expect
+      .poll(() =>
+        preview
+          .locator("[data-widget-actions]")
+          .evaluate((element) => getComputedStyle(element).opacity),
+      )
+      .toBe("0.6");
+    await expect
+      .poll(() =>
+        pin.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const thread = element.closest(".chat-thread")!.getBoundingClientRect();
+          return box.top >= thread.top;
+        }),
+      )
+      .toBe(true);
     await pin.focus();
     await pin.click();
 

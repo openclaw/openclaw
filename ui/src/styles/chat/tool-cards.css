@@ -854,10 +854,9 @@
   top: 0;
   left: 100%;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: center;
   width: max-content;
-  max-width: var(--widget-actions-space);
   gap: 4px;
   padding-left: 4px;
 }
@@ -877,6 +876,7 @@
 .chat-virtual-row:has(
   .chat-tool-card__preview:hover,
   .chat-tool-card__preview:focus-within,
+  .chat-tool-card__preview[data-widget-actions-above],
   .chat-tool-card__widget-actions[open]
 ) {
   content-visibility: visible;
@@ -898,31 +898,15 @@
   font-size: calc(13px * var(--control-ui-text-scale));
 }
 
-.chat-tool-card__widget-actions-trigger,
-.chat-tool-card__widget-action {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
+.chat-tool-card__preview[data-widget-actions-above] .chat-tool-card__preview-actions {
+  top: auto;
+  bottom: 100%;
+  left: auto;
+  right: 0;
+  flex-direction: row;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 76%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--card) 88%, transparent);
-  box-shadow: var(--shadow-sm);
-  color: var(--muted);
-}
-
-.chat-tool-card__widget-actions-trigger:hover,
-.chat-tool-card__widget-actions-trigger:focus-visible,
-.chat-tool-card__widget-action:hover,
-.chat-tool-card__widget-action:focus-visible {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.chat-tool-card__widget-actions-trigger svg,
-.chat-tool-card__widget-action svg {
-  width: 16px;
-  height: 16px;
+  opacity: 0.6;
+  pointer-events: auto;
 }
 
 [data-widget-actions] {
@@ -938,27 +922,16 @@
   pointer-events: auto;
 }
 
-/* Match inline image actions: touch keeps content controls directly reachable. */
+/* Touch keeps actions reachable; focus, hover, and an open menu reveal them. */
 @media (hover: none) {
   [data-widget-actions] {
-    opacity: 1;
+    opacity: 0.6;
     pointer-events: auto;
   }
 
   .chat-virtual-row:has(.chat-tool-card__preview[data-has-widget-actions]) {
     content-visibility: visible;
   }
-}
-
-.chat-tool-card__preview[data-widget-actions-above] .chat-tool-card__preview-actions {
-  top: auto;
-  bottom: 100%;
-  left: auto;
-  right: 0;
-  max-width: none;
-  padding: 0 0 4px;
-  border-radius: var(--radius-sm);
-  background: var(--bg);
 }
 
 .chat-tool-card__widget-action[data-pinned] {

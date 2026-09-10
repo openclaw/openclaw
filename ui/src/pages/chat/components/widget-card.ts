@@ -541,7 +541,6 @@ function widgetActionsPlacementRef() {
       const clipRight =
         thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
       const availableWidth = clipRight - element.getBoundingClientRect().right;
-      element.style.setProperty("--widget-actions-space", `${Math.max(0, availableWidth)}px`);
       element.toggleAttribute("data-widget-actions-above", availableWidth < 40);
     });
     observer.observe(element);
