@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureDirectoryWithinRoot } from "@openclaw/fs-safe/advanced";
@@ -10,7 +11,9 @@ export function supervisedWorkspaceVersionPath(version: string, options: Options
   }
   const database =
     options.database?.path ?? options.path ?? resolveOpenClawStateSqlitePath(options.env);
-  return path.join(path.dirname(database), "taskflow-workspaces", version);
+  // The database is already open. Resolve its configured parent, not the
+  // artifact root/leaf whose independent alias rejection must remain intact.
+  return path.join(realpathSync.native(path.dirname(database)), "taskflow-workspaces", version);
 }
 
 /** Establish the artifact boundary before the first directory mutation. Used by

@@ -15,7 +15,7 @@ import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
-import { readCodexAppServerConfigOptions } from "./launch-args.js";
+import { isCodexAppServerProxyLaunch, readCodexAppServerConfigOptions } from "./launch-args.js";
 import { readModelListResult } from "./models.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
@@ -121,7 +121,10 @@ export async function runBoundedCodexAppServerTurn(
     pluginConfig: params.options.pluginConfig,
     managedCommandOrder: params.isolation === "private-stdio" ? "package-first" : undefined,
   });
-  if (params.ownedLocalProcessRequired && appServer.start.transport !== "stdio") {
+  if (
+    params.ownedLocalProcessRequired &&
+    (appServer.start.transport !== "stdio" || isCodexAppServerProxyLaunch(appServer.start.args))
+  ) {
     throw new Error("Supervised isolated completion requires an owned local Codex stdio process");
   }
   if (params.isolation === "configured-transport") {

@@ -1,20 +1,26 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createReplyOperation,
   type ReplyBackendQueueMessageOptions,
 } from "../../auto-reply/reply/reply-run-registry.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
+  appendTranscriptMessage,
   listSessionPendingInputs,
   loadSessionEntry,
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { listSessionPendingInputReceipts } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { registerSupervisedTaskAdmissionOwner } from "../../tasks/supervised-task.admission-owner.js";
 import { heartbeatTaskSupervisor, listSupervisedTasks } from "../../tasks/supervised-task.store.js";
+import { maybeAdmitSupervisedGatewayRoot } from "../agent-turn/agent-run-supervised-root.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {
   dispatchInboundMessageMock,
@@ -45,7 +51,7 @@ afterEach(() => {
   }
 });
 
-async function fixture(active = true) {
+async function fixture(active = true, collectInput = false) {
   const dir = dirs.make("supervised-chat-");
   const workspace = path.join(dir, "workspace");
   await fs.mkdir(workspace);
@@ -93,8 +99,25 @@ async function fixture(active = true) {
       },
     },
   });
+  await appendTranscriptMessage(scope, {
+    message: { role: "user", content: "Keep working on the current request.", timestamp: 1 },
+  });
   const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
-    await options?.userTurnTranscriptRecorder?.persistApproved();
+    const recorder = options?.userTurnTranscriptRecorder;
+    if (collectInput && recorder) {
+      const aggregate = createUserTurnTranscriptRecorder({
+        input: { text: "Collected follow-up", idempotencyKey: "collected-input:user" },
+        pendingInputSources: [recorder],
+        target: {
+          ...scope,
+          sessionEntry: loadSessionEntry(scope),
+          expectedSessionId: scope.sessionId,
+        },
+      });
+      await aggregate.persistApproved();
+    } else {
+      await recorder?.persistApproved();
+    }
   });
   if (active) {
     const operation = createReplyOperation({ ...scope, resetTriggered: false });
@@ -183,10 +206,22 @@ it("admits before ACK or active backend injection and replays the same task afte
   );
   const tasks = listSupervisedTasks();
   expect(tasks).toHaveLength(1);
-  expect(tasks[0]).toMatchObject({ phase: "ready", attempts: 0 });
+  const task = tasks[0];
+  assert.isDefined(task);
+  expect(task).toMatchObject({ phase: "ready", attempts: 0 });
   expect(listSessionPendingInputs(f.scope).total).toBe(0);
   f.context.dedupe.clear();
-  await f.send();
+  const replay = vi.fn<RespondFn>();
+  await f.send(replay);
+  expect(replay).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      status: "ok",
+      supervisedTask: { flowId: task.flowId, episode: task.episode },
+    }),
+    undefined,
+    expect.anything(),
+  );
   expect(classifier).toHaveBeenCalledOnce();
   expect(listSupervisedTasks()).toEqual(tasks);
   expect(f.queueMessage).not.toHaveBeenCalled();
@@ -227,3 +262,117 @@ it("preserves ordinary active-run injection when the classifier selects conversa
   expect(listSupervisedTasks()).toHaveLength(0);
   expect(f.queueMessage).toHaveBeenCalledOnce();
 });
+
+it("replays consumed collected input after supervision is enabled without classifying it", async () => {
+  const f = await fixture(true, true);
+  const enabledConfig = getRuntimeConfig();
+  const enabledPolicy = enabledConfig.agents?.entries?.main?.taskSupervision;
+  assert.isDefined(enabledPolicy);
+  setRuntimeConfigSnapshot({
+    ...enabledConfig,
+    agents: {
+      ...enabledConfig.agents,
+      entries: {
+        ...enabledConfig.agents?.entries,
+        main: {
+          ...enabledConfig.agents?.entries?.main,
+          taskSupervision: { ...enabledPolicy, enabled: false },
+        },
+      },
+    },
+  });
+  const first = vi.fn<RespondFn>();
+  await f.send(first);
+  expect(f.queueMessage, JSON.stringify(first.mock.calls)).toHaveBeenCalledOnce();
+  expect(classifier).not.toHaveBeenCalled();
+  expect(f.queueMessage.mock.calls[0]?.[1]?.userTurnTranscriptRecorder).toBeDefined();
+  await f.queueMessage.mock.results[0]?.value;
+  expect(
+    f.queueMessage.mock.calls[0]?.[1]?.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
+  ).toBeDefined();
+  expect(listSessionPendingInputReceipts(f.scope, { runIds: [f.params.idempotencyKey] })).toEqual([
+    { runId: f.params.idempotencyKey, state: "consumed", consumedByEventId: expect.any(String) },
+  ]);
+  expect(listSessionPendingInputs(f.scope).total).toBe(0);
+  setRuntimeConfigSnapshot(enabledConfig);
+  // A Gateway restart loses transient admission/ACK state, not consumed custody.
+  f.context.dedupe.clear();
+  f.context.chatAbortControllers.clear();
+  f.context.chatQueuedTurns?.clear();
+  const replay = vi.fn<RespondFn>();
+  await f.send(replay);
+  expect(replay).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({ runId: f.params.idempotencyKey, status: "ok" }),
+    undefined,
+    expect.objectContaining({ cached: true }),
+  );
+  expect(classifier).not.toHaveBeenCalled();
+  expect(listSupervisedTasks()).toHaveLength(0);
+  expect(f.queueMessage).toHaveBeenCalledOnce();
+  expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+});
+
+it.each(["throws", "missing-anchor"] as const)(
+  "does not commit an agent-root task when source transcript persistence %s",
+  async (failure) => {
+    const f = await fixture(false);
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: f.params.message },
+      target: { ...f.scope, sessionEntry: loadSessionEntry(f.scope) },
+    });
+    const persist = vi.spyOn(recorder, "persistApproved");
+    if (failure === "throws") {
+      persist.mockRejectedValue(new Error("source transcript unavailable"));
+    } else {
+      persist.mockResolvedValue(undefined);
+    }
+    const activeRunAbort = registerChatAbortController({
+      ...f.scope,
+      chatAbortControllers: f.context.chatAbortControllers,
+      runId: f.params.idempotencyKey,
+      timeoutMs: 60_000,
+    });
+    cleanups.push(activeRunAbort.cleanup);
+    const onRejected = vi.fn();
+    const emitAcceptance = vi.fn();
+    await maybeAdmitSupervisedGatewayRoot({
+      admission: {
+        cfg: getRuntimeConfig(),
+        activeSessionAgentId: f.scope.agentId,
+        resolvedSessionKey: f.scope.sessionKey,
+        suppressVisibleSessionEffects: false,
+        isOneShotModelRun: false,
+        isRestartRecoveryResumeRun: false,
+        canUseInternalRuntimeHandoff: false,
+        sessionEntry: loadSessionEntry(f.scope),
+        images: [],
+        offloadedRefs: [],
+        assertGatewayWorkAdmissionAllowed: () => {},
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        getAdmittedSessionId: () => f.scope.sessionId,
+        runId: f.params.idempotencyKey,
+        markAgentRunAccepted: vi.fn(),
+        context: f.context,
+        agentDedupeKeys: [`agent:${f.params.idempotencyKey}`],
+        io: { emitAcceptance, emitFinal: vi.fn() },
+      },
+      userTurn: {
+        execApprovalFollowupHandoffClaimId: "no-followup",
+        message: f.params.message,
+        recorder,
+        senderIsOwner: true,
+        suppressPromptPersistence: false,
+      },
+      activeModel: { provider: "openai", model: "supervision-fixture-model" },
+      activeRunAbort,
+      onInputAccepted: vi.fn(),
+      onAccepted: vi.fn(),
+      onRejected,
+    });
+    expect(persist).toHaveBeenCalledOnce();
+    expect(listSupervisedTasks()).toHaveLength(0);
+    expect(onRejected).toHaveBeenCalledOnce();
+    expect(emitAcceptance).not.toHaveBeenCalled();
+  },
+);

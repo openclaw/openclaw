@@ -54,7 +54,9 @@ export function startSupervisedOperationDispatcher(params: {
         },
       });
       cleanupCursor = resources.nextExecutionId;
-      reconcileSupervisedOperationCapacity(Date.now(), options);
+      for (const error of reconcileSupervisedOperationCapacity(Date.now(), options)) {
+        report(error);
+      }
       const operations = listSupervisedOperations(options, params.onlyFlowId).filter(
         (operation) => !operation.outcome,
       );

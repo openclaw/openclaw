@@ -6,6 +6,10 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 
 export type SupervisedWorkflowDatabaseOptions = OpenClawStateDatabaseOptions;
+
+/** Decode/identity failure in persisted bytes, never a database or filesystem failure. */
+export class SupervisedRecordCorruptionError extends Error {}
+
 const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS task_flow_episodes (");
 const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS flow_runs (", start);
 if (start < 0 || end < start) {

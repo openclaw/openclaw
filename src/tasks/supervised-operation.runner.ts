@@ -158,13 +158,12 @@ export async function runSupervisedOperationProcess(
       throw new Error("Review runtime closure remains unresolved", { cause: error });
     }
     if (
-      ((current?.dispatchedAt === null &&
-        (!getSupervisedCommandResources(executionId, options) ||
-          getSupervisedCommandResources(executionId, options)?.state === "closed")) ||
-        operation.request.kind === "publication" ||
-        operation.request.kind === "ci") &&
-      !controller.signal.aborted
+      (current?.dispatchedAt === null && (!resources || resources.state === "closed")) ||
+      operation.request.kind === "publication" ||
+      operation.request.kind === "ci"
     ) {
+      // A runner stop is not cancellation of its external effect. This write
+      // still checks task/lease authority; a revoked owner cannot reopen work.
       releaseSupervisedOperationForReconciliation(
         execution,
         Date.now(),

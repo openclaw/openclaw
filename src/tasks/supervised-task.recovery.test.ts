@@ -8,6 +8,7 @@ import { supervisedInputIdentity } from "./supervised-task.source.js";
 import {
   createSupervisedTask,
   heartbeatTaskSupervisor,
+  getSupervisedTask,
   listSupervisedTasks,
   reconcileSupervisedTasks,
 } from "./supervised-task.store.js";
@@ -147,4 +148,46 @@ it("isolates more than one page of corrupt episodes without starving healthy wor
     options,
   )!;
   expect(faults).toHaveLength(270);
+});
+
+it("retries an environmental write failure without quarantining a healthy episode", () => {
+  const options = { path: `${dirs.make("task-transient-write-")}/state.sqlite` };
+  heartbeatTaskSupervisor("owner", 1000, 60_000, options);
+  const task = createSupervisedTask(
+    {
+      flowId: "healthy",
+      agentId: "poc",
+      runtime: "codex",
+      model: "openai/test",
+      prompt: "Keep the healthy task",
+      policy: { deadlineAt: 2000, maxAttempts: 4, attemptTimeoutMs: 1000 },
+    },
+    "owner",
+    1000,
+    options,
+  );
+  writeSupervisedWorkflow((db) => {
+    // sqlite-allow-raw -- Test-only trigger forces a real SQLite operational write failure.
+    db.exec(
+      "CREATE TRIGGER reject_task_update BEFORE UPDATE ON task_flow_episodes BEGIN SELECT RAISE(ABORT, 'temporary write failure'); END",
+    );
+  }, options);
+  expect(() => reconcileSupervisedTasks(2001, options)).toThrow("temporary write failure");
+  expect(getSupervisedTask(task.flowId, options)).toEqual(task);
+  expect(
+    readSupervisedWorkflow(
+      (db) =>
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<DB>(db).selectFrom("task_flow_recovery").selectAll(),
+        ).rows,
+      options,
+    ),
+  ).toEqual([]);
+  writeSupervisedWorkflow((db) => {
+    // sqlite-allow-raw -- Remove the test-only operational failure trigger before retry.
+    db.exec("DROP TRIGGER reject_task_update");
+  }, options);
+  reconcileSupervisedTasks(2002, options);
+  expect(getSupervisedTask(task.flowId, options)?.endpoint).not.toBeNull();
 });

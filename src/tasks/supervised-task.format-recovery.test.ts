@@ -157,8 +157,7 @@ it.each([false, true])(
     await vi.waitFor(() => expect(errors).toHaveLength(1), { timeout: 5000 });
     const recovery = getSupervisedTask("format", options)!;
     expect(recovery).toMatchObject({ phase: "ready", attempts: 1, endpoint: null });
-    expect(recovery.next).toContain("Previous terminal response was not a valid task decision");
-    expect(recovery.next).toContain("no prose");
+    expect(recovery.next).toBe("Repair answer");
     expect(recovery.next).not.toContain("Both modules are written");
     expect(listSupervisedOperations(options, "format", 1)).toEqual([]);
     const accepted = resolveSupervisedWorkflowWorkspace(contract, "format", 1, options);
@@ -174,8 +173,8 @@ it.each([false, true])(
       { timeout: 5000 },
     );
     expect(command).toHaveBeenCalledTimes(2);
-    expect(command.mock.calls[1]![0].message).toContain(
-      "Previous terminal response was not a valid task decision",
+    expect(command.mock.calls[1]![0].extraSystemPrompt).toContain(
+      "A previous attempt did not produce an accepted decision",
     );
     expect(inputBytes).toEqual(["accepted input", "accepted input"]);
     expect(getSupervisedTask("format", options)?.attempts).toBe(2);

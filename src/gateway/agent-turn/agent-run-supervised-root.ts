@@ -89,6 +89,21 @@ export function maybeAdmitSupervisedGatewayRoot(input: {
           throw new Error("Root task source session changed during admission");
         }
       };
+      // Admission may commit durable work. Establish the source transcript first;
+      // a missing anchor or failed write must not leave an unacknowledged task.
+      assertCurrent();
+      const persisted = await userTurn.recorder?.persistApproved({
+        expectedSessionId: params.getAdmittedSessionId(),
+        retryIfUnpersisted: true,
+      });
+      assertCurrent();
+      if (
+        !persisted ||
+        persisted.admission.sessionId !== params.getAdmittedSessionId() ||
+        persisted.admission.agentId !== params.activeSessionAgentId
+      ) {
+        throw new Error("Root task input has no exact committed transcript anchor");
+      }
       const disposition = await maybeAdmitSupervisedRootTask({
         config: params.cfg,
         source: bindSupervisedRootSource({
@@ -110,11 +125,6 @@ export function maybeAdmitSupervisedGatewayRoot(input: {
       }
       // The durable task retains the input. Consume its pending-input owner without
       // inventing a runtime; lifecycle cleanup remains with prepareAgentRunDispatch.
-      await userTurn.recorder?.persistApproved({
-        expectedSessionId: params.getAdmittedSessionId(),
-        retryIfUnpersisted: true,
-      });
-      assertCurrent();
       const acceptedTask = {
         runId: params.runId,
         sessionKey,

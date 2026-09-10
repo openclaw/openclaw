@@ -11,6 +11,7 @@ import type { SupervisedTask } from "./supervised-task.types.js";
 import { insertSupervisedWorkflowRootInTransaction } from "./supervised-workflow-root.js";
 import {
   readSupervisedWorkflow,
+  SupervisedRecordCorruptionError,
   type SupervisedWorkflowDatabaseOptions as Options,
 } from "./supervised-workflow.persistence.js";
 import {
@@ -59,15 +60,19 @@ export function readSupervisedWorkflowContractInTransaction(
   if (!row) {
     return undefined;
   }
-  const encoded = encodeSupervisedWorkflowContract(JSON.parse(row.record_json));
-  if (
-    encoded.json !== row.record_json ||
-    encoded.hash !== row.contract_hash ||
-    encoded.contract.workspace !== row.workspace
-  ) {
-    throw new Error("Accepted workflow contract is corrupt");
+  try {
+    const encoded = encodeSupervisedWorkflowContract(JSON.parse(row.record_json));
+    if (
+      encoded.json !== row.record_json ||
+      encoded.hash !== row.contract_hash ||
+      encoded.contract.workspace !== row.workspace
+    ) {
+      throw new Error("Accepted workflow contract is corrupt");
+    }
+    return encoded;
+  } catch (cause) {
+    throw new SupervisedRecordCorruptionError("Accepted workflow contract is corrupt", { cause });
   }
-  return encoded;
 }
 
 export function getSupervisedWorkflowContract(

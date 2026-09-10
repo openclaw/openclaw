@@ -17,6 +17,7 @@ import {
   heartbeatTaskSupervisor,
   reconcileSupervisedTasks,
   reserveSupervisedDispatch,
+  resumeSupervisedTask,
   stopTaskSupervisor,
 } from "./supervised-task.store.js";
 import { readSupervisedWorkflow } from "./supervised-workflow.persistence.js";
@@ -375,4 +376,66 @@ it("rejects an aliased artifact root before creating any external directory", as
   ).rejects.toThrow();
   expect(await fs.readdir(outside)).toEqual(["sentinel"]);
   expect(await fs.readFile(`${outside}/sentinel`, "utf8")).toBe("preserve");
+});
+
+it.each(["runtime", "abandoned"] as const)(
+  "preserves the complete operator resume input after %s recovery",
+  async (failure) => {
+    const f = await fixture();
+    const first = f.claim("one");
+    const draft = await prepareAttemptCandidateFixture(first, f.contract, f.options, () =>
+      assertSupervisedAttemptCurrent(first, Date.now(), f.options),
+    );
+    await draft.stage({
+      kind: "input_required",
+      reason: "Choose the repair",
+      question: "Which answer?",
+    });
+    expect(await draft.close()).toBe(true);
+    await draft.accept();
+    const input = "Use the explicitly selected answer: " + "x".repeat(4060);
+    const resumed = resumeSupervisedTask(
+      "work",
+      1,
+      input,
+      f.task.policy,
+      "one",
+      Date.now(),
+      f.options,
+    );
+    const attempt = f.claim("one");
+    if (failure === "runtime") {
+      failSupervisedAttempt(attempt, "Backend disconnected", Date.now(), f.options);
+    } else {
+      stopTaskSupervisor("one", Date.now(), f.options);
+      reconcileSupervisedTasks(Date.now(), f.options);
+    }
+    closeOpenClawStateDatabaseForTest();
+    const recovered = getSupervisedTask("work", f.options)!;
+    expect(recovered).toMatchObject({
+      episode: resumed.episode,
+      phase: "ready",
+      next: input,
+      endpoint: null,
+    });
+  },
+);
+
+it("uses the canonical artifact parent when the configured state directory is an alias", async () => {
+  const f = await fixture();
+  const alias = `${dirs.make("artifact-state-alias-")}/state`;
+  await fs.symlink(f.root, alias, "dir");
+  const options = { path: `${alias}/state.sqlite` };
+  const attempt = f.claim("one");
+  const source = await ensureSupervisedAttemptSource(attempt, f.contract, options, () =>
+    assertSupervisedAttemptCurrent(attempt, Date.now(), options),
+  );
+  const accepted = resolveSupervisedWorkflowWorkspace(
+    f.contract,
+    attempt.flowId,
+    attempt.episode,
+    options,
+  );
+  expect(accepted.workspace).toBe(`${f.root}/taskflow-workspaces/${source.version_id}`);
+  expect(await fs.readFile(`${accepted.workspace}/answer.txt`, "utf8")).toBe("initial\n");
 });

@@ -12,6 +12,7 @@ import {
   validateSupervisedTask,
   type SupervisedTask,
 } from "./supervised-task.types.js";
+import { SupervisedRecordCorruptionError } from "./supervised-workflow.persistence.js";
 type Database = Pick<DB, "task_flow_episodes" | "task_flow_supervisors">;
 
 export function readTask(
@@ -34,18 +35,22 @@ export function readTask(
 }
 
 export function decodeTaskRow(row: Selectable<DB["task_flow_episodes"]>): SupervisedTask {
-  const task = validateSupervisedTask(JSON.parse(row.record_json));
-  if (
-    row.revision !== task.revision ||
-    row.phase !== task.phase ||
-    row.flow_id !== task.flowId ||
-    row.episode !== task.episode ||
-    row.due_at_ms !== task.dueAt ||
-    row.deadline_at_ms !== task.policy.deadlineAt
-  ) {
-    throw new Error("Supervised TaskFlow row identity disagrees with its record");
+  try {
+    const task = validateSupervisedTask(JSON.parse(row.record_json));
+    if (
+      row.revision !== task.revision ||
+      row.phase !== task.phase ||
+      row.flow_id !== task.flowId ||
+      row.episode !== task.episode ||
+      row.due_at_ms !== task.dueAt ||
+      row.deadline_at_ms !== task.policy.deadlineAt
+    ) {
+      throw new Error("Supervised TaskFlow row identity disagrees with its record");
+    }
+    return task;
+  } catch (cause) {
+    throw new SupervisedRecordCorruptionError("Stored supervised task is corrupt", { cause });
   }
-  return task;
 }
 
 function rowForTask(task: SupervisedTask, previous?: SupervisedTask) {

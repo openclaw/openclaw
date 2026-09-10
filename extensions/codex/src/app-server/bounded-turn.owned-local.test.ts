@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
 import { createClientFactory } from "./bounded-turn.test-fixtures.js";
 
-it.each(["stdio", "websocket", "unix"] as const)(
+it.each(["stdio", "websocket", "unix", "stdio-proxy"] as const)(
   "fences owned-local isolated turns before %s client startup",
   async (transport) => {
     const fake = createClientFactory();
@@ -13,11 +13,16 @@ it.each(["stdio", "websocket", "unix"] as const)(
         clientFactory: fake.factory,
         pluginConfig: {
           appServer:
-            transport === "stdio"
-              ? { transport }
-              : transport === "unix"
-                ? { transport, homeScope: "user", url: "unix:///fixture/native.sock" }
-                : { transport, url: "ws://127.0.0.1:19400", authToken: "fixture-token" },
+            transport === "stdio-proxy"
+              ? {
+                  transport: "stdio",
+                  args: ["app-server", "proxy", "--sock", "/fixture/native.sock"],
+                }
+              : transport === "stdio"
+                ? { transport }
+                : transport === "unix"
+                  ? { transport, homeScope: "user", url: "unix:///fixture/native.sock" }
+                  : { transport, url: "ws://127.0.0.1:19400", authToken: "fixture-token" },
         },
       },
       taskLabel: "isolated completion",

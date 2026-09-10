@@ -200,7 +200,6 @@ export function startSupervisedTaskWorker(params: {
                 : "Attempt failed or returned an invalid task decision; inspect the attempt before resuming",
               Date.now(),
               options,
-              error instanceof SupervisedDecisionFormatError ? "invalid_decision" : undefined,
             );
             if (endpoint) {
               reportChange(endpoint);

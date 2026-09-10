@@ -35,6 +35,7 @@ import {
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
+import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
@@ -162,7 +163,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const withPreparedProcessEnv = <T extends CodexAppServerRuntimeOptions>(appServer: T) => {
     // Peer locality is not process ownership: disconnected socket turns can outlive recovery.
     assertLocalTargetSupported(
-      appServer.start.transport !== "stdio" || Boolean(appServer.remoteWorkspaceRoot),
+      appServer.start.transport !== "stdio" ||
+        isCodexAppServerProxyLaunch(appServer.start.args) ||
+        Boolean(appServer.remoteWorkspaceRoot),
     );
     return shellEnvironment
       ? {

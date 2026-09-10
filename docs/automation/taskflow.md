@@ -447,7 +447,9 @@ artifact, explicitly resume if continuation is needed.
 
 Workflow recovery can start a fresh attempt from the last accepted artifact and
 durable operation receipts. It discards no uncertain evidence and never treats
-an abandoned draft as accepted work. `maxRecoveryAttempts: 0` disables this
+an abandoned draft as accepted work. The current step, including an accepted
+operator answer, survives recovery; formatting guidance does not replace it.
+`maxRecoveryAttempts: 0` disables this
 managed recovery; retries remain bounded by the recovery count, attempt count,
 and deadline. Recovery backoff starts at one second and caps at 30 seconds.
 Malformed decisions can receive bounded formatting feedback, not a relaxed JSON

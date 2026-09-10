@@ -5,8 +5,10 @@ import { withOwnedRuntimeProcess } from "../infra/owned-runtime-process-context.
 import { listSupervisedOperations } from "./supervised-operation.store.js";
 import { SupervisedAgentResultError } from "./supervised-runtime-diagnostic.js";
 import { parseSupervisedDecision } from "./supervised-task.decision.js";
+import { readSupervisedRecoveryInTransaction } from "./supervised-task.recovery.js";
 import { SupervisedDecisionEnvelopeSchema, type SupervisedTask } from "./supervised-task.types.js";
 import type { SupervisedAttemptRunner } from "./supervised-task.worker.js";
+import { readSupervisedWorkflow } from "./supervised-workflow.persistence.js";
 import { getSupervisedWorkflowContract } from "./supervised-workflow.store.js";
 
 /** Cold source/module loading happens before a supervisor advertises custody. */
@@ -99,6 +101,12 @@ async function runSupervisedAgentAdapter(
   }
   context.assertCurrent();
   const workflow = getSupervisedWorkflowContract(task.flowId, task.episode, context.options);
+  const recoveries = workflow
+    ? (readSupervisedWorkflow(
+        (db) => readSupervisedRecoveryInTransaction(db, task.flowId, task.episode)?.recoveries,
+        context.options ?? {},
+      ) ?? 0)
+    : 0;
   const operations = workflow
     ? listSupervisedOperations(context.options, task.flowId, task.episode).slice(-8)
     : [];
@@ -124,6 +132,12 @@ async function runSupervisedAgentAdapter(
       ].join("\n"),
       extraSystemPrompt: [
         buildAttemptContract(task, Boolean(workflow)),
+        ...(recoveries > 0
+          ? [
+              "A previous attempt did not produce an accepted decision. Recover from the last controller-accepted workspace artifact, not an abandoned draft. Preserve the current step/operator input and inspect durable operation receipts before requesting work; do not repeat an observed publication.",
+              "Your final response must be exactly one schema-valid JSON object within 64 KiB: no prose, Markdown fences, or text before or after the object. Choose the decision that accurately describes the next step; do not claim completion to satisfy formatting.",
+            ]
+          : []),
         ...(task.runtime === "claude-cli"
           ? [
               'Submit the final logical decision through native StructuredOutput inside {"decision": <decision object>}. Do not return it as conversational prose.',

@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import { planSupervisedCommandResources } from "./supervised-command-custody.js";
 import { startSupervisedOperationDispatcher } from "./supervised-operation.dispatcher.js";
 import {
   readSupervisedWorkflow,
@@ -619,3 +620,91 @@ it("isolates a corrupt operation without hiding its bytes or starving an unrelat
     vi.useRealTimers();
   }
 });
+
+it.each(["execution", "resources"] as const)(
+  "retains corrupt %s capacity evidence without starving healthy queued work",
+  async (kind) => {
+    const broken = admitted();
+    const launcher = requireNodeWorkerProcessIdentity(process.pid);
+    const execution = claimSupervisedOperation(
+      broken.operation.operationId,
+      "runner",
+      1002,
+      broken.options,
+      launcher,
+    )!;
+    observeSupervisedOperationProcess(execution.executionId, launcher, 1003, broken.options);
+    if (kind === "resources") {
+      planSupervisedCommandResources(execution, 1004, broken.options);
+    }
+    const healthy = fixture(broken.root, "healthy");
+    const operation = enqueueSupervisedOperation(healthy.expected, request, 1002, healthy.options);
+    writeSupervisedWorkflow((db) => {
+      const sql = getNodeSqliteKysely<DB>(db);
+      if (kind === "execution") {
+        executeSqliteQuerySync(
+          db,
+          sql
+            .updateTable("task_flow_operation_executions")
+            .set({ record_json: "{}" })
+            .where("execution_id", "=", execution.executionId),
+        );
+      } else {
+        executeSqliteQuerySync(
+          db,
+          sql
+            .updateTable("task_flow_command_resources")
+            .set({ identity_json: "{}" })
+            .where("execution_id", "=", execution.executionId),
+        );
+      }
+    }, broken.options);
+    launch.mockClear();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(20_000);
+    const onError = vi.fn();
+    const dispatcher = startSupervisedOperationDispatcher({ options: broken.options, onError });
+    try {
+      await vi.waitFor(() =>
+        expect(launch).toHaveBeenCalledWith(operation.operationId, healthy.options),
+      );
+      expect(onError).toHaveBeenCalled();
+      expect(
+        readSupervisedWorkflow((db) => {
+          const sql = getNodeSqliteKysely<DB>(db);
+          return kind === "execution"
+            ? executeSqliteQuerySync(
+                db,
+                sql
+                  .selectFrom("task_flow_operation_executions")
+                  .select("record_json as bytes")
+                  .where("execution_id", "=", execution.executionId),
+              ).rows
+            : executeSqliteQuerySync(
+                db,
+                sql
+                  .selectFrom("task_flow_command_resources")
+                  .select("identity_json as bytes")
+                  .where("execution_id", "=", execution.executionId),
+              ).rows;
+        }, broken.options),
+      ).toEqual([{ bytes: "{}" }]);
+      expect(
+        readSupervisedWorkflow(
+          (db) =>
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<DB>(db)
+                .selectFrom("task_flow_operation_launches")
+                .select("state")
+                .where("execution_id", "=", execution.executionId),
+            ).rows,
+          broken.options,
+        ),
+      ).toEqual([{ state: "spawned" }]);
+    } finally {
+      dispatcher.stop();
+      vi.useRealTimers();
+    }
+  },
+);

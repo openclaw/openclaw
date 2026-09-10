@@ -3,7 +3,9 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { SupervisedRootDisposition } from "../../tasks/supervised-task.admission.js";
 import { bindSupervisedRootSource } from "../../tasks/supervised-task.root-source.js";
+import { readSupervisedSourceHandoff } from "../../tasks/supervised-task.source.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -97,37 +99,47 @@ export async function handoffSupervisedChatRoot(
     }
   };
   assertCurrent(false);
-  const persisted = await params.persistUserTurn();
-  assertCurrent();
-  // The pending-input receipt's state is a staging/replay observation, not a
-  // live SQL projection. A fresh append consumes custody in the canonical
-  // writer transaction and returns its exact committed transcript anchor.
-  if (
-    !persisted ||
-    persisted.admission.sessionId !== admission.admittedSessionId ||
-    persisted.admission.agentId !== session.agentId
-  ) {
-    throw new Error("Chat input custody was not consumed by its transcript owner");
-  }
-  const { provider, model } = session.resolvedSessionModel;
-  const { maybeAdmitSupervisedRootTask } = await import("../../tasks/supervised-task.admission.js");
-  assertCurrent();
-  const disposition = await maybeAdmitSupervisedRootTask({
+  const source = bindSupervisedRootSource({
     config: session.cfg,
-    source: bindSupervisedRootSource({
-      config: session.cfg,
-      agentId: session.agentId,
-      sessionKey: session.sessionKey,
-      sessionId: admission.admittedSessionId,
-      namespace: "gateway",
-      inputId: session.clientRunId,
-    }),
-    message: params.ctx.RawBody ?? request.rawMessage,
-    model: `${provider}/${model}`,
-    ownerAuthorized: true,
-    internal: false,
-    assertCurrent,
+    agentId: session.agentId,
+    sessionKey: session.sessionKey,
+    sessionId: admission.admittedSessionId,
+    namespace: "gateway",
+    inputId: session.clientRunId,
   });
+  // A consumed input cannot enter its pending-input owner again. Recover its
+  // committed task handoff, or let the caller return the ordinary cached ACK.
+  const replay = params.recorder.isPendingInputConsumed?.();
+  let disposition: SupervisedRootDisposition | undefined = replay
+    ? readSupervisedSourceHandoff(source)
+    : undefined;
+  if (replay && !disposition) {
+    return false;
+  }
+  if (!disposition) {
+    const persisted = await params.persistUserTurn();
+    assertCurrent();
+    if (
+      !persisted ||
+      persisted.admission.sessionId !== admission.admittedSessionId ||
+      persisted.admission.agentId !== session.agentId
+    ) {
+      throw new Error("Chat input custody was not consumed by its transcript owner");
+    }
+    const { provider, model } = session.resolvedSessionModel;
+    const { maybeAdmitSupervisedRootTask } =
+      await import("../../tasks/supervised-task.admission.js");
+    assertCurrent();
+    disposition = await maybeAdmitSupervisedRootTask({
+      config: session.cfg,
+      source,
+      message: params.ctx.RawBody ?? request.rawMessage,
+      model: `${provider}/${model}`,
+      ownerAuthorized: true,
+      internal: false,
+      assertCurrent,
+    });
+  }
   if (disposition.kind === "ordinary") {
     return false;
   }

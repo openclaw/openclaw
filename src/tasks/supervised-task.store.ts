@@ -44,6 +44,7 @@ import {
 import {
   readSupervisedWorkflow,
   writeSupervisedWorkflow as write,
+  SupervisedRecordCorruptionError,
 } from "./supervised-workflow.persistence.js";
 import {
   insertSupervisedWorkflowContractInTransaction,
@@ -431,7 +432,6 @@ export function failSupervisedAttempt(
   reason: string,
   now: number,
   options: Options = {},
-  failure?: "invalid_decision",
 ): SupervisedTask | undefined {
   return write((db) => {
     const task = readTask(db, expected.flowId, expected.episode);
@@ -445,7 +445,7 @@ export function failSupervisedAttempt(
       return undefined;
     }
     const uncertain = task.attempt.dispatched;
-    const recovered = recoverManagedSupervisedAttemptInTransaction(db, task, now, failure);
+    const recovered = recoverManagedSupervisedAttemptInTransaction(db, task, now);
     if (recovered) {
       return replaceTask(db, task, recovered);
     }
@@ -694,7 +694,10 @@ export function reconcileSupervisedTasks(now: number, options: Options = {}): vo
           );
         }
       }, options);
-    } catch {
+    } catch (error) {
+      if (!(error instanceof SupervisedRecordCorruptionError)) {
+        throw error;
+      }
       // The failed transaction retained the exact source bytes. Isolate this
       // episode in a separate transaction; do not roll back healthy siblings.
       quarantineSupervisedTask(row.flow_id, row.episode, now, options);

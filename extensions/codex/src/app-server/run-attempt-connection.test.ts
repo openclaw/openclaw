@@ -293,7 +293,7 @@ describe("prepareCodexAttemptConnection", () => {
     expect(connection.appServer.start.env).toMatchObject(localProcessEnv);
     expect(connection.disableLoginShell).toBe(true);
   });
-  it.each(["stdio", "unix", "websocket", "forwarded", "sandbox"])(
+  it.each(["stdio", "unix", "websocket", "forwarded", "sandbox", "stdio-proxy"])(
     "requires an owned local model process before %s startup",
     async (placement) => {
       const sessionFile = path.join(tempDir, `owned-${placement}.jsonl`);
@@ -318,7 +318,12 @@ describe("prepareCodexAttemptConnection", () => {
             ? { transport: "websocket", url: "ws://127.0.0.1:19400", authToken: "fixture-token" }
             : placement === "forwarded"
               ? { transport: "stdio", remoteWorkspaceRoot: "/remote/workspace" }
-              : { transport: "stdio" };
+              : placement === "stdio-proxy"
+                ? {
+                    transport: "stdio",
+                    args: ["app-server", "proxy", "--sock", "/fixture/native.sock"],
+                  }
+                : { transport: "stdio" };
       const options = { bindingStore: testCodexAppServerBindingStore, pluginConfig: { appServer } };
       if (placement === "stdio") {
         const prepared = await prepareCodexAttemptConnection({ params, options });

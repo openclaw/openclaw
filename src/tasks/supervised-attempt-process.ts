@@ -1,9 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveAgentDir } from "../agents/agent-scope-config.js";
-import { getRuntimeConfig } from "../config/config.js";
-import { resolveConfigPath } from "../config/paths.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import {
@@ -24,7 +21,10 @@ import {
   supervisedAttemptWorkspacePayloadPrefix,
 } from "./supervised-attempt-workspace.js";
 import { runSupervisedCommandChild } from "./supervised-command-child.js";
-import { resolveSupervisedNativeRuntimeRoot } from "./supervised-native-runtime-root.js";
+import {
+  prepareSupervisedRuntimePaths,
+  bindSupervisedPayloadAgentDirectory,
+} from "./supervised-native-runtime-root.js";
 import {
   readSupervisedRuntimeDiagnostic,
   supervisedRuntimeFailureDiagnostic,
@@ -32,7 +32,7 @@ import {
 import { SupervisedDecisionFormatError } from "./supervised-task.decision.js";
 import { getSupervisedWorkflowContract } from "./supervised-workflow.store.js";
 
-const [mode, resourceId, databasePath, parentMountNamespace, parentUserNamespace] =
+const [mode, resourceId, databasePath, parentMountNamespace, parentUserNamespace, payloadAgentDir] =
   process.argv.slice(2);
 if (
   (mode !== "--namespace" && mode !== "--payload") ||
@@ -40,7 +40,7 @@ if (
   !databasePath ||
   !parentMountNamespace ||
   !parentUserNamespace ||
-  process.argv.length !== 7
+  (mode === "--payload" ? process.argv.length !== 8 || !payloadAgentDir : process.argv.length !== 7)
 ) {
   throw new Error("Invalid private supervised attempt invocation");
 }
@@ -103,6 +103,7 @@ async function runPayload() {
   ) {
     throw new Error("Attempt payload lacks its exact private workspace and namespaces");
   }
+  bindSupervisedPayloadAgentDirectory(context!.task.agentId, payloadAgentDir!);
   stage = "model";
   const { runSupervisedAgentPayload } = await import("./supervised-task.agent.js");
   let decision;
@@ -161,47 +162,19 @@ async function runNamespace() {
     assertCurrent,
   });
   stage = "runtime_paths";
-  const config = getRuntimeConfig();
-  const roots = new Set([
-    path.dirname(databasePath!),
-    path.dirname(resolveAgentDir(config, context!.task.agentId)),
-  ]);
-  // Keep native runtime auth at its existing owner/path. These stores have
-  // separate retention policies; the working tmpfs is not an all-host-disk quota.
-  const nativeRoot = resolveSupervisedNativeRuntimeRoot(context!.task.runtime);
-  if (nativeRoot) {
-    try {
-      await fs.access(nativeRoot);
-      roots.add(nativeRoot);
-    } catch {
-      /* No native store selected. */
-    }
-  }
-  for (const root of roots) {
-    await fs.mkdir(root, { recursive: true, mode: 0o700 });
-  }
-  const configFile = resolveConfigPath();
-  const readOnlyRuntimeFiles = await fs.access(configFile).then(
-    () => [configFile],
-    (error: unknown) => {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-        return [];
-      }
-      throw error;
-    },
-  );
+  const runtimePaths = await prepareSupervisedRuntimePaths({
+    databasePath: databasePath!,
+    agentId: context!.task.agentId,
+    runtime: context!.task.runtime,
+    assertCurrent,
+  });
   const prefix = await supervisedAttemptWorkspacePayloadPrefix({
     prepared,
-    writableRuntimePaths: [...roots],
-    readOnlyRuntimeFiles,
+    writableRuntimePaths: runtimePaths.writableRuntimePaths,
+    readOnlyRuntimeFiles: runtimePaths.readOnlyRuntimeFiles,
     assertCurrent,
   });
   const entrypoint = resolveRuntimeProcessEntrypointUrl("supervisedAttempt");
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
   stage = "payload_launch";
   reserveSupervisedAttemptPayload(resourceId!, options);
   let joined = false;
@@ -213,12 +186,13 @@ async function runNamespace() {
       ...resolveRuntimeWorkerArgv(entrypoint),
       "--payload",
       resourceId!,
-      databasePath!,
+      runtimePaths.databasePath,
       prepared.mountNamespace,
       prepared.userNamespace,
+      runtimePaths.agentDir,
     ],
     cwd: path.resolve(path.dirname(fileURLToPath(entrypoint)), "../.."),
-    env,
+    env: runtimePaths.env,
     timeoutMs: Math.max(1, context!.plan.expiresAt - Date.now()),
     signal: controller.signal,
     keepInputOpen: true,

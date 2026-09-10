@@ -217,7 +217,11 @@ export function recordSupervisedOperationBootstrapExited(
   }, options);
 }
 
-export function reconcileSupervisedOperationCapacity(now: number, options: Options = {}): void {
+export function reconcileSupervisedOperationCapacity(
+  now: number,
+  options: Options = {},
+): unknown[] {
+  const errors: unknown[] = [];
   const rows =
     readSupervisedWorkflow(
       (db) =>
@@ -234,120 +238,130 @@ export function reconcileSupervisedOperationCapacity(now: number, options: Optio
       options,
     ) ?? [];
   for (const row of rows) {
-    const execution = readSupervisedWorkflow((db) => readExecution(db, row.execution_id), options);
-    let launchBootRetired = false;
-    if (execution?.launchHost) {
-      try {
-        const host = readSupervisedProcessHostIdentity();
-        if (host.hostId !== execution.launchHost.hostId) {
+    try {
+      const execution = readSupervisedWorkflow(
+        (db) => readExecution(db, row.execution_id),
+        options,
+      );
+      let launchBootRetired = false;
+      if (execution?.launchHost) {
+        try {
+          const host = readSupervisedProcessHostIdentity();
+          if (host.hostId !== execution.launchHost.hostId) {
+            continue;
+          }
+          launchBootRetired = host.bootId !== execution.launchHost.bootId;
+        } catch {
           continue;
         }
-        launchBootRetired = host.bootId !== execution.launchHost.bootId;
-      } catch {
-        continue;
       }
-    }
-    if (row.state === "reserved") {
-      if (!launchBootRetired) {
-        continue;
-      }
-      writeSupervisedWorkflow((db) => {
-        const current = readExecution(db, row.execution_id);
-        const resource = executeSqliteQueryTakeFirstSync(
-          db,
-          sql(db)
-            .selectFrom("task_flow_command_resources")
-            .select("state")
-            .where("execution_id", "=", row.execution_id),
-        );
-        if (
-          current?.launchHost?.hostId !== execution?.launchHost?.hostId ||
-          current?.launchHost?.bootId !== execution?.launchHost?.bootId ||
-          (resource && resource.state !== "closed")
-        ) {
-          return;
+      if (row.state === "reserved") {
+        if (!launchBootRetired) {
+          continue;
         }
-        executeSqliteQuerySync(
-          db,
-          sql(db)
-            .updateTable("task_flow_operation_launches")
-            .set({ state: "gone", updated_at_ms: now })
-            .where("execution_id", "=", row.execution_id)
-            .where("state", "=", "reserved")
-            .where("runner_pid", "is", null)
-            .where("launcher_pid", "=", row.launcher_pid)
-            .where("launcher_start_time", "=", row.launcher_start_time),
-        );
-      }, options);
-      continue;
-    }
-    if (row.runner_pid === null || row.runner_start_time === null) {
-      continue;
-    }
-    const state = inspectNodeWorkerProcessIdentity({
-      pid: row.runner_pid,
-      startTime: row.runner_start_time,
-    });
-    const resources = getSupervisedCommandResources(row.execution_id, options);
-    if (!resources) {
-      const previous = readSupervisedWorkflow(
-        (db) =>
-          executeSqliteQueryTakeFirstSync(
+        writeSupervisedWorkflow((db) => {
+          const current = readExecution(db, row.execution_id);
+          const resource = executeSqliteQueryTakeFirstSync(
             db,
             sql(db)
-              .selectFrom("task_flow_operation_executions as e")
-              .innerJoin("task_flow_operations as o", "o.operation_id", "e.operation_id")
-              .select(["e.dispatched_at_ms", "e.finished_at_ms", "o.record_json"])
-              .where("e.execution_id", "=", row.execution_id),
+              .selectFrom("task_flow_command_resources")
+              .select("state")
+              .where("execution_id", "=", row.execution_id),
+          );
+          if (
+            current?.launchHost?.hostId !== execution?.launchHost?.hostId ||
+            current?.launchHost?.bootId !== execution?.launchHost?.bootId ||
+            (resource && resource.state !== "closed")
+          ) {
+            return;
+          }
+          executeSqliteQuerySync(
+            db,
+            sql(db)
+              .updateTable("task_flow_operation_launches")
+              .set({ state: "gone", updated_at_ms: now })
+              .where("execution_id", "=", row.execution_id)
+              .where("state", "=", "reserved")
+              .where("runner_pid", "is", null)
+              .where("launcher_pid", "=", row.launcher_pid)
+              .where("launcher_start_time", "=", row.launcher_start_time),
+          );
+        }, options);
+        continue;
+      }
+      if (row.runner_pid === null || row.runner_start_time === null) {
+        continue;
+      }
+      const state = inspectNodeWorkerProcessIdentity({
+        pid: row.runner_pid,
+        startTime: row.runner_start_time,
+      });
+      const resources = getSupervisedCommandResources(row.execution_id, options);
+      if (!resources) {
+        const previous = readSupervisedWorkflow(
+          (db) =>
+            executeSqliteQueryTakeFirstSync(
+              db,
+              sql(db)
+                .selectFrom("task_flow_operation_executions as e")
+                .innerJoin("task_flow_operations as o", "o.operation_id", "e.operation_id")
+                .select(["e.dispatched_at_ms", "e.finished_at_ms", "o.record_json"])
+                .where("e.execution_id", "=", row.execution_id),
+            ),
+          options,
+        );
+        if (
+          !previous ||
+          (previous.dispatched_at_ms !== null &&
+            parseSupervisedOperation(JSON.parse(previous.record_json)).request.kind === "review")
+        ) {
+          // Old unscoped review history is not newly invented kernel evidence.
+          continue;
+        }
+      }
+      if (resources && resources.state !== "closed") {
+        continue;
+      }
+      if (!launchBootRetired && state !== "dead" && state !== "reused") {
+        try {
+          const host = resources?.prebinding ? readSupervisedProcessHostIdentity() : null;
+          const retiredPrebinding =
+            host &&
+            resources?.prebinding &&
+            host.hostId === resources.prebinding.hostId &&
+            host.bootId !== resources.prebinding.bootId;
+          if (
+            !retiredPrebinding &&
+            (!resources?.identity || !isSupervisedCommandBootRetired(resources.identity))
+          ) {
+            continue;
+          }
+        } catch {
+          // Wrong/unknown host evidence cannot retire a coincidentally equal PID.
+          continue;
+        }
+      }
+      writeSupervisedWorkflow(
+        (db) =>
+          executeSqliteQuerySync(
+            db,
+            sql(db)
+              .updateTable("task_flow_operation_launches")
+              .set({ state: "gone", updated_at_ms: now })
+              .where("execution_id", "=", row.execution_id)
+              .where("state", "=", "spawned")
+              .where("runner_pid", "=", row.runner_pid)
+              .where("runner_start_time", "=", row.runner_start_time),
           ),
         options,
       );
-      if (
-        !previous ||
-        (previous.dispatched_at_ms !== null &&
-          parseSupervisedOperation(JSON.parse(previous.record_json)).request.kind === "review")
-      ) {
-        // Old unscoped review history is not newly invented kernel evidence.
-        continue;
-      }
+    } catch (error) {
+      // A bad record cannot prove closure. Retain its reservation and report
+      // the failure while still reconciling independent healthy owners.
+      errors.push(error);
     }
-    if (resources && resources.state !== "closed") {
-      continue;
-    }
-    if (!launchBootRetired && state !== "dead" && state !== "reused") {
-      try {
-        const host = resources?.prebinding ? readSupervisedProcessHostIdentity() : null;
-        const retiredPrebinding =
-          host &&
-          resources?.prebinding &&
-          host.hostId === resources.prebinding.hostId &&
-          host.bootId !== resources.prebinding.bootId;
-        if (
-          !retiredPrebinding &&
-          (!resources?.identity || !isSupervisedCommandBootRetired(resources.identity))
-        ) {
-          continue;
-        }
-      } catch {
-        // Wrong/unknown host evidence cannot retire a coincidentally equal PID.
-        continue;
-      }
-    }
-    writeSupervisedWorkflow(
-      (db) =>
-        executeSqliteQuerySync(
-          db,
-          sql(db)
-            .updateTable("task_flow_operation_launches")
-            .set({ state: "gone", updated_at_ms: now })
-            .where("execution_id", "=", row.execution_id)
-            .where("state", "=", "spawned")
-            .where("runner_pid", "=", row.runner_pid)
-            .where("runner_start_time", "=", row.runner_start_time),
-        ),
-      options,
-    );
   }
   // Without an exact child exit or recorded same-host boot retirement, a
   // reserved slot remains unknown, even after its launcher disappears.
+  return errors;
 }

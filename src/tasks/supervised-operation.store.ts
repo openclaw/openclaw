@@ -50,7 +50,6 @@ export {
 } from "./supervised-operation.persistence.js";
 export {
   listSupervisedOperations,
-  listSupervisedOperationsInTransaction,
   reconcileSupervisedOperationRecords,
 } from "./supervised-operation.recovery.js";
 

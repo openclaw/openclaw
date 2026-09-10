@@ -40,7 +40,6 @@ export function recoverManagedSupervisedAttemptInTransaction(
   db: DatabaseSync,
   task: SupervisedTask,
   now: number,
-  failure?: "invalid_decision",
 ): SupervisedTask | undefined {
   const contract = readSupervisedWorkflowContractInTransaction(db, task.flowId, task.episode);
   const previous = readSupervisedRecoveryInTransaction(db, task.flowId, task.episode);
@@ -76,15 +75,9 @@ export function recoverManagedSupervisedAttemptInTransaction(
     phase: "ready",
     dueAt: now + Math.min(30_000, 1000 * 2 ** (recoveries - 1)),
     updatedAt: now,
-    next: [
-      "Recover from the last controller-accepted workspace artifact. An earlier private attempt was abandoned; its unaccepted draft is not a result. Inspect durable operation receipts before requesting work; do not invent success or repeat an observed publication.",
-      ...(failure === "invalid_decision"
-        ? [
-            "Previous terminal response was not a valid task decision. Its draft and requested transition were not accepted. Your final response must be exactly one schema-valid JSON object within 64 KiB: no prose, Markdown fences, or text before or after the object.",
-            'For example, a continuation has the shape {"kind":"continue","next":"Describe the remaining work"}. Choose the decision that accurately describes the next step; do not claim completion to satisfy formatting. Use the accepted operation profiles when a host command or review is needed.',
-          ]
-        : []),
-    ].join("\n"),
+    // The last accepted continuation may be an operator answer. Recovery
+    // discards only the unaccepted draft, never that durable instruction.
+    next: task.next,
   };
 }
 
