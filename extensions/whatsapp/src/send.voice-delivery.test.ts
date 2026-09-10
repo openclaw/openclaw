@@ -357,7 +357,7 @@ describe("WhatsApp gateway voice delivery", () => {
       tempPrefix: "whatsapp-voice-",
       outputFileName: "voice.ogg",
       maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
-      sampleRateHz: 48000,
+      sampleRateHz: 16000,
       channels: 1,
       bitrate: "64k",
     });
