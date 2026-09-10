@@ -15,11 +15,17 @@ const MAX_SCAN_MS = 30_000;
 const log = createSubsystemLogger("update/package-integrity");
 let readerSequence = 0;
 
-type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
+export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
 
 export type PackageRootIntegrityFingerprint =
   | { kind: "directory"; tree: PackageIntegrityFingerprint }
   | { kind: "link"; metadata: string[]; target: string };
+
+export async function readPackageVersionIfPresent(
+  packageRoot: string | null,
+): Promise<string | null> {
+  return packageRoot ? readPackageVersion(packageRoot) : null;
+}
 
 function identity(stat: BigIntStats): string {
   return `${stat.dev}:${stat.ino}`;
@@ -70,7 +76,7 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
   }
 
   async function observe<T>(
-    phase: "baseline" | "retained" | "restored",
+    phase: "baseline" | "retained" | "restored" | "transaction",
     operation: () => Promise<T>,
   ): Promise<T> {
     const emit = (event: string, facts?: Record<string, unknown>) => {

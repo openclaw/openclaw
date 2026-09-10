@@ -23,6 +23,7 @@ current Gateway ports and non-secret TXT hint data, and calls the returned
 api.registerGatewayDiscoveryService({
   id: "my-discovery",
   async advertise(ctx) {
+    // startMyAdvertiser is your plugin's own mDNS/Bonjour helper, not an SDK export.
     const handle = await startMyAdvertiser({
       gatewayPort: ctx.gatewayPort,
       tls: ctx.gatewayTlsEnabled,
@@ -38,6 +39,14 @@ authentication. Discovery is a routing hint; Gateway auth and TLS pinning still
 own trust.
 
 ## CLI registration metadata
+
+The executable CLI also owns provider callbacks borrowed through
+`openclaw/plugin-sdk/provider-catalog-runtime` during registration, actions, or
+cleanup. It releases those SDK claims after the invocation's actual work
+settles, even when a cleanup warning has already reported a timeout. Forced
+process exit can still interrupt asynchronous disposal. Caller-owned programs
+and Gateway startup do not become executable CLI owners merely by calling a CLI
+helper; see [retained SDK contracts](/plugins/sdk-migration/compatibility-policy#retained-helper-contracts).
 
 `api.registerCli(registrar, opts?)` accepts two kinds of command metadata:
 

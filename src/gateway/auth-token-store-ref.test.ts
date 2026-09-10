@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readSecretStoreValue, writeSecretStoreEntry } from "../secrets/store/secret-store.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { provisionGatewayTokenStoreRef } from "./auth-token-store-ref.js";
 
@@ -23,6 +25,9 @@ describe("provisionGatewayTokenStoreRef", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseByPath(
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+    );
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 

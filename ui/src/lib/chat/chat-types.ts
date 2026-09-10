@@ -7,6 +7,7 @@ import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
@@ -262,6 +263,7 @@ export type MessageGroup = {
 
 /** Content item types in a normalized message */
 export type MessageContentItem =
+  | ClawHubRecommendation
   | {
       type: "text" | "tool_call" | "tool_result";
       text?: string;

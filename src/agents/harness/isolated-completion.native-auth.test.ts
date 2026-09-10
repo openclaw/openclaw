@@ -15,6 +15,8 @@ import {
 const { createPluginMetadataSnapshot, makeRegistry } =
   await import("../../config/plugin-auto-enable.test-helpers.js");
 
+const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
+
 beforeEach(resetIsolatedCompletionTestState);
 
 describe("runIsolatedCompletion native authorization", () => {
@@ -426,7 +428,15 @@ describe("runIsolatedCompletion native authorization", () => {
       runIsolatedCompletionV2,
     });
 
-    await runIsolatedCompletion(isolatedRequest());
+    const parent = new AsyncWorkScope();
+    try {
+      await parent.run(() => runIsolatedCompletion(isolatedRequest()));
+    } finally {
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [parent],
+        () => parent.drain(),
+      );
+    }
 
     expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
     expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(

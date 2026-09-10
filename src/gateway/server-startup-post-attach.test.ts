@@ -3,6 +3,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createInfoErrorLogger,
@@ -4414,49 +4415,74 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(trace.measures).not.toContain("sidecars.restart-sentinel");
   });
 
-  it("waits for a healthy ACP runtime backend before startup identity reconcile", async () => {
-    const trace = createStartupTraceRecorder();
-    let healthy = false;
-    hoisted.getAcpRuntimeBackend.mockImplementation((id?: string) => ({
-      id: id ?? "acpx",
-      runtime: {},
-      healthy: () => healthy,
-    }));
+  it.each([
+    { direction: "forward", shiftedWallClockMs: 10_000, monotonicMs: 50, timedOut: false },
+    { direction: "backward", shiftedWallClockMs: -10_000, monotonicMs: 5_000, timedOut: true },
+  ])(
+    "waits for a healthy ACP runtime backend before startup identity reconcile after a $direction wall-clock shift",
+    async ({ shiftedWallClockMs, monotonicMs, timedOut }) => {
+      const trace = createStartupTraceRecorder();
+      let healthy = false;
+      let wallClockMs = 10_000;
+      const wallClockNow = vi.spyOn(Date, "now").mockImplementation(() => wallClockMs);
+      const monotonicNow = vi.spyOn(performance, "now").mockReturnValue(0);
+      const probeHealth = vi.fn(() => healthy);
+      hoisted.getAcpRuntimeBackend.mockImplementation((id?: string) => ({
+        id: id ?? "acpx",
+        runtime: {},
+        healthy: probeHealth,
+      }));
 
-    await startGatewaySidecars({
-      cfg: {
-        hooks: { internal: { enabled: false } },
-        acp: { enabled: true, backend: "acpx" },
-      } as never,
-      pluginRegistry: createPostAttachParams().pluginRegistry,
-      defaultWorkspaceDir: testState.workspaceDir,
-      deps: {} as never,
-      startChannels: vi.fn(async () => {}),
-      log: { warn: vi.fn() },
-      logHooks: createInfoWarnErrorLogger(),
-      logChannels: createInfoErrorLogger(),
-      startupTrace: trace.startupTrace,
-    });
+      try {
+        await startGatewaySidecars({
+          cfg: {
+            hooks: { internal: { enabled: false } },
+            acp: { enabled: true, backend: "acpx" },
+          } as never,
+          pluginRegistry: createPostAttachParams().pluginRegistry,
+          defaultWorkspaceDir: testState.workspaceDir,
+          deps: {} as never,
+          startChannels: vi.fn(async () => {}),
+          log: { warn: vi.fn() },
+          logHooks: createInfoWarnErrorLogger(),
+          logChannels: createInfoErrorLogger(),
+          startupTrace: trace.startupTrace,
+        });
 
-    await waitForGatewayTestState(() => {
-      expect(hoisted.getAcpRuntimeBackend).toHaveBeenCalledWith("acpx");
-    });
-    expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
+        await waitForGatewayTestState(() => {
+          expect(hoisted.getAcpRuntimeBackend).toHaveBeenCalledWith("acpx");
+        });
+        expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
 
-    healthy = true;
-    await waitForGatewayTestState(() => {
-      expect(hoisted.reconcilePendingSessionIdentities).toHaveBeenCalledTimes(1);
-    });
-    expect(trace.measures).toContain("sidecars.acp.runtime-ready");
-    expect(trace.measures).toContain("sidecars.acp.identity-reconcile");
-    expect(trace.details).toContainEqual({
-      name: "sidecars.acp.runtime-ready",
-      metrics: [
-        ["readyCount", 1],
-        ["backend", "acpx"],
-      ],
-    });
-  });
+        wallClockMs += shiftedWallClockMs;
+        monotonicNow.mockReturnValue(monotonicMs);
+        if (!timedOut) {
+          await waitForGatewayTestState(() => {
+            expect(probeHealth.mock.calls.length).toBeGreaterThan(1);
+          });
+          expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
+          healthy = true;
+        }
+        await waitForGatewayTestState(() => {
+          expect(hoisted.reconcilePendingSessionIdentities).toHaveBeenCalledTimes(1);
+        });
+        expect(trace.measures).toContain("sidecars.acp.runtime-ready");
+        expect(trace.measures).toContain("sidecars.acp.identity-reconcile");
+        expect(trace.details).toContainEqual({
+          name: "sidecars.acp.runtime-ready",
+          metrics: [
+            ["readyCount", timedOut ? 0 : 1],
+            ["backend", "acpx"],
+          ],
+        });
+      } finally {
+        healthy = true;
+        wallClockNow.mockRestore();
+        monotonicNow.mockRestore();
+        await waitForGatewayTestState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      }
+    },
+  );
 
   it.each(["suspension", "backend readiness", "manager import", "reconciliation"] as const)(
     "retires unstarted ACP reconciliation when close wins during %s",

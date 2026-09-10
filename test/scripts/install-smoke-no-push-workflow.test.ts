@@ -527,9 +527,17 @@ describe("install smoke no-push root image transport", () => {
         expect(existsSync(dockerCalls), result.stderr).toBe(true);
         expect(readFileSync(dockerCalls, "utf8")).toContain("image inspect");
       } else {
-        expect(result.status).toBe(2);
+        expect(
+          result.status,
+          JSON.stringify({
+            stderr: result.stderr,
+            dockerCalls: existsSync(dockerCalls) ? readFileSync(dockerCalls, "utf8") : null,
+          }),
+        ).toBe(2);
         expect(result.stderr).toContain(
-          "selected source checkout does not match OPENCLAW_SELECTED_SHA",
+          source === "tooling"
+            ? "selected source checkout does not match OPENCLAW_SELECTED_SHA"
+            : "frozen source: unable to read selected source",
         );
         expect(existsSync(dockerCalls)).toBe(false);
       }

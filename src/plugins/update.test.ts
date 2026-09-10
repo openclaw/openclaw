@@ -49,6 +49,7 @@ function requirePluginPackageName(
 const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
 const installPluginFromClawHubMock = vi.fn();
+const fetchClawHubPackageDetailMock = vi.fn();
 const installPluginFromGitSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const runCommandWithTimeoutMock = vi.fn();
@@ -132,6 +133,14 @@ vi.mock("./clawhub.js", () => ({
   },
   installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHubMock(...args),
 }));
+
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/clawhub-packages.js")>();
+  return {
+    ...actual,
+    fetchClawHubPackageDetail: (...args: unknown[]) => fetchClawHubPackageDetailMock(...args),
+  };
+});
 
 vi.mock("../state/claw-package-adoption.js", () => ({
   markClawPackageIndependentlyOwned: (...args: unknown[]) =>
@@ -831,6 +840,7 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromNpmSpecMock.mockReset();
     installPluginFromMarketplaceMock.mockReset();
     installPluginFromClawHubMock.mockReset();
+    fetchClawHubPackageDetailMock.mockReset();
     installPluginFromGitSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
@@ -862,6 +872,7 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromNpmSpecMock.mockReset();
     installPluginFromMarketplaceMock.mockReset();
     installPluginFromClawHubMock.mockReset();
+    fetchClawHubPackageDetailMock.mockReset();
     installPluginFromGitSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
@@ -3418,6 +3429,157 @@ describe("updateNpmInstalledPlugins", () => {
       config: { preserved: true },
     });
   });
+
+  it.each(
+    [
+      {
+        name: "exact version without a tag",
+        selector: "2026.9.1",
+        tag: undefined,
+        warns: true,
+      },
+      {
+        name: "exact version with a different leading-v tag",
+        selector: "2026.9.1",
+        tag: "v2026.9.1",
+        warns: true,
+      },
+      {
+        name: "matching bare version tag",
+        selector: "2026.9.1",
+        tag: "2026.9.1",
+        warns: false,
+      },
+      {
+        name: "matching leading-v version tag",
+        selector: "v2026.9.1",
+        tag: "v2026.9.1",
+        warns: false,
+      },
+    ].flatMap((scenario) =>
+      [false, true].map((dryRun) => ({ name: scenario.name, scenario, dryRun })),
+    ),
+  )("reports ClawHub pin diagnostics for $name (dryRun=$dryRun)", async ({ scenario, dryRun }) => {
+    const spec = `clawhub:@openclaw/diagnostics-otel@${scenario.selector}`;
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/diagnostics-otel",
+      version: "2026.9.1",
+    });
+    installPluginFromClawHubMock.mockResolvedValue(
+      createSuccessfulClawHubUpdateResult({
+        pluginId: "diagnostics-otel",
+        targetDir: installPath,
+        version: "2026.9.1",
+        clawhubPackage: "@openclaw/diagnostics-otel",
+      }),
+    );
+    fetchClawHubPackageDetailMock.mockResolvedValue({
+      package: {
+        name: "@openclaw/diagnostics-otel",
+        latestVersion: "2026.9.2",
+        tags: {
+          latest: "2026.9.2",
+          ...(scenario.tag ? { [scenario.tag]: "2026.9.1" } : {}),
+        },
+      },
+    });
+    const config = createClawHubInstallConfig({
+      pluginId: "diagnostics-otel",
+      installPath,
+      clawhubPackage: "@openclaw/diagnostics-otel",
+      spec,
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      dryRun,
+      syncOfficialPluginInstalls: true,
+    });
+
+    expect(clawHubInstallCall()?.spec).toBe(spec);
+    expect(fetchClawHubPackageDetailMock).toHaveBeenCalledWith({
+      name: "@openclaw/diagnostics-otel",
+      baseUrl: "https://clawhub.ai",
+      timeoutMs: undefined,
+    });
+    expectRecordFields(result.outcomes[0], {
+      pluginId: "diagnostics-otel",
+      status: "unchanged",
+      currentVersion: "2026.9.1",
+      nextVersion: scenario.warns ? "2026.9.2" : "2026.9.1",
+      message: scenario.warns
+        ? `diagnostics-otel is pinned to ${spec} ` +
+          "(installed 2026.9.1); ClawHub latest resolves to 2026.9.2. " +
+          "Pass `openclaw plugins install clawhub:@openclaw/diagnostics-otel --force` " +
+          "to replace this version pin."
+        : dryRun
+          ? "diagnostics-otel is up to date (2026.9.1)."
+          : "diagnostics-otel already at 2026.9.1.",
+    });
+    expect(result.config.plugins?.installs?.["diagnostics-otel"]?.spec).toBe(spec);
+  });
+
+  it.each(
+    [
+      {
+        name: "official",
+        pluginId: "diagnostics-otel",
+        packageName: "@openclaw/diagnostics-otel",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubChannel: "official" as const,
+      },
+      {
+        name: "community",
+        pluginId: "demo",
+        packageName: "demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubChannel: "community" as const,
+      },
+      {
+        name: "custom registry",
+        pluginId: "demo",
+        packageName: "demo",
+        clawhubUrl: "https://registry.example.test",
+        clawhubChannel: "community" as const,
+      },
+    ].flatMap((source) => [false, true].map((dryRun) => ({ name: source.name, source, dryRun }))),
+  )(
+    "preserves an unresolved literal selector for $name updates (dryRun=$dryRun)",
+    async ({ source: { pluginId, packageName, clawhubUrl, clawhubChannel }, dryRun }) => {
+      const spec = `clawhub:${packageName}@v2026.9.1`;
+      const installPath = createInstalledPackageDir({
+        name: packageName,
+        version: "2026.9.1",
+      });
+      installPluginFromClawHubMock.mockResolvedValue({
+        ok: false,
+        error: "Unknown ClawHub version v2026.9.1",
+      });
+      const config = createClawHubInstallConfig({
+        pluginId,
+        installPath,
+        clawhubPackage: packageName,
+        clawhubUrl,
+        clawhubChannel,
+        spec,
+      });
+
+      const result = await updateNpmInstalledPlugins({
+        config,
+        dryRun,
+        syncOfficialPluginInstalls: true,
+      });
+
+      expect(clawHubInstallCall()?.spec).toBe(spec);
+      expect(result.outcomes[0]).toMatchObject({
+        pluginId,
+        status: "error",
+        message: expect.stringContaining("Unknown ClawHub version v2026.9.1"),
+      });
+      expect(result.config.plugins?.installs?.[pluginId]?.spec).toBe(spec);
+      expect(fetchClawHubPackageDetailMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("updates bare trusted official ClawHub installs through the catalog spec", async () => {
     installPluginFromClawHubMock.mockResolvedValue(

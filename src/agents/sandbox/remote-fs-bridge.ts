@@ -85,12 +85,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return canonicalPath;
   }
 
-  async readFile(params: {
-    filePath: string;
-    cwd?: string;
-    signal?: AbortSignal;
-    maxBytes?: number;
-  }): Promise<Buffer> {
+  async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
     if (
       params.maxBytes !== undefined &&
       (!Number.isSafeInteger(params.maxBytes) || params.maxBytes < 0)
@@ -134,11 +129,9 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return result.stdout;
   }
 
-  async readDirectory(params: {
-    filePath: string;
-    cwd?: string;
-    signal?: AbortSignal;
-  }): Promise<DirectoryEntry[]> {
+  async readDirectory(
+    params: Parameters<NonNullable<SandboxFsBridge["readDirectory"]>>[0],
+  ): Promise<DirectoryEntry[]> {
     const target = this.resolveTarget(params);
     const pinned = await this.resolvePinnedTarget({
       containerPath: target.containerPath,
@@ -157,13 +150,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return parseDirectoryEntries(result.stdout.toString("utf8"));
   }
 
-  async copyFile(params: {
-    sourcePath: string;
-    destinationPath: string;
-    cwd?: string;
-    mkdir?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  async copyFile(params: Parameters<NonNullable<SandboxFsBridge["copyFile"]>>[0]): Promise<void> {
     const source = this.resolveTarget({ filePath: params.sourcePath, cwd: params.cwd });
     const destination = this.resolveTarget({
       filePath: params.destinationPath,
@@ -199,14 +186,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
   }
 
-  async writeFile(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     await this.ensureRemoteWritable(target, "write files", params.signal);
     const pinned = await this.resolvePinnedTarget({
@@ -235,14 +215,9 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
   }
 
-  async createFileExclusive(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-    signal?: AbortSignal;
-  }): Promise<"created" | "exists"> {
+  async createFileExclusive(
+    params: Parameters<NonNullable<SandboxFsBridge["createFileExclusive"]>>[0],
+  ): Promise<"created" | "exists"> {
     const target = this.resolveTarget(params);
     await this.ensureRemoteWritable(target, "create files", params.signal);
     const pinned = await this.resolvePinnedTarget({
@@ -305,13 +280,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
   }
 
-  async remove(params: {
-    filePath: string;
-    cwd?: string;
-    recursive?: boolean;
-    force?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     await this.ensureRemoteWritable(target, "remove files", params.signal, params.recursive);
     const exists = await this.remotePathExists(target.containerPath, params.signal);
@@ -342,12 +311,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
   }
 
-  async rename(params: {
-    from: string;
-    to: string;
-    cwd?: string;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  async rename(params: Parameters<SandboxFsBridge["rename"]>[0]): Promise<void> {
     const { from, to } = this.resolveRenameTargets(params);
     await this.ensureRemoteWritable(from, "rename files", params.signal, true);
     await this.ensureRemoteWritable(to, "rename files", params.signal, true);
@@ -378,11 +342,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
   }
 
-  async stat(params: {
-    filePath: string;
-    cwd?: string;
-    signal?: AbortSignal;
-  }): Promise<SandboxFsStat | null> {
+  async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
     const exists = await this.remotePathExists(target.containerPath, params.signal);
     if (!exists) {

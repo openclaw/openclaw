@@ -223,6 +223,21 @@ class ChatFullMessageOwnershipLayoutTest {
   }
 
   @Test
+  fun mixedToolMessageCanLoadFullTextWithoutDuplicatingTools() {
+    gateway.includeToolCall = true
+    refreshSelectedChat()
+    viewAll().assertIsDisplayed().assertIsEnabled().performClick()
+    awaitInlineExpanded()
+    assertEquals(listOf(expectedRequest()), gateway.fullReads.toList())
+    val timeline = buildChatTimeline(runtime.chatMessages.value, 0, emptyList(), null)
+    assertEquals(1, timeline.items.filterIsInstance<ChatTimelineItem.CompletedTools>().size)
+    composeRule.onNodeWithText("Show less").performScrollTo().performClick()
+    viewAll().performClick()
+    awaitInlineExpanded()
+    assertEquals(1, gateway.fullReads.size)
+  }
+
+  @Test
   fun stableMarkerlessPreviewCanRecoverTheCanonicalAnswer() {
     gateway.emitTruncationMarker = false
     listOf(false, true).forEachIndexed { index, blocks ->
@@ -1812,6 +1827,8 @@ internal class FullMessageGateway : AutoCloseable {
 
   @Volatile var fullResponseOverride: JsonObject? = null
 
+  @Volatile var includeToolCall = false
+
   @Volatile var previewPrefix = ""
 
   @Volatile var historyRole = "assistant"
@@ -2098,6 +2115,21 @@ internal class FullMessageGateway : AutoCloseable {
               )
             }
           },
+        )
+      } else if (includeToolCall) {
+        JsonArray(
+          listOf(
+            buildJsonObject {
+              put("type", JsonPrimitive("text"))
+              put("text", JsonPrimitive(text))
+            },
+            buildJsonObject {
+              put("type", JsonPrimitive("toolCall"))
+              put("id", JsonPrimitive("mixed-tool"))
+              put("name", JsonPrimitive("exec"))
+              put("arguments", buildJsonObject { put("command", JsonPrimitive("pwd")) })
+            },
+          ),
         )
       } else if (contentAsBlocks) {
         JsonArray(

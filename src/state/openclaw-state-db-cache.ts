@@ -4,18 +4,41 @@ import {
   clearNodeSqliteKyselyCacheForDatabase,
   registerNodeSqliteKyselyQueryErrorHandler,
 } from "../infra/kysely-sync-cache-state.js";
+import {
+  createSqliteLifecycleAggregateError,
+  runWithSqliteCoordinator,
+} from "../infra/sqlite-coordinator.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import {
+  confirmSqliteFileIntegrity,
+  type SqliteIntegrityConfirmation,
+} from "../infra/sqlite-integrity.js";
+import {
+  prepareSqliteReadOnlyLocationFromOwnedDatabase,
+  prepareSqliteReadOnlyLocationSyncInProcess,
+} from "../infra/sqlite-readonly-location.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
-import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
+import {
+  acquireStateDatabaseCoordinator,
+  acquireStateDatabaseHandleExclusion,
+} from "../infra/state-database-coordinator.js";
 import {
   createOpenClawDatabaseVerificationError,
   readOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import { closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
+type StateDatabaseHandle = Pick<OpenClawStateDatabase, "db" | "path"> &
+  Partial<Pick<OpenClawStateDatabase, "walMaintenance">>;
+// Failed native closes stay disposal-owned, never eligible for a successful cache hit.
+const retainedDatabaseHandles = new Map<DatabaseSync, StateDatabaseHandle>();
+let unregisterRetainedExitClose: (() => void) | undefined;
 // Statements retain their native database; key by the plain lifecycle owner so
 // removing that owner releases the statement instead of rooting its own weak key.
 const cachedDataVersionStatements = new WeakMap<
@@ -64,22 +87,38 @@ export function registerOpenClawStateDatabaseLifecycleListener(
 
 /** Close both physical-handle owners while retaining every cleanup failure. */
 function closeOpenClawStateDatabaseHandle(
-  database: OpenClawStateDatabase,
+  database: StateDatabaseHandle,
   options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
 ): unknown[] {
   const errors: unknown[] = [];
   try {
-    database.walMaintenance.close(options);
+    database.walMaintenance?.close(options);
   } catch (error) {
     errors.push(error);
   }
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
   try {
-    if (database.db.isOpen) {
-      database.db.close();
-    }
+    clearNodeSqliteKyselyCacheForDatabase(database.db);
   } catch (error) {
     errors.push(error);
+  }
+  try {
+    closeTrackedStateDatabase(database.db);
+  } catch (error) {
+    errors.push(error);
+  }
+  if (database.db.isOpen) {
+    retainedDatabaseHandles.set(database.db, database);
+    unregisterRetainedExitClose ??= registerSqliteCacheExitClose(closeOpenClawStateDatabase);
+  } else {
+    retainedDatabaseHandles.delete(database.db);
+    if (retainedDatabaseHandles.size === 0) {
+      unregisterRetainedExitClose?.();
+      unregisterRetainedExitClose = undefined;
+    }
+  }
+  // A failed native close retains physical custody, never a successful cache hit.
+  if (cachedDatabases.get(database.path)?.db === database.db) {
+    cachedDatabases.delete(database.path);
   }
   return errors;
 }
@@ -188,10 +227,12 @@ function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase):
   if (cachedDatabases.get(database.path) !== database) {
     return;
   }
-  database.walMaintenance.close();
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
-  cachedDatabases.delete(database.path);
+  const errors = closeOpenClawStateDatabaseHandle(database);
   notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
+  throwStateDatabaseCleanupErrors(
+    errors,
+    `Stale OpenClaw state database cleanup failed for ${database.path}.`,
+  );
 }
 
 /** Latch background verification damage so later opens fail without rescanning. */
@@ -245,34 +286,75 @@ function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   }
 }
 
+/** Explicit retirement can checkpoint WAL and must join the lifecycle writer gate. */
+function retireOpenClawStateDatabaseHandle(
+  database: StateDatabaseHandle,
+  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
+): void {
+  const coordinator = acquireStateDatabaseCoordinator({ databasePath: database.path });
+  runWithSqliteCoordinator(coordinator, "state database retirement", () => {
+    // Refused acquisition leaves both cache and physical ownership untouched.
+    const wasCached = cachedDatabases.get(database.path)?.db === database.db;
+    const errors = closeOpenClawStateDatabaseHandle(database, options);
+    if (wasCached) {
+      try {
+        notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    throwStateDatabaseCleanupErrors(
+      errors,
+      `OpenClaw state database cleanup failed for ${database.path}.`,
+    );
+  });
+}
+
+function throwStateDatabaseCleanupErrors(errors: unknown[], message: string): void {
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw createSqliteLifecycleAggregateError(errors, message, errors[0]);
+  }
+}
+
+/** Close cached and disposal-only handles, preserving independent cleanup failures. */
+function retireOpenClawStateDatabaseHandles(
+  pathname?: string,
+  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
+): boolean {
+  const databases = new Set<StateDatabaseHandle>([
+    ...retainedDatabaseHandles.values(),
+    ...cachedDatabases.values(),
+  ]);
+  const errors: unknown[] = [];
+  let found = false;
+  for (const database of databases) {
+    if (pathname !== undefined && database.path !== pathname) {
+      continue;
+    }
+    found = true;
+    try {
+      retireOpenClawStateDatabaseHandle(database, options);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  throwStateDatabaseCleanupErrors(errors, "OpenClaw state database cleanup failed.");
+  return found;
+}
+
 /** Close one cached shared state database handle by exact pathname. */
 export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
-  const resolvedPath = path.resolve(pathname);
-  const database = cachedDatabases.get(resolvedPath);
-  if (!database) {
-    return false;
-  }
-  database.walMaintenance.close();
-  if (database.db.isOpen) {
-    database.db.close();
-  }
-  cachedDatabases.delete(resolvedPath);
-  notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: resolvedPath });
-  return true;
+  return retireOpenClawStateDatabaseHandles(path.resolve(pathname));
 }
 
 /** Close all cached shared state database handles. */
 export function closeOpenClawStateDatabase(
   options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
 ): void {
-  for (const database of cachedDatabases.values()) {
-    database.walMaintenance.close(options);
-    if (database.db.isOpen) {
-      database.db.close();
-    }
-    notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
-  }
-  cachedDatabases.clear();
+  retireOpenClawStateDatabaseHandles(undefined, options);
 }
 
 /** Test whether a cached shared state database handle is still open, optionally at one path. */
@@ -309,3 +391,148 @@ export const openClawStateDatabaseCache = {
   recordOpenClawStateDatabaseOpenFailure,
   recordOpenClawStateDatabaseLifecycleOpenError,
 };
+
+/** Drain local cached owners before excluding participating foreign handles for file removal. */
+export function acquireOpenClawStateDatabaseFileExclusion(pathname: string) {
+  const databasePath = path.resolve(pathname);
+  const lifecycle = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
+  let handles: ReturnType<typeof acquireStateDatabaseHandleExclusion>;
+  try {
+    closeOpenClawStateDatabaseByPath(databasePath);
+    handles = acquireStateDatabaseHandleExclusion({ databasePath, busyTimeoutMs: 0 });
+  } catch (error) {
+    lifecycle.release();
+    throw error;
+  }
+  return {
+    assertCurrent: handles.assertCurrent,
+    runWithSourceReads: handles.runWithSourceReads,
+    assertMutationCurrent: handles.assertMutationCurrent,
+    async mutate<T>(assertCurrent: () => void, operation: () => Promise<T>): Promise<T> {
+      let outcome: { value: T } | { error: unknown };
+      try {
+        outcome = {
+          value: await handles.runWithCanonicalMutation(
+            assertCurrent,
+            operation,
+            async (assertInspection) => {
+              assertInspection();
+              const opened = getOpenClawStateDatabaseIfOpenAtPath(databasePath);
+              if (opened) {
+                return await prepareSqliteReadOnlyLocationFromOwnedDatabase(opened.db, () => {
+                  assertInspection();
+                  if (getOpenClawStateDatabaseIfOpenAtPath(databasePath) !== opened) {
+                    throw new Error("SQLite inspection lost its original native owner");
+                  }
+                });
+              }
+              // Before first open, no cached OR uncached source handle may exist.
+              handles.assertDrainedDuringMutation();
+              return await handles.runWithSourceReads(async () => {
+                assertInspection();
+                return prepareSqliteReadOnlyLocationSyncInProcess(databasePath);
+              });
+            },
+          ),
+        };
+      } catch (error) {
+        outcome = { error };
+      }
+      const errors: unknown[] = "error" in outcome ? [outcome.error] : [];
+      const database = cachedDatabases.get(databasePath);
+      if (database) {
+        try {
+          // Physical custody permits closure, never another mutation after authority loss.
+          handles.runWithCanonicalWrites(handles.assertCurrent, () => {
+            errors.push(...closeOpenClawStateDatabaseHandle(database));
+          });
+          notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: databasePath });
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      try {
+        handles.assertNoPins();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length > 1) {
+        throw createSqliteLifecycleAggregateError(
+          errors,
+          "SQLite mutation or drainage failed",
+          errors[0],
+        );
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if ("error" in outcome) {
+        throw outcome.error;
+      }
+      return outcome.value;
+    },
+    async bindCaptured(assertCurrent: () => void, operation: () => undefined): Promise<void> {
+      const errors: unknown[] = [];
+      let result: unknown;
+      try {
+        result = handles.runWithCanonicalWrites(assertCurrent, operation);
+      } catch (error) {
+        errors.push(error);
+      }
+      // Revoke issued raw SQLite capabilities before yielding to an invalid
+      // async binder. Keep the physical fence until that promise has settled.
+      const database = cachedDatabases.get(databasePath);
+      if (database) {
+        try {
+          // Cleanup retains physical custody even if mutation authority expired.
+          // No user callback or lifecycle notification runs in this scope.
+          handles.runWithCanonicalWrites(handles.assertCurrent, () => {
+            errors.push(...closeOpenClawStateDatabaseHandle(database));
+          });
+          notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: databasePath });
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (result !== undefined) {
+        errors.push(new Error("checkpoint binding must complete synchronously with undefined"));
+        try {
+          await Promise.resolve(result);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      try {
+        assertCurrent();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw createSqliteLifecycleAggregateError(
+          errors,
+          "checkpoint binding or writer closure failed",
+          errors[0],
+        );
+      }
+    },
+    release: () => {
+      try {
+        handles.release();
+      } finally {
+        lifecycle.release();
+      }
+    },
+  };
+}
+
+/** Reconfirm an advisory worker failure on the live owner connection. */
+export function confirmOpenClawStateDatabaseIntegrity(
+  pathname: string,
+): SqliteIntegrityConfirmation {
+  const resolvedPath = path.resolve(pathname);
+  closeOpenClawStateDatabaseByPath(resolvedPath);
+  return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
+}

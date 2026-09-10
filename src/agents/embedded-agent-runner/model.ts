@@ -57,6 +57,8 @@ type CommonModelResolutionOptions = {
 };
 
 type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
+  /** Selected executable IDs must not pass through input aliases again. */
+  modelIdSource?: "input" | "selected";
   allowBundledStaticCatalogFallback?: boolean;
   preferBundledStaticCatalogTransport?: boolean;
   agentRuntimeId?: string;
@@ -117,13 +119,9 @@ export async function resolveModelAsync(
     options?.agentId,
   );
   const explicitPreparedRuntime = options?.preparedModelRuntime;
-  const emptyDiscoveryStores =
-    options?.skipAgentDiscovery && (!options.authStorage || !options.modelRegistry)
-      ? createEmptyAgentDiscoveryStores()
-      : undefined;
   const needsPreparedSnapshot =
     !explicitPreparedRuntime &&
-    !emptyDiscoveryStores &&
+    !options?.skipAgentDiscovery &&
     (!options?.authStorage || !options?.modelRegistry);
   const publishedSnapshot = needsPreparedSnapshot
     ? resolvePreparedAgentSnapshot(
@@ -150,13 +148,16 @@ export async function resolveModelAsync(
   const resolve = async () => {
     const workspaceDir =
       options?.workspaceDir ?? preparedModelRuntime?.workspaceDir ?? derivedWorkspaceDir;
-    const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
+    const normalizedRef = normalizeProviderModelRef({
+      provider,
+      modelId,
+      cfg,
+      workspaceDir,
+      modelIdSource: options?.modelIdSource,
+    });
     let { authStorage, modelRegistry } = options ?? {};
     if (!authStorage || !modelRegistry) {
-      const stores =
-        emptyDiscoveryStores ??
-        preparedModelRuntime?.createStores() ??
-        createEmptyAgentDiscoveryStores();
+      const stores = preparedModelRuntime?.createStores() ?? createEmptyAgentDiscoveryStores();
       authStorage ??= stores.authStorage;
       modelRegistry ??= options?.authStorage
         ? stores.modelRegistry.fork(authStorage)
@@ -169,6 +170,11 @@ export async function resolveModelAsync(
       if (!staticCatalogResolved) {
         staticCatalogResolved = true;
         staticCatalogModel =
+          preparedModelRuntime?.configuredRuntimeModels?.find(
+            ({ modelId: candidateId, provider: rowProvider }) =>
+              candidateId === normalizedRef.model &&
+              normalizeProviderId(rowProvider) === normalizeProviderId(normalizedRef.provider),
+          )?.model ??
           preparedModelRuntime?.configuredRuntimeModels?.find(
             ({ modelId: candidateId, provider: rowProvider }) =>
               staticModelIdMatches({

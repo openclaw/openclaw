@@ -460,9 +460,9 @@ jobs:
       package_sha256: ${{ steps.resolve.outputs.sha256 }}
       package_version: ${{ steps.resolve.outputs.package_version }}
       prepublish_plugin_registry_json: ${{ steps.registry_identity.outputs.json }}
-      published_upgrade_survivor_baseline: ${{ steps.exact_baselines.outputs.baseline }}
-      published_upgrade_survivor_baselines: ${{ steps.exact_baselines.outputs.baselines }}
-      published_upgrade_survivor_baseline_scope: ${{ steps.upgrade_survivor_baselines.outputs.baseline_scope }}
+      published_upgrade_survivor_baseline: ${{ steps.resolved_admission.outputs.baseline }}
+      published_upgrade_survivor_baselines: ${{ steps.resolved_admission.outputs.baselines }}
+      published_upgrade_survivor_baseline_scope: ${{ steps.resolved_admission.outputs.baseline_scope }}
       published_upgrade_survivor_scenarios: ${{ inputs.published_upgrade_survivor_scenarios }}
       telegram_enabled: ${{ steps.profile.outputs.telegram_enabled }}
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
@@ -506,6 +506,8 @@ jobs:
       - name: Select acceptance profile
         id: profile
         env:
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}
+          ADMISSION_TOOLING_SHA: ${{ steps.tooling.outputs.sha }}
           SOURCE: ${{ inputs.source }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
           CUSTOM_DOCKER_LANES: ${{ inputs.docker_lanes }}
@@ -514,6 +516,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" \
+            --verify-tooling "$ADMISSION_TOOLING_ROOT" "$ADMISSION_TOOLING_SHA"
 
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
@@ -713,7 +717,7 @@ jobs:
           ADMISSION_TOOLING_SHA: ${{ steps.tooling.outputs.sha }}
           ADMISSION_WORKFLOW_REF: ${{ format('{0}/.github/workflows/package-acceptance.yml@{1}', github.repository, steps.tooling.outputs.sha) }}
           ADMISSION_STAGE: known-source
-        run: &package_admission_plan |
+        run: |
           set -euo pipefail
           umask 077
           node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --workflow-request > "$RUNNER_TEMP/frozen-admission-request.json"
@@ -832,8 +836,31 @@ jobs:
             }
           fi
 
+      - name: Plan frozen source admission
+        id: frozen_selection
+        env:
+          ADMISSION_WORKFLOW: package
+          ADMISSION_INPUTS: ${{ toJSON(inputs) }}
+          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}/.frozen-target
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}
+          ADMISSION_TOOLING_SHA: ${{ steps.tooling.outputs.sha }}
+          ADMISSION_WORKFLOW_REF: ${{ format('{0}/.github/workflows/package-acceptance.yml@{1}', github.repository, steps.tooling.outputs.sha) }}
+          ADMISSION_SELECTED_SHA: ${{ steps.resolve.outputs.package_source_sha }}
+          ADMISSION_PACKAGE_SOURCE_SHA: ${{ steps.resolve.outputs.package_source_sha }}
+          ADMISSION_PACKAGE_SHA256: ${{ steps.resolve.outputs.sha256 }}
+          ADMISSION_PACKAGE_VERSION: ${{ steps.resolve.outputs.package_version }}
+          ADMISSION_BASELINES_RESOLVED: "false"
+          ADMISSION_STAGE: resolved-package
+        run: |
+          set -euo pipefail
+          umask 077
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --workflow-request > "$RUNNER_TEMP/frozen-admission-request.json"
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --plan "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission-selection.json"
+          printf 'upgrade_baselines_required=%s\n' "$(jq -er 'any(.obligations[]; .kind == "upgrade-baselines") | tostring' "$RUNNER_TEMP/frozen-admission-selection.json")" >> "$GITHUB_OUTPUT"
+
       - name: Resolve published upgrade survivor baselines
         id: upgrade_survivor_baselines
+        if: steps.frozen_selection.outputs.upgrade_baselines_required == 'true'
         env:
           CANDIDATE_VERSION: ${{ steps.resolve.outputs.package_version }}
           CANDIDATE_PUBLISHED: ${{ inputs.source == 'npm' || fromJSON(inputs.candidate_artifact_json || '{}').packagePublished == true }}
@@ -874,6 +901,8 @@ jobs:
           args=(
             --requested "$REQUESTED_BASELINES"
             --fallback "$fallback_baseline"
+            --candidate-version "$CANDIDATE_VERSION"
+            --candidate-published "$CANDIDATE_PUBLISHED"
             --github-output "$GITHUB_OUTPUT"
           )
           if [[ -n "$npm_versions_json" ]]; then
@@ -895,6 +924,7 @@ jobs:
 
       - name: Pin published upgrade baseline versions
         id: exact_baselines
+        if: steps.frozen_selection.outputs.upgrade_baselines_required == 'true'
         env:
           BASELINE: ${{ steps.upgrade_survivor_baselines.outputs.baseline }}
           BASELINES: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
@@ -924,6 +954,45 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `baseline=${baseline}\nbaselines=${(baselines.length ? baselines : [baseline]).join(' ')}\n`);
           NODE
 
+      - name: Finalize frozen source admission
+        id: resolved_admission
+        env:
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}
+          BASELINE: ${{ steps.exact_baselines.outputs.baseline }}
+          BASELINES: ${{ steps.exact_baselines.outputs.baselines }}
+          BASELINE_SCOPE: ${{ steps.upgrade_survivor_baselines.outputs.baseline_scope }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+          const requestPath = `${process.env.RUNNER_TEMP}/frozen-admission-request.json`;
+          const request = JSON.parse(readFileSync(requestPath, 'utf8'));
+          const plan = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/frozen-admission-selection.json`, 'utf8'));
+          const options = request.options;
+          if (plan.obligations.some(entry => entry.kind === 'upgrade-baselines')) {
+            options.upgradeSurvivorBaseline = process.env.BASELINE;
+            options.upgradeSurvivorBaselines = process.env.BASELINES;
+            options.upgradeSurvivorBaselineScope = process.env.BASELINE_SCOPE;
+            options.baselinesResolved = true;
+            writeFileSync(requestPath, `${JSON.stringify(request)}\n`, { mode: 0o600 });
+          }
+          for (const [key, value] of Object.entries({
+            baseline: options.upgradeSurvivorBaseline,
+            baselines: options.upgradeSurvivorBaselines,
+            baseline_scope: options.upgradeSurvivorBaselineScope,
+          })) {
+            if (/[\r\n]/u.test(value)) {
+              let delimiter = 'OPENCLAW_ADMISSION_OUTPUT';
+              const lines = value.split(/\r\n|\r|\n/u);
+              while (lines.includes(delimiter)) delimiter += '_';
+              appendFileSync(process.env.GITHUB_OUTPUT, `${key}<<${delimiter}\n${value}\n${delimiter}\n`);
+            } else {
+              appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+            }
+          }
+          NODE
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --plan "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission-selection.json"
+
       - name: Validate resolved package source
         env:
           PACKAGE_SOURCE_SHA: ${{ steps.resolve.outputs.package_source_sha }}
@@ -951,26 +1020,6 @@ jobs:
           sparse-checkout: package.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
-
-      - name: Plan frozen source admission
-        id: frozen_selection
-        env:
-          ADMISSION_WORKFLOW: package
-          ADMISSION_INPUTS: ${{ toJSON(inputs) }}
-          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}/.frozen-target
-          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}
-          ADMISSION_TOOLING_SHA: ${{ steps.tooling.outputs.sha }}
-          ADMISSION_WORKFLOW_REF: ${{ format('{0}/.github/workflows/package-acceptance.yml@{1}', github.repository, steps.tooling.outputs.sha) }}
-          ADMISSION_SELECTED_SHA: ${{ steps.resolve.outputs.package_source_sha }}
-          ADMISSION_PACKAGE_SOURCE_SHA: ${{ steps.resolve.outputs.package_source_sha }}
-          ADMISSION_PACKAGE_SHA256: ${{ steps.resolve.outputs.sha256 }}
-          ADMISSION_PACKAGE_VERSION: ${{ steps.resolve.outputs.package_version }}
-          ADMISSION_BASELINE: ${{ steps.exact_baselines.outputs.baseline }}
-          ADMISSION_BASELINES: ${{ steps.exact_baselines.outputs.baselines }}
-          ADMISSION_BASELINE_SCOPE: ${{ steps.upgrade_survivor_baselines.outputs.baseline_scope }}
-          ADMISSION_BASELINES_RESOLVED: "true"
-          ADMISSION_STAGE: resolved-package
-        run: *package_admission_plan
 
       - name: Acquire selected contract objects
         env:
@@ -1063,8 +1112,9 @@ jobs:
           SOURCE: ${{ inputs.source }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
           WORKFLOW_REF: ${{ inputs.workflow_ref }}
-          PUBLISHED_UPGRADE_SURVIVOR_BASELINE: ${{ steps.upgrade_survivor_baselines.outputs.baseline }}
-          PUBLISHED_UPGRADE_SURVIVOR_BASELINES: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
+          PUBLISHED_UPGRADE_SURVIVOR_BASELINE: ${{ steps.resolved_admission.outputs.baseline }}
+          PUBLISHED_UPGRADE_SURVIVOR_BASELINES: ${{ steps.resolved_admission.outputs.baselines }}
+          PUBLISHED_UPGRADE_SURVIVOR_BASELINE_SCOPE: ${{ steps.resolved_admission.outputs.baseline_scope }}
           PUBLISHED_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         shell: bash
         run: |
@@ -1092,6 +1142,7 @@ jobs:
             echo "- Profile: \`${SUITE_PROFILE}\`"
             echo "- Published upgrade survivor baseline: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINE}\`"
             echo "- Published upgrade survivor baselines: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINES}\`"
+            echo "- Published upgrade survivor baseline scope: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINE_SCOPE}\`"
             echo "- Published upgrade survivor scenarios: \`${PUBLISHED_UPGRADE_SURVIVOR_SCENARIOS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 

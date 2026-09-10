@@ -158,6 +158,7 @@ async function runPreparedUpdateFailureTriage(
               target: installationTarget,
               cwd: cwd ?? prepared.operatorHome,
               updateFailure: params.failure,
+              signal: params.signal,
               isCurrent,
             },
           },

@@ -174,36 +174,39 @@ async function withCurrentTranscript<T>(
   // or inherited writer fences would stop matching after the queue wait.
   const fenced = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fenced);
-  return runExclusiveSqliteSessionWrite(resolved, async () =>
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        assertOwnedTranscriptWriteCommit(fenced);
-        const refusal = resolveTranscriptAppendRefusal(
-          readSessionEntryRow(database, resolved.sessionKey)?.entry,
-          resolved,
-          fenced,
-        );
-        if (refusal) {
-          if (fenced.expectedWriterRunId !== undefined) {
-            throw new SessionTranscriptWriterClaimReboundError(refusal);
+  return runExclusiveSqliteSessionWrite(
+    resolved,
+    async () =>
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          assertOwnedTranscriptWriteCommit(fenced);
+          const refusal = resolveTranscriptAppendRefusal(
+            readSessionEntryRow(database, resolved.sessionKey)?.entry,
+            resolved,
+            fenced,
+          );
+          if (refusal) {
+            if (fenced.expectedWriterRunId !== undefined) {
+              throw new SessionTranscriptWriterClaimReboundError(refusal);
+            }
+            return err(refusal);
           }
-          return err(refusal);
-        }
-        const result = run(database, resolved);
-        assertOwnedTranscriptWriteCommit(fenced);
-        const rebound = resolveTranscriptAppendRefusal(
-          readSessionEntryRow(database, resolved.sessionKey)?.entry,
-          resolved,
-          fenced,
-        );
-        if (rebound) {
-          throw new SessionTranscriptWriterClaimReboundError(rebound);
-        }
-        return ok(result);
-      },
-      toDatabaseOptions(resolved),
-      { operationLabel: "session.transcript.report" },
-    ),
+          const result = run(database, resolved);
+          assertOwnedTranscriptWriteCommit(fenced);
+          const rebound = resolveTranscriptAppendRefusal(
+            readSessionEntryRow(database, resolved.sessionKey)?.entry,
+            resolved,
+            fenced,
+          );
+          if (rebound) {
+            throw new SessionTranscriptWriterClaimReboundError(rebound);
+          }
+          return ok(result);
+        },
+        toDatabaseOptions(resolved),
+        { operationLabel: "session.transcript.report" },
+      ),
+    "session.transcript.report",
   );
 }
 

@@ -4,6 +4,7 @@
           - "extensions/azure-speech/**"
           - "docs/providers/azure-speech.md"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "plugin: geolocation":
   - changed-files:
       - any-glob-to-any-file:
@@ -59,6 +60,7 @@
       - any-glob-to-any-file:
           - "extensions/feishu/**"
           - "docs/channels/feishu.md"
+          - "docs/channels/feishu/**"
 "channel: googlechat":
   - changed-files:
       - any-glob-to-any-file:
@@ -141,6 +143,7 @@
       - any-glob-to-any-file:
           - "extensions/imessage/**"
           - "docs/channels/imessage.md"
+          - "docs/channels/imessage/**"
 "channel: line":
   - changed-files:
       - any-glob-to-any-file:
@@ -151,6 +154,7 @@
       - any-glob-to-any-file:
           - "extensions/matrix/**"
           - "docs/channels/matrix.md"
+          - "docs/channels/matrix/**"
 "channel: mattermost":
   - changed-files:
       - any-glob-to-any-file:
@@ -161,6 +165,7 @@
       - any-glob-to-any-file:
           - "extensions/msteams/**"
           - "docs/channels/msteams.md"
+          - "docs/channels/msteams/**"
 "channel: nextcloud-talk":
   - changed-files:
       - any-glob-to-any-file:
@@ -226,6 +231,7 @@
       - any-glob-to-any-file:
           - "extensions/telegram/**"
           - "docs/channels/telegram.md"
+          - "docs/channels/telegram/**"
 "channel: tlon":
   - changed-files:
       - any-glob-to-any-file:
@@ -358,7 +364,9 @@
           - "src/config/**/*sandbox*"
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
+          - "docs/gateway/sandboxing/**"
           - "docs/install/docker.md"
+          - "docs/install/docker/**"
           - "docs/tools/multi-agent-sandbox-tools.md"
 
 "deploy: cloudflare":
@@ -583,6 +591,7 @@
           - "extensions/fish-audio-speech/**"
           - "docs/providers/fish-audio.md"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:
@@ -608,6 +617,7 @@
           - "docs/plugins/codex-harness/**"
           - "docs/plugins/codex-harness-reference.md"
           - "docs/plugins/codex-harness-runtime.md"
+          - "docs/plugins/codex-harness-runtime/**"
           - "docs/plugins/codex-supervision.md"
           - "docs/specs/codex-supervision.md"
 "extensions: copilot":
@@ -694,6 +704,7 @@
       - any-glob-to-any-file:
           - "extensions/tts-local-cli/**"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "extensions: venice":
   - changed-files:
       - any-glob-to-any-file:

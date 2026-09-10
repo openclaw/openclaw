@@ -82,6 +82,8 @@ choose a password explicitly; Tailscale Funnel still requires password mode.
 | `--workspace <dir>`            | Workspace proposal; existing fleets require classic confirmation and are preserved noninteractively. |
 | `--baseline`                   | Create baseline config/workspace/session folders without onboarding.                                 |
 | `--wizard`                     | Force interactive onboarding.                                                                        |
+| `--classic`                    | Run the classic multi-step onboarding wizard; not valid with `--non-interactive`.                    |
+| `--agent-name <name>`          | Name for the first agent (default: `main`).                                                          |
 | `--tui`                        | Use the terminal hatch instead of the browser handoff.                                               |
 | `--non-interactive`            | Run onboarding without prompts.                                                                      |
 | `--accept-risk`                | Acknowledge full-system agent access risk; required with `--non-interactive`.                        |

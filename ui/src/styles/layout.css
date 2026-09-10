@@ -2802,6 +2802,21 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   white-space: nowrap;
 }
 
+.session-menu__description {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.session-menu__item--described:disabled {
+  opacity: 1;
+  color: var(--muted);
+}
+
 /* Keycap hint, not content: the app's quiet mono shortcut idiom, fixed-width so
    letters and digits share one rail. Identity-menu chords use the system UI face
    below because theme body fonts are not guaranteed to cover modifier glyphs. */
@@ -4352,6 +4367,26 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
+  min-height: 0;
+}
+
+/* Embedded pages own their spacing and scrolling inside the frame. */
+.content:has(.plugin-tab-embed) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+
+.content:has(.plugin-tab-embed) > * + * {
+  margin-top: 0;
+}
+
+.content:has(.plugin-tab-embed) > openclaw-router-outlet {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
 }
 

@@ -17,6 +17,8 @@ import {
 
 /** Prepares readable skills and owns environment rollback until the caller takes custody. */
 export function prepareEmbeddedSkills(params: {
+  /** Prompt-only callers can skip process-wide environment overrides. */
+  applySkillEnvironment?: boolean;
   attempt: Pick<
     EmbeddedRunAttemptParams,
     | "config"
@@ -71,15 +73,18 @@ export function prepareEmbeddedSkills(params: {
         : { executionWorkspaceDir: params.effectiveWorkspace }),
       workspaceOnly,
     });
-  const restoreSkillEnv = skillsSnapshot
-    ? applySkillEnvOverridesFromSnapshot({
-        snapshot: skillsSnapshot,
-        config: params.attempt.config,
-      })
-    : applySkillEnvOverrides({
-        skills: skillEntries ?? [],
-        config: params.attempt.config,
-      });
+  const restoreSkillEnv =
+    params.applySkillEnvironment === false
+      ? () => {}
+      : skillsSnapshot
+        ? applySkillEnvOverridesFromSnapshot({
+            snapshot: skillsSnapshot,
+            config: params.attempt.config,
+          })
+        : applySkillEnvOverrides({
+            skills: skillEntries ?? [],
+            config: params.attempt.config,
+          });
   try {
     const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
       entries: shouldLoadSkillEntries ? skillEntries : undefined,

@@ -22,6 +22,7 @@ export function resolveUnsafeUpdateRecoveryGuidance(
 
 export function resolveUpdateResultNextAction(params: {
   result: UpdateRunResult;
+  restart?: boolean;
   serviceRunning?: boolean;
   runningVersion?: string;
   verificationFailure?: string;
@@ -57,6 +58,9 @@ export function resolveUpdateResultNextAction(params: {
     return `This OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${command("openclaw doctor")}\` and \`${command("openclaw gateway restart")}\`. Examples: \`npm i -g openclaw@latest\` or \`pnpm add -g openclaw@latest\`.`;
   }
   if (result.status === "ok") {
+    if (params.restart === false && result.postUpdate?.plugins?.changed) {
+      return `Plugins updated; Gateway restart skipped (--no-restart). Run \`${command("openclaw gateway restart")}\` to activate them in the running Gateway.`;
+    }
     return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${resolveStateDir(env)}. Keep the same state/config overrides.`;
   }
   return undefined;

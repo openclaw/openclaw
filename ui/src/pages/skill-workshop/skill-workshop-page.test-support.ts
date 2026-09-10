@@ -87,6 +87,7 @@ export function createContext(
     },
     sessions: options?.sessions ?? { state: { result: null, loading: false } },
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
+    chatSubmissions: { retain: vi.fn() },
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
 }

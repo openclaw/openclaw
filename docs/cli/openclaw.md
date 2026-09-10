@@ -102,6 +102,10 @@ quit
 
 OpenClaw uses typed operations instead of editing config ad hoc.
 
+For `config get`, quote record keys that contain dots or brackets, such as
+`config get channels.modelByChannel.telegram["team.ops[west]"]`.
+Config reads redact sensitive values before selecting the requested path.
+
 Read-only operations run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path.
 
 Starting a guided setup flow also runs immediately: channel setup (`connect telegram`), workspace skills setup (`configure skills`), web-search provider setup (`configure web search`), and local Gateway setup (`configure gateway`). Each config-backed hosted wizard collects explicit answers and owns the resulting writes; completions append audit entries and re-validate config. A web-search provider that needs a plugin install writes config only after the install succeeds — a failed or timed-out install stops setup and reports it instead of claiming the provider is configured.

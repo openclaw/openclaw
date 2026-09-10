@@ -46,6 +46,21 @@ Retained compatibility entrypoints keep their shipped caller names:
 `resolvePluginProviders`, and `agent-runtime`'s
 `resolveThinkingDefaultWithRuntimeCatalog` accepts `loadModelCatalog`.
 
+`resolvePluginProviders` remains synchronous and returns the existing provider
+array. When it borrows from an owned inspection, the Gateway lifecycle or
+executable CLI invocation retains the backing resources until its actual work
+and cleanup finish. Finish calls using those providers before the host closes;
+keeping the array does not authorize use after host retirement. A released
+inspection stays retired, and a new lookup through that inspection is refused.
+Callers outside an OpenClaw host retain the standalone process lifetime of this
+SDK contract; process exit does not guarantee asynchronous plugin disposal.
+
+Inspection release relinquishes the inspection's own claim. If an SDK host
+still borrows the same source, final disposal belongs to that host. The host
+reports later disposal failures during teardown; they cannot retroactively
+change an already returned inspection result. Internal provider resolvers do
+not acquire this compatibility lifetime.
+
 `text-chunking` retains positional `CodeRegion` inputs with `start` and `end`
 offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not
@@ -174,20 +189,22 @@ diagnostics say otherwise. New code should prefer the documented replacement;
 existing plugins should not break during ordinary minor releases.
 
 The dated compatibility registry also tracks shipped annotations that do not
-belong to one legacy subpath. These records use 2026-10-01 as the earliest
-review date; removal still requires the reader condition in the final column.
+belong to one legacy subpath. Unless a later date is listed below, these records
+use 2026-10-01 as the earliest review date; removal still requires the reader
+condition in the final column.
 
-| Compatibility code                        | Replacement                                                                                    | Removal condition                                                                            |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `plugin-sdk-broad-runtime-barrels`        | Focused capability subpaths                                                                    | No bundled or published imports of the seven enumerated broad barrels remain.                |
-| `plugin-sdk-provider-owned-helper-shims`  | Provider-local auth/model/replay/OAuth/stream APIs                                             | Every enumerated helper is migrated in official providers and absent from published plugins. |
-| `message-presentation-legacy-bridges`     | `MessagePresentation` and channel presentation renderers                                       | Producers and official channel packages no longer emit or read legacy interactive replies.   |
-| `plugin-sdk-focused-compat-aliases`       | The focused replacement named by each `@deprecated` annotation                                 | Every enumerated alias has zero bundled and published readers.                               |
-| `agent-harness-terminal-result-aliases`   | `AgentHarnessAttemptResult.terminal` and `visibleReplies`                                      | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.           |
-| `official-plugin-export-aliases`          | Canonical Google Meet testing, presentation renderers, and host-owned Discord timeout behavior | Minimum supported official plugin packages no longer import the aliases.                     |
-| `memory-host-compatibility-aliases`       | Canonical memory tables and prepared runtime config                                            | Memory integrations no longer pass table overrides or call legacy `loadConfig`.              |
-| `plugin-runtime-api-compat-aliases`       | Namespaced plugin APIs and focused runtime methods                                             | All enumerated flat API/runtime aliases have no readers.                                     |
-| `plugin-provider-manifest-compat-aliases` | Manifest-owned kind/setup metadata and model catalog registration                              | Providers no longer publish runtime kind or legacy catalog hooks.                            |
+| Compatibility code                                | Replacement                                                                                    | Removal condition                                                                                                    |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk-broad-runtime-barrels`                | Focused capability subpaths                                                                    | No bundled or published imports of the seven enumerated broad barrels remain.                                        |
+| `plugin-sdk-provider-owned-helper-shims`          | Provider-local auth/model/replay/OAuth/stream APIs                                             | Every enumerated helper is migrated in official providers and absent from published plugins.                         |
+| `message-presentation-legacy-bridges`             | `MessagePresentation` and channel presentation renderers                                       | Producers and official channel packages no longer emit or read legacy interactive replies.                           |
+| `plugin-sdk-focused-compat-aliases`               | The focused replacement named by each `@deprecated` annotation                                 | Every enumerated alias has zero bundled and published readers.                                                       |
+| `agent-harness-terminal-result-aliases`           | `AgentHarnessAttemptResult.terminal` and `visibleReplies`                                      | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.                                   |
+| `official-plugin-export-aliases`                  | Canonical Google Meet testing, presentation renderers, and host-owned Discord timeout behavior | Minimum supported official plugin packages no longer import the aliases.                                             |
+| `memory-host-compatibility-aliases`               | Canonical memory tables and prepared runtime config                                            | Memory integrations no longer pass table overrides or call legacy `loadConfig`.                                      |
+| `plugin-runtime-api-compat-aliases`               | Namespaced plugin APIs and focused runtime methods                                             | All enumerated flat API/runtime aliases have no readers.                                                             |
+| `plugin-provider-manifest-compat-aliases`         | Manifest-owned kind/setup metadata and model catalog registration                              | Providers no longer publish runtime kind or legacy catalog hooks.                                                    |
+| `agent-harness-credential-prompt-string-argument` | Options object `{ controlToolsAvailable }`                                                     | Deprecated and warnings start 2026-09-09; supported through 2026-11-30. Remove after that date once callers migrate. |
 
 ### Published channel setup compatibility
 

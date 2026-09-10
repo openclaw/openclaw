@@ -1,42 +1,36 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  consumeLauncherRootOptionToken,
+  isForegroundGmailRunInvocation,
+  isNativeHookRelayInvocation,
+  recoverNodeRuntime,
+  runRespawnedChild,
+} from "./node-runtime-recovery.mjs";
+import {
+  canRunOpenClawNodeDiagnostics,
+  classifyUnsupportedNodeCommand,
+  formatUnsupportedNodeDiagnosticWarning,
+} from "./node-version.mjs";
 
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
   existsSync(new URL("./src/entry.ts", import.meta.url));
 
-if (
-  !isSourceCheckoutLauncher() &&
-  (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
-    existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
-) {
-  try {
-    const { completePendingPackageLifecycle } = await import("./dist/infra/package-lifecycle.js");
-    await completePendingPackageLifecycle({
-      packageRoot: fileURLToPath(new URL("./", import.meta.url)),
-    });
-  } catch (error) {
-    process.stderr.write(
-      `openclaw: package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}\n`,
-    );
-    process.exit(1);
-  }
-}
-
-const { isSupportedOpenClawNodeVersion } = await import("./node-version.mjs");
+const { detectCurrentSqliteCapabilities, nodeRuntimeFailure, nodeRuntimeNote } =
+  await import("./node-sqlite.mjs");
 
 const RECOMMENDED_NODE_MAJOR = 26;
 const SUPPORTED_NODE_RANGE = ">=24.16.0 <25, or >=26.1.0";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
-const ensureSupportedRuntimeVersion = () => {
+const ensureSupportedRuntimeVersion = async () => {
   if (process.versions.bun) {
     // Bun >=1.4 (Rust rewrite) ships node:sqlite; feature-probe instead of
     // rejecting Bun outright so capable Bun builds can run OpenClaw.
@@ -47,38 +41,52 @@ const ensureSupportedRuntimeVersion = () => {
       hasNodeSqlite = false;
     }
     if (hasNodeSqlite) {
-      return;
+      return false;
     }
     process.stderr.write(
       "openclaw: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
         `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
     );
-    process.exit(1);
+    return process.exit(1);
   }
-  if (isSupportedOpenClawNodeVersion(process.versions.node)) {
-    return;
+  const probe = detectCurrentSqliteCapabilities();
+  const failure = nodeRuntimeFailure(process.versions.node, probe);
+  if (!failure) {
+    const note = nodeRuntimeNote(process.versions.node, probe);
+    if (note) {
+      process.stderr.write(`${note}\n`);
+    }
+    return false;
   }
-
+  const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
+  const canRunDiagnostics = canRunOpenClawNodeDiagnostics(process.versions.node, probe.available);
+  const diagnosticExemption = unsupportedCommand === "diagnostic" && canRunDiagnostics;
+  await recoverNodeRuntime({
+    allowInstall: !diagnosticExemption,
+  });
+  if (!diagnosticExemption) {
+    process.stderr.write(`openclaw: ${failure}\n`);
+  }
+  if (diagnosticExemption) {
+    return false;
+  }
   process.stderr.write(
-    `openclaw: Node.js ${SUPPORTED_NODE_RANGE} is required (current: v${process.versions.node}).\n` +
-      "If you use nvm, run:\n" +
+    "If you use nvm, run:\n" +
       `  nvm install ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm use ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm alias default ${RECOMMENDED_NODE_MAJOR}\n`,
   );
-  process.exit(1);
+  if (unsupportedCommand === "update" && canRunDiagnostics) {
+    // A later CLI startup respawn must not repeat this invocation's recovery offer.
+    process.env.OPENCLAW_NODE_UPDATE_RESPAWNED = "1";
+    return false;
+  }
+  return process.exit(1);
 };
-
-ensureSupportedRuntimeVersion();
-
-if (tryOutputLauncherVersion(process.argv)) {
-  process.exit(0);
-}
 
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
   Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
-const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
 const sanitizeCompileCachePathSegment = (value) => {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return normalized.length > 0 ? normalized : "unknown";
@@ -113,123 +121,6 @@ const resolvePackagedCompileCacheDirectory = () => {
     version,
     sanitizeCompileCachePathSegment(installMarker),
   );
-};
-
-const respawnSignals =
-  process.platform === "win32"
-    ? ["SIGTERM", "SIGINT", "SIGBREAK"]
-    : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
-const respawnSignalExitGraceMs = 1_000;
-const respawnSignalForceKillGraceMs = 1_000;
-const respawnSignalHardExitGraceMs = 1_000;
-
-const runRespawnedChild = (command, args, env) => {
-  const child = spawn(command, args, {
-    stdio: "inherit",
-    env,
-  });
-  const listeners = new Map();
-  // This intentionally overlaps with src/entry.compile-cache.ts; keep the
-  // respawn supervision behavior in sync until the launcher can share TS code.
-  // Give the child a moment to honor forwarded signals, then exit the wrapper so
-  // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
-  let signalExitTimer = null;
-  let signalForceKillTimer = null;
-  let signalHardExitTimer = null;
-  let firstForwardedSignal = null;
-  let hardKillBackstopStarted = false;
-  const detach = () => {
-    for (const [signal, listener] of listeners) {
-      process.off(signal, listener);
-    }
-    listeners.clear();
-    if (signalExitTimer) {
-      clearTimeout(signalExitTimer);
-      signalExitTimer = null;
-    }
-    if (signalForceKillTimer) {
-      clearTimeout(signalForceKillTimer);
-      signalForceKillTimer = null;
-    }
-    if (signalHardExitTimer) {
-      clearTimeout(signalHardExitTimer);
-      signalHardExitTimer = null;
-    }
-  };
-  const forceKillChild = () => {
-    try {
-      child.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
-    } catch {
-      // Best-effort shutdown fallback.
-    }
-  };
-  const requestChildTermination = () => {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Best-effort shutdown fallback.
-    }
-    signalForceKillTimer = setTimeout(() => {
-      hardKillBackstopStarted = true;
-      forceKillChild();
-      signalHardExitTimer = setTimeout(() => {
-        process.exit(1);
-      }, respawnSignalHardExitGraceMs);
-      signalHardExitTimer.unref?.();
-    }, respawnSignalForceKillGraceMs);
-    signalForceKillTimer.unref?.();
-  };
-  const scheduleParentExit = (signal) => {
-    firstForwardedSignal ??= signal;
-    if (signalExitTimer) {
-      return;
-    }
-    signalExitTimer = setTimeout(() => {
-      requestChildTermination();
-    }, respawnSignalExitGraceMs);
-    signalExitTimer.unref?.();
-  };
-  for (const signal of respawnSignals) {
-    const listener = () => {
-      try {
-        child.kill(signal);
-      } catch {
-        // Best-effort signal forwarding.
-      }
-      scheduleParentExit(signal);
-    };
-    try {
-      process.on(signal, listener);
-      listeners.set(signal, listener);
-    } catch {
-      // Unsupported signal on this platform.
-    }
-  }
-  child.once("exit", (code, signal) => {
-    detach();
-    if (signal) {
-      const forwardedSignalExitCode =
-        !hardKillBackstopStarted && signal === firstForwardedSignal
-          ? signal === "SIGINT"
-            ? 130
-            : signal === "SIGTERM"
-              ? 143
-              : undefined
-          : undefined;
-      process.exit(forwardedSignalExitCode ?? 1);
-    }
-    process.exit(code ?? 1);
-  });
-  child.once("error", (error) => {
-    detach();
-    process.stderr.write(
-      `[openclaw] Failed to respawn launcher: ${
-        error instanceof Error ? (error.stack ?? error.message) : String(error)
-      }\n`,
-    );
-    process.exit(1);
-  });
-  return true;
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
@@ -379,8 +270,6 @@ const isBareRootHelpInvocation = (argv) =>
   argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
 
 const LAUNCHER_HELP_FLAGS = new Set(["-h", "--help"]);
-const LAUNCHER_ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
-const LAUNCHER_ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
 const LAUNCHER_PRECOMPUTED_COMMAND_HELP = {
   browser: { command: "browser", metadataKey: "browserHelpText" },
   secrets: { command: "secrets", metadataKey: "secretsHelpText" },
@@ -395,55 +284,6 @@ const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
   "sessions",
   "tasks",
 ]);
-
-const isLauncherRootOptionValueToken = (arg) => {
-  if (!arg || arg === "--") {
-    return false;
-  }
-  if (!arg.startsWith("-")) {
-    return true;
-  }
-  return /^-\d+(?:\.\d+)?$/.test(arg);
-};
-
-const consumeLauncherRootOptionToken = (args, index) => {
-  const arg = args[index];
-  if (!arg) {
-    return 0;
-  }
-  if (LAUNCHER_ROOT_BOOLEAN_FLAGS.has(arg)) {
-    return 1;
-  }
-  if (
-    arg.startsWith("--profile=") ||
-    arg.startsWith("--log-level=") ||
-    arg.startsWith("--container=")
-  ) {
-    return 1;
-  }
-  if (LAUNCHER_ROOT_VALUE_FLAGS.has(arg)) {
-    return isLauncherRootOptionValueToken(args[index + 1]) ? 2 : 1;
-  }
-  return 0;
-};
-
-// Mirror the entry's foreground Gmail policy before any built modules can load.
-// A compile-cache wrapper would kill its owner before descendant cleanup finishes.
-const isForegroundGmailRunInvocation = (argv) => {
-  const args = argv.slice(2);
-  const commandPath = [];
-  for (let index = 0; index < args.length && commandPath.length < 3; index += 1) {
-    const consumed = consumeLauncherRootOptionToken(args, index);
-    if (consumed > 0) {
-      index += consumed - 1;
-    } else if (!args[index] || args[index].startsWith("-")) {
-      break;
-    } else {
-      commandPath.push(args[index]);
-    }
-  }
-  return commandPath.join(" ") === "webhooks gmail run";
-};
 
 const hasLauncherContainerTarget = (argv) => {
   if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
@@ -779,12 +619,47 @@ const tryOutputPrecomputedCommandHelp = () => {
   return true;
 };
 
+// Resolve Node before loading pending package lifecycle code or any built runtime modules.
+const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
+const currentNodeRuntimeFailure = process.versions.bun
+  ? null
+  : nodeRuntimeFailure(process.versions.node, detectCurrentSqliteCapabilities());
+
+if (!waitingForNodeUpdateRespawn) {
+  // Diagnostics must not replay package lifecycle scripts under an unsupported Node.
+  if (
+    !currentNodeRuntimeFailure &&
+    !isSourceCheckoutLauncher() &&
+    (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
+      existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
+  ) {
+    try {
+      const { completePendingPackageLifecycle } = await import("./dist/infra/package-lifecycle.js");
+      await completePendingPackageLifecycle({
+        packageRoot: fileURLToPath(new URL("./", import.meta.url)),
+      });
+    } catch (error) {
+      process.stderr.write(
+        `openclaw: package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exit(1);
+    }
+  }
+  if (tryOutputLauncherVersion(process.argv)) {
+    if (currentNodeRuntimeFailure) {
+      process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+    }
+    process.exit(0);
+  }
+}
+
 // Codex owns the relay timeout by PID. Keep the launcher as that exact process
 // so a timeout cannot strand a compile-cache respawn child.
 const waitingForCompileCacheRespawn =
-  !isForegroundGmailRunInvocation(process.argv) &&
-  !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
-  (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded());
+  waitingForNodeUpdateRespawn ||
+  (!isForegroundGmailRunInvocation(process.argv) &&
+    !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
+    (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded()));
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (
@@ -802,7 +677,9 @@ if (
 
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
-    // OK
+    if (currentNodeRuntimeFailure) {
+      process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+    }
   } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
     // OK
   } else {

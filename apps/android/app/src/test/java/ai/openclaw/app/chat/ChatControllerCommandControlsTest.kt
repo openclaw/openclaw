@@ -674,11 +674,17 @@ class ChatControllerCommandControlsTest {
     runTest {
       val controller =
         createScriptedChatController {
-          respond("sessions.list", """{"sessions":[{"key":"main","label":"Named","category":"Work","color":" BLUE "}]}""")
+          respond(
+            "sessions.list",
+            """{"sessions":[{"key":"main","label":"Named","autoLabel":"Device fallback","displayName":"Generated title","category":"Work","color":" BLUE "}]}""",
+          )
         }
 
       controller.refreshSessions()
       advanceUntilIdle()
+      val initialSession = controller.sessions.value.single()
+      assertEquals("Device fallback", initialSession.autoLabel)
+      assertEquals("Generated title", initialSession.displayName)
       assertEquals(
         "Work",
         controller.sessions.value
@@ -696,11 +702,13 @@ class ChatControllerCommandControlsTest {
       // Another client cleared the metadata; the gateway sends explicit nulls.
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","agentId":"main","label":null,"category":null,"color":null}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","label":null,"autoLabel":null,"displayName":null,"category":null,"color":null}}""",
       )
       advanceUntilIdle()
       val merged = controller.sessions.value.single()
       assertEquals(null, merged.label)
+      assertEquals(null, merged.autoLabel)
+      assertEquals(null, merged.displayName)
       assertEquals(null, merged.category)
       assertEquals(null, merged.color)
     }

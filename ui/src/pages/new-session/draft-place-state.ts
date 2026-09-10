@@ -147,6 +147,7 @@ export class DraftPlaceState {
   buildSessionCreateParams(params: DraftSessionCreateSelection): SessionCreateParams {
     return buildDraftSessionCreateParams({
       ...params,
+      deferInitialTurn: this.remotePlacement,
       agentId: this.agentId,
       model: this.modelControl.modelForSubmission(),
       contextWindow: this.modelControl.contextWindow,

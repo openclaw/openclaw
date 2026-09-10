@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const CODEX_SUITE_PREFIX = "live-codex-harness";
 const GENERIC_CODEX_SUITE = "live-codex-harness-docker";
@@ -120,7 +120,17 @@ function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+let invokedAsMain = false;
+if (process.argv[1]) {
+  try {
+    invokedAsMain =
+      realpathSync.native(fileURLToPath(import.meta.url)) === realpathSync.native(process.argv[1]);
+  } catch {
+    // Inline and stdin importers need not have a filesystem entrypoint.
+  }
+}
+
+if (invokedAsMain) {
   try {
     main();
   } catch (error) {

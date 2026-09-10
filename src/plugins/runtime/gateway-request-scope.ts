@@ -92,6 +92,23 @@ export function bindGatewayContextResolver(
 
 export const getGatewayContextResolver = (owner: object) => gatewayContextResolvers.get(owner);
 
+/** Follows explicit wrapper ownership without invoking any execution resolver. */
+export function getCanonicalGatewayContextResolver(
+  resolver: GatewayContextResolver,
+): GatewayContextResolver | undefined {
+  const seen = new Set<GatewayContextResolver>();
+  let current = resolver;
+  while (!seen.has(current)) {
+    seen.add(current);
+    const parent = gatewayContextResolvers.get(current);
+    if (!parent) {
+      return current;
+    }
+    current = parent;
+  }
+  return undefined;
+}
+
 /** Match the host owner without invoking a possibly retired execution resolver. */
 export function hasGatewayContextOwner(
   owner: object,
@@ -124,7 +141,7 @@ export function getSharedGatewayContextResolver(
   }
   // Separate caller wrappers may own one instance. Recheck every captured fence;
   // never replace it with a current global resolver or permit mixed ambient routing.
-  return () => {
+  const shared = () => {
     const contexts = resolvers.map((resolve) => {
       try {
         return resolve?.();
@@ -143,6 +160,14 @@ export function getSharedGatewayContextResolver(
     }
     return contexts[0];
   };
+  const canonical = resolvers.map((resolve) =>
+    resolve ? getCanonicalGatewayContextResolver(resolve) : undefined,
+  );
+  const owner = canonical[0];
+  if (owner && canonical.every((candidate) => candidate === owner)) {
+    bindGatewayContextResolver(shared, owner);
+  }
+  return shared;
 }
 
 /**

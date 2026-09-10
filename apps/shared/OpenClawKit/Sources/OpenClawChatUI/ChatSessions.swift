@@ -500,6 +500,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var isMain: Bool?
     public var isBackground: Bool?
     public var label: String?
+    /// Automatic device label; explicit labels and generated display names take precedence.
+    public var autoLabel: String?
     public var category: String?
     public var color: String?
     public var pinned: Bool?
@@ -592,6 +594,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         thinkingOptions: [String]? = nil,
         thinkingDefault: String? = nil,
         label: String? = nil,
+        autoLabel: String? = nil,
         category: String? = nil,
         color: String? = nil,
         pinned: Bool? = nil,
@@ -641,6 +644,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.isMain = isMain
         self.isBackground = isBackground
         self.label = label
+        self.autoLabel = autoLabel
         self.category = category
         self.color = color
         self.pinned = pinned

@@ -428,6 +428,20 @@ async function sendQueuedChatMessage(
         if (prepared.queueMode !== "steer" || !host.chatRunId) {
           adoptStartedChatRun(host, ack.runId, startedAt);
         }
+        // Hydrate approved custody during setup without changing ordinary send
+        // reconciliation or steering, whose ACK does not identify a new input.
+        const setupHeld =
+          prepared.sessionId &&
+          host.sessionsResult?.sessions.some(
+            (row) =>
+              row.sessionId === prepared.sessionId &&
+              ["requested", "provisioning", "syncing", "starting"].includes(
+                row.placement?.state ?? "",
+              ),
+          );
+        if (prepared.queueMode !== "steer" && ack.messageSeq === undefined && setupHeld) {
+          void loadChatHistory(host, { deferBranches: true });
+        }
       }
     }
     if (prepared.refreshSessions) {

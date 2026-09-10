@@ -1,5 +1,6 @@
 {
   "id": "openai",
+  "categories": ["models", "memory", "voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "sessionRouteStateOwners": [
     {

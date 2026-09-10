@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderThinkingRegistry } from "../plugins/provider-thinking.types.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 
 describe("Gateway all-null thinking map", () => {
@@ -32,6 +33,46 @@ describe("Gateway all-null thinking map", () => {
 
     expect(profile.thinkingLevels).toEqual([]);
     expect(profile.thinkingDefault).toBeUndefined();
+  });
+});
+
+describe("Gateway captured thinking defaults", () => {
+  const provider = "captured-thinking-default-fixture";
+  const captured: ProviderThinkingRegistry = {
+    providers: [
+      {
+        provider: {
+          id: provider,
+          resolveThinkingProfile: () => ({
+            // Medium stays supported so clamping cannot hide a lost policy source.
+            levels: [{ id: "off" }, { id: "low" }, { id: "medium" }],
+            defaultLevel: "low",
+          }),
+        },
+      },
+    ],
+  };
+
+  it.each([
+    { name: "captured", source: captured, expected: "low" },
+    { name: "active", source: "active" as const, expected: "medium" },
+    { name: "ordinary", source: undefined, expected: "medium" },
+    { name: "active or bundled", source: "active-or-bundled" as const, expected: "medium" },
+  ])("uses the $name source for its default", ({ source, expected }) => {
+    const profile = resolveGatewayModelThinkingProfile({
+      cfg: {},
+      agentId: "main",
+      provider,
+      model: "reasoner",
+      agentRuntime: "openclaw",
+      providerPolicySource: source,
+      modelCatalog: [
+        { provider, id: "reasoner", name: "Reasoner", api: "openai-completions", reasoning: true },
+      ],
+    });
+
+    expect(profile.thinkingDefault).toBe(expected);
+    expect(profile.thinkingLevels.map(({ id }) => id)).toContain(expected);
   });
 });
 

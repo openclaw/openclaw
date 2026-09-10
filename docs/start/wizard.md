@@ -121,7 +121,7 @@ Quick start follows this path:
    saving the provider or replacing the active model.
    Choose **Skip for now** to prepare the local baseline and exit without starting
    the Gateway or AI chat. Choosing a provider through its manual setup keeps the
-   quick-start defaults: agent name `main`, full access, telemetry consent unset,
+   Quick start defaults: agent name `main`, full access, telemetry consent unset,
    and a foreground Gateway after verification.
 5. Save the verified route, prepare the agent workspace, and persist Gateway
    settings.
@@ -130,7 +130,7 @@ Quick start follows this path:
    for background operation, `openclaw` for the TUI, or `openclaw dashboard` to
    reopen the web UI.
 
-The quick-start choice is not offered for configured installs, remote Gateway
+The Quick start choice is not offered for configured installs, remote Gateway
 chat setup, non-interactive runs, or runs with `--skip-ui` or `--tui`.
 
 Re-running the command on a configured installation offers the current default

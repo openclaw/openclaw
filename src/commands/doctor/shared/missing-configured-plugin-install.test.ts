@@ -4017,27 +4017,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: true,
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "@openclaw/plugin-demo@1.0.0",
-              installPath: "/tmp/openclaw-plugins/demo",
-            },
-          },
+    mocks.updateNpmInstalledPlugins.mockResolvedValue(
+      successfulUpdate("demo", {
+        demo: {
+          source: "npm",
+          spec: "@openclaw/plugin-demo@1.0.0",
+          installPath: "/tmp/openclaw-plugins/demo",
         },
-      },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "updated",
-          message: "Updated demo.",
-        },
-      ],
-    });
+      }),
+    );
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -4081,27 +4069,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       reviewToken: review.reviewToken,
     });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: true,
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "clawhub",
-              spec: "clawhub:@openclaw/plugin-demo@1.0.0",
-              installPath: "/tmp/openclaw-plugins/demo",
-            },
-          },
+    mocks.updateNpmInstalledPlugins.mockResolvedValue(
+      successfulUpdate("demo", {
+        demo: {
+          source: "clawhub",
+          spec: "clawhub:@openclaw/plugin-demo@1.0.0",
+          installPath: "/tmp/openclaw-plugins/demo",
         },
-      },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "updated",
-          message: "Updated demo.",
-        },
-      ],
-    });
+      }),
+    );
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -4143,27 +4119,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         config: Record<string, unknown>;
       }) => {
         params.logger?.warn?.(repairWarning);
-        return {
-          changed: true,
-          config: {
-            plugins: {
-              installs: {
-                demo: {
-                  source: "npm",
-                  spec: "@openclaw/plugin-demo@1.0.0",
-                  installPath: "/tmp/openclaw-plugins/demo",
-                },
-              },
-            },
+        return successfulUpdate("demo", {
+          demo: {
+            source: "npm",
+            spec: "@openclaw/plugin-demo@1.0.0",
+            installPath: "/tmp/openclaw-plugins/demo",
           },
-          outcomes: [
-            {
-              pluginId: "demo",
-              status: "updated",
-              message: "Updated demo.",
-            },
-          ],
-        };
+        });
       },
     );
 
@@ -4205,27 +4167,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         config: Record<string, unknown>;
       }) => {
         params.logger?.warn?.(coloredReviewNotice);
-        return {
-          changed: true,
-          config: {
-            plugins: {
-              installs: {
-                demo: {
-                  source: "clawhub",
-                  spec: "clawhub:@openclaw/plugin-demo@1.0.0",
-                  installPath: "/tmp/openclaw-plugins/demo",
-                },
-              },
-            },
+        return successfulUpdate("demo", {
+          demo: {
+            source: "clawhub",
+            spec: "clawhub:@openclaw/plugin-demo@1.0.0",
+            installPath: "/tmp/openclaw-plugins/demo",
           },
-          outcomes: [
-            {
-              pluginId: "demo",
-              status: "updated",
-              message: "Updated demo.",
-            },
-          ],
-        };
+        });
       },
     );
 
@@ -4271,27 +4219,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       ],
     });
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: true,
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "@openclaw/plugin-demo@1.0.0",
-              installPath: "/tmp/openclaw-plugins/demo",
-            },
-          },
+    mocks.updateNpmInstalledPlugins.mockResolvedValue(
+      successfulUpdate("demo", {
+        demo: {
+          source: "npm",
+          spec: "@openclaw/plugin-demo@1.0.0",
+          installPath: "/tmp/openclaw-plugins/demo",
         },
-      },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "updated",
-          message: "Updated demo.",
-        },
-      ],
-    });
+      }),
+    );
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -5014,10 +4950,76 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
   });
 
-  it("installs env-only web provider plugins before auto-detection", async () => {
+  it.each([
+    {
+      name: "installs env-only providers before auto-detection",
+      cfg: {},
+      env: { BRAVE_API_KEY: "brave-key", PERPLEXITY_API_KEY: "perplexity-key" },
+      installedIds: ["brave", "perplexity"],
+    },
+    {
+      name: "auto-detects providers for a whitespace-only selection",
+      cfg: { tools: { web: { search: { provider: " \t " } } } },
+      env: { BRAVE_API_KEY: "brave-key", PERPLEXITY_API_KEY: "perplexity-key" },
+      installedIds: ["brave", "perplexity"],
+    },
+    {
+      name: "installs only the selected provider despite another provider's env key",
+      cfg: { tools: { web: { search: { provider: "perplexity" } } } },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: ["perplexity"],
+    },
+    {
+      name: "normalizes a padded mixed-case explicit provider",
+      cfg: { tools: { web: { search: { provider: " PeRpLeXiTy " } } } },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: ["perplexity"],
+    },
+    {
+      name: "does not auto-detect providers for an unknown explicit selection",
+      cfg: { tools: { web: { search: { provider: "custom-search" } } } },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: [],
+    },
+    {
+      name: "retains independently configured plugins with an explicit search provider",
+      cfg: {
+        tools: { web: { search: { provider: "perplexity" } } },
+        plugins: { entries: { brave: { enabled: true } } },
+      },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: ["brave", "perplexity"],
+    },
+    {
+      name: "does not install an env-selected disabled plugin",
+      cfg: { plugins: { entries: { brave: { enabled: false } } } },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: [],
+    },
+    {
+      name: "does not install an env-selected denied plugin",
+      cfg: { plugins: { deny: ["brave"] } },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: [],
+    },
+    {
+      name: "does not install search providers when plugins are globally disabled",
+      cfg: {
+        tools: { web: { search: { provider: "perplexity" } } },
+        plugins: { enabled: false, entries: { brave: { enabled: true } } },
+      },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: [],
+    },
+  ] satisfies Array<{
+    name: string;
+    cfg: OpenClawConfig;
+    env: Record<string, string>;
+    installedIds: string[];
+  }>)("search plugin installation intent: $name", async ({ cfg, env, installedIds }) => {
     const packages = [
-      ["exa", "@openclaw/exa-plugin", "EXA_API_KEY"],
-      ["firecrawl", "@openclaw/firecrawl-plugin", "FIRECRAWL_API_KEY"],
+      ["brave", "@openclaw/brave-plugin", "BRAVE_API_KEY"],
+      ["perplexity", "@openclaw/perplexity-plugin", "PERPLEXITY_API_KEY"],
     ] as const;
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue(
       packages.map(([id, npmSpec, envVar]) =>
@@ -5029,31 +5031,38 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         }),
       ),
     );
-    for (const [pluginId, npmSpec] of packages) {
-      mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
-        successfulInstall({ pluginId, npmSpec }),
-      );
-    }
-
-    const result = await repairConfiguredPlugins(
-      {},
-      {
-        EXA_API_KEY: "exa-key",
-        FIRECRAWL_API_KEY: "firecrawl-key",
-      },
+    mocks.installPluginFromNpmSpec.mockImplementation(
+      async ({ expectedPluginId }: { expectedPluginId: string }) =>
+        successfulInstall({
+          pluginId: expectedPluginId,
+          npmSpec: expectDefined(
+            packages.find(([id]) => id === expectedPluginId),
+            "expected search plugin package",
+          )[1],
+        }),
     );
+
+    const result = await repairConfiguredPlugins(cfg, env);
 
     expect(
       mocks.installPluginFromNpmSpec.mock.calls.map(
         ([params]) => (params as { expectedPluginId?: string }).expectedPluginId,
       ),
-    ).toEqual(["exa", "firecrawl"]);
+    ).toEqual(installedIds);
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(Object.keys(result.records)).toEqual(installedIds);
     expect(result.changes).toEqual(
-      packages.map(
-        ([pluginId, npmSpec]) =>
-          `Installed missing configured plugin "${pluginId}" from ${expectedNpmInstallSpec(npmSpec)}.`,
-      ),
+      packages
+        .filter(([pluginId]) => installedIds.some((id) => id === pluginId))
+        .map(
+          ([pluginId, npmSpec]) =>
+            `Installed missing configured plugin "${pluginId}" from ${expectedNpmInstallSpec(npmSpec)}.`,
+        ),
     );
+    expect(result.warnings).toEqual([]);
+    if (installedIds.length === 0) {
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    }
   });
 
   it("installs env-only provider plugins before model discovery", async () => {

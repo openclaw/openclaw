@@ -44,6 +44,7 @@ import {
 } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
+import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
@@ -184,11 +185,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const {
-      attachments: initialAttachments,
-      hasInitialTurn,
-      message: initialMessage,
-    } = initialTurn;
+    const { attachments, hasInitialTurn, message } = initialTurn;
     const repositoryCreation = resolveSessionRepositoryCreation(p, hasInitialTurn);
     if (!repositoryCreation.ok) {
       respond(false, undefined, repositoryCreation.error);
@@ -214,7 +211,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       const normalized = normalizeChatSendRequest({
         params: {
           sessionKey,
-          message: initialMessage ?? "",
+          message: message ?? "",
           mentions: p.mentions,
           idempotencyKey: initialRunId,
         },
@@ -481,15 +478,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           baseRef: worktreeBaseRef,
           baseCommit,
           titleSource: buildDashboardSessionTitleSource({
-            message: initialMessage ?? "",
-            attachments: initialAttachments,
+            message: message ?? "",
+            attachments,
           }),
         };
       } else {
         prepareLifecycle = async (lifecycleTarget) => {
           const source = buildDashboardSessionTitleSource({
-            message: initialMessage ?? "",
-            attachments: initialAttachments,
+            message: message ?? "",
+            attachments,
           });
           // Empty creates have no persisted generation until the lifecycle owner commits.
           const title =
@@ -509,7 +506,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
                   sessionId: lifecycleTarget.entry.sessionId,
                   sessionKey: lifecycleTarget.key,
                   storePath: lifecycleTarget.storePath,
-                  currentUserMessage: initialMessage,
+                  currentUserMessage: message,
                   userMessage: source,
                   commitGuard,
                   onError: (error) =>
@@ -616,8 +613,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       armSessionDiffBaselineCapture: !repository,
       loadGatewayModelCatalog: () => context.loadGatewayModelCatalog({ agentId: sessionAgentId }),
       commitGuard,
-      afterCreate: async ({ key, agentId }) => {
-        if (!authority.hasActive() || !hasInitialTurn) {
+      afterCreate: async (session) => {
+        const { key, agentId } = session;
+        if (!authority.hasActive()) {
+          return;
+        }
+        if (!hasInitialTurn) {
+          scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);
           return;
         }
         const sendChat = expectDefined(chatHandlers["chat.send"], "chat.send handler");
@@ -626,11 +628,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           params: {
             sessionKey: key,
             agentId,
-            message: initialMessage ?? "",
+            message: message ?? "",
             idempotencyKey: initialRunId,
             ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
             ...(p.mentions ? { mentions: p.mentions } : {}),
-            ...(initialAttachments ? { attachments: initialAttachments } : {}),
+            ...(attachments ? { attachments } : {}),
           },
           respond: (ok, payload, error, meta) => {
             if (ok && payload && typeof payload === "object") {
@@ -680,21 +682,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         cached: runMeta?.cached === true,
       });
 
-    respond(
-      true,
-      {
-        ok: true,
-        key: created.key,
-        sessionId: created.entry.sessionId,
-        entry: responseEntry,
-        runStarted,
-        ...(!created.resetExisting && runPayload ? runPayload : {}),
-        ...(!created.resetExisting && runError ? { runError } : {}),
-        resolved: created.resolved,
-        ...(createdWorktree ? { worktree: createdWorktree } : {}),
-      },
-      undefined,
-    );
+    respond(true, {
+      ok: true,
+      key: created.key,
+      sessionId: created.entry.sessionId,
+      entry: responseEntry,
+      runStarted,
+      ...(!created.resetExisting && runPayload ? runPayload : {}),
+      ...(!created.resetExisting && runError ? { runError } : {}),
+      resolved: created.resolved,
+      ...(createdWorktree ? { worktree: createdWorktree } : {}),
+    });
     emitSessionsChanged(context, {
       sessionKey: created.key,
       agentId: created.agentId,

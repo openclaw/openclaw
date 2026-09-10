@@ -30,6 +30,7 @@ import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.t
 import { isPathInside } from "../infra/path-guards.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
@@ -43,6 +44,8 @@ import {
   FIRST_USE_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
+import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-dangling-workshop-index.js";
+import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -66,7 +69,9 @@ import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "./openclaw-state-schema-v10-
 import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "./openclaw-state-schema-v11-retirement.test-support.js";
 import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "./openclaw-state-schema-v12-foldin.test-support.js";
 import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "./openclaw-state-schema-v13-widerow.test-support.js";
+import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
@@ -728,6 +733,58 @@ function materializeCurrentStateDatabase(stateDir: string): string {
   return databasePath;
 }
 
+function createDanglingSkillWorkshopReviewIndex(databasePath: string): number {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(
+      "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+    );
+    const index = database
+      .prepare(
+        "SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND name = 'idx_skill_workshop_collection_reviews_workspace_time'",
+      )
+      .get() as { rootpage?: number } | undefined;
+    if (typeof index?.rootpage !== "number") {
+      throw new Error("failed to create legacy Skill Workshop review index fixture");
+    }
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        `UPDATE sqlite_schema
+            SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
+                         ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
+          WHERE type = 'index'
+            AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
+      )
+      .run();
+    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
+    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
+    return index.rootpage;
+  } finally {
+    database.close();
+  }
+}
+
+function readDanglingSkillWorkshopReviewIndex(
+  databasePath: string,
+): { rootpage: number; sql: string } | undefined {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    return database
+      .prepare(
+        "SELECT rootpage, sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_skill_workshop_collection_reviews_workspace_time'",
+      )
+      .get() as { rootpage: number; sql: string } | undefined;
+  } finally {
+    database.close();
+  }
+}
+
 function downgradeWorkerPlacementsToV7(db: DatabaseSync): void {
   const row = db
     .prepare(
@@ -846,34 +903,6 @@ function insertAuditMarker(
     "system",
     "gateway",
   );
-}
-
-function createUnsafeIndexDrift(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(`
-      CREATE TABLE unsafe_index_records (
-        id INTEGER PRIMARY KEY,
-        indexed_value TEXT NOT NULL,
-        alternate_value TEXT NOT NULL
-      );
-      CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value);
-      INSERT INTO unsafe_index_records (indexed_value, alternate_value)
-      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
-    `);
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    database
-      .prepare(
-        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_index_records_value ON unsafe_index_records(alternate_value)' WHERE name = 'unsafe_index_records_value'",
-      )
-      .run();
-    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
-    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-  } finally {
-    database.close();
-  }
 }
 
 function createTaskRunStatusIndexPhysicalDrift(databasePath: string): void {
@@ -1170,14 +1199,17 @@ function runConcurrentSchemaProbe(params: {
     const readyPath = process.env.OPENCLAW_SCHEMA_TEST_READY_PATH;
     const startPath = process.env.OPENCLAW_SCHEMA_TEST_START_PATH;
     const workerIndex = process.env.OPENCLAW_SCHEMA_TEST_WORKER_INDEX;
-    fs.writeFileSync(readyPath, "ready");
-    const deadline = Date.now() + 15_000;
-    while (!fs.existsSync(startPath)) {
-      if (Date.now() >= deadline) {
-        throw new Error("timed out waiting for concurrent schema upgrade start");
+    async function waitForMarker(markerPath, label) {
+      const deadline = Date.now() + 15_000;
+      while (!fs.existsSync(markerPath)) {
+        if (Date.now() >= deadline) {
+          throw new Error(\`timed out waiting for \${label}\`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2));
       }
-      await new Promise((resolve) => setTimeout(resolve, 2));
     }
+    fs.writeFileSync(readyPath, "ready");
+    await waitForMarker(startPath, "concurrent schema upgrade start");
     fs.writeFileSync(enteringPath, \`entering-\${workerIndex}\`);
     try {
       const database = openOpenClawStateDatabase({ path: databasePath });
@@ -1185,9 +1217,17 @@ function runConcurrentSchemaProbe(params: {
       if (integrity?.integrity_check !== "ok") {
         throw new Error("state database integrity check failed");
       }
-    } finally {
-      closeOpenClawStateDatabaseForTest();
+      fs.writeFileSync(readyPath + ".opened", "opened");
+      await waitForMarker(readyPath + ".retire", "schema probe retirement permission");
+    } catch (error) {
+      try {
+        closeOpenClawStateDatabaseForTest();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "schema probe and worker cleanup failed");
+      }
+      throw error;
     }
+    closeOpenClawStateDatabaseForTest();
   `;
   const orchestratorSource = `
     import assert from "node:assert/strict";
@@ -1463,6 +1503,21 @@ function runConcurrentSchemaProbe(params: {
       }
       let results;
       try {
+        if (!roundError) {
+          const openedPaths = readyPaths.map((readyPath) => readyPath + ".opened");
+          await waitForMarkers(workers, openedPaths, "successful open markers", round);
+          // Opens contend together; explicit WAL-capable retirement intentionally fails
+          // on contention, so each worker stays live until granted its own close phase.
+          for (const [index, worker] of workers.entries()) {
+            assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited before retirement\`);
+            assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled before retirement\`);
+            fs.writeFileSync(readyPaths[index] + ".retire", "retire");
+            const [result] = await waitForOutcomes([outcomes[index]], round);
+            if (result.error || result.code !== 0) {
+              throw new Error(\`round \${round} worker \${index} retirement failed: \${JSON.stringify(result)}\`);
+            }
+          }
+        }
         results = await waitForOutcomes(outcomes, round);
       } catch (error) {
         roundError = roundError
@@ -1521,12 +1576,13 @@ afterEach(() => {
 });
 
 describe("openclaw state database", () => {
-  it("migrates v15 Skill Workshop ownership columns to v16 without losing rows", () => {
+  it("migrates v15 Skill Workshop ownership through v16 and prepared workers to v17 without losing rows", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = materializeCurrentStateDatabase(stateDir);
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
+    removePreparedWorkerOwnershipColumns(legacy);
     const record = {
       schema: "openclaw.skill-workshop.proposal.v1",
       id: "workshop-v16-migration",
@@ -1635,6 +1691,7 @@ describe("openclaw state database", () => {
     legacy.close();
 
     const migrated = openOpenClawStateDatabase(options);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(17);
     expect(migrated.db.prepare("PRAGMA table_info(skill_workshop_proposals)").all()).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "workspace_dir" }),
@@ -1694,13 +1751,114 @@ describe("openclaw state database", () => {
     ).toEqual({ review_id: "review-v15", backup_id: "backup-v15" });
   });
 
-  it("upgrades a v15 store without Workshop tables before creating their v16 schema", () => {
+  it("requires Doctor to repair the dangling v15 Workshop review index", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database
+      .prepare(
+        `INSERT INTO skill_workshop_collection_reviews (
+           review_id, owner_agent_id, backup_id, create_time,
+           kept_names_json, written_names_json, dropped_json
+         ) VALUES ('review-preserved', 'main', 'backup-preserved', 1, '[]', '[]', '[]')`,
+      )
+      .run();
+    database.close();
+    const rootpage = createDanglingSkillWorkshopReviewIndex(databasePath);
+
+    const defensiveProbe = new DatabaseSync(databasePath);
+    expect(hasDanglingSkillWorkshopCollectionReviewIndex(defensiveProbe)).toBe(true);
+    const schemaVersion = readSqliteNumberPragma(defensiveProbe, "schema_version");
+    defensiveProbe.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
+    expect(readSqliteNumberPragma(defensiveProbe, "schema_version")).toBe(schemaVersion);
+    defensiveProbe.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /legacy-workshop-review-index.*openclaw doctor --fix/u,
+    );
+    expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Removed dangling legacy Skill Workshop review index"],
+      warnings: [],
+    });
+
+    const repaired = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        repaired
+          .prepare(
+            "SELECT review_id, backup_id FROM skill_workshop_collection_reviews WHERE review_id = 'review-preserved'",
+          )
+          .get(),
+      ).toEqual({ review_id: "review-preserved", backup_id: "backup-preserved" });
+      expect(repaired.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+      expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toBeUndefined();
+    } finally {
+      repaired.close();
+    }
+    expect(() => openOpenClawStateDatabase(options)).not.toThrow();
+  });
+
+  it("does not repair a dangling Workshop index in a newer unsupported schema", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const rootpage = createDanglingSkillWorkshopReviewIndex(databasePath);
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database.exec("PRAGMA writable_schema = ON;");
+    database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+    database.exec("PRAGMA writable_schema = OFF;");
+    database.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("uses newer schema version")],
+    });
+    expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
+  });
+
+  it("rolls back dangling Workshop index reclamation and converges on retry", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const rootpage = createDanglingSkillWorkshopReviewIndex(databasePath);
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    const repairAdmittedSchema = prepareStateDatabaseSchemaRepair(
+      database,
+      databasePath,
+      options.env,
+    );
+    expect(() =>
+      runSqliteImmediateTransactionSync(database, () => {
+        expect(repairAdmittedSchema()).toEqual([
+          "Removed dangling legacy Skill Workshop review index",
+        ]);
+        throw new Error("injected post-reclamation failure");
+      }),
+    ).toThrow("injected post-reclamation failure");
+    database.close();
+
+    expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Removed dangling legacy Skill Workshop review index"],
+      warnings: [],
+    });
+    expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toBeUndefined();
+  });
+
+  it("upgrades a v15 store without Workshop tables through v16 and prepared workers to v17", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = materializeCurrentStateDatabase(stateDir);
 
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
+    removePreparedWorkerOwnershipColumns(legacy);
     legacy.exec(`
       PRAGMA foreign_keys = OFF;
       DROP TABLE skill_workshop_proposal_events;
@@ -1714,7 +1872,7 @@ describe("openclaw state database", () => {
     legacy.close();
 
     const migrated = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(16);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(17);
     for (const tableName of ["skill_workshop_proposals", "skill_workshop_collection_reviews"]) {
       expect(
         migrated.db
@@ -1740,6 +1898,7 @@ describe("openclaw state database", () => {
 
     const { DatabaseSync } = requireNodeSqlite();
     const damaged = new DatabaseSync(databasePath);
+    removePreparedWorkerOwnershipColumns(damaged);
     damaged.exec(`
       DROP TABLE apns_registration_tombstones;
       PRAGMA user_version = 15;

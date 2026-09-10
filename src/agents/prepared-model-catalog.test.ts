@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   refreshStaleCatalog: vi.fn(),
   isFullCatalog: vi.fn(),
   releaseSnapshot: vi.fn(),
+  releasePublishedSnapshot: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -54,6 +55,10 @@ vi.mock("./prepared-model-runtime.js", () => {
     preparedModelRuntimeConfigsMatch: (left: object, right: object) =>
       JSON.stringify(left) === JSON.stringify(right),
     prepareModelRuntimeSnapshot: (...args: unknown[]) => mocks.prepareSnapshot(...args),
+    acquirePreparedModelRuntimeSnapshot: async (...args: unknown[]) => ({
+      snapshot: await mocks.prepareSnapshot(...args),
+      release: mocks.releasePublishedSnapshot,
+    }),
     refreshPreparedModelRuntimeCatalog: (...args: unknown[]) => mocks.refreshStaleCatalog(...args),
   };
 });
@@ -113,6 +118,78 @@ describe("prepared model catalog access", () => {
     mocks.refreshStaleCatalog.mockReset();
     mocks.isFullCatalog.mockReset();
     mocks.releaseSnapshot.mockReset();
+    mocks.releasePublishedSnapshot.mockReset();
+  });
+
+  it.each([
+    { readOnly: true, rejectProjection: false },
+    { readOnly: true, rejectProjection: true },
+    { readOnly: false, rejectProjection: false },
+    { readOnly: false, rejectProjection: true },
+  ])(
+    "retains a published owner through projection (readOnly=$readOnly, reject=$rejectProjection)",
+    async ({ readOnly, rejectProjection }) => {
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const failure = new Error("projection failed");
+      mocks.prepareSnapshot.mockResolvedValue(fullSnapshot);
+      const result = withPreparedModelCatalogOwner({ readOnly }, async (snapshot) => {
+        entered.resolve();
+        await resume.promise;
+        expect(mocks.releasePublishedSnapshot).not.toHaveBeenCalled();
+        if (rejectProjection) {
+          throw failure;
+        }
+        return snapshot.modelCatalog.entries;
+      });
+      const outcome = rejectProjection
+        ? expect(result).rejects.toBe(failure)
+        : expect(result).resolves.toBe(fullSnapshot.modelCatalog.entries);
+      await entered.promise;
+      expect(mocks.releasePublishedSnapshot).not.toHaveBeenCalled();
+      resume.resolve();
+      await outcome;
+      expect(mocks.releasePublishedSnapshot).toHaveBeenCalledOnce();
+      expect(mocks.activateSnapshot).not.toHaveBeenCalled();
+      expect(mocks.loadSnapshot).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains a published owner while an explicitly requested catalog refresh fails", async () => {
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const failure = new Error("catalog refresh failed");
+    const snapshot = { ...fullSnapshot, loadFullModelCatalog: vi.fn() };
+    mocks.prepareSnapshot.mockResolvedValue(snapshot);
+    mocks.refreshStaleCatalog.mockImplementation(async () => {
+      entered.resolve();
+      await resume.promise;
+      expect(mocks.releasePublishedSnapshot).not.toHaveBeenCalled();
+      throw failure;
+    });
+    const project = vi.fn();
+    const result = withPreparedModelCatalogOwner({ refreshFullCatalog: true }, project);
+    const outcome = expect(result).rejects.toBe(failure);
+    await entered.promise;
+    expect(mocks.releasePublishedSnapshot).not.toHaveBeenCalled();
+    resume.resolve();
+    await outcome;
+    expect(project).not.toHaveBeenCalled();
+    expect(mocks.releasePublishedSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("releases a published claim rejected by the exact config policy", async () => {
+    mocks.prepareSnapshot.mockResolvedValue({
+      ...fullSnapshot,
+      config: { agents: { defaults: { model: "openai/old" } } },
+    });
+    const project = vi.fn();
+    await expect(withPreparedModelCatalogOwner({}, project)).rejects.toBeInstanceOf(
+      PreparedModelCatalogConfigReplacedError,
+    );
+    expect(project).not.toHaveBeenCalled();
+    expect(mocks.releasePublishedSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.activateSnapshot).not.toHaveBeenCalled();
   });
 
   it.each([

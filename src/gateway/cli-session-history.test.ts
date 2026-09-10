@@ -12,6 +12,7 @@ import {
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
@@ -24,6 +25,12 @@ import { expectRecordFields, requireGatewayRecord } from "./test-helpers.asserti
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
 type AugmentCliHistoryParams = Parameters<typeof resolveChatHistoryWithCliSessionImports>[0];
+
+const CLAUDE_RESUME_DRIFT_NOTES = [
+  "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=system-prompt.",
+  "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=prompt-tools.",
+  "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=system-prompt,prompt-tools.",
+] as const;
 
 function requireFallbackSeed(
   seed: ReturnType<typeof readClaudeCliFallbackSeed>,
@@ -643,7 +650,7 @@ describe("cli session history", () => {
             ...(importedTimestamp === undefined ? {} : { timestamp: importedTimestamp }),
             message: {
               role: "user",
-              content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n${mention}`,
+              content: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nlook at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n${mention}`,
             },
           }),
           "utf-8",
@@ -670,7 +677,13 @@ describe("cli session history", () => {
         });
 
         expect(merged).toHaveLength(1);
-        expect(readRecord(readRecord(merged[0])["__openclaw"]).media).toHaveLength(1);
+        expect(readRecord(readRecord(merged[0])["__openclaw"])).toMatchObject({
+          id: localEntryId,
+          importedFrom: "claude-cli",
+          cliSessionId: sessionId,
+          externalId: "image-only-user",
+          media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
+        });
       });
     },
   );
@@ -718,6 +731,331 @@ describe("cli session history", () => {
       expect(merged.at(-1)).toBe(importedMessages[localCount]);
     },
   );
+
+  it.each(
+    CLAUDE_RESUME_DRIFT_NOTES.flatMap((note) =>
+      ["string", "text block"].map((shape) => ({ note, shape })),
+    ),
+  )(
+    "dedupes a drift-note user import against the local turn it repeats ($shape, $note)",
+    ({ note, shape }) => {
+      const timestamp = Date.parse("2026-09-10T10:57:09.764Z");
+      const localMessage = {
+        role: "user",
+        content: "test ping...",
+        timestamp,
+        __openclaw: { id: "local-test-ping", senderIsOwner: true },
+      };
+      const importedText = `${note}\n\ntest ping...`;
+      const importedMessage = {
+        role: "user",
+        content: shape === "string" ? importedText : [{ type: "text", text: importedText }],
+        timestamp: timestamp + 1_531,
+        __openclaw: {
+          importedFrom: "claude-cli",
+          cliSessionId: "session-1",
+          externalId: "drift-user",
+        },
+      };
+      const before = structuredClone({ localMessage, importedMessage });
+
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [localMessage],
+        importedMessages: [importedMessage],
+      });
+
+      expect(merged).toEqual([
+        {
+          ...localMessage,
+          __openclaw: { ...localMessage["__openclaw"], ...importedMessage["__openclaw"] },
+        },
+      ]);
+      expect({ localMessage, importedMessage }).toEqual(before);
+    },
+  );
+
+  it.each([
+    [
+      "first sentence followed by user prose",
+      "OpenClaw resumed this CLI session after prompt content changed. This is my own note.\n\nhello",
+    ],
+    [
+      "unknown reason",
+      `${CLAUDE_RESUME_DRIFT_NOTES[0].replace("system-prompt", "user-choice")}\n\nhello`,
+    ],
+    ["empty reasons", `${CLAUDE_RESUME_DRIFT_NOTES[0].replace("system-prompt", "")}\n\nhello`],
+    [
+      "repeated reason",
+      `${CLAUDE_RESUME_DRIFT_NOTES[0].replace("system-prompt", "system-prompt,system-prompt")}\n\nhello`,
+    ],
+    [
+      "reversed reasons",
+      `${CLAUDE_RESUME_DRIFT_NOTES[2].replace("system-prompt,prompt-tools", "prompt-tools,system-prompt")}\n\nhello`,
+    ],
+    ["extra prose on the note line", `${CLAUDE_RESUME_DRIFT_NOTES[0]} Keep this text.\n\nhello`],
+    [
+      "extra line before the separator",
+      `${CLAUDE_RESUME_DRIFT_NOTES[0]}\nKeep this text.\n\nhello`,
+    ],
+    ["single newline separator", `${CLAUDE_RESUME_DRIFT_NOTES[0]}\nhello`],
+    ["no separator", `${CLAUDE_RESUME_DRIFT_NOTES[0]}hello`],
+    ["leading space", ` ${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`],
+    ["leading newline", `\n${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`],
+    ["note in the middle", `Keep this text.\n\n${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`],
+    ["two notes", `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n${CLAUDE_RESUME_DRIFT_NOTES[1]}\n\nhello`],
+  ])("retains a distinct imported user row with %s", (_label, content) => {
+    const localMessage = { role: "user", content: "hello", timestamp: 1_000 };
+    const importedMessage = {
+      role: "user",
+      content,
+      timestamp: 1_001,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "native-user",
+      },
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [importedMessage],
+    });
+
+    expect(merged).toEqual([localMessage, importedMessage]);
+  });
+
+  it.each([
+    CLAUDE_RESUME_DRIFT_NOTES[0],
+    `${CLAUDE_RESUME_DRIFT_NOTES[0]}\nhello`,
+    ...CLAUDE_RESUME_DRIFT_NOTES.map((note) => `${note}\n\nhello`),
+  ])("matches literal note text: %s", (content) => {
+    const localMessage = { role: "user", content, timestamp: 1_000 };
+    const importedMeta = {
+      importedFrom: "claude-cli",
+      cliSessionId: "session-1",
+      externalId: "literal-note",
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [{ ...localMessage, timestamp: 1_001, __openclaw: importedMeta }],
+    });
+
+    expect(merged).toEqual([{ ...localMessage, __openclaw: importedMeta }]);
+  });
+
+  it("prefers a literal note match and preserves the distinct unprefixed turn", () => {
+    const literal = `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`;
+    const localMessages = [
+      { role: "user", content: "hello", timestamp: 1_000 },
+      { role: "user", content: literal, timestamp: 1_001 },
+    ];
+    const importedMeta = {
+      importedFrom: "claude-cli",
+      cliSessionId: "session-1",
+      externalId: "literal-note",
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: [
+        { role: "user", content: literal, timestamp: 1_002, __openclaw: importedMeta },
+      ],
+    });
+
+    expect(merged).toEqual([localMessages[0], { ...localMessages[1], __openclaw: importedMeta }]);
+  });
+
+  it.each(["text", "external identity"])(
+    "keeps an ordinary unprefixed import eligible after a literal %s match",
+    (matchKind) => {
+      const literal = `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`;
+      const literalMeta = {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "literal-note",
+      };
+      const plainMeta = { ...literalMeta, externalId: "plain-user" };
+      const localMessages = [
+        { role: "user", content: "hello", timestamp: 1_000 },
+        {
+          role: "user",
+          content: literal,
+          timestamp: 1_001,
+          ...(matchKind === "external identity" ? { __openclaw: literalMeta } : {}),
+        },
+      ];
+
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages,
+        importedMessages: [
+          { role: "user", content: literal, timestamp: 1_002, __openclaw: literalMeta },
+          { role: "user", content: "hello", timestamp: 1_003, __openclaw: plainMeta },
+        ],
+      });
+
+      expect(merged).toEqual([
+        { ...localMessages[0], __openclaw: plainMeta },
+        { ...localMessages[1], __openclaw: literalMeta },
+      ]);
+    },
+  );
+
+  it.each([
+    {
+      label: "literal then stripped",
+      firstLocalIsLiteral: false,
+      firstImportTime: 1_002,
+      secondImportTime: 1_003,
+    },
+    {
+      label: "stripped then literal",
+      firstLocalIsLiteral: true,
+      firstImportTime: 600_001,
+      secondImportTime: 1_002,
+    },
+  ])(
+    "keeps repeated native text order when matching $label",
+    ({ firstLocalIsLiteral, firstImportTime, secondImportTime }) => {
+      const literal = `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`;
+      const localMessages = [
+        { role: "user", content: firstLocalIsLiteral ? literal : "hello", timestamp: 1_000 },
+        {
+          role: "user",
+          content: firstLocalIsLiteral ? "hello" : literal,
+          timestamp: firstImportTime,
+        },
+      ];
+      const firstMeta = {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "first-import",
+      };
+      const laterImport = {
+        role: "user",
+        content: literal,
+        timestamp: secondImportTime,
+        __openclaw: { ...firstMeta, externalId: "later-import" },
+      };
+
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages,
+        importedMessages: [
+          { role: "user", content: literal, timestamp: firstImportTime, __openclaw: firstMeta },
+          laterImport,
+        ],
+      });
+
+      expect(merged).toHaveLength(3);
+      expect(merged).toContainEqual(localMessages[0]);
+      expect(merged).toContainEqual({ ...localMessages[1], __openclaw: firstMeta });
+      expect(merged).toContainEqual(laterImport);
+    },
+  );
+
+  it.each([1_000, undefined])(
+    "keeps ordinary matches after an unsuccessful stripped lookup (timestamp=%s)",
+    (timestamp) => {
+      const literal = `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`;
+      const localMessages = [
+        { role: "user", content: "hello", timestamp },
+        { role: "user", content: literal, timestamp: 1_001 },
+      ];
+      const literalMeta = {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "literal-user",
+      };
+      const plainMeta = { ...literalMeta, externalId: "plain-user" };
+      const repeatedImport = {
+        role: "user",
+        content: literal,
+        timestamp: 1_003,
+        __openclaw: { ...literalMeta, externalId: "repeated-user" },
+      };
+
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages,
+        importedMessages: [
+          { role: "user", content: literal, timestamp: 1_002, __openclaw: literalMeta },
+          repeatedImport,
+          { role: "user", content: "hello", timestamp: 1_004, __openclaw: plainMeta },
+        ],
+      });
+
+      expect(merged).toEqual([
+        { ...localMessages[0], __openclaw: plainMeta },
+        { ...localMessages[1], __openclaw: literalMeta },
+        repeatedImport,
+      ]);
+    },
+  );
+
+  it.each([
+    {
+      label: "ordinary local user text",
+      role: "user",
+      localContent: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`,
+      importedContent: "hello",
+      importedFrom: "claude-cli",
+    },
+    {
+      label: "assistant text",
+      role: "assistant",
+      localContent: "hello",
+      importedContent: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`,
+      importedFrom: "claude-cli",
+    },
+    {
+      label: "non-Claude imported text",
+      role: "user",
+      localContent: "hello",
+      importedContent: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`,
+      importedFrom: "other-cli",
+    },
+  ])(
+    "does not strip drift notes from $label",
+    ({ role, localContent, importedContent, importedFrom }) => {
+      const localMessage = { role, content: localContent, timestamp: 1_000 };
+      const importedMessage = {
+        role,
+        content: importedContent,
+        timestamp: 1_001,
+        __openclaw: { importedFrom, cliSessionId: "session-1", externalId: "native-row" },
+      };
+
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [localMessage],
+        importedMessages: [importedMessage],
+      });
+
+      expect(merged).toEqual([localMessage, importedMessage]);
+    },
+  );
+
+  it.each([
+    { label: "different text", text: "a different ask", elapsed: 1_531 },
+    { label: "outside the match window", text: "hello", elapsed: 5 * 60 * 1_000 + 1 },
+  ])("retains an exact drift-note import with $label", ({ text, elapsed }) => {
+    const localMessage = { role: "user", content: "hello", timestamp: 1_000 };
+    const importedMessage = {
+      role: "user",
+      content: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n${text}`,
+      timestamp: localMessage.timestamp + elapsed,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "native-user",
+      },
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [importedMessage],
+    });
+
+    expect(merged).toEqual([localMessage, importedMessage]);
+  });
 
   it("retains mention-only imports near unrelated local image turns", () => {
     const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
@@ -1470,8 +1808,7 @@ describe("cli session history", () => {
     const importedMessages = [
       {
         role: "user",
-        content:
-          'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+        content: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nSender: ⟦openclaw:ctx⟧\n\`\`\`json\n{"label":"openclaw-control-ui"}\n\`\`\`\n\n[Thu 2026-03-26 16:29 GMT] hi [[reply_to_current]]`,
         timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
         __openclaw: {
           importedFrom: "claude-cli",
@@ -1583,7 +1920,7 @@ describe("cli session history", () => {
           {
             role: "user",
             uuid: "user-secret-copy",
-            content: importRedacted ? redactedContent : secretText,
+            content: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n${importRedacted ? redactedContent : secretText}`,
           },
         ]),
         "utf-8",
@@ -1659,7 +1996,11 @@ describe("cli session history", () => {
       await fs.writeFile(
         filePath,
         createClaudeTextHistoryLines([
-          { role: "user", uuid: externalId, content: "original imported text" },
+          {
+            role: "user",
+            uuid: externalId,
+            content: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\noriginal imported text`,
+          },
         ]),
         "utf-8",
       );
@@ -1667,6 +2008,7 @@ describe("cli session history", () => {
         {
           role: "user",
           content: "edited local text",
+          timestamp: Date.parse("2026-03-26T16:39:54.800Z"),
           __openclaw: {
             importedFrom: "claude-cli",
             externalId,
@@ -1754,6 +2096,92 @@ describe("cli session history", () => {
     expect(readRecord(readRecord(merged[2])["__openclaw"]).externalId).toBe("later-id");
   });
 
+  it.each([CLAUDE_RESUME_DRIFT_NOTES[0], CLAUDE_RESUME_DRIFT_NOTES[1]])(
+    "keeps drift-note order after an edited exact identity: %s",
+    (laterNote) => {
+      const earlierLocal = { role: "user", content: "Original ask", timestamp: 1_000 };
+      const exactMeta = {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "exact-user",
+      };
+      const exactLocal = {
+        role: "user",
+        content: "Edited ask",
+        timestamp: 1_001,
+        __openclaw: exactMeta,
+      };
+      const laterImport = {
+        role: "user",
+        content: `${laterNote}\n\nOriginal ask`,
+        timestamp: 1_003,
+        __openclaw: { ...exactMeta, externalId: "later-user" },
+      };
+
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [earlierLocal, exactLocal],
+        importedMessages: [
+          {
+            role: "user",
+            content: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nOriginal ask`,
+            timestamp: 1_002,
+            __openclaw: exactMeta,
+          },
+          laterImport,
+        ],
+      });
+
+      expect(merged).toEqual([earlierLocal, exactLocal, laterImport]);
+    },
+  );
+
+  it.each([CLAUDE_RESUME_DRIFT_NOTES[0], CLAUDE_RESUME_DRIFT_NOTES[1]])(
+    "keeps drift-note order after an exact image turn: %s",
+    (laterNote) => {
+      const earlierLocal = { role: "user", content: "Same caption", timestamp: 1_000 };
+      const localEntryId = "local-image-order";
+      const imageLocal = {
+        role: "user",
+        content: "Same caption",
+        timestamp: 1_001,
+        __openclaw: {
+          id: localEntryId,
+          media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/order.png" }],
+        },
+      };
+      const imageMeta = {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "image-user",
+      };
+      const laterImport = {
+        role: "user",
+        content: `${laterNote}\n\nSame caption`,
+        timestamp: 1_003,
+        __openclaw: { ...imageMeta, externalId: "later-user" },
+      };
+
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [earlierLocal, imageLocal],
+        importedMessages: [
+          {
+            role: "user",
+            content: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nSame caption\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/tmp/openclaw/openclaw-cli-images/${"a".repeat(64)}.png`,
+            timestamp: 1_002,
+            __openclaw: imageMeta,
+          },
+          laterImport,
+        ],
+      });
+
+      expect(merged).toEqual([
+        earlierLocal,
+        { ...imageLocal, __openclaw: { ...imageLocal["__openclaw"], ...imageMeta } },
+        laterImport,
+      ]);
+    },
+  );
+
   it("does not surface a secret present only in imported history after merge", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const importedSecret = "sk-abcdef1234567890xyz";
@@ -1781,11 +2209,15 @@ describe("cli session history", () => {
     });
   });
 
-  it("does not dedupe external ids from different imported sessions", () => {
+  it.each([
+    { label: "different imported sessions", externalId: "same-id", cliSessionId: "session-2" },
+    { label: "different native messages", externalId: "other-id", cliSessionId: "session-1" },
+  ])("does not dedupe drift-note text across $label", ({ externalId, cliSessionId }) => {
     const localMessages = [
       {
         role: "user",
-        content: "hello from first session",
+        content: "hello",
+        timestamp: 1_000,
         __openclaw: {
           importedFrom: "claude-cli",
           externalId: "same-id",
@@ -1796,17 +2228,18 @@ describe("cli session history", () => {
     const importedMessages = [
       {
         role: "user",
-        content: "hello from second session",
+        content: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`,
+        timestamp: 1_001,
         __openclaw: {
           importedFrom: "claude-cli",
-          externalId: "same-id",
-          cliSessionId: "session-2",
+          externalId,
+          cliSessionId,
         },
       },
     ];
 
     const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
-    expect(merged).toHaveLength(2);
+    expect(merged).toEqual([...localMessages, ...importedMessages]);
   });
 
   it.each([
@@ -2515,25 +2948,59 @@ describe("cli session history", () => {
     });
   });
 
-  it("falls back to legacy claudeCliSessionId when newer fields are absent", async () => {
-    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const messages = resolveChatHistoryWithCliSessionImports({
-        entry: {
+  it.each([false, true])(
+    "imports a legacy Claude conversation after Doctor migration (locked=%s)",
+    async (locked) => {
+      await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
+        const { maybeRepairCodexSessionRoutes } =
+          await import("../commands/doctor/shared/codex-route-session-repair.js");
+        const stateDir = path.join(homeDir, "state");
+        const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const key = "agent:main:cli-history";
+        const entry: SessionEntry = {
           sessionId: "openclaw-session",
-          updatedAt: Date.now(),
+          updatedAt: 1,
           claudeCliSessionId: sessionId,
-        },
-        provider: "claude-cli",
-        localMessages: [],
-        homeDir,
-      }).messages;
-      expect(messages).toHaveLength(3);
-      expectFields(messages[0], {
-        role: "user",
+          ...(locked ? { modelSelectionLocked: true, agentHarnessId: "claude-cli" } : {}),
+        };
+        expect(
+          resolveChatHistoryWithCliSessionImports({
+            entry,
+            provider: "claude-cli",
+            localMessages: [],
+            homeDir,
+          }).messages,
+        ).toEqual([]);
+        await fs.mkdir(path.dirname(storePath), { recursive: true });
+        await fs.writeFile(storePath, JSON.stringify({ [key]: entry }));
+        await maybeRepairCodexSessionRoutes({
+          cfg: {
+            plugins: { enabled: false },
+            session: { store: storePath },
+            agents: { entries: { main: {} }, defaults: { model: "anthropic/claude-sonnet-4-6" } },
+          },
+          env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_HOME: homeDir },
+          shouldRepair: true,
+        });
+        const reopened: Record<string, SessionEntry> = JSON.parse(
+          await fs.readFile(storePath, "utf8"),
+        );
+        expect(reopened[key]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(sessionId);
+        expect(reopened[key]?.modelSelectionLocked).toBe(locked ? true : undefined);
+        const messages = resolveChatHistoryWithCliSessionImports({
+          entry: reopened[key],
+          provider: "claude-cli",
+          localMessages: [],
+          homeDir,
+        }).messages;
+        expect(messages).toHaveLength(3);
+        expectFields(messages[0], {
+          role: "user",
+        });
+        expectCliSessionMarker(messages[0], sessionId);
       });
-      expectCliSessionMarker(messages[0], sessionId);
-    });
-  });
+    },
+  );
 });
 
 describe("readClaudeCliFallbackSeed", () => {

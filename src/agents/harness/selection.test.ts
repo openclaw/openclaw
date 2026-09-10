@@ -1929,7 +1929,11 @@ describe("runAgentHarnessAttempt", () => {
     expect(received).toEqual([false, false, false, false, false, true, true, true, true, true]);
   });
 
-  it("rejects restrictive policy before an unsupported plugin harness runs", async () => {
+  it.each([
+    { conversationToolPolicy: { deny: ["exec"] } },
+    { toolsAllow: [] },
+    { disableTools: true },
+  ])("rejects restrictive policy %j before an unsupported plugin harness runs", async (policy) => {
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("other"));
     registerAgentHarness(
       {
@@ -1945,13 +1949,105 @@ describe("runAgentHarnessAttempt", () => {
     await expect(
       runAgentHarnessAttempt({
         ...createAttemptParams(),
-        conversationToolPolicy: { deny: ["exec"] },
+        ...policy,
       }),
     ).rejects.toThrow(
       "Other runtime cannot enforce this conversation's tool policy. Use the embedded runtime",
     );
     expect(runAttempt).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "omitted runtime allowlist",
+      policy: {},
+      restricted: false,
+      tools: undefined,
+      denyAll: false,
+    },
+    {
+      name: "empty config allowlist",
+      policy: { config: { tools: { allow: [] } } },
+      restricted: false,
+      tools: undefined,
+      denyAll: false,
+    },
+    {
+      name: "empty runtime allowlist",
+      policy: { toolsAllow: [] },
+      restricted: true,
+      tools: [],
+      denyAll: true,
+    },
+    {
+      name: "disabled tools",
+      policy: { disableTools: true },
+      restricted: true,
+      tools: [],
+      denyAll: true,
+    },
+    {
+      name: "disabled tools with wildcard",
+      policy: { disableTools: true, toolsAllow: ["*"] },
+      restricted: true,
+      tools: [],
+      denyAll: true,
+    },
+    {
+      name: "narrow runtime allowlist",
+      policy: { toolsAllow: ["read"] },
+      restricted: true,
+      tools: ["read"],
+      denyAll: false,
+    },
+    {
+      name: "wildcard runtime allowlist",
+      policy: { toolsAllow: ["*"] },
+      restricted: false,
+      tools: ["*"],
+      denyAll: false,
+    },
+  ])(
+    "preserves $name semantics at plugin handoff",
+    async ({ policy, restricted, tools, denyAll }) => {
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+        createAttemptResult("codex"),
+      );
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          conversationToolPolicySupport: "exact",
+          conversationToolPolicySafeDenyTools: ["image_generate"],
+          supports: (ctx) =>
+            ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+          runAttempt,
+        },
+        { ownerPluginId: "codex" },
+      );
+
+      await runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        ...policy,
+        extraSystemPrompt: "Existing operator note.",
+      });
+
+      expect(runAttempt).toHaveBeenCalledTimes(1);
+      const attempt = runAttempt.mock.calls[0]?.[0];
+      expect(attempt?.pluginHarnessToolPolicyRestricted).toBe(restricted);
+      expect(attempt?.toolsAllow).toEqual(tools);
+      expect(attempt?.extraSystemPrompt).toContain("Existing operator note.");
+      if (denyAll) {
+        expect(attempt?.extraSystemPrompt).toContain(
+          "Tool and file actions are disabled by runtime policy.",
+        );
+      } else {
+        expect(attempt?.extraSystemPrompt).not.toContain(
+          "Tool and file actions are disabled by runtime policy.",
+        );
+      }
+    },
+  );
 
   it("adds chat policy wording for plugin harness group deny-all", async () => {
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));

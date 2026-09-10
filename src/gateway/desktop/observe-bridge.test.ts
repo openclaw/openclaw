@@ -5,6 +5,7 @@ import path from "node:path";
 import { Duplex } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
@@ -14,8 +15,12 @@ import {
   handleDesktopObserveUpgrade,
   mintDesktopObserverToken,
 } from "./observe-bridge.js";
-import type { DesktopObserveRequester } from "./observe-requester.js";
+import {
+  resolveDesktopObserveRequester,
+  type DesktopObserveRequester,
+} from "./observe-requester.js";
 import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
+import { createDesktopSessionRegistry, type DesktopSessionRegistry } from "./session-registry.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 const logPaths = createSuiteLogPathTracker("desktop-observer-diagnostics-");
@@ -65,6 +70,7 @@ async function createProxyHarness(
     stream?: Duplex;
     preauth?: RfbPreauthDescriptor;
     requester?: DesktopObserveRequester;
+    registry?: DesktopSessionRegistry;
   } = {},
 ) {
   // macOS sockaddr_un cannot hold the test runner's nested temporary path.
@@ -99,7 +105,7 @@ async function createProxyHarness(
   );
   httpServer.on("upgrade", (req, socket, head) => {
     handleDesktopObserveUpgrade(req, socket, head, {
-      registry: {
+      registry: params.registry ?? {
         claimStream: () => params.stream,
         attachObserver: (_environmentId, observer) => {
           closeObserver.mockImplementation((code: number, reason: string) => {
@@ -177,6 +183,59 @@ async function expectUnauthorizedObserver(url: string): Promise<void> {
 }
 
 describe.runIf(process.platform !== "win32")("worker desktop observer proxy", () => {
+  it.each([
+    {
+      displayName: "Morgan Example",
+      userId: "morgan@example.test",
+      reason: "control-taken:Morgan Example",
+    },
+    {
+      displayName: "  ",
+      userId: "morgan@example.test",
+      reason: "control-taken:morgan@example.test",
+    },
+    { displayName: null, userId: undefined, reason: "control-taken" },
+    { displayName: "A".repeat(110), userId: undefined, reason: `control-taken:${"A".repeat(109)}` },
+    { displayName: "🦞".repeat(28), userId: undefined, reason: `control-taken:${"🦞".repeat(27)}` },
+  ])(
+    "identifies a controller takeover with a valid close reason ($reason)",
+    async ({ displayName, userId, reason }) => {
+      const registry = createDesktopSessionRegistry();
+      cleanup.push(() => registry.stopAll());
+      await registry.activate({ sourceKey: "worker:pump", ownerEpoch: 2 });
+      const previous = await createProxyHarness({ control: true, registry });
+      const closed = new Promise<[number, string]>((resolve) => {
+        previous.ws.once("close", (code, value) => resolve([code, value.toString()]));
+      });
+      const requester = resolveDesktopObserveRequester({
+        client: {
+          authenticatedUserId: userId,
+          authenticatedUserProfile: {
+            profileId: "synthetic-profile",
+            displayName,
+            hasAvatar: false,
+            updatedAt: 0,
+          },
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: {
+              id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+              displayName: "Unverified wire name",
+              version: "test",
+              platform: "test",
+              mode: "webchat",
+            },
+          },
+        },
+      });
+      const current = await createProxyHarness({ control: true, registry, requester });
+      await expect(closed).resolves.toEqual([4000, reason]);
+      expect(Buffer.byteLength(reason)).toBeLessThanOrEqual(123);
+      expect(current.ws.readyState).toBe(WebSocket.OPEN);
+    },
+  );
+
   it("keeps an idle observer alive without adding bytes to RFB and retires on owner close", async () => {
     const logCapture = createDiagnosticLogRecordCapture();
     logCaptures.push(logCapture);

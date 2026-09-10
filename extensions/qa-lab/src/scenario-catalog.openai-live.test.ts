@@ -182,6 +182,9 @@ describe("qa scenario catalog", () => {
     expect(config?.allowedAdversarialDiagnostics).toContain(
       "model catalog provider registration missing provider",
     );
+    expect(config?.allowedAdversarialDiagnostics).toContain(
+      "memory prompt preparation registration missing prepare function",
+    );
     expect(
       config?.requiredAdversarialDiagnostics?.every((entry) => typeof entry === "string"),
     ).toBe(true);

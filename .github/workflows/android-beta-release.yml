@@ -96,7 +96,7 @@ jobs:
       actions: read
       attestations: read
       contents: read
-    runs-on: macos-26-intel
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     environment: android-beta-release
     concurrency:
@@ -134,6 +134,40 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Prepare trusted Linux Android tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS/$RUNNER_ARCH" = "Linux/X64"
+          for executable in /usr/bin/apt-get /usr/bin/sudo /usr/bin/timeout; do
+            test -x "$executable"
+          done
+          /usr/bin/timeout --signal=TERM --kill-after=10s 300s \
+            /usr/bin/sudo env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update
+          /usr/bin/timeout --signal=TERM --kill-after=10s 300s \
+            /usr/bin/sudo env DEBIAN_FRONTEND=noninteractive \
+            /usr/bin/apt-get install -y --no-install-recommends acl imagemagick
+          test -x /usr/bin/convert
+          test -x /usr/bin/identify
+
+          trusted_root="apps/android/build/mobile-release-ci/authority"
+          adapter_path="scripts/android-sips-linux.sh"
+          test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"
+          read -r adapter_mode adapter_type adapter_oid adapter_name < <(
+            git -C "$trusted_root" ls-tree HEAD -- "$adapter_path"
+          )
+          if [[ "$adapter_mode" != "100755" || "$adapter_type" != "blob" ||
+            "$adapter_name" != "$adapter_path" ]]; then
+            echo "::error::Trusted Linux screenshot adapter is not a committed executable file"
+            exit 1
+          fi
+          tool_dir="$RUNNER_TEMP/openclaw-android-tools"
+          adapter="$tool_dir/android-sips-linux.sh"
+          mkdir -p "$tool_dir"
+          git -C "$trusted_root" cat-file blob "$adapter_oid" >"$adapter"
+          chmod 700 "$adapter"
+          cmp -s "$trusted_root/$adapter_path" "$adapter"
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -147,8 +181,50 @@ jobs:
           cache-mode: off
           install-screenshot-emulators: "true"
 
-      - name: Verify Android emulator acceleration
-        run: emulator -accel-check
+      - name: Verify Linux KVM acceleration
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_kvm_acceleration() {
+            local output_file="$1"
+            local raw_output="${output_file}.raw"
+            local accel_status
+            local accel_timed_out=false
+
+            if /usr/bin/timeout --signal=TERM --kill-after=2s 15s \
+              emulator -accel-check >"$raw_output" 2>&1; then
+              accel_status=0
+            else
+              accel_status=$?
+            fi
+            if [[ "$accel_status" == "124" || "$accel_status" == "137" ]]; then
+              accel_timed_out=true
+            fi
+            head -c 16384 "$raw_output" >"$output_file"
+            rm -f "$raw_output"
+            {
+              printf '\nexit_status=%s\n' "$accel_status"
+              printf 'timed_out=%s\n' "$accel_timed_out"
+            } >>"$output_file"
+            cat "$output_file"
+            if [[ "$accel_status" -ne 0 || "$accel_timed_out" != "false" ]]; then
+              echo "::error::Android emulator acceleration check failed"
+              return 1
+            fi
+            if ! grep -Eiq '\bKVM\b.*\b(available|usable)\b' "$output_file"; then
+              echo "::error::Android emulator did not confirm usable KVM acceleration"
+              return 1
+            fi
+          }
+
+          test "$RUNNER_OS/$RUNNER_ARCH" = "Linux/X64"
+          test -c /dev/kvm
+          current_user="$(id -un)"
+          /usr/bin/sudo /usr/bin/setfacl -m "u:${current_user}:rw" /dev/kvm
+          /usr/bin/getfacl -cp /dev/kvm | grep -Fqx "user:${current_user}:rw-"
+          KVM_DEVICE=/dev/kvm /bin/bash -c \
+            'test -c "$KVM_DEVICE" && test -r "$KVM_DEVICE" && test -w "$KVM_DEVICE"'
+          verify_kvm_acceleration "$RUNNER_TEMP/android-emulator-kvm-check.txt"
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
@@ -266,6 +342,7 @@ jobs:
           OPENCLAW_MOBILE_RELEASE_INTENT_PATH: ${{ runner.temp }}/mobile-release-intent-android/intent.json
           OPENCLAW_MOBILE_RELEASE_REF_MODE: intent
           OPENCLAW_MOBILE_RELEASE_TARGET_REF: ${{ needs.authorize.outputs.target_ref }}
+          SIPS: ${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh
           SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW: "true"
           SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW: "false"
         run: |

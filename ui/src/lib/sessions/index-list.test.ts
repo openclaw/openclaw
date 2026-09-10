@@ -224,6 +224,71 @@ describe("session list requests", () => {
     }
   });
 
+  it.each([
+    { managedAgentId: "work", expectedSource: "managed" },
+    { managedAgentId: "main", expectedSource: "primary" },
+  ] as const)(
+    "keeps a $managedAgentId global query scoped when a newer Main observation arrives",
+    async ({ managedAgentId, expectedSource }) => {
+      // Explicit session IDs are scoped to agent stores, including their global rows.
+      const primaryRow = {
+        key: "global",
+        kind: "global" as const,
+        agentId: "main",
+        sessionId: "operator-session",
+        updatedAt: 10,
+        label: "Current Main label",
+        derivedTitle: "Current Main title",
+        lastMessagePreview: "Current Main preview",
+      };
+      const managedRow = {
+        ...primaryRow,
+        agentId: managedAgentId,
+        label: "Managed query label",
+        derivedTitle: "Managed query title",
+        lastMessagePreview: "Managed query preview",
+      };
+      const held = createDeferred<SessionsListResult>();
+      const request = vi.fn(async (method: string, params?: ListParams) => {
+        expect(method).toBe("sessions.list");
+        return params?.archived === "all" ? held.promise : sessionsResult([primaryRow], 10);
+      });
+      const { sessions } = sessionHarness(request);
+      const query = { agentId: managedAgentId, archivedFilter: "all" as const };
+      const listener = vi.fn();
+      const observation = sessions.observeList(query, listener);
+      const pending = observation.refresh();
+
+      try {
+        expect(request).toHaveBeenCalledExactlyOnceWith(
+          "sessions.list",
+          expect.objectContaining({ agentId: managedAgentId, archived: "all" }),
+        );
+        await sessions.refresh({ agentId: "main", force: true });
+        held.resolve(sessionsResult([managedRow], 10));
+        await pending;
+
+        const expectedRow = expectedSource === "primary" ? primaryRow : managedRow;
+        expect(sessions.listSnapshot(query)).toMatchObject({
+          agentId: managedAgentId,
+          result: { sessions: [expectedRow] },
+        });
+        expect(listener).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            agentId: managedAgentId,
+            result: expect.objectContaining({ sessions: [expectedRow] }),
+          }),
+        );
+        expect(sessions.state.result?.sessions).toEqual([primaryRow]);
+      } finally {
+        held.resolve(sessionsResult([managedRow], 10));
+        await Promise.allSettled([pending]);
+        observation.dispose();
+        sessions.dispose();
+      }
+    },
+  );
+
   it("queues a reentrant observed refresh behind the current request", async () => {
     const firstResponse = createDeferred<SessionsListResult>();
     const secondResponse = createDeferred<SessionsListResult>();
@@ -269,78 +334,112 @@ describe("session list requests", () => {
     }
   });
 
-  it("refreshes a managed query after a local terminal outside the primary roster", async () => {
-    vi.useFakeTimers();
-    const key = "agent:writer:linked";
-    let writerFinished = false;
-    const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      const agentId = params?.agentId ?? "main";
-      const done = agentId === "writer" && writerFinished;
-      return sessionsResult(
-        [
-          {
-            key: agentId === "writer" ? key : `agent:${agentId}:main`,
-            kind: "direct",
-            updatedAt: done ? 2 : 1,
-            hasActiveRun: !done,
-            activeRunIds: done ? [] : [`${agentId}-run`],
-            status: done ? "done" : "running",
-          },
-        ],
-        done ? 2 : 1,
+  it.each([false, true])(
+    "settles managed-only terminals before refresh (refresh fails: %s)",
+    async (refreshFails) => {
+      vi.useFakeTimers();
+      const key = "agent:writer:linked";
+      let writerFinished = false;
+      const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        const agentId = params?.agentId ?? "main";
+        const done = agentId === "writer" && writerFinished;
+        if (done && refreshFails) {
+          throw new Error("List refresh failed");
+        }
+        const result = sessionsResult(
+          [
+            {
+              key: agentId === "writer" ? key : `agent:${agentId}:main`,
+              sessionId: `${agentId}-session`,
+              kind: "direct",
+              updatedAt: done ? 2 : 1,
+              hasActiveRun: !done,
+              activeRunIds: done ? [] : [`${agentId}-run`],
+              status: done ? "done" : "running",
+            },
+          ],
+          done ? 2 : 1,
+        );
+        return { ...result, totalCount: 3, hasMore: true, nextOffset: 1 };
+      });
+      const { sessions } = createSessionCapabilityHarness(
+        request as unknown as GatewayBrowserClient["request"],
       );
-    });
-    const { sessions } = createSessionCapabilityHarness(
-      request as unknown as GatewayBrowserClient["request"],
-    );
-    const writerQuery = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
-    const researchQuery = { ...writerQuery, agentId: "research" };
-    const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
-    const stopResearch = sessions.subscribeList(researchQuery, () => undefined);
+      const writerQuery = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
+      const otherWriterQuery = { ...writerQuery, ownerId: "ada" };
+      const researchQuery = { ...writerQuery, agentId: "research" };
+      const observed: unknown[] = [];
+      const stopWriter = sessions.subscribeList(writerQuery, (snapshot) => {
+        if (!snapshot.loading && !snapshot.result?.sessions[0]?.hasActiveRun) {
+          observed.push(sessions.listSnapshot(otherWriterQuery).result?.sessions[0]?.status);
+        }
+      });
+      const stopOtherWriter = sessions.subscribeList(otherWriterQuery, () => undefined);
+      const stopResearch = sessions.subscribeList(researchQuery, () => undefined);
 
-    try {
-      await sessions.refresh({ agentId: "main", force: true });
-      await sessions.refreshList(writerQuery);
-      await sessions.refreshList(researchQuery);
-      const primary = sessions.state.result;
-      expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
-        key,
-        hasActiveRun: true,
-        status: "running",
-      });
-      request.mockClear();
-      writerFinished = true;
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        await sessions.refreshList(writerQuery);
+        await sessions.refreshList(otherWriterQuery);
+        await sessions.refreshList(researchQuery);
+        const primary = sessions.state.result;
+        expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+          key,
+          hasActiveRun: true,
+          status: "running",
+        });
+        request.mockClear();
+        writerFinished = true;
 
-      sessions.reconcileRunTerminal({
-        sessionKeys: [key],
-        runId: "writer-run",
-        status: "done",
-        endedAt: 2,
-      });
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+        sessions.reconcileRunTerminal({
+          sessionKeys: [key],
+          runId: "writer-run",
+          status: "done",
+          endedAt: 2,
+        });
+        expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+          key,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        });
+        expect(observed).toEqual(["done"]);
+        expect(sessions.listSnapshot(writerQuery).result).toMatchObject({
+          count: 1,
+          totalCount: 3,
+          hasMore: true,
+          nextOffset: 1,
+        });
+        expect(request).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
-      expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
-        key,
-        hasActiveRun: false,
-        status: "done",
-      });
-      expect(sessions.state.result).toEqual(primary);
-      expect(sessions.listSnapshot(researchQuery).result?.sessions[0]).toMatchObject({
-        key: "agent:research:main",
-        hasActiveRun: true,
-        status: "running",
-      });
-      expect(request.mock.calls.map(([, params]) => params?.agentId)).not.toContain("research");
-    } finally {
-      stopWriter();
-      stopResearch();
-      sessions.dispose();
-      vi.useRealTimers();
-    }
-  });
+        expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+          key,
+          hasActiveRun: false,
+          status: "done",
+        });
+        expect(sessions.state.result).toEqual(primary);
+        expect(sessions.listSnapshot(writerQuery).error).toBe(
+          refreshFails ? "List refresh failed" : null,
+        );
+        expect(sessions.listSnapshot(researchQuery).result?.sessions[0]).toMatchObject({
+          key: "agent:research:main",
+          hasActiveRun: true,
+          status: "running",
+        });
+        expect(request.mock.calls.map(([, params]) => params?.agentId)).not.toContain("research");
+      } finally {
+        stopWriter();
+        stopOtherWriter();
+        stopResearch();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("forwards a trimmed parent key when listing child sessions", async () => {
     const request = vi.fn(async (_method: string, _params?: unknown) => listResult());

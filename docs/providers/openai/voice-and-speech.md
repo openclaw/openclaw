@@ -121,7 +121,7 @@ sidebarTitle: "Voice and speech"
     G.711 u-law (`g711_ulaw` / `audio/pcmu`) audio. For an `openai` API-key
     profile, the Gateway mints an ephemeral Realtime transcription client
     secret before opening the WebSocket. This streaming provider is for Voice
-    Call's realtime transcription path; Discord voice currently records short
+    Call's realtime transcription path; Discord voice records short
     segments and uses the batch `tools.media.audio` transcription path
     instead.
     </Note>
@@ -329,7 +329,7 @@ sidebarTitle: "Voice and speech"
     <Note>
     Realtime voice is selected when the session is created. OpenAI allows most
     session fields to change later, but the voice cannot be changed after the
-    model has emitted audio in that session. OpenClaw currently exposes the
+    model has emitted audio in that session. OpenClaw exposes the
     built-in Realtime voice ids as strings.
     </Note>
 

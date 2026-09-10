@@ -22,8 +22,8 @@ import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../../agents/model-selection.js";
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import {
+  acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
 } from "../../agents/simple-completion-runtime.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -33,6 +33,8 @@ import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { convertHeicToJpeg } from "../../media/media-services.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
@@ -193,79 +195,100 @@ async function runModelRun(params: {
         ]
       : params.prompt;
   if (params.transport === "local") {
-    const prepared = await prepareSimpleCompletionModelForAgent({
-      cfg,
-      agentId,
-      modelRef,
-      allowMissingApiKeyModes: ["aws-sdk"],
-      ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
-      skipAgentDiscovery: true,
-    });
-    if ("error" in prepared) {
-      throw new Error(prepared.error);
-    }
-    if (prepared.selection.provider === "codex") {
-      throw new Error(
-        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
-      );
-    }
-    const localModelRunSystemPrompt =
-      prepared.model.api === "openai-chatgpt-responses" ? LOCAL_MODEL_RUN_SYSTEM_PROMPT : undefined;
-    const result = await completeWithPreparedSimpleCompletionModel({
-      model: prepared.model,
-      auth: prepared.auth,
-      cfg,
-      context: {
-        ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
-        messages: [
-          {
-            role: "user",
-            content: messageContent,
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      options: {
-        maxTokens:
-          typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
-            ? prepared.model.maxTokens
-            : undefined,
-        ...(params.thinking ? { reasoning: params.thinking } : {}),
-      },
-    });
-    const text = collectModelRunText(result.content);
-    if (!text) {
-      const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
-      const detail =
-        typeof providerErrorMessage === "string" && providerErrorMessage.trim()
-          ? `: ${providerErrorMessage.trim()}`
-          : "";
-      throw new Error(
-        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
-      );
-    }
-    return {
-      ok: true,
-      capability: "model.run",
-      transport: "local" as const,
-      provider: prepared.selection.provider,
-      model: prepared.selection.modelId,
-      attempts: [],
-      ...(imageFiles.length > 0
-        ? {
-            inputs: imageFiles.map((image) => ({
-              path: image.path,
-              mimeType: image.mimeType,
-            })),
-          }
-        : {}),
-      outputs: [
-        {
-          text,
-          mediaUrl: null,
-        },
-      ],
-    } satisfies CapabilityEnvelope;
+    const callerResult = createDeferredCore<CapabilityEnvelope>();
+    const trackOwner = captureAsyncWorkTracker();
+    // Command completion can precede response callbacks and cancellation drainage.
+    void trackOwner(async () => {
+      const prepared = await acquireSimpleCompletionModelForAgent({
+        cfg,
+        agentId,
+        modelRef,
+        allowMissingApiKeyModes: ["aws-sdk"],
+        ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
+        skipAgentDiscovery: true,
+      });
+      if ("error" in prepared) {
+        throw new Error(prepared.error);
+      }
+      const work = new AsyncWorkScope();
+      try {
+        callerResult.resolve(
+          await work.track(async () => {
+            if (prepared.selection.provider === "codex") {
+              throw new Error(
+                'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+              );
+            }
+            const localModelRunSystemPrompt =
+              prepared.model.api === "openai-chatgpt-responses"
+                ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
+                : undefined;
+            const result = await completeWithPreparedSimpleCompletionModel({
+              model: prepared.model,
+              auth: prepared.auth,
+              cfg,
+              context: {
+                ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
+                messages: [
+                  {
+                    role: "user",
+                    content: messageContent,
+                    timestamp: Date.now(),
+                  },
+                ],
+              },
+              options: {
+                maxTokens:
+                  typeof prepared.model.maxTokens === "number" &&
+                  Number.isFinite(prepared.model.maxTokens)
+                    ? prepared.model.maxTokens
+                    : undefined,
+                ...(params.thinking ? { reasoning: params.thinking } : {}),
+              },
+            });
+            const text = collectModelRunText(result.content);
+            if (!text) {
+              const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
+              const detail =
+                typeof providerErrorMessage === "string" && providerErrorMessage.trim()
+                  ? `: ${providerErrorMessage.trim()}`
+                  : "";
+              throw new Error(
+                `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
+              );
+            }
+            return {
+              ok: true,
+              capability: "model.run",
+              transport: "local" as const,
+              provider: prepared.selection.provider,
+              model: prepared.selection.modelId,
+              attempts: [],
+              ...(imageFiles.length > 0
+                ? {
+                    inputs: imageFiles.map((image) => ({
+                      path: image.path,
+                      mimeType: image.mimeType,
+                    })),
+                  }
+                : {}),
+              outputs: [
+                {
+                  text,
+                  mediaUrl: null,
+                },
+              ],
+            } satisfies CapabilityEnvelope;
+          }),
+        );
+      } catch (error) {
+        callerResult.reject(error);
+      } finally {
+        await work.drain();
+        prepared.release();
+      }
+    }).catch((error: unknown) => callerResult.reject(error));
+    return await callerResult.promise;
   }
 
   const { provider, model } = requireProviderModelOverride(modelRef) ?? {};

@@ -81,6 +81,10 @@ import {
   log,
   resolveOpenAIClientBaseUrl,
 } from "./openai-transport-shared.js";
+import {
+  filterProviderTurnHeadersForExplicitOpencodeSession,
+  resolveProviderTransportTurnState,
+} from "./provider-transport-turn-state.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import {
   createWritableTransportEventStream,
@@ -127,50 +131,17 @@ function combineWebSocketTimeoutSignal(
   return AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, resolvedTimeoutMs))]);
 }
 
-function resolveProviderTransportTurnState(
-  model: Model,
-  params: {
-    sessionId?: string;
-    turnId: string;
-    attempt: number;
-    transport: "stream" | "websocket";
-  },
-) {
-  const normalizedProvider = model.provider.trim().toLowerCase();
-  const allowRuntimePluginLoad =
-    normalizedProvider === "openai" ||
-    normalizedProvider === "azure-openai" ||
-    normalizedProvider === "azure-openai-responses";
-  return getAiTransportHost().plugin.resolveTransportTurnState({
-    provider: model.provider,
-    modelId: model.id,
-    allowRuntimePluginLoad,
-    context: {
-      provider: model.provider,
-      modelId: model.id,
-      model,
-      sessionId: params.sessionId,
-      turnId: params.turnId,
-      attempt: params.attempt,
-      transport: params.transport,
-    },
-  });
-}
-
 export function createOpenAIResponsesClient(
   model: Model,
-  context: Context,
   apiKey: string,
-  optionHeaders?: Record<string, string>,
-  turnHeaders?: Record<string, string>,
-  sessionId?: string,
+  defaultHeaders: Record<string, string>,
   fetchOverride?: typeof globalThis.fetch,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: resolveOpenAIClientBaseUrl(model),
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
+    defaultHeaders,
     fetch: fetchOverride ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -227,22 +198,38 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           transport: websocketMode ? "websocket" : "stream",
         });
         const websocketSessionPolicy = websocketMode ? turnState?.websocket : undefined;
+        const httpTurnHeaders = filterProviderTurnHeadersForExplicitOpencodeSession(
+          model,
+          options,
+          turnState?.headers,
+        );
+        const websocketTurnHeaders = filterProviderTurnHeadersForExplicitOpencodeSession(
+          model,
+          options,
+          websocketSessionPolicy?.headers,
+        );
         const websocketHeaders = websocketMode
           ? buildOpenAIClientHeaders(
               model,
               context,
               options?.headers,
-              websocketSessionPolicy?.headers,
+              websocketTurnHeaders,
               options?.sessionId,
+              options?.cacheRetention,
             )
           : undefined;
-        const client = config.createClient(
+        const httpHeaders = buildOpenAIClientHeaders(
           model,
           context,
-          apiKey,
           options?.headers,
-          turnState?.headers,
+          httpTurnHeaders,
           options?.sessionId,
+          options?.cacheRetention,
+        );
+        const client = config.createClient(
+          model,
+          apiKey,
+          httpHeaders,
           compactRequest
             ? createBoundedOpenAIResponsesCompactionFetch(buildGuardedModelFetch(model))
             : undefined,
@@ -344,13 +331,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             sessionId,
             apiKey,
             baseUrl: model.baseUrl,
-            headers: buildOpenAIClientHeaders(
-              model,
-              context,
-              options?.headers,
-              turnState?.headers,
-              sessionId,
-            ),
+            headers: httpHeaders,
             request: params as ResponsesContinuationRequest,
             restoreRequest: () =>
               restoreResponsesReasoningState(context, model, responsesOptions, params),
@@ -662,20 +643,17 @@ function resolveAzureDeploymentName(model: Model): string {
   });
 }
 
-export function createAzureOpenAIClient(
+function createAzureOpenAIClient(
   model: Model,
-  context: Context,
   apiKey: string,
-  optionHeaders?: Record<string, string>,
-  turnHeaders?: Record<string, string>,
-  _sessionId?: string,
+  defaultHeaders: Record<string, string>,
   fetchOverride?: typeof globalThis.fetch,
 ) {
   const baseURL = model.baseUrl.replace(/\/+$/, "");
   const clientOptions = {
     apiKey,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders,
     baseURL,
     fetch: fetchOverride ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),

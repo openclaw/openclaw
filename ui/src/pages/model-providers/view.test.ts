@@ -227,7 +227,7 @@ describe("renderModelProviders", () => {
     document.body.replaceChildren();
   });
 
-  it("renders one Defaults section with the five default rows and canonical values", () => {
+  it("renders global defaults with agent override precedence and canonical values", () => {
     const onThinkingChange = vi.fn();
     const onFastModeChange = vi.fn();
     const container = mount(
@@ -241,9 +241,9 @@ describe("renderModelProviders", () => {
 
     const behavior = container.querySelector("#settings-model-behavior");
     expect(behavior).not.toBeNull();
-    expect(text(container.querySelector(".settings-section__heading"))).toBe("Defaults");
+    expect(text(container.querySelector(".settings-section__heading"))).toBe("Global defaults");
     expect(text(container.querySelector(".settings-section__desc"))).toBe(
-      "Applies across all providers and models where applicable.",
+      "Model and behavior defaults for all agents. Agent-specific settings override these defaults. View each agent's model in Agents → Overview.",
     );
     expect(
       [...container.querySelectorAll(".model-providers__defaults .settings-row")].map((entry) =>

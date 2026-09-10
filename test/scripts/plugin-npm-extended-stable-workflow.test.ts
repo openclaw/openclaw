@@ -500,6 +500,22 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     const sourceSetup = step(preview, "Setup Node environment");
     const preparedSetup = step(preview, "Setup trusted Node for prepared publication");
     const preparedPlan = step(preview, "Read qualified npm preparation");
+    const toolingInstall = step(preview, "Install trusted plugin tooling dependencies");
+    const preparationSteps = previewSteps.filter((candidate) =>
+      [sourceSetup, preparedSetup, preparedPlan, toolingInstall].includes(candidate),
+    );
+    for (const preparedArtifact of ["", "qualified-preparation"]) {
+      const enabled = preparationSteps.filter(
+        (candidate) =>
+          !candidate.if ||
+          runInNewContext(candidate.if, { inputs: { prepared_artifact: preparedArtifact } }),
+      );
+      expect(enabled.map((candidate) => candidate.name)).toEqual(
+        preparedArtifact
+          ? ["Setup trusted Node for prepared publication", "Read qualified npm preparation"]
+          : ["Setup Node environment", "Install trusted plugin tooling dependencies"],
+      );
+    }
     expect(sourceSetup.uses).toBe("./.github/actions/setup-node-env");
     expect(sourceSetup.if).toBe("inputs.prepared_artifact == ''");
     expect(preparedSetup.if).toBe("inputs.prepared_artifact != ''");

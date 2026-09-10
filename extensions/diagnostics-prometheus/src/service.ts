@@ -1100,15 +1100,19 @@ export function createDiagnosticsPrometheusExporter() {
           1,
         );
       }
-      unsubscribe = subscribe((event, metadata) => {
-        try {
-          recordDiagnosticEvent(store, event, metadata);
-        } catch (err) {
-          ctx.logger.error(
-            `diagnostics-prometheus: event handler failed (${event.type}): ${safeErrorMessage(err)}`,
-          );
-        }
-      });
+      unsubscribe = subscribe(
+        (event, metadata) => {
+          try {
+            recordDiagnosticEvent(store, event, metadata);
+          } catch (err) {
+            ctx.logger.error(
+              `diagnostics-prometheus: event handler failed (${event.type}): ${safeErrorMessage(err)}`,
+            );
+          }
+        },
+        undefined,
+        { includePrivateData: false },
+      );
       internalDiagnostics = ctx.internalDiagnostics as unknown as TrustedExporterDiagnosticsBridge;
       reportExporterHealth({
         signal: "metrics",

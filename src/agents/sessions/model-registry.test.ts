@@ -326,7 +326,7 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.getAvailable().map((model) => model.id)).toEqual(["example-model"]);
   });
 
-  it("automatically migrates released provider models before the first registry load", async () => {
+  it("migrates released provider inventory without adopting cached credentials", async () => {
     // A synthetic provider keeps host credentials out of this migration-only fixture.
     const providerId = "migrated-catalog-provider";
     const modelsPath = writeModelsJson({ providers: {} });
@@ -352,9 +352,8 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find(providerId, "glm-5.1")?.name).toBe("GLM 5.1");
-    await expect(registry.getApiKeyForProvider(providerId)).resolves.toBe(
-      "released-zai-provider-test-key",
-    );
+    await expect(registry.getApiKeyForProvider(providerId)).resolves.toBeUndefined();
+    expect(registry.getProviderAuthStatus(providerId).configured).toBe(false);
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
     expect(existsSync(catalogPath)).toBe(false);
   });

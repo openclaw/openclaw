@@ -112,7 +112,12 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   };
 
   private readonly closeFocusedPanel = (event: Event): void => {
-    if (event.defaultPrevented || !this.layout.open || this.layout.expanded || !this.callbacks) {
+    if (
+      event.defaultPrevented ||
+      !this.layout.open ||
+      (this.layout.expanded && !this.layout.expandedSide) ||
+      !this.callbacks
+    ) {
       return;
     }
     const browserScope = event instanceof CustomEvent ? event.detail?.browserScope : undefined;
@@ -230,7 +235,21 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         id: panel.id,
         domId: `side-panel-tab-${panel.id}`,
         label: type.label,
-        labelTooltip: type.label,
+        labelTooltip:
+          panel.slot === "dashboard"
+            ? t(
+                this.layout.expanded &&
+                  this.layout.expandedSide &&
+                  column.activePanelId === panel.id
+                  ? "chat.sidePanel.restore"
+                  : "chat.sidePanel.expandPanel",
+                { panel: type.label },
+              )
+            : type.label,
+        onActivate:
+          panel.slot === "dashboard"
+            ? () => this.callbacks?.togglePanelExpanded(panel.id)
+            : undefined,
         icon: type.icon,
         closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
       };
@@ -267,6 +286,13 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderHeaderActions(panelActions: TemplateResult | typeof nothing | null) {
+    const active = sidebarActivePanel(this.layout);
+    const expanded = this.layout.expanded === true && this.layout.expandedSide === true;
+    const expandLabel = expanded
+      ? t("chat.sidePanel.restore")
+      : t("chat.sidePanel.expandPanel", {
+          panel: active ? panelType(this.panelDefinitions, active.slot).label : "",
+        });
     return html`<div class="rail-header__actions side-panel__actions">
       ${
         panelActions
@@ -276,6 +302,21 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           : nothing
       }
       <span class="side-panel__action-group side-panel__action-group--close">
+        ${
+          active
+            ? html`<openclaw-tooltip .content=${expandLabel}>
+                <button
+                  class="rail-header__action side-panel__expand"
+                  type="button"
+                  aria-label=${expandLabel}
+                  aria-pressed=${String(expanded)}
+                  @click=${() => this.callbacks?.togglePanelExpanded(active.id)}
+                >
+                  ${expanded ? icons.minimize : icons.maximize}
+                </button>
+              </openclaw-tooltip>`
+            : nothing
+        }
         <openclaw-tooltip .content=${t("common.close")}>
           <button
             class="rail-header__action side-panel__minimize"
@@ -400,7 +441,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     // Saved closed panels stay dormant until first shown. Once mounted, their
     // content survives hiding; closing tabs or this region releases it.
     this.contentMounted ||=
-      (this.layout.open === true && !this.layout.expanded) ||
+      (this.layout.open === true && (!this.layout.expanded || this.layout.expandedSide === true)) ||
       (sidebarMainPanel(this.layout)?.slot ?? "conversation") !== "conversation";
     return html`${
         !this.narrow && this.layout.open && !this.layout.expanded && column

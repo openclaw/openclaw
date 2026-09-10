@@ -432,7 +432,7 @@ describe("release readiness executable handoff", () => {
         openclaw_npm_expected_workflow_sha="$PARENT_WORKFLOW_SHA"
       }
       resolve_clawhub_release_plan() { clawhub_plan_path="$CLAWHUB_PLAN_PATH"; }
-      append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
+      append_clawhub_dispatch_args() { clawhub_dispatch_args=(-f "plugins=fixture"); }
       dispatch_workflow() { node "$GITHUB_WORKSPACE/.release-harness/scripts/fixture-dispatch.mjs" "$@"; }
       dispatch_workflow_at_ref() { shift 2; dispatch_workflow "$@"; }
     `,

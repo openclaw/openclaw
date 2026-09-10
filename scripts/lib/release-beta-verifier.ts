@@ -12,11 +12,13 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { lt as semverLt, valid as validSemver } from "semver";
 import { z } from "zod";
 import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
 import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
+import { resolveNpmJsonEntries } from "./npm-json-output.mts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
@@ -171,6 +173,7 @@ const diagnosticChildNames = [
   "npmTelegram",
 ] as const;
 type DiagnosticStageName = (typeof diagnosticStageNames)[number];
+type NpmDiagnosticScope = { stage: "coreNpm" } | { stage: "pluginNpm"; packageName: string };
 type DiagnosticChildName = (typeof diagnosticChildNames)[number];
 const diagnosticId = z.string().max(20).regex(POSITIVE_INTEGER_PATTERN).nullable();
 const diagnosticSha = z.string().regex(COMMIT_SHA_PATTERN).nullable();
@@ -525,7 +528,11 @@ class PostpublishDiagnostics {
     this.packageName = undefined;
     this.data.currentStage = stage;
     this.data.stages[stage].state = "started";
-    if (!["evidence", "binding", "assets"].includes(stage)) {
+    // Collecting later observations must not erase an already observed failure.
+    if (
+      !["evidence", "binding", "assets"].includes(stage) &&
+      this.data.verification !== "failure"
+    ) {
       this.data.verification = "started";
     }
     this.save();
@@ -538,6 +545,18 @@ class PostpublishDiagnostics {
     }
     this.packageName = undefined;
     this.save();
+  }
+
+  observeNpmPublication(scope: NpmDiagnosticScope) {
+    const stage = this.data.stages[scope.stage];
+    const entry =
+      scope.stage === "coreNpm"
+        ? stage
+        : stage.packages.find((item) => item.name === scope.packageName);
+    if (entry) {
+      entry.publication = "observed";
+      this.save();
+    }
   }
 
   packages(stage: "pluginNpm" | "clawHub", packages: readonly { packageName: string }[]) {
@@ -567,7 +586,11 @@ class PostpublishDiagnostics {
     this.save();
   }
 
-  fail(error: unknown) {
+  fail(error: unknown, scope?: NpmDiagnosticScope) {
+    if (scope) {
+      this.data.currentStage = scope.stage;
+      this.packageName = scope.stage === "pluginNpm" ? scope.packageName : undefined;
+    }
     const stage = this.data.currentStage;
     if (!stage) {
       return;
@@ -770,7 +793,9 @@ function parseJson(raw: string, label: string): unknown {
 }
 
 export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields {
-  const parsed = parseJson(raw, "npm view");
+  const value = parseJson(raw, "npm view");
+  const entries = resolveNpmJsonEntries(value);
+  const parsed = entries.length === 1 && isJsonRecord(entries[0]) ? entries[0] : value;
   if (Array.isArray(parsed)) {
     return {
       version: normalizeOptionalString(parsed[0]),
@@ -1059,6 +1084,43 @@ export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"):
   } finally {
     await cancelResponseBody(response);
   }
+}
+
+async function readNpmBetaFloorError(
+  packageName: string,
+  version: string,
+): Promise<string | undefined> {
+  const entries = resolveNpmJsonEntries(
+    parseJson(
+      await runNpmViewWithRetry(["view", `${packageName}@${version}`, "dist-tags", "--json"]),
+      `npm view ${packageName}@${version} dist-tags`,
+    ),
+  );
+  const tags = entries.length === 1 ? entries[0] : undefined;
+  if (!isJsonRecord(tags)) {
+    throw new Error(`${packageName}: npm dist-tags returned an unsupported JSON shape.`);
+  }
+  // A package published only to beta has no stable floor yet.
+  if (tags.latest === undefined) {
+    return undefined;
+  }
+  const latest = normalizeOptionalString(tags.latest);
+  const beta = normalizeOptionalString(tags.beta);
+  const observed = `${packageName}: beta=${beta ?? JSON.stringify(tags.beta) ?? "<missing>"}, latest=${latest ?? JSON.stringify(tags.latest)}`;
+  if (
+    latest === undefined ||
+    !validSemver(latest) ||
+    (tags.beta !== undefined && (beta === undefined || !validSemver(beta)))
+  ) {
+    return `${observed} (invalid semver dist-tag)`;
+  }
+  return beta === undefined || semverLt(beta, latest) ? observed : undefined;
+}
+
+function createNpmBetaFloorError(errors: readonly string[]): Error {
+  return new Error(
+    `npm beta must be at or above latest; release verification failed:\n${errors.join("\n")}\nFor each listed stale package, run:\nnpm dist-tag add <pkg>@<latest> beta\nUse that package's current latest version, preserve newer beta tags, then verify again.`,
+  );
 }
 
 async function verifyNpmPackage(
@@ -1870,6 +1932,8 @@ export async function verifyBetaRelease(
 ): Promise<string[]> {
   const rootDir = options.rootDir ?? resolve(".");
   const diagnostic = new PostpublishDiagnostics(args, rootDir, "verify");
+  const betaFloorErrors: { scope: NpmDiagnosticScope; message: string }[] = [];
+  let betaFloorFailureScope: NpmDiagnosticScope | undefined;
   try {
     diagnostic.start("checkout");
     const rootVersion = readRootPackageVersion(rootDir);
@@ -1902,10 +1966,17 @@ export async function verifyBetaRelease(
 
     diagnostic.start("coreNpm");
     const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
-    diagnostic.success("coreNpm", true);
-    lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
+    diagnostic.observeNpmPublication({ stage: "coreNpm" });
+    const coreBetaFloorError = await readNpmBetaFloorError("openclaw", args.version);
+    if (coreBetaFloorError !== undefined) {
+      betaFloorErrors.push({ scope: { stage: "coreNpm" }, message: coreBetaFloorError });
+      diagnostic.fail(createNpmBetaFloorError([coreBetaFloorError]));
+    } else {
+      diagnostic.success("coreNpm");
+      lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
+    }
 
-    if (!args.skipPostpublish) {
+    if (!args.skipPostpublish && coreBetaFloorError === undefined) {
       diagnostic.start("postpublish");
       const postpublishVerifier = resolveOpenClawNpmPostpublishVerifier(
         rootDir,
@@ -1931,9 +2002,25 @@ export async function verifyBetaRelease(
     for (const plugin of npmPlugins) {
       diagnostic.package("pluginNpm", plugin.packageName, "started");
       await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
-      diagnostic.package("pluginNpm", plugin.packageName, "success");
+      const scope: NpmDiagnosticScope = { stage: "pluginNpm", packageName: plugin.packageName };
+      diagnostic.observeNpmPublication(scope);
+      const betaFloorError = await readNpmBetaFloorError(plugin.packageName, args.version);
+      if (betaFloorError !== undefined) {
+        betaFloorErrors.push({ scope, message: betaFloorError });
+        diagnostic.fail(createNpmBetaFloorError([betaFloorError]));
+      } else {
+        diagnostic.package("pluginNpm", plugin.packageName, "success");
+      }
     }
-    diagnostic.success("pluginNpm");
+    if (!betaFloorErrors.some(({ scope }) => scope.stage === "pluginNpm")) {
+      diagnostic.success("pluginNpm");
+    }
+    const firstBetaFloorError = betaFloorErrors[0];
+    if (firstBetaFloorError) {
+      // The final catch must not overwrite the last healthy package or stage.
+      betaFloorFailureScope = firstBetaFloorError.scope;
+      throw createNpmBetaFloorError(betaFloorErrors.map(({ message }) => message));
+    }
     lines.push(`plugin npm OK: ${npmPlugins.length}`);
 
     if (!args.skipClawHub) {
@@ -2129,7 +2216,7 @@ export async function verifyBetaRelease(
 
     return lines;
   } catch (error) {
-    diagnostic.fail(error);
+    diagnostic.fail(error, betaFloorFailureScope);
     throw error;
   }
 }

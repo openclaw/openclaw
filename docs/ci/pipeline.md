@@ -188,6 +188,16 @@ and isolated-renderer ceilings still apply independently. Reports include exact
 bytes, base deltas, and remaining headroom, with an early warning when the largest
 CSS file has less than 1 KiB of headroom.
 
+JavaScript accounting separates ordinary chunks, deferred special-purpose
+chunks, startup assets, and the full bundle total. The 215 KiB ordinary-chunk
+ceiling excludes the isolated Mermaid renderer and configured locale catalogs.
+A locale catalog must match `assets/<locale>-<nonempty-suffix>.js`; each
+configured locale may produce one deferred chunk, with at most 20 locale chunks
+overall and a 300 KiB ceiling per chunk. Locale chunks remain forbidden in the
+startup asset set. Total JavaScript accounting includes ordinary, deferred, and
+startup assets for reporting while enforcement stays on the category-specific
+limits.
+
 CI builds the selected checkout and the exact preflight base with the same
 installed Node, Vite, and dependencies. The temporary base's CSS sidecars are
 normalized through the candidate's pinned compressor before comparison. The

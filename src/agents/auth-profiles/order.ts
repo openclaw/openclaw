@@ -62,6 +62,7 @@ function isProfileProviderCompatibleWithAuthProvider(params: {
   const providerKey = resolveProviderIdForAuth(params.provider, {
     config: params.cfg,
     ...params.authAliasLookupParams,
+    storedCredential: true,
   });
   return providerKey === params.providerAuthKey;
 }
@@ -139,6 +140,7 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
     resolveProviderIdForAuth(profileConfig.provider, {
       config: params.cfg,
       ...params.authAliasLookupParams,
+      storedCredential: true,
     }) !== providerAuthKey
   ) {
     return false;

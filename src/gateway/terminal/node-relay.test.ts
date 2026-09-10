@@ -1,20 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { type NodeInvokeResult, NodeRegistry } from "../node-registry.js";
 import { createNodeRelayBackend } from "./node-relay.js";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
 describe("createNodeRelayBackend", () => {
   it("waits for pairing validation and dispatch instead of the final node exit", async () => {
-    const pairingState = deferred<{ identity: string; generation: string }>();
+    const pairingState = createDeferred<{ identity: string; generation: string }>();
     const frames: string[] = [];
     const resolveCurrentPairingState = vi.fn(async () => await pairingState.promise);
     const registry = new NodeRegistry({
@@ -78,7 +70,7 @@ describe("createNodeRelayBackend", () => {
     "codex.terminal.start.v1",
     "anthropic.claude.terminal.start.v1",
   ])("%s relays progress, input, resize, cancellation, and exit", async (command) => {
-    const invokeResult = deferred<NodeInvokeResult>();
+    const invokeResult = createDeferred<NodeInvokeResult>();
     let onProgress: ((chunk: string) => void) | undefined;
     let signal: AbortSignal | undefined;
     const sendInvokeInput = vi.fn();

@@ -12,6 +12,7 @@ import {
 import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
@@ -29,7 +30,6 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   createGatewayPluginRuntimeGeneration,
   type GatewayPluginRuntimeClaim,
@@ -53,6 +53,7 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
 export async function prepareGatewayLifecycle(params: {
   runtime: GatewayRuntimePreparation;
+  sdkResourceHost: LegacyPluginSdkResourceHost;
   releasePluginMetadata: () => void;
   port: number;
   log: GatewayLogger;
@@ -101,13 +102,6 @@ export async function prepareGatewayLifecycle(params: {
     workerPlacementRuntime,
     lifecycle,
   } = runtime;
-  const subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"] = (
-    connId,
-    sessionKey,
-    options,
-  ) => sessionMessageSubscribers.subscribe(connId, sessionKey, options);
-  const unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"] =
-    (connId, sessionKey) => sessionMessageSubscribers.unsubscribe(connId, sessionKey);
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
   const nodeDesktopServiceRef: {
     current?: import("./desktop/node-source.js").NodeDesktopService;
@@ -580,6 +574,7 @@ export async function prepareGatewayLifecycle(params: {
           chatRunState,
           clients,
           finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
+          closeSdkResources: () => params.sdkResourceHost.close(),
           ...(transport
             ? {
                 wss: transport.wss,
@@ -666,10 +661,11 @@ export async function prepareGatewayLifecycle(params: {
 
   return {
     ...runtime,
+    sdkResourceHost: params.sdkResourceHost,
     configureDiagnostics,
     requestEntryLifetime,
-    subscribeSessionMessageEvents,
-    unsubscribeSessionMessageEvents,
+    subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
+    unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
     restartRecoveryCandidates,
     nodeRegistry,
     nodeDesktopService,
@@ -714,7 +710,10 @@ export async function prepareGatewayLifecycle(params: {
     registerPostReadySidecars: postReadySidecarStopOwner.publish,
     registerGatewayLifetimeSidecars: gatewayLifetimeSidecarStopOwner.publish,
     sealAndJoinRegisteredSidecarStops,
-    prepareClose,
-    closeOnStartupFailure,
+    prepareClose: async (options?: GatewayCloseOptions) => {
+      const close = await params.sdkResourceHost.run(() => prepareClose(options));
+      return () => params.sdkResourceHost.run(close);
+    },
+    closeOnStartupFailure: () => params.sdkResourceHost.run(closeOnStartupFailure),
   };
 }

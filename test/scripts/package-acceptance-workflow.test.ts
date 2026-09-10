@@ -4,10 +4,12 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -174,12 +176,35 @@ const RUN_TESTBOX_WITH_FAILURE_REPORTING =
   "steipete/run-testbox@2b6b1be536ec7f3c73757fedf5460a27ab4856b4";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+const frozenAdmissionClosure = [
+  "scripts/preflight-frozen-target-contracts.mjs",
+  "scripts/lib/frozen-target-source.mjs",
+  "scripts/lib/docker-e2e-plan.mts",
+  "scripts/lib/docker-e2e-scenarios.mts",
+  "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/upgrade-survivor-policy.mjs",
+  "scripts/lib/release-version.mjs",
+  "scripts/lib/frozen-target-compat.sh",
+  "scripts/resolve-frozen-codex-live-suite.mjs",
+  "scripts/resolve-fs-safe-native-contract.mjs",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
+  "scripts/windows-cmd-helpers.mjs",
+  "package.json",
+  "pnpm-lock.yaml",
+  "scripts/plan-release-workflow-matrix.mjs",
+  "scripts/lib/direct-run.mjs",
+  "scripts/lib/plugin-prerelease-test-plan.mts",
+  "scripts/plan-targeted-docker-lane-groups.mjs",
+  "scripts/lib/numeric-options.mjs",
+];
+
 function frozenWorkflowFixture(
   file: string,
   jobName: string,
   inputs: Record<string, string | boolean | number>,
   files: Record<string, string> = {},
   overrides: Record<string, string> = {},
+  toolingPaths: string[] = [],
 ) {
   const root = tempDirs.make("frozen-workflow-");
   const target = join(root, "target");
@@ -213,7 +238,23 @@ function frozenWorkflowFixture(
   git("add", ".");
   git("commit", "-qm", "fixture");
   const sha = git("rev-parse", "HEAD");
-  const toolingSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const tooling = join(root, "tooling");
+  // The acquisition step also uses the existing npm-output parser.
+  for (const path of [...frozenAdmissionClosure, "scripts/lib/npm-json-output.mts"]) {
+    mkdirSync(dirname(join(tooling, path)), { recursive: true });
+    copyFileSync(path, join(tooling, path));
+  }
+  const recipes = "scripts/e2e/lib/upgrade-survivor/config-recipe";
+  cpSync(recipes, join(tooling, recipes), { recursive: true });
+  for (const path of toolingPaths) {
+    mkdirSync(dirname(join(tooling, path)), { recursive: true });
+    cpSync(path, join(tooling, path), { recursive: true });
+  }
+  const toolingGit = (...args: string[]) => git("-C", tooling, ...args);
+  toolingGit("init", "-q");
+  toolingGit("add", ".");
+  toolingGit("commit", "-qm", "candidate tooling fixture");
+  const toolingSha = toolingGit("rev-parse", "HEAD");
   const job = workflowJob(file, jobName);
   const plan = workflowStep(job, "Plan frozen source admission");
   const env = {
@@ -228,16 +269,21 @@ function frozenWorkflowFixture(
     ADMISSION_INPUTS: JSON.stringify(inputs, null, 2),
     ADMISSION_SELECTED_ROOT: target,
     ADMISSION_SELECTED_SHA: sha,
-    ADMISSION_TOOLING_ROOT: resolve("."),
+    ADMISSION_TOOLING_ROOT: tooling,
     ADMISSION_TOOLING_SHA: toolingSha,
     ADMISSION_WORKFLOW_REF: `openclaw/openclaw/${file}@${toolingSha}`,
     ...overrides,
   };
-  function run(stepName: string, extra: Record<string, string> = {}, suffix = "") {
+  function run(
+    stepName: string,
+    extra: Record<string, string> = {},
+    suffix = "",
+    options: { cwd?: string; timeout?: number } = {},
+  ) {
     return spawnSync(
       "bash",
       ["--noprofile", "--norc", "-c", `${workflowStep(job, stepName).run ?? ""}\n${suffix}`],
-      { encoding: "utf8", cwd: root, env: { ...env, ...extra }, timeout: 30_000 },
+      { encoding: "utf8", cwd: root, env: { ...env, ...extra }, timeout: 30_000, ...options },
     );
   }
   function selection() {
@@ -272,6 +318,7 @@ function frozenWorkflowFixture(
     `#!/bin/sh\nfor arg in "$@"; do\ncase "$arg" in fetch|clone) printf 'hydration\\n' >> '${forbidden}'; exit 97;; esac\ndone\nexec '${gitPath}' "$@"\n`,
     { mode: 0o755 },
   );
+  env.PATH = `${bin}:${process.env.PATH}`;
   function admit(extra: Record<string, string> = {}, stepName = "Admit frozen source contracts") {
     const result = run(
       stepName,
@@ -287,10 +334,1150 @@ function frozenWorkflowFixture(
     expect(existsSync(forbidden), result.stderr).toBe(false);
     return result;
   }
-  return { root, target, sha, toolingSha, git, env, run, selection, admit };
+  function provisionParser() {
+    cpSync("node_modules/typescript", join(tooling, "node_modules/typescript"), {
+      recursive: true,
+      dereference: true,
+    });
+  }
+  return {
+    root,
+    target,
+    sha,
+    tooling,
+    toolingSha,
+    git,
+    toolingGit,
+    env,
+    run,
+    selection,
+    admit,
+    provisionParser,
+  };
+}
+
+function reconstructAdmissionEvaluations(record: {
+  evaluationIdentity: {
+    version: number;
+    repository: string;
+    selectedSha: string;
+    toolingSha: string;
+  };
+  sources: Record<"selected" | "tooling", Array<{ path: string; oid: string }>>;
+  evaluations: Array<{
+    selection: unknown;
+    contracts: unknown[];
+    docker?: unknown;
+    sourceRefs: Record<"selected" | "tooling", number[]>;
+    digest: string;
+  }>;
+}) {
+  return record.evaluations.map((evaluation) => {
+    const sources = {
+      selected: [] as Array<{ path: string; oid: string }>,
+      tooling: [] as Array<{ path: string; oid: string }>,
+    };
+    for (const role of ["selected", "tooling"] as const) {
+      sources[role] = evaluation.sourceRefs[role].map((index) => {
+        expect(Number.isInteger(index)).toBe(true);
+        expect(index).toBeGreaterThanOrEqual(0);
+        expect(index).toBeLessThan(record.sources[role].length);
+        const identity = record.sources[role][index];
+        if (identity === undefined) {
+          throw new Error("missing admission source identity");
+        }
+        return identity;
+      });
+    }
+    const child = {
+      ...record.evaluationIdentity,
+      selection: evaluation.selection,
+      contracts: evaluation.contracts,
+      ...(evaluation.docker ? { docker: evaluation.docker } : {}),
+      sources,
+    };
+    expect(evaluation.digest).toBe(
+      createHash("sha256").update(JSON.stringify(child)).digest("hex"),
+    );
+    return { ...child, digest: evaluation.digest };
+  });
+}
+
+function packageAdmissionBaselineFixture(
+  inputs: Record<string, string | boolean | number>,
+  failRegistry = false,
+) {
+  const f = frozenWorkflowFixture(
+    PACKAGE_ACCEPTANCE_WORKFLOW,
+    "resolve_package",
+    {
+      source: "artifact",
+      suite_profile: "custom",
+      telegram_mode: "none",
+      ...inputs,
+    },
+    {
+      "package.json": '{"type":"module","version":"2026.9.9"}',
+      "scripts/e2e/lib/upgrade-survivor/assertions.mjs": readFileSync(
+        "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
+        "utf8",
+      ),
+    },
+    {},
+    ["scripts/resolve-upgrade-survivor-baselines.mts", "scripts/lib/release-upgrade-baseline.mjs"],
+  );
+  // Only the existing trusted acquisition command needs tsx; admission uses plain Node.
+  symlinkSync(resolve("node_modules"), join(f.tooling, "node_modules"), "dir");
+  const calls = join(f.root, "registry-calls");
+  writeFileSync(
+    join(f.root, "bin/npm"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\n${
+      failRegistry
+        ? "echo 'controlled baseline lookup failure' >&2\nexit 73"
+        : "printf '\"2026.9.1\"\\n'"
+    }\n`,
+    { mode: 0o755 },
+  );
+  const selected = join(f.root, "not-acquired");
+  const identity = {
+    ADMISSION_SELECTED_ROOT: selected,
+    ADMISSION_STAGE: "resolved-package",
+    ADMISSION_PACKAGE_SOURCE_SHA: f.sha,
+    ADMISSION_PACKAGE_SHA256: "d".repeat(64),
+    ADMISSION_PACKAGE_VERSION: "2026.9.9",
+  };
+  const outputs: Record<string, { outputs: Record<string, string> }> = {};
+  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+  const completed: string[] = [];
+  const readOutputs = (path: string) => {
+    const values: Record<string, string> = {};
+    const lines = (existsSync(path) ? readFileSync(path, "utf8") : "").split("\n");
+    for (let index = 0; index < lines.length - 1; index++) {
+      const line = lines[index];
+      if (line === undefined) {
+        throw new Error("missing output line");
+      }
+      const heredoc = line.indexOf("<<");
+      const equals = line.indexOf("=");
+      if (heredoc >= 0 && (equals < 0 || heredoc < equals)) {
+        const delimiter = line.slice(heredoc + 2);
+        const content: string[] = [];
+        while (++index < lines.length && lines[index] !== delimiter) {
+          const value = lines[index];
+          if (value === undefined) {
+            throw new Error("missing multiline output");
+          }
+          content.push(value);
+        }
+        expect(lines[index]).toBe(delimiter);
+        values[line.slice(0, heredoc)] = content.join("\n");
+      } else {
+        expect(equals, line).toBeGreaterThan(0);
+        values[line.slice(0, equals)] = line.slice(equals + 1);
+      }
+    }
+    return values;
+  };
+  function run(stepName: string) {
+    const step = workflowStep(job, stepName);
+    if (!step.id) {
+      throw new Error("missing baseline step identity");
+    }
+    const outputPath = join(f.root, `${step.id}-outputs`);
+    const resolver = outputs.upgrade_survivor_baselines?.outputs ?? {};
+    const pin = outputs.exact_baselines?.outputs ?? {};
+    if (!runInNewContext(step.if ?? "true", { steps: outputs })) {
+      outputs[step.id] = { outputs: {} };
+      return { status: 0, stderr: "", stdout: "" };
+    }
+    const result = f.run(
+      stepName,
+      {
+        ...identity,
+        GITHUB_OUTPUT: outputPath,
+        CANDIDATE_VERSION: "2026.9.9",
+        CANDIDATE_PUBLISHED: "false",
+        FALLBACK_BASELINE: String(inputs.published_upgrade_survivor_baseline ?? "openclaw@beta"),
+        REQUESTED_BASELINES: String(inputs.published_upgrade_survivor_baselines ?? ""),
+        TARGET_CONTEXT_REF: "",
+        GH_TOKEN: "",
+        BASELINE:
+          step.id === "resolved_admission" ? (pin.baseline ?? "") : (resolver.baseline ?? ""),
+        BASELINES:
+          step.id === "resolved_admission" ? (pin.baselines ?? "") : (resolver.baselines ?? ""),
+        BASELINE_SCOPE: resolver.baseline_scope ?? "",
+      },
+      "",
+      { cwd: f.tooling },
+    );
+    outputs[step.id] = { outputs: readOutputs(outputPath) };
+    if (result.status === 0) {
+      completed.push(stepName);
+    }
+    return result;
+  }
+  const request = () =>
+    JSON.parse(readFileSync(join(f.root, "frozen-admission-request.json"), "utf8"));
+  const plan = () =>
+    JSON.parse(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8"));
+  const planned = run("Plan frozen source admission");
+  expect(planned.status, planned.stderr).toBe(0);
+  expect(existsSync(selected)).toBe(false);
+  const initialRequest = request();
+  const initialPlan = plan();
+  function resolveBaselines() {
+    for (const name of [
+      "Resolve published upgrade survivor baselines",
+      "Pin published upgrade baseline versions",
+      "Finalize frozen source admission",
+    ]) {
+      const result = run(name);
+      if (result.status !== 0) {
+        return { ...result, failedStep: name };
+      }
+    }
+    return { status: 0, stderr: "", stdout: "", failedStep: undefined };
+  }
+  function admit() {
+    renameSync(f.target, selected);
+    return f.admit();
+  }
+  return {
+    f,
+    calls,
+    outputs,
+    completed,
+    initialRequest,
+    initialPlan,
+    request,
+    plan,
+    resolveBaselines,
+    admit,
+  };
 }
 
 describe("frozen admission workflow barriers", () => {
+  it("keeps admission artifacts distinct across the owned nested release callers", () => {
+    const jobs = Object.values(readWorkflow(RELEASE_CHECKS_WORKFLOW).jobs ?? {});
+    const callers = jobs.filter(
+      (job) =>
+        job.uses === "./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml" ||
+        job.uses === "./.github/workflows/package-acceptance.yml",
+    );
+    const transports = Object.values(readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW).jobs ?? {}).filter(
+      (job) => job.uses === "./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
+    );
+    expect(callers).toHaveLength(3);
+    expect(transports).toHaveLength(2);
+    for (const policy of ["no-push-artifact", "existing-only"]) {
+      expect(
+        transports.filter((job) =>
+          runInNewContext(job.if ?? "true", {
+            inputs: { suite_profile: "custom", shared_image_policy: policy },
+          }),
+        ),
+      ).toHaveLength(1);
+    }
+    for (const job of transports) {
+      expect(job.with?.shared_image_artifact_namespace).toBe(
+        "${{ inputs.shared_image_artifact_namespace }}",
+      );
+    }
+    const upload = workflowStep(
+      workflowJob(LIVE_E2E_WORKFLOW, "validate_selected_ref"),
+      "Upload frozen admission diagnostic",
+    );
+    const template = upload.with?.name;
+    if (!template) {
+      throw new Error("missing admission artifact name");
+    }
+    const names = callers.map((job) => {
+      const namespace = job.with?.shared_image_artifact_namespace;
+      if (typeof namespace !== "string") {
+        throw new Error("missing caller namespace");
+      }
+      return template
+        .replaceAll("${{ inputs.shared_image_artifact_namespace }}", namespace)
+        .replaceAll("${{ github.run_id }}", "123")
+        .replaceAll("${{ github.run_attempt }}", "2");
+    });
+    expect(new Set(names).size, JSON.stringify(names)).toBe(callers.length);
+    expect(upload.with?.overwrite).toBeUndefined();
+    expect(upload["continue-on-error"]).toBeUndefined();
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
+    expect(upload.with?.["retention-days"]).toBe(7);
+  });
+
+  it.each(["beta", "alpha"])(
+    "preserves an unused package %s baseline without a registry lookup",
+    (tag) => {
+      const baseline = `openclaw@${tag}`;
+      const f = frozenWorkflowFixture(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", {
+        source: "artifact",
+        suite_profile: "custom",
+        docker_lanes: "onboard",
+        telegram_mode: "none",
+        published_upgrade_survivor_baseline: baseline,
+      });
+      const planned = f.run("Plan frozen source admission", {
+        ADMISSION_STAGE: "resolved-package",
+        ADMISSION_PACKAGE_SOURCE_SHA: f.sha,
+        ADMISSION_PACKAGE_SHA256: "d".repeat(64),
+        ADMISSION_PACKAGE_VERSION: "2026.7.33",
+      });
+      expect(planned.status, planned.stderr).toBe(0);
+      expect(
+        JSON.parse(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8"))
+          .obligations,
+      ).toEqual([]);
+      const calls = join(f.root, "registry-calls");
+      writeFileSync(
+        join(f.root, "bin/npm"),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\necho 'unexpected unused baseline lookup' >&2\nexit 73\n`,
+        { mode: 0o755 },
+      );
+      const step = workflowStep(
+        workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package"),
+        "Pin published upgrade baseline versions",
+      );
+      const outputs = Object.fromEntries(
+        (existsSync(join(f.root, "outputs")) ? readFileSync(join(f.root, "outputs"), "utf8") : "")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const at = line.indexOf("=");
+            return [line.slice(0, at), line.slice(at + 1)];
+          }),
+      );
+      const enabled = runInNewContext(step.if ?? "true", {
+        steps: { frozen_selection: { outputs } },
+      });
+      const result = enabled
+        ? f.run(
+            "Pin published upgrade baseline versions",
+            { BASELINE: baseline, BASELINES: "" },
+            "",
+            { cwd: f.tooling },
+          )
+        : { status: 0, stderr: "", stdout: "" };
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(calls)).toBe(false);
+    },
+  );
+
+  it.each([
+    "published-upgrade-survivor",
+    "update-migration",
+    "root-managed-vps-upgrade",
+    "update-restart-auth",
+  ])("pins package %s baselines only after the canonical plan", (lane) => {
+    const f = packageAdmissionBaselineFixture({
+      docker_lanes: lane,
+      published_upgrade_survivor_baseline: "openclaw@beta",
+    });
+    expect(f.initialPlan.obligations).toContainEqual({
+      kind: "upgrade-baselines",
+      status: "UNRESOLVED",
+      requested: f.initialRequest.requestedBaselines,
+    });
+    expect(f.initialRequest.options.baselinesResolved).toBe(false);
+    const resolved = f.resolveBaselines();
+    expect(resolved.status, resolved.stderr).toBe(0);
+    expect(readFileSync(f.calls, "utf8").trim().split("\n")).toEqual([
+      "view openclaw@beta version --json --silent --prefer-online",
+    ]);
+    const request = f.request();
+    expect(request.binding).toEqual(f.initialRequest.binding);
+    expect(request.selected).toEqual(f.initialRequest.selected);
+    expect(request.requestedBaselines).toEqual(f.initialRequest.requestedBaselines);
+    expect(request.options).toMatchObject({
+      upgradeSurvivorBaseline: "openclaw@2026.9.1",
+      upgradeSurvivorBaselines: "openclaw@2026.9.1",
+      baselinesResolved: true,
+    });
+    expect(f.plan().obligations).toEqual([]);
+    const admitted = f.admit();
+    expect(admitted.status, admitted.stderr).toBe(0);
+    const record = JSON.parse(readFileSync(join(f.f.root, "frozen-admission.json"), "utf8"));
+    expect(record.status).toBe("ADMITTED");
+    expect(record.binding).toEqual(request.binding);
+    expect(record.requestedBaselines.baseline).toBe("openclaw@beta");
+    reconstructAdmissionEvaluations(record);
+  });
+
+  it.each([
+    "published-upgrade-survivor",
+    "update-migration",
+    "root-managed-vps-upgrade",
+    "update-restart-auth",
+  ])("blocks package %s admission when baseline lookup fails", (lane) => {
+    const f = packageAdmissionBaselineFixture(
+      { docker_lanes: lane, published_upgrade_survivor_baseline: "openclaw@alpha" },
+      true,
+    );
+    const result = f.resolveBaselines();
+    expect(result.status).toBe(1);
+    expect(result.failedStep).toBe("Pin published upgrade baseline versions");
+    expect(result.stderr).toContain("controlled baseline lookup failure");
+    expect(readFileSync(f.calls, "utf8").trim().split("\n")).toEqual([
+      "view openclaw@alpha version --json --silent --prefer-online",
+    ]);
+    expect(f.completed).not.toContain("Finalize frozen source admission");
+    expect(f.request().options.baselinesResolved).toBe(false);
+    expect(existsSync(join(f.f.root, "frozen-admission.json"))).toBe(false);
+  });
+
+  it("does not look up already exact selected package baselines", () => {
+    const f = packageAdmissionBaselineFixture(
+      {
+        docker_lanes: "root-managed-vps-upgrade",
+        published_upgrade_survivor_baseline: "openclaw@2026.9.1",
+        published_upgrade_survivor_baselines: "openclaw@2026.9.1",
+      },
+      true,
+    );
+    const resolved = f.resolveBaselines();
+    expect(resolved.status, resolved.stderr).toBe(0);
+    expect(existsSync(f.calls)).toBe(false);
+    expect(f.request().options.baselinesResolved).toBe(true);
+    expect(f.outputs.resolved_admission?.outputs.baseline_scope).toBe("all-scenarios");
+  });
+
+  it.each(["onboard", "upgrade-survivor"])(
+    "preserves unused multiline package baselines and scope for %s",
+    (lane) => {
+      const baselines = "OPENCLAW_ADMISSION_OUTPUT\r\nopenclaw@alpha\nopenclaw@beta\n";
+      const f = packageAdmissionBaselineFixture(
+        {
+          docker_lanes: lane,
+          published_upgrade_survivor_baseline: "openclaw@beta",
+          published_upgrade_survivor_baselines: baselines,
+        },
+        true,
+      );
+      expect(f.initialPlan.obligations).toEqual([]);
+      const resolved = f.resolveBaselines();
+      expect(resolved.status, resolved.stderr).toBe(0);
+      expect(existsSync(f.calls)).toBe(false);
+      expect(f.request()).toEqual(f.initialRequest);
+      expect(f.request().options.baselinesResolved).toBe(false);
+      expect(f.outputs.resolved_admission?.outputs).toEqual({
+        baseline: "openclaw@beta",
+        baselines,
+        baseline_scope: "all-scenarios",
+      });
+      expect(f.completed).not.toContain("Resolve published upgrade survivor baselines");
+      expect(f.completed).not.toContain("Pin published upgrade baseline versions");
+    },
+  );
+
+  it("orders package planning, acquisition and final outputs around selected baseline resolution", () => {
+    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+    const names = (job.steps ?? []).map((step) => step.name);
+    const ordered = [
+      "Admit known package source before packing",
+      "Resolve package candidate",
+      "Plan frozen source admission",
+      "Resolve published upgrade survivor baselines",
+      "Pin published upgrade baseline versions",
+      "Finalize frozen source admission",
+      "Validate resolved package source",
+      "Acquire resolved package source",
+      "Acquire selected contract objects",
+      "Admit frozen source contracts",
+    ];
+    for (const [index, name] of ordered.entries()) {
+      const previous = ordered[index - 1];
+      expect(names.indexOf(name), name).toBeGreaterThan(previous ? names.indexOf(previous) : -1);
+    }
+    for (const name of [
+      "Resolve published upgrade survivor baselines",
+      "Pin published upgrade baseline versions",
+    ]) {
+      expect(workflowStep(job, name).if).toBe(
+        "steps.frozen_selection.outputs.upgrade_baselines_required == 'true'",
+      );
+    }
+    for (const [suffix, output] of [
+      ["baseline", "baseline"],
+      ["baselines", "baselines"],
+      ["baseline_scope", "baseline_scope"],
+    ] as const) {
+      expect(job.outputs?.[`published_upgrade_survivor_${suffix}`]).toBe(
+        `\${{ steps.resolved_admission.outputs.${output} }}`,
+      );
+    }
+    const summary = workflowStep(job, "Summarize package candidate");
+    expect(summary.env?.PUBLISHED_UPGRADE_SURVIVOR_BASELINE_SCOPE).toBe(
+      "${{ steps.resolved_admission.outputs.baseline_scope }}",
+    );
+    expect(summary.run).toContain("${PUBLISHED_UPGRADE_SURVIVOR_BASELINE_SCOPE}");
+  });
+
+  it(
+    "admits the default parent CLI within the final record byte limit",
+    { timeout: 420_000 },
+    () => {
+      const started = Date.now();
+      const files = Object.fromEntries(
+        [
+          "scripts/runtime-postbuild.mts",
+          "src/cli/update-cli/update-command-plugin-preflight.ts",
+          "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
+          "extensions/codex/package.json",
+        ].map((path) => [path, readFileSync(path, "utf8")]),
+      );
+      const f = frozenWorkflowFixture(
+        FULL_RELEASE_VALIDATION_WORKFLOW,
+        "resolve_target",
+        {},
+        { ...files, "package.json": '{"type":"module","version":"2026.9.9"}' },
+        {},
+        [
+          "scripts/lib",
+          "scripts/e2e/lib",
+          "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
+        ],
+      );
+      const plan = f.selection();
+      expect(plan.docker).toHaveLength(71);
+      const planned = Date.now();
+      const result = f.run("Admit frozen source contracts", {}, "", { timeout: 360_000 });
+      console.info(
+        JSON.stringify({
+          case: "default parent admission",
+          setupAndPlanMs: planned - started,
+          evaluationMs: Date.now() - planned,
+          status: result.status,
+          error: result.error?.message,
+          stderr: result.stderr,
+        }),
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const bytes = readFileSync(join(f.root, "frozen-admission.json"));
+      expect(bytes.length).toBeLessThanOrEqual(262_144);
+      const record = JSON.parse(bytes.toString("utf8"));
+      expect(record.evaluations).toHaveLength(72);
+      const children = reconstructAdmissionEvaluations(record);
+      expect(children).toHaveLength(72);
+      const { digest, provenance: _provenance, ...content } = record;
+      expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
+      expect(record.status).toBe("UNRESOLVED");
+      expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+      console.info(
+        `default parent admission: ${record.evaluations.length} evaluations, ${bytes.length} emitted bytes`,
+      );
+    },
+  );
+
+  it.each([
+    { groups: 256, scenarios: "base", admitted: true },
+    { groups: 64, scenarios: "base ".repeat(800).trim(), admitted: false },
+  ])(
+    "bounds the complete CLI record for $groups real planner groups",
+    { timeout: 420_000 },
+    ({ groups, scenarios, admitted }) => {
+      const baselines = Array.from(
+        { length: groups / 2 },
+        (_, index) => `openclaw@2026.9.${index + 1}`,
+      ).join(" ");
+      const f = frozenWorkflowFixture(
+        LIVE_E2E_WORKFLOW,
+        "validate_selected_ref",
+        {
+          docker_lanes: "published-upgrade-survivor update-migration",
+          targeted_docker_lane_group_size: 1,
+          include_live_suites: true,
+          live_suite_filter: "live-gateway-docker",
+          include_release_path_suites: false,
+          published_upgrade_survivor_baseline: "openclaw@2026.9.1",
+          published_upgrade_survivor_baselines: baselines,
+          published_upgrade_survivor_scenarios: scenarios,
+        },
+        {
+          "package.json": '{"type":"module","version":"2026.9.9"}',
+          "scripts/e2e/lib/upgrade-survivor/assertions.mjs": readFileSync(
+            "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
+            "utf8",
+          ),
+        },
+        { ADMISSION_BASELINES_RESOLVED: "true" },
+      );
+      const plan = f.selection();
+      expect(plan.docker).toHaveLength(groups);
+      expect(plan.explicitConsumers).toContain("live-cli-backend");
+      const result = f.run("Admit frozen source contracts", {}, "printf 'producer-ran\\n'", {
+        timeout: 360_000,
+      });
+      expect(result.status, result.stderr).toBe(admitted ? 0 : 1);
+      const bytes = readFileSync(join(f.root, "frozen-admission.json"));
+      if (admitted) {
+        expect(bytes.length).toBeLessThanOrEqual(262_144);
+        const record = JSON.parse(bytes.toString("utf8"));
+        const children = reconstructAdmissionEvaluations(record);
+        expect(children).toHaveLength(groups + 1);
+        expect(record.status).toBe("ADMITTED");
+        expect(
+          record.evaluations
+            .slice(0, -1)
+            .map(
+              (evaluation: { selection: { docker: { baselines: string } } }) =>
+                evaluation.selection.docker.baselines,
+            ),
+        ).toEqual(plan.docker.map((group: { baselines: string }) => group.baselines));
+        expect(record.evaluations.at(-1).selection.consumers).toContain("live-cli-backend");
+        const { digest, provenance: _provenance, ...content } = record;
+        expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
+        expect(result.stdout).toContain("producer-ran");
+        console.info(
+          `high-cardinality admission: ${children.length} evaluations, ${bytes.length} emitted bytes`,
+        );
+      } else {
+        expect(result.stderr).toContain("workflow admission record exceeds limit");
+        expect(bytes.length).toBe(0);
+        expect(result.stdout).toBe("");
+      }
+      expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+    },
+  );
+
+  it.each(["root-managed-vps-upgrade", "update-restart-auth"])(
+    "rejects unresolved published baseline for the exact %s wrapper",
+    (lane) => {
+      const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
+        docker_lanes: lane,
+        include_live_suites: false,
+        include_release_path_suites: false,
+        published_upgrade_survivor_baseline: "openclaw@latest",
+      });
+      const plan = f.selection();
+      const result = f.admit();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("unresolved upgrade baselines at the execution boundary");
+      expect(result.stdout).toBe("");
+      expect(plan.obligations).toContainEqual(
+        expect.objectContaining({ kind: "upgrade-baselines" }),
+      );
+      expect(readFileSync(join(f.root, "frozen-admission.json"), "utf8")).toBe("");
+    },
+  );
+
+  it.each(["root-managed-vps-upgrade", "update-restart-auth"])(
+    "rejects a falsely resolved moving baseline for %s",
+    (lane) => {
+      const f = frozenWorkflowFixture(
+        LIVE_E2E_WORKFLOW,
+        "validate_selected_ref",
+        {
+          docker_lanes: lane,
+          include_live_suites: false,
+          include_release_path_suites: false,
+          published_upgrade_survivor_baseline: "openclaw@latest",
+        },
+        {},
+        { ADMISSION_BASELINES_RESOLVED: "true" },
+      );
+      const result = f.run("Plan frozen source admission", {}, "printf 'acquisition-reachable\\n'");
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("unresolved upgrade baselines at the execution boundary");
+      expect(result.stdout).toBe("");
+      expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+    },
+  );
+
+  it.each([
+    { lane: "onboard", prepareOnly: false },
+    { lane: "upgrade-survivor", prepareOnly: false },
+    { lane: "root-managed-vps-upgrade update-restart-auth", prepareOnly: true },
+  ])(
+    "leaves unselected published baselines unresolved for $lane prepare=$prepareOnly",
+    ({ lane, prepareOnly }) => {
+      const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
+        docker_lanes: lane,
+        include_live_suites: false,
+        include_release_path_suites: false,
+        prepare_only: prepareOnly,
+        published_upgrade_survivor_baseline: "openclaw@latest",
+      });
+      expect(f.selection().obligations).toEqual([]);
+      expect(f.run("Resolve selected upgrade baseline versions").status).toBe(0);
+      expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+    },
+  );
+
+  it("keeps shared verification evidence separate from each child's selected and tooling reads", () => {
+    const inputs = {
+      docker_lanes: "onboard codex-on-demand",
+      targeted_docker_lane_group_size: 1,
+      include_live_suites: false,
+      include_release_path_suites: false,
+    };
+    const f = frozenWorkflowFixture(
+      LIVE_E2E_WORKFLOW,
+      "validate_selected_ref",
+      inputs,
+      {
+        "extensions/codex/package.json": readFileSync("extensions/codex/package.json", "utf8"),
+      },
+      {},
+      ["scripts/e2e/lib", "scripts/lib/record-shared.mjs"],
+    );
+    f.selection();
+    const result = f.admit();
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8"));
+    const children = reconstructAdmissionEvaluations(record);
+    expect(children).toHaveLength(3);
+    const extra = "scripts/lib/record-shared.mjs";
+    for (const [index, child] of children.entries()) {
+      const toolingPaths = child.sources.tooling.map(({ path }) => path);
+      const selectedPaths = child.sources.selected.map(({ path }) => path);
+      if (index === 1) {
+        expect(toolingPaths).toContain(extra);
+        expect(selectedPaths).toContain("extensions/codex/package.json");
+      } else {
+        expect(toolingPaths).not.toContain(extra);
+        expect(selectedPaths).not.toContain("extensions/codex/package.json");
+      }
+    }
+    const onlyOnboard = f.run("Plan frozen source admission", {
+      ADMISSION_INPUTS: JSON.stringify({ ...inputs, docker_lanes: "onboard" }),
+    });
+    expect(onlyOnboard.status, onlyOnboard.stderr).toBe(0);
+    const single = f.admit();
+    expect(single.status, single.stderr).toBe(0);
+    const isolated = reconstructAdmissionEvaluations(
+      JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8")),
+    );
+    expect(children[0]).toEqual(isolated[0]);
+  });
+
+  it.each([
+    { prepareOnly: false, baselines: "openclaw@2026.9.1\r\nopenclaw@2026.7.33" },
+    { prepareOnly: true, baselines: "openclaw@2026.9.1\r\nopenclaw@2026.7.33" },
+    {
+      prepareOnly: false,
+      baselines: "OPENCLAW_ADMISSION_OUTPUT\nOPENCLAW_ADMISSION_OUTPUT_\nopenclaw@2026.9.1\n",
+    },
+  ])(
+    "round-trips unselected multiline baseline outputs with prepare_only=$prepareOnly $baselines",
+    ({ prepareOnly, baselines }) => {
+      const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
+        docker_lanes: "onboard",
+        include_live_suites: false,
+        include_release_path_suites: false,
+        prepare_only: prepareOnly,
+        published_upgrade_survivor_baselines: baselines,
+      });
+      expect(f.selection().obligations).toEqual([]);
+      const result = f.run("Resolve selected upgrade baseline versions");
+      expect(result.status, result.stderr).toBe(0);
+      const output = readFileSync(join(f.root, "outputs"), "utf8");
+      const values = new Map<string, string>();
+      const lines = output.split("\n");
+      for (let index = 0; index < lines.length - 1; index++) {
+        const line = lines[index];
+        if (line === undefined) {
+          throw new Error("missing workflow output line");
+        }
+        const heredoc = line.indexOf("<<");
+        const equals = line.indexOf("=");
+        if (heredoc >= 0 && (equals < 0 || heredoc < equals)) {
+          const key = line.slice(0, heredoc);
+          const delimiter = line.slice(heredoc + 2);
+          const content = [];
+          while (++index < lines.length && lines[index] !== delimiter) {
+            content.push(lines[index]);
+          }
+          expect(lines[index], key).toBe(delimiter);
+          values.set(key, content.join("\n"));
+        } else {
+          expect(equals, `invalid output line: ${line}`).toBeGreaterThan(0);
+          values.set(line.slice(0, equals), line.slice(equals + 1));
+        }
+      }
+      expect(values.get("baselines")).toBe(baselines);
+      expect(values.get("baseline")).toBe("openclaw@latest");
+      expect(values.get("baseline_scope")).toBe("all-scenarios");
+      expect(values.get("parser_required")).toBe("false");
+      expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+      expect(
+        JSON.parse(readFileSync(join(f.root, "frozen-admission-request.json"), "utf8"))
+          .requestedBaselines.baselines,
+      ).toBe(baselines);
+    },
+  );
+
+  it.each(
+    (
+      [
+        [
+          FULL_RELEASE_VALIDATION_WORKFLOW,
+          "resolve_target",
+          "Plan frozen source admission",
+          "parent",
+        ],
+        [
+          LIVE_E2E_WORKFLOW,
+          "validate_selected_ref",
+          "Validate focused live suite filter",
+          "reusable",
+        ],
+        [RELEASE_CHECKS_WORKFLOW, "resolve_target", "Capture selected inputs", "release"],
+        [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "Select acceptance profile", "package"],
+      ] as const
+    ).flatMap(([file, jobName, caller, workflow]) => [
+      {
+        file,
+        jobName,
+        caller,
+        workflow,
+        condition: "clean",
+        path: "scripts/plan-release-workflow-matrix.mjs",
+      },
+      {
+        file,
+        jobName,
+        caller,
+        workflow,
+        condition: "dirty",
+        path: "scripts/plan-release-workflow-matrix.mjs",
+      },
+      {
+        file,
+        jobName,
+        caller,
+        workflow,
+        condition: "missing",
+        path: "scripts/plan-release-workflow-matrix.mjs",
+      },
+      {
+        file,
+        jobName,
+        caller,
+        workflow,
+        condition: "dirty transitive",
+        path: "scripts/lib/numeric-options.mjs",
+      },
+      {
+        file,
+        jobName,
+        caller,
+        workflow,
+        condition: "missing transitive",
+        path: "scripts/lib/numeric-options.mjs",
+      },
+    ]),
+  )(
+    "verifies before the earliest planner command in $workflow: $condition $path",
+    ({ file, jobName, caller, condition, path }) => {
+      const f = frozenWorkflowFixture(
+        file,
+        jobName,
+        {
+          include_live_suites: true,
+          include_release_path_suites: false,
+          live_suite_filter: "docker-live-models",
+          suite_profile: "custom",
+          docker_lanes: "onboard",
+        },
+        {},
+        {},
+        [RELEASE_FILTER_VALIDATOR],
+      );
+      symlinkSync(f.tooling, join(f.root, "workflow"), "dir");
+      const planner = join(f.tooling, path);
+      const sentinel = join(f.root, "planner-executed");
+      if (condition !== "clean") {
+        writeFileSync(
+          planner,
+          `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(sentinel)}, 'executed');\n${readFileSync(planner, "utf8")}`,
+        );
+      }
+      if (condition.startsWith("missing")) {
+        f.toolingGit("add", path);
+        f.toolingGit("commit", "-qm", "earliest import execution witness");
+        f.env.ADMISSION_TOOLING_SHA = f.toolingGit("rev-parse", "HEAD");
+        const oid = f.toolingGit("rev-parse", `HEAD:${path}`);
+        unlinkSync(join(f.tooling, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+        f.toolingGit("config", "remote.origin.url", "fixture::unavailable");
+        f.toolingGit("config", "remote.origin.promisor", "true");
+      }
+      const job = workflowJob(file, jobName);
+      const stepNames = (job.steps ?? [])
+        .map((step) => step.name)
+        .filter(
+          (name): name is string => name === caller || name === "Plan frozen source admission",
+        );
+      const env = {
+        ...Object.fromEntries(
+          Object.keys(workflowStep(job, caller).env ?? {}).map((key) => [key, ""]),
+        ),
+        ...f.env,
+        ADMISSION_TOOLING_ROOT: f.tooling,
+        ADMISSION_TOOLING_SHA: f.env.ADMISSION_TOOLING_SHA,
+        ADMISSION_STAGE: "known-source",
+        LIVE_SUITE_FILTER: "docker-live-models",
+        RELEASE_TEST_PROFILE: "beta",
+        INCLUDE_LIVE_SUITES: "true",
+        INCLUDE_REPO_E2E: "false",
+        LIVE_MODELS_ONLY: "false",
+        SOURCE: "ref",
+        SUITE_PROFILE: "custom",
+        CUSTOM_DOCKER_LANES: "onboard",
+        TELEGRAM_MODE: "none",
+        PACKAGE_ARTIFACT_NAME: "fixture-package",
+        RELEASE_PHASE_INPUT: "all",
+        RELEASE_PROFILE_INPUT: "beta",
+        RELEASE_REF_INPUT: "main",
+        RELEASE_RERUN_GROUP_INPUT: "all",
+        RELEASE_FILTER_VALIDATOR: join(f.tooling, RELEASE_FILTER_VALIDATOR),
+      };
+      const script = stepNames.map((name) => workflowStep(job, name).run).join("\n");
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+        cwd: file === PACKAGE_ACCEPTANCE_WORKFLOW ? f.tooling : f.root,
+        env: { ...f.env, ...env },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      expect(existsSync(sentinel), result.stderr).toBe(false);
+      expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+      if (condition === "clean") {
+        expect(result.status, result.stderr).toBe(0);
+        expect(
+          JSON.parse(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8")).docker
+            .length,
+        ).toBeGreaterThan(0);
+        return;
+      }
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        condition.startsWith("missing")
+          ? "unable to read selected source"
+          : `tooling closure does not match committed source: ${path}`,
+      );
+      expect(result.stdout).toBe("");
+      expect(
+        existsSync(join(f.root, "outputs")) ? readFileSync(join(f.root, "outputs"), "utf8") : "",
+      ).toBe("");
+      expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+    },
+  );
+
+  it("verifies tooling without selected identity, objects, dependencies or admission output", () => {
+    const f = frozenWorkflowFixture(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", {});
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(f.tooling, "scripts/preflight-frozen-target-contracts.mjs"),
+        "--verify-tooling",
+        f.tooling,
+        f.toolingSha,
+      ],
+      {
+        encoding: "utf8",
+        env: { PATH: f.env.PATH, ADMISSION_SELECTED_ROOT: join(f.root, "not-acquired") },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(existsSync(join(f.root, "not-acquired"))).toBe(false);
+    expect(existsSync(join(f.root, "outputs"))).toBe(false);
+    expect(existsSync(join(f.root, "frozen-admission.json"))).toBe(false);
+    expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
+    expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+  });
+
+  it.each([
+    [FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target", "known-source"],
+    [RELEASE_CHECKS_WORKFLOW, "resolve_target", "known-source"],
+    [LIVE_E2E_WORKFLOW, "validate_selected_ref", "known-source"],
+    [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "known-source"],
+    [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "resolved-package"],
+  ])("fulfills evaluations before emitting %s %s %s admission", (file, job, stage) => {
+    const f = frozenWorkflowFixture(
+      file,
+      job,
+      {
+        release_profile: "beta",
+        release_test_profile: "beta",
+        rerun_group: "live-e2e",
+        live_suite_filter: "live-gateway-docker",
+        include_live_suites: true,
+        include_release_path_suites: false,
+        suite_profile: "custom",
+        docker_lanes: "onboard plugins-offline",
+        allow_frozen_target_scenario_omissions: true,
+      },
+      { "package.json": '{"type":"module","version":"2026.9.9"}' },
+      { ADMISSION_STAGE: stage },
+    );
+    const known = file === PACKAGE_ACCEPTANCE_WORKFLOW && stage === "known-source";
+    const result = f.run(
+      known ? "Plan known package source admission" : "Plan frozen source admission",
+      stage === "resolved-package"
+        ? {
+            ADMISSION_PACKAGE_SOURCE_SHA: f.sha,
+            ADMISSION_PACKAGE_SHA256: "d".repeat(64),
+            ADMISSION_PACKAGE_VERSION: "2026.9.9",
+          }
+        : {},
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const plan = JSON.parse(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8"));
+    const admitted = f.admit(
+      {},
+      known ? "Admit known package source before packing" : "Admit frozen source contracts",
+    );
+    expect(admitted.status, admitted.stderr).toBe(0);
+    expect(admitted.stdout).toContain("producer-ran");
+    const record = JSON.parse(
+      readFileSync(
+        join(f.root, known ? "frozen-admission-known-source.json" : "frozen-admission.json"),
+        "utf8",
+      ),
+    );
+    expect(record.status).toBe("ADMITTED");
+    expect(record.evaluations).toHaveLength(plan.docker.length + 1);
+    for (const evaluation of reconstructAdmissionEvaluations(record)) {
+      expect(evaluation).toMatchObject({
+        version: 1,
+        selectedSha: f.sha,
+        toolingSha: f.toolingSha,
+      });
+      expect(Array.isArray(evaluation.contracts)).toBe(true);
+      expect(evaluation.digest).toMatch(/^[a-f0-9]{64}$/u);
+      const identities = evaluation.sources.tooling.map(
+        ({ path, oid }: { path: string; oid: string }) => {
+          expect(f.toolingGit("rev-parse", `${f.toolingSha}:${path}`)).toBe(oid);
+          return path;
+        },
+      );
+      expect(identities).toEqual(expect.arrayContaining(frozenAdmissionClosure));
+    }
+    const { digest, provenance: _provenance, ...content } = record;
+    expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
+    expect(existsSync(join(f.target, "node_modules"))).toBe(false);
+    expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
+  });
+
+  it.each(["dirty planner", "missing planner object"])(
+    "rejects %s before planner execution or acquisition",
+    (condition) => {
+      const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
+        include_live_suites: false,
+        include_release_path_suites: false,
+        docker_lanes: "onboard",
+      });
+      const path = "scripts/plan-release-workflow-matrix.mjs";
+      const sentinel = join(f.root, "planner-executed");
+      const original = readFileSync(join(f.tooling, path), "utf8");
+      writeFileSync(
+        join(f.tooling, path),
+        `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(sentinel)}, "executed");\n${original}`,
+      );
+      if (condition === "missing planner object") {
+        // Keep working bytes executable and HEAD's tree intact, but remove its blob.
+        f.toolingGit("add", path);
+        f.toolingGit("commit", "-qm", "planner execution witness");
+        f.env.ADMISSION_TOOLING_SHA = f.toolingGit("rev-parse", "HEAD");
+        const oid = f.toolingGit("rev-parse", `HEAD:${path}`);
+        unlinkSync(join(f.tooling, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+        f.toolingGit("config", "remote.origin.url", "fixture::unavailable");
+        f.toolingGit("config", "remote.origin.promisor", "true");
+      }
+      const result = f.run(
+        "Plan frozen source admission",
+        {},
+        "printf 'acquisition-install-reachable\\n'",
+      );
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(
+        condition === "dirty planner"
+          ? `tooling closure does not match committed source: ${path}`
+          : "unable to read selected source",
+      );
+      expect(existsSync(sentinel)).toBe(false);
+      expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+      expect(result.stdout).toBe("");
+      expect(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8")).toBe("");
+      expect(
+        JSON.parse(readFileSync(join(f.root, "frozen-admission-request.json"), "utf8")).tooling.sha,
+      ).toBe(f.env.ADMISSION_TOOLING_SHA);
+      expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
+    },
+  );
+
+  it("plans without selected objects and rejects admission before acquisition", () => {
+    const f = frozenWorkflowFixture(
+      LIVE_E2E_WORKFLOW,
+      "validate_selected_ref",
+      {
+        docker_lanes: "onboard",
+        include_live_suites: false,
+        include_release_path_suites: false,
+        allow_frozen_target_scenario_omissions: true,
+      },
+      { "src/config/zod-schema.ts": "lastRunAt:" },
+    );
+    const oid = f.git("rev-parse", "HEAD:src/config/zod-schema.ts");
+    unlinkSync(join(f.target, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+    const missingRoot = join(f.root, "not-acquired");
+    const unavailable = f.run("Plan frozen source admission", {
+      ADMISSION_SELECTED_ROOT: missingRoot,
+    });
+    expect(unavailable.status, unavailable.stderr).toBe(0);
+    expect(existsSync(missingRoot)).toBe(false);
+    expect(f.selection().sourcePaths).toContain("src/config/zod-schema.ts");
+    const rejected = f.admit();
+    expect(rejected.status, rejected.stderr).toBe(1);
+    expect(rejected.stderr).toContain("unable to read selected source");
+    expect(rejected.stdout).toBe("");
+    expect(readFileSync(join(f.root, "frozen-admission.json"), "utf8")).toBe("");
+  });
+
+  it("stops on a later Docker rejection before explicit consumers or success output", () => {
+    const f = frozenWorkflowFixture(
+      LIVE_E2E_WORKFLOW,
+      "validate_selected_ref",
+      {
+        docker_lanes: "onboard root-managed-vps-upgrade",
+        targeted_docker_lane_group_size: 1,
+        published_upgrade_survivor_baseline: "openclaw@2026.9.1",
+        include_live_suites: true,
+        live_suite_filter: "live-gateway-docker",
+        include_release_path_suites: false,
+        allow_frozen_target_scenario_omissions: true,
+      },
+      {
+        "package.json": '{"type":"module","version":"not-a-release"}',
+        "scripts/print-cli-backend-live-metadata.ts":
+          "export function resolveCliBackendDockerPackages() {}",
+      },
+      { ADMISSION_BASELINES_RESOLVED: "true" },
+    );
+    const oid = f.git("rev-parse", "HEAD:scripts/print-cli-backend-live-metadata.ts");
+    unlinkSync(join(f.target, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+    const planned = f.selection();
+    expect(planned.explicitConsumers).toContain("live-cli-backend");
+    expect(planned.docker.map((group: { lanes: string[] }) => group.lanes)).toEqual([
+      ["onboard"],
+      ["root-managed-vps-upgrade"],
+    ]);
+    const outputs = readFileSync(join(f.root, "outputs"), "utf8");
+    const rejected = f.admit();
+    expect(rejected.status, rejected.stderr).toBe(1);
+    expect(rejected.stderr.split("\n")[0]).toBe(
+      "frozen admission: selected upgrade target has an invalid release version",
+    );
+    expect(rejected.stderr).not.toContain("unable to read selected source");
+    expect(rejected.stderr).not.toContain("UnhandledPromiseRejection");
+    expect(rejected.stdout).toBe("");
+    expect(readFileSync(join(f.root, "frozen-admission.json"), "utf8")).toBe("");
+    expect(readFileSync(join(f.root, "outputs"), "utf8")).toBe(outputs);
+  });
+
   it.each([
     [FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"],
     [RELEASE_CHECKS_WORKFLOW, "resolve_target"],
@@ -466,10 +1653,15 @@ describe("frozen admission workflow barriers", () => {
       readFileSync(join(fixture.root, "frozen-admission.json"), "utf8"),
     );
     expect(multilineRecord.evaluations).toHaveLength(normalizedRecord.evaluations.length);
-    for (const [index, evaluated] of multilineRecord.evaluations.entries()) {
-      expect(evaluated.docker).toEqual(normalizedRecord.evaluations[index].docker);
-      expect(evaluated.contracts).toEqual(normalizedRecord.evaluations[index].contracts);
-      expect(evaluated.sources).toEqual(normalizedRecord.evaluations[index].sources);
+    const normalizedChildren = reconstructAdmissionEvaluations(normalizedRecord);
+    for (const [index, evaluated] of reconstructAdmissionEvaluations(multilineRecord).entries()) {
+      const normalizedChild = normalizedChildren[index];
+      if (normalizedChild === undefined) {
+        throw new Error("missing normalized admission evaluation");
+      }
+      expect(evaluated.docker).toEqual(normalizedChild.docker);
+      expect(evaluated.contracts).toEqual(normalizedChild.contracts);
+      expect(evaluated.sources).toEqual(normalizedChild.sources);
     }
   });
 
@@ -594,58 +1786,66 @@ describe("frozen admission workflow barriers", () => {
     }
   });
 
-  it("captures a moving baseline once and carries the exact version through evaluation", () => {
-    const f = frozenWorkflowFixture(
-      LIVE_E2E_WORKFLOW,
-      "validate_selected_ref",
-      {
-        docker_lanes: "published-upgrade-survivor",
-        include_release_path_suites: false,
-        include_live_suites: false,
-        published_upgrade_survivor_baseline: "openclaw@latest",
-      },
-      {
-        "scripts/e2e/lib/upgrade-survivor/assertions.mjs": readFileSync(
-          "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
-          "utf8",
-        ),
-      },
-    );
-    f.selection();
-    const bin = join(f.root, "acquisition-bin");
-    const calls = join(f.root, "registry-calls");
-    mkdirSync(bin);
-    writeFileSync(
-      join(bin, "npm"),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nprintf '"2026.9.1"\\n'\n`,
-      { mode: 0o755 },
-    );
-    const result = f.run("Resolve selected upgrade baseline versions", {
-      PATH: `${bin}:${process.env.PATH}`,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const continuation = f.run("Resolve selected upgrade baseline versions", {
-      PATH: `${bin}:${process.env.PATH}`,
-    });
-    expect(continuation.status, continuation.stderr).toBe(0);
-    expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
-      "view openclaw@latest version --json --silent --prefer-online",
-    ]);
-    const admitted = f.admit();
-    expect(admitted.status, admitted.stderr).toBe(0);
-    const record = JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8"));
-    expect(record).toMatchObject({
-      status: "ADMITTED",
-      requestedBaselines: { baseline: "openclaw@latest" },
-      options: {
-        upgradeSurvivorBaseline: "openclaw@2026.9.1",
-        upgradeSurvivorBaselines: "openclaw@2026.9.1",
-        baselinesResolved: true,
-      },
-      obligations: [],
-    });
-    expect(record.evaluations[0].docker.lanes).toEqual(["published-upgrade-survivor-2026.9.1"]);
-  });
+  it.each(["published-upgrade-survivor", "root-managed-vps-upgrade", "update-restart-auth"])(
+    "captures a moving baseline once and carries the exact version through %s evaluation",
+    (lane) => {
+      const f = frozenWorkflowFixture(
+        LIVE_E2E_WORKFLOW,
+        "validate_selected_ref",
+        {
+          docker_lanes: lane,
+          include_release_path_suites: false,
+          include_live_suites: false,
+          published_upgrade_survivor_baseline: "openclaw@latest",
+        },
+        {
+          "scripts/e2e/lib/upgrade-survivor/assertions.mjs": readFileSync(
+            "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
+            "utf8",
+          ),
+        },
+      );
+      f.selection();
+      const bin = join(f.root, "acquisition-bin");
+      const calls = join(f.root, "registry-calls");
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, "npm"),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nprintf '"2026.9.1"\\n'\n`,
+        { mode: 0o755 },
+      );
+      const result = f.run("Resolve selected upgrade baseline versions", {
+        PATH: `${bin}:${process.env.PATH}`,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const continuation = f.run("Resolve selected upgrade baseline versions", {
+        PATH: `${bin}:${process.env.PATH}`,
+      });
+      expect(continuation.status, continuation.stderr).toBe(0);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+        "view openclaw@latest version --json --silent --prefer-online",
+      ]);
+      const admitted = f.admit();
+      expect(admitted.status, admitted.stderr).toBe(0);
+      const record = JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8"));
+      expect(record).toMatchObject({
+        status: "ADMITTED",
+        requestedBaselines: { baseline: "openclaw@latest" },
+        options: {
+          upgradeSurvivorBaseline: "openclaw@2026.9.1",
+          upgradeSurvivorBaselines: "openclaw@2026.9.1",
+          baselinesResolved: true,
+        },
+        obligations: [],
+      });
+      expect(record.evaluations[0].docker.lanes).toEqual([
+        lane === "published-upgrade-survivor" ? `${lane}-2026.9.1` : lane,
+      ]);
+      expect(record.selectedSha).toBe(f.sha);
+      expect(record.toolingSha).toBe(f.toolingSha);
+      reconstructAdmissionEvaluations(record);
+    },
+  );
 
   it.each(["published-upgrade-survivor", "update-migration"])(
     "acquires the selected mobile-pairing blob before expanded %s admission",
@@ -712,9 +1912,7 @@ describe("frozen admission workflow barriers", () => {
         ),
       ).toContain(`${lane}-2026.9.1-mobile-pairing-reconnect`);
       expect(
-        record.evaluations.flatMap(
-          (entry: { sources: { selected: unknown[] } }) => entry.sources.selected,
-        ),
+        reconstructAdmissionEvaluations(record).flatMap((entry) => entry.sources.selected),
       ).toEqual(expect.arrayContaining([expect.objectContaining({ path, oid })]));
       for (const [overrides, selected] of [
         [{ published_upgrade_survivor_scenarios: "base" }, false],
@@ -756,10 +1954,11 @@ describe("frozen admission workflow barriers", () => {
     );
     const planned = known.run("Plan known package source admission");
     expect(planned.status, planned.stderr).toBe(0);
+    known.provisionParser();
     const rejected = known.admit({}, "Admit known package source before packing");
     expect(rejected.status).not.toBe(0);
     expect(rejected.stdout).not.toContain("producer-ran");
-    expect(rejected.stderr).toContain("frozen admission:");
+    expect(rejected.stderr).toContain("expected exactly one committed bundle client layout");
 
     const acquired = frozenWorkflowFixture(
       PACKAGE_ACCEPTANCE_WORKFLOW,
@@ -869,6 +2068,7 @@ describe("frozen admission workflow barriers", () => {
         parserRequired: true,
         consumers: ["agent-bundle-mcp-tools"],
       });
+      f.provisionParser();
       const result = f.admit();
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("producer-ran");
@@ -956,67 +2156,26 @@ describe("frozen admission workflow barriers", () => {
     [LIVE_E2E_WORKFLOW, "validate_selected_ref"],
     [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package"],
   ])("rejects unsupported selected source before producers in %s", (file, jobName) => {
-    const root = tempDirs.make("frozen-workflow-barrier-");
-    const target = join(root, "target");
-    mkdirSync(target);
-    writeFileSync(
-      join(target, "package.json"),
-      JSON.stringify({ type: "module", version: "2026.6.33" }),
+    const f = frozenWorkflowFixture(
+      file,
+      jobName,
+      {},
+      { "package.json": '{"type":"module","version":"2026.6.33"}' },
     );
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-C", target, ...args], {
-        encoding: "utf8",
-        env: {
-          PATH: process.env.PATH,
-          HOME: root,
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_GLOBAL: "/dev/null",
-          GIT_AUTHOR_NAME: "Fixture",
-          GIT_AUTHOR_EMAIL: "fixture@example.test",
-          GIT_COMMITTER_NAME: "Fixture",
-          GIT_COMMITTER_EMAIL: "fixture@example.test",
-        },
-      }).trim();
-    git("init", "--quiet");
-    git("add", ".");
-    git("-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture");
+    f.provisionParser();
     const request = {
       version: 1,
       repository: "openclaw/openclaw",
-      selected: { root: target, sha: git("rev-parse", "HEAD") },
-      tooling: {
-        root: resolve("."),
-        sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-      },
+      selected: { root: f.target, sha: f.sha },
+      tooling: { root: f.tooling, sha: f.toolingSha },
       allowFrozenTargetScenarioOmissions: true,
       selection: { consumers: ["agent-bundle-mcp-tools"] },
     };
-    writeFileSync(join(root, "frozen-admission-request.json"), JSON.stringify(request));
-    const admission = workflowJob(file, jobName).steps?.find(
-      (step) => step.name === "Admit frozen source contracts",
-    );
-    const result = spawnSync(
-      "bash",
-      [
-        "--noprofile",
-        "--norc",
-        "-c",
-        `set -euo pipefail\n${admission?.run ?? ""}\nprintf 'producer-ran\\n'`,
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          PATH: process.env.PATH,
-          RUNNER_TEMP: root,
-          ADMISSION_TOOLING_ROOT: resolve("."),
-          GITHUB_OUTPUT: join(root, "outputs"),
-        },
-      },
-    );
+    writeFileSync(join(f.root, "frozen-admission-request.json"), JSON.stringify(request));
+    const result = f.admit();
     expect(result.stdout).not.toContain("producer-ran");
     expect(result.status, result.stderr).not.toBe(0);
-    expect(result.stderr).toContain("frozen admission:");
+    expect(result.stderr).toContain("expected exactly one committed bundle client layout");
   });
 });
 
@@ -1514,7 +2673,14 @@ function runReleaseChecksInputValidation(
     workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target"),
     "Capture selected inputs",
   );
-  const workdir = tempDirs.make("release-checks-input-validation-");
+  const fixture = frozenWorkflowFixture(RELEASE_CHECKS_WORKFLOW, "resolve_target", {}, {}, {}, [
+    "scripts/full-release-validation-policy.mjs",
+    "scripts/full-release-candidate-contract.mjs",
+    "scripts/lib/cross-os-release-checks/suite-filter.mjs",
+    "scripts/lib/canonical-json.mjs",
+    "scripts/lib/record-shared.mjs",
+  ]);
+  const workdir = fixture.root;
   const outputPath = resolve(workdir, "github-output");
   mkdirSync(resolve(workdir, "waiver-target"));
   writeFileSync(
@@ -1522,13 +2688,15 @@ function runReleaseChecksInputValidation(
     JSON.stringify({ version: options.version ?? "2026.8.1" }),
     "utf8",
   );
-  symlinkSync(process.cwd(), resolve(workdir, "workflow"), "dir");
+  symlinkSync(fixture.tooling, resolve(workdir, "workflow"), "dir");
   const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
   const result = spawnSync("bash", ["-c", step.run ?? ""], {
     cwd: workdir,
     encoding: "utf8",
     env: {
       ...stepEnv,
+      ADMISSION_TOOLING_ROOT: fixture.tooling,
+      ADMISSION_TOOLING_SHA: fixture.toolingSha,
       CANDIDATE_ARTIFACT_JSON_INPUT: options.candidateArtifactJson ?? "",
       GITHUB_OUTPUT: outputPath,
       PATH: process.env.PATH,
@@ -2064,11 +3232,15 @@ function runPackageAcceptanceProfile(params: {
   if (!script) {
     throw new Error("Expected package acceptance profile script");
   }
-  const workdir = tempDirs.make("package-acceptance-profile-");
+  const fixture = frozenWorkflowFixture(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", {});
+  const workdir = fixture.root;
   const outputPath = resolve(workdir, "github-output");
   const result = spawnSync("bash", ["-c", script], {
+    cwd: fixture.tooling,
     encoding: "utf8",
     env: {
+      ADMISSION_TOOLING_ROOT: fixture.tooling,
+      ADMISSION_TOOLING_SHA: fixture.toolingSha,
       CUSTOM_DOCKER_LANES: params.dockerLanes ?? "",
       GITHUB_OUTPUT: outputPath,
       PACKAGE_ARTIFACT_NAME: "package-under-test",
@@ -12827,6 +13999,9 @@ promote_windows_release_assets
       ]);
     }
 
+    const npmPublish = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm");
+    expect(npmPublish.if).toContain("always() && !cancelled()");
+
     for (const workflowPath of [PLUGIN_NPM_RELEASE_WORKFLOW, OPENCLAW_NPM_RELEASE_WORKFLOW]) {
       const authorization = workflowStep(
         workflowJob(
@@ -13708,11 +14883,14 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   it("documents checked extended-stable dispatch instead of a raw-SHA workflow ref", () => {
     const nightly = readFileSync(".agents/skills/release-openclaw-nightly/SKILL.md", "utf8");
     const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
-    // The CI page is an index over docs/ci/*. Read the whole set so this
-    // assertion follows the content instead of a single file path.
+    // The CI page is an index over docs/ci/**. Read the whole tree so this
+    // assertion follows the content instead of a single file path. The walk is
+    // recursive because docs/ci pages are themselves split into subdirectories
+    // (docs/ci/scope-and-routing/*); a flat readdir silently drops those and
+    // turns a content move into a failure.
     const ciDocs = [
       readFileSync("docs/ci.md", "utf8"),
-      ...readdirSync("docs/ci")
+      ...readdirSync("docs/ci", { encoding: "utf8", recursive: true })
         .filter((name) => name.endsWith(".md"))
         .toSorted()
         .map((name) => readFileSync(`docs/ci/${name}`, "utf8")),

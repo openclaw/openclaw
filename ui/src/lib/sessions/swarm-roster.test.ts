@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionCapability, SessionListOptions } from "./index.ts";
+import { createSessionRowProvenance } from "./session-row-provenance.ts";
 import {
   hydrateSwarmSessionRows,
   isSwarmEnabledInConfig,
@@ -17,6 +18,16 @@ function row(index: number): GatewaySessionRow {
     updatedAt: index,
     spawnedBy: "agent:main:parent",
     swarmGroupId: "swarm:agent:main:parent:run-1",
+  };
+}
+
+function sessionSource(list: SessionCapability["list"], revision: () => number = () => 0) {
+  return {
+    get canonicalListRevision() {
+      return revision();
+    },
+    list,
+    inheritRow: createSessionRowProvenance().inheritRow,
   };
 }
 
@@ -116,10 +127,7 @@ describe("SwarmRosterHydrator", () => {
     vi.useFakeTimers();
     const onRows = vi.fn();
     const hydrator = new SwarmRosterHydrator();
-    const sessions = {
-      canonicalListRevision: 0,
-      list: vi.fn(async () => result([row(0)], 0, 1)),
-    } as unknown as SessionCapability;
+    const sessions = sessionSource(vi.fn(async () => result([row(0)], 0, 1)));
 
     hydrator.update({
       sessions,
@@ -151,10 +159,7 @@ describe("SwarmRosterHydrator", () => {
     const done = { ...row(0), status: "done" as const, updatedAt: 5 };
     let currentRows: GatewaySessionRow[] = [running];
     const hydrator = new SwarmRosterHydrator();
-    const sessions = {
-      canonicalListRevision: 0,
-      list: vi.fn(async () => result([done], 0, 1)),
-    } as unknown as SessionCapability;
+    const sessions = sessionSource(vi.fn(async () => result([done], 0, 1)));
 
     const params = {
       sessions,
@@ -192,7 +197,7 @@ describe("SwarmRosterHydrator", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValue(result([row(0)], 0, 1));
     const hydrator = new SwarmRosterHydrator();
-    const sessions = { canonicalListRevision: 0, list } as unknown as SessionCapability;
+    const sessions = sessionSource(list);
 
     hydrator.update({
       sessions,
@@ -229,12 +234,10 @@ describe("SwarmRosterHydrator", () => {
       label: "Current owner",
     };
     let revision = 1;
-    const sessions = {
-      get canonicalListRevision() {
-        return revision;
-      },
-      list: vi.fn(async () => result([], 0, 0)),
-    } as unknown as SessionCapability;
+    const sessions = sessionSource(
+      vi.fn(async () => result([], 0, 0)),
+      () => revision,
+    );
     const hydrator = new SwarmRosterHydrator();
     const params = {
       sessions,
@@ -274,10 +277,10 @@ describe("SwarmRosterHydrator", () => {
         otherActiveGroups: 0,
       },
     };
-    const sessions = {
-      canonicalListRevision: 1,
-      list: vi.fn(() => childRead),
-    } as unknown as SessionCapability;
+    const sessions = sessionSource(
+      vi.fn(() => childRead),
+      () => 1,
+    );
     const hydrator = new SwarmRosterHydrator();
     hydrator.update({
       sessions,
@@ -308,15 +311,13 @@ describe("SwarmRosterHydrator", () => {
         },
       };
       let revision = 1;
-      const sessions = {
-        get canonicalListRevision() {
-          return revision;
-        },
-        list: vi
+      const sessions = sessionSource(
+        vi
           .fn()
           .mockReturnValueOnce(children.promise)
           .mockResolvedValue(result([], 0, 0)),
-      } as unknown as SessionCapability;
+        () => revision,
+      );
       const onRows = vi.fn();
       const hydrator = new SwarmRosterHydrator();
       const params = {
@@ -359,7 +360,7 @@ describe("SwarmRosterHydrator", () => {
 describe("hydrateSwarmSessionRows", () => {
   it("hydrates paginated cross-agent children outside the normal session page", async () => {
     const children = Array.from({ length: 10_055 }, (_, index) => row(index));
-    const list = vi.fn(async (options: SessionListOptions) => {
+    const list = vi.fn(async (options: SessionListOptions = {}) => {
       const offset = options.offset ?? 0;
       return result(children.slice(offset, offset + 10_000), offset, children.length);
     });
@@ -378,7 +379,7 @@ describe("hydrateSwarmSessionRows", () => {
     ];
 
     const rows = await hydrateSwarmSessionRows({
-      sessions: { list } as unknown as SessionCapability,
+      sessions: sessionSource(list),
       parentKey: "agent:main:parent",
       currentRows,
       isCurrent: () => true,
@@ -404,9 +405,7 @@ describe("hydrateSwarmSessionRows", () => {
     const fetched = { ...row(0), status: "done" as const, updatedAt: 5 };
 
     const rows = await hydrateSwarmSessionRows({
-      sessions: {
-        list: vi.fn(async () => result([fetched], 0, 1)),
-      } as unknown as SessionCapability,
+      sessions: sessionSource(vi.fn(async () => result([fetched], 0, 1))),
       parentKey: "agent:main:parent",
       currentRows: [current],
       isCurrent: () => true,
@@ -425,14 +424,14 @@ describe("hydrateSwarmSessionRows", () => {
       [done, row(2)],
     ];
     let callIndex = 0;
-    const list = vi.fn(async (options: SessionListOptions) => {
+    const list = vi.fn(async (options: SessionListOptions = {}) => {
       const rows = pages[callIndex] ?? [];
       callIndex += 1;
       return result(rows, options.offset ?? 0, 4);
     });
 
     const rows = await hydrateSwarmSessionRows({
-      sessions: { list } as unknown as SessionCapability,
+      sessions: sessionSource(list),
       parentKey: "agent:main:parent",
       currentRows: [],
       isCurrent: () => true,
@@ -474,9 +473,7 @@ describe("hydrateSwarmSessionRows", () => {
 
   it("drops stale hydration results", async () => {
     const rows = await hydrateSwarmSessionRows({
-      sessions: {
-        list: vi.fn(async () => result([row(0)], 0, 1)),
-      } as unknown as SessionCapability,
+      sessions: sessionSource(vi.fn(async () => result([row(0)], 0, 1))),
       parentKey: "agent:main:parent",
       currentRows: [],
       isCurrent: () => false,

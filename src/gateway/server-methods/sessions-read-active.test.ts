@@ -344,7 +344,7 @@ it.each(["global", "unknown"] as const)(
           kind: sentinel,
           boardFace,
           hasActiveRun: true,
-          derivedTitle: "ops task",
+          derivedTitle: "Ops task",
           lastMessagePreview: "ops progress",
         },
         {
@@ -353,7 +353,7 @@ it.each(["global", "unknown"] as const)(
           kind: sentinel,
           boardFace,
           hasActiveRun: true,
-          derivedTitle: "research task",
+          derivedTitle: "Research task",
           lastMessagePreview: "research progress",
         },
         {

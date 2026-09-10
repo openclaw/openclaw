@@ -217,6 +217,9 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
   const forwardedSignals = ["SIGTERM", "SIGHUP"] as const;
   let forwardedSignal: (typeof forwardedSignals)[number] | null = null;
   let forwardedSignalPids: number[] = [];
+  let forwardedSignalTreeComplete = false;
+  let childExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  let forcedSignalCleanup = false;
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
   let forwardedSignalDrainTimer: ReturnType<typeof setInterval> | null = null;
   const clearForwardedSignalTimers = () => {
@@ -230,13 +233,23 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
     }
   };
   const finishForwardedSignal = () => {
-    cleanupSignalHandlers();
-    if (forwardedSignal) {
-      process.kill(process.pid, forwardedSignal);
+    if (!forwardedSignal || !childExit) {
+      return;
     }
+    cleanupSignalHandlers();
+    const interrupted =
+      childExit.signal ??
+      (forcedSignalCleanup ? "SIGKILL" : !forwardedSignalTreeComplete ? forwardedSignal : null);
+    if (interrupted) {
+      process.kill(process.pid, interrupted);
+      return;
+    }
+    // A returned child and quiescent captured tree acknowledge this stop.
+    // Raw signal death and forced cleanup cannot make that same promise.
+    process.exit(forwardedSignal === "SIGTERM" ? 143 : 129);
   };
   const waitForForwardedSignalChildren = () => {
-    if (!forwardedSignal || processTreeIsAlive(forwardedSignalPids)) {
+    if (!forwardedSignal || !childExit || processTreeIsAlive(forwardedSignalPids)) {
       return;
     }
     finishForwardedSignal();
@@ -250,11 +263,16 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
       () => {
         if (!forwardedSignal) {
           forwardedSignal = signal;
-          forwardedSignalPids = collectChildProcessTreePids(child);
+          const tree = collectChildProcessTreePids(child);
+          forwardedSignalPids = tree.pids;
+          forwardedSignalTreeComplete = tree.complete;
           signalProcessTree(child, signal, forwardedSignalPids);
           forwardedSignalDrainTimer = setInterval(waitForForwardedSignalChildren, 25);
           forceKillTimer = setTimeout(() => {
-            signalProcessTree(child, "SIGKILL", forwardedSignalPids);
+            if (processTreeIsAlive(forwardedSignalPids)) {
+              forcedSignalCleanup = true;
+              signalProcessTree(child, "SIGKILL", forwardedSignalPids);
+            }
           }, FORWARDED_SIGNAL_KILL_GRACE_MS);
           forceKillTimer.unref?.();
         }
@@ -277,6 +295,7 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
     process.exit(1);
   });
   child.on("exit", (code, signal) => {
+    childExit = { code, signal };
     if (forwardedSignal) {
       waitForForwardedSignalChildren();
       return;
@@ -292,22 +311,28 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
   });
 }
 
-function collectChildProcessTreePids(child: ChildProcess): number[] {
+function collectChildProcessTreePids(child: ChildProcess): { pids: number[]; complete: boolean } {
   if (process.platform === "win32" || typeof child.pid !== "number") {
-    return typeof child.pid === "number" ? [child.pid] : [];
+    return { pids: typeof child.pid === "number" ? [child.pid] : [], complete: false };
   }
   const ps = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
   if (ps.status !== 0) {
-    return [child.pid];
+    return { pids: [child.pid], complete: false };
   }
   const childrenByParent = new Map<number, number[]>();
+  let complete = true;
+  let childFound = false;
   for (const line of ps.stdout.split("\n")) {
     const match = line.trim().match(/^(\d+)\s+(\d+)$/u);
     if (!match) {
+      if (line.trim()) {
+        complete = false;
+      }
       continue;
     }
     const pid = Number(match[1]);
     const ppid = Number(match[2]);
+    childFound ||= pid === child.pid;
     const siblings = childrenByParent.get(ppid) ?? [];
     siblings.push(pid);
     childrenByParent.set(ppid, siblings);
@@ -318,7 +343,7 @@ function collectChildProcessTreePids(child: ChildProcess): number[] {
       pids.push(pid);
     }
   }
-  return [...new Set(pids)];
+  return { pids: [...new Set(pids)], complete: complete && childFound };
 }
 
 function processTreeIsAlive(pids: number[]): boolean {

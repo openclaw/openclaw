@@ -348,7 +348,7 @@ sidebarTitle: "Setup"
     it from display and diagnostics. Never print, log, or expose the encrypted
     content.
 
-    A process-owned isolated-Gateway run verified this exact
+    A process-owned isolated-Gateway run on OpenClaw 2026.8.1 verified this exact
     `openai/gpt-5.6-sol` configuration. Dense turns reached `295098`, `586562`,
     and `863664` prompt tokens. Turn three emitted and persisted a first-class
     server compaction item; the next request replayed that exact opaque item,

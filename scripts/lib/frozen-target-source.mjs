@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const maxObjectBytes = 16 * 1024 * 1024;
 const maxReadBytes = 64 * 1024 * 1024;
@@ -179,7 +180,17 @@ export function createFrozenTargetSource(root, sha) {
   };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+let invokedAsMain = false;
+if (process.argv[1]) {
+  try {
+    invokedAsMain =
+      realpathSync.native(fileURLToPath(import.meta.url)) === realpathSync.native(process.argv[1]);
+  } catch {
+    // Inline and stdin importers need not have a filesystem entrypoint.
+  }
+}
+
+if (invokedAsMain) {
   try {
     const [operation, root, sha, relativePath, needle] = process.argv.slice(2);
     const source = createFrozenTargetSource(root, sha);

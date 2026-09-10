@@ -267,6 +267,7 @@ export type GatewayCloseParams = {
     socket: { close: (code: number, reason: string) => void };
   }>;
   finishRequestEntries?: () => Promise<void>;
+  closeSdkResources?: () => Promise<void>;
   wss?: WebSocketServer;
   httpServer?: HttpServer;
   httpServers?: HttpServer[];
@@ -389,6 +390,8 @@ export async function completeGatewayClose(
   const restartExpectedMs = notice.restartExpectedMs ?? null;
   let pluginServicesCleanup: Promise<void> | undefined;
   let mediaCleanupStopResult: MediaCleanupStopResult | undefined;
+  const resourceCleanupErrors: unknown[] = [];
+  let closeFailure: { error: unknown } | undefined;
   const measureCloseStep = createCloseStepTimer(reason);
   try {
     if (params.drainActiveSessionsForShutdown) {
@@ -628,6 +631,8 @@ export async function completeGatewayClose(
       graceMs: EMBEDDING_PROVIDER_CLOSE_GRACE_MS,
       warnings,
     });
+  } catch (error) {
+    closeFailure = { error };
   } finally {
     // Grace lets independent teardown advance; failed plugin cleanup still owns
     // shared state and must prevent a new Gateway lifecycle from starting.
@@ -637,6 +642,11 @@ export async function completeGatewayClose(
     await waitForMediaCleanupDrainsToSettle();
     // Host cleanup can still use plugin state, and its own grace races must settle first.
     await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
+    try {
+      await params.closeSdkResources?.();
+    } catch (error) {
+      resourceCleanupErrors.push(error);
+    }
     if (mediaCleanupStopResult !== undefined) {
       await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
     }
@@ -646,6 +656,8 @@ export async function completeGatewayClose(
       // Plugin cleanup may still read ambient slots. A failed owner drain must
       // stop restart so the next lifecycle cannot reuse incomplete shutdown.
       await drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart");
+    } catch (error) {
+      resourceCleanupErrors.push(error);
     } finally {
       try {
         params.clearSecretsRuntimeSnapshot?.();
@@ -653,6 +665,17 @@ export async function completeGatewayClose(
         /* ignore */
       }
     }
+  }
+  if (resourceCleanupErrors.length === 1) {
+    throw resourceCleanupErrors[0];
+  }
+  if (resourceCleanupErrors.length > 1) {
+    throw new AggregateError(resourceCleanupErrors, "Gateway resource cleanup failed", {
+      cause: resourceCleanupErrors[0],
+    });
+  }
+  if (closeFailure) {
+    throw closeFailure.error;
   }
 
   const durationMs = Date.now() - start;

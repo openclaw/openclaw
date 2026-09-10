@@ -845,6 +845,26 @@ jobs:
             echo "Trust reason: \`$trusted_reason\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Plan frozen source admission
+        id: frozen_selection
+        env:
+          ADMISSION_WORKFLOW: reusable
+          ADMISSION_INPUTS: ${{ toJSON(inputs) }}
+          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}
+          ADMISSION_SELECTED_SHA: ${{ steps.validate.outputs.selected_sha }}
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}/.release-harness
+          ADMISSION_TOOLING_SHA: ${{ steps.workflow.outputs.workflow_sha }}
+          ADMISSION_WORKFLOW_REF: ${{ format('{0}/.github/workflows/openclaw-live-and-e2e-checks-reusable.yml@{1}', steps.workflow.outputs.workflow_repository, steps.workflow.outputs.workflow_sha) }}
+          ADMISSION_PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
+          ADMISSION_PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+          ADMISSION_PACKAGE_VERSION: ${{ inputs.package_version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --workflow-request > "$RUNNER_TEMP/frozen-admission-request.json"
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --plan "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission-selection.json"
+          printf 'parser_required=%s\n' "$(jq -er '.parserRequired | tostring' "$RUNNER_TEMP/frozen-admission-selection.json")" >> "$GITHUB_OUTPUT"
+
       - name: Validate focused live suite filter
         if: inputs.live_suite_filter != ''
         shell: bash
@@ -960,26 +980,6 @@ jobs:
           fi
           exit 1
 
-      - name: Plan frozen source admission
-        id: frozen_selection
-        env:
-          ADMISSION_WORKFLOW: reusable
-          ADMISSION_INPUTS: ${{ toJSON(inputs) }}
-          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}
-          ADMISSION_SELECTED_SHA: ${{ steps.validate.outputs.selected_sha }}
-          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}/.release-harness
-          ADMISSION_TOOLING_SHA: ${{ steps.workflow.outputs.workflow_sha }}
-          ADMISSION_WORKFLOW_REF: ${{ format('{0}/.github/workflows/openclaw-live-and-e2e-checks-reusable.yml@{1}', steps.workflow.outputs.workflow_repository, steps.workflow.outputs.workflow_sha) }}
-          ADMISSION_PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
-          ADMISSION_PACKAGE_SHA256: ${{ inputs.package_sha256 }}
-          ADMISSION_PACKAGE_VERSION: ${{ inputs.package_version }}
-        run: |
-          set -euo pipefail
-          umask 077
-          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --workflow-request > "$RUNNER_TEMP/frozen-admission-request.json"
-          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --plan "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission-selection.json"
-          printf 'parser_required=%s\n' "$(jq -er '.parserRequired | tostring' "$RUNNER_TEMP/frozen-admission-selection.json")" >> "$GITHUB_OUTPUT"
-
       - name: Resolve selected upgrade baseline versions
         id: upgrade_baselines
         env:
@@ -1022,7 +1022,16 @@ jobs:
             baseline: options.upgradeSurvivorBaseline,
             baselines: options.upgradeSurvivorBaselines,
             baseline_scope: options.upgradeSurvivorBaselineScope,
-          })) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+          })) {
+            if (/[\r\n]/u.test(value)) {
+              let delimiter = 'OPENCLAW_ADMISSION_OUTPUT';
+              const lines = value.split(/\r\n|\r|\n/u);
+              while (lines.includes(delimiter)) delimiter += '_';
+              appendFileSync(process.env.GITHUB_OUTPUT, `${key}<<${delimiter}\n${value}\n${delimiter}\n`);
+            } else {
+              appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+            }
+          }
           NODE
           node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" \
             --plan "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission-selection.json"
@@ -1071,7 +1080,7 @@ jobs:
       - name: Upload frozen admission diagnostic
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: frozen-source-admission-reusable-${{ github.run_id }}-${{ github.run_attempt }}
+          name: frozen-source-admission-reusable-${{ inputs.shared_image_artifact_namespace }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/frozen-admission.json
           if-no-files-found: error
           retention-days: 7
@@ -1679,6 +1688,9 @@ jobs:
           if [[ "$credentials" == *",anthropic,"* ]]; then
             require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
           fi
+          if [[ "$credentials" == *",anthropic-api-key,"* ]]; then
+            require_any "Anthropic API key" ANTHROPIC_API_KEY
+          fi
           if [[ "$credentials" == *",factory,"* ]]; then
             require_any Factory FACTORY_API_KEY
           fi
@@ -2065,6 +2077,9 @@ jobs:
           fi
           if [[ "$credentials" == *",anthropic,"* ]]; then
             require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
+          fi
+          if [[ "$credentials" == *",anthropic-api-key,"* ]]; then
+            require_any "Anthropic API key" ANTHROPIC_API_KEY
           fi
           if [[ "$credentials" == *",factory,"* ]]; then
             require_any Factory FACTORY_API_KEY
@@ -2512,6 +2527,9 @@ jobs:
           if [[ "$PREPARE_ONLY" == "true" ]]; then
             # Shared artifacts serve both release-path and plugin prerelease consumers.
             # Plan their union here without expanding either child's execution scope.
+            if [[ -z "$OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS" ]]; then
+              export OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS="base legacy-operator-state"
+            fi
             preparation_lanes="$(node --input-type=module <<'NODE'
           import { allReleasePathLanes } from "./.release-harness/scripts/lib/docker-e2e-scenarios.mts";
           import { createPluginPrereleaseTestPlan } from "./.release-harness/scripts/lib/plugin-prerelease-test-plan.mts";

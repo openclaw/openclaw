@@ -87,6 +87,7 @@ import {
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import { createReplyModelLevelResolver } from "./reply-model-levels.js";
 import {
   recordReplyPreRunRejection,
   resolveReplyOperationRunState,
@@ -997,14 +998,14 @@ export async function getReplyFromConfig(
     model: resolvedModel,
     requestedRouteResolution,
     modelState,
+    resolveModelLevels,
     contextTokens,
     inlineStatusRequested,
     directiveAck,
     perMessageQueueMode,
     perMessageQueueOptions,
   } = directiveResult.result;
-  let { directives, cleanedBody, resolvedThinkLevel, resolvedReasoningLevel } =
-    directiveResult.result;
+  let { directives, cleanedBody } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
 
@@ -1078,9 +1079,8 @@ export async function getReplyFromConfig(
       elevatedFailures,
       defaultActivation: () => defaultActivation,
       thinkingCatalog: statusThinkingCatalog,
-      resolvedThinkLevel,
+      resolveModelLevels,
       resolvedVerboseLevel,
-      resolvedReasoningLevel,
       resolvedElevatedLevel,
       blockReplyChunking,
       resolvedBlockStreamingBreak,
@@ -1111,6 +1111,7 @@ export async function getReplyFromConfig(
   const runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
   const runModel = runAutoFallbackPrimaryProbe?.model ?? model;
   let runModelState = modelState;
+  let resolveRunModelLevels = resolveModelLevels;
   if (runAutoFallbackPrimaryProbe) {
     try {
       runModelState = await createModelSelectionState({
@@ -1159,23 +1160,29 @@ export async function getReplyFromConfig(
       hasTurnOrSessionThinkLevel ||
       configuredThinkingDefault !== undefined ||
       runModelState.hasConfiguredThinkingDefault === true;
-    if (!hasTurnOrSessionThinkLevel) {
-      resolvedThinkLevel = await runModelState.resolveDefaultThinkingLevel();
-    }
     const rawSessionReasoningLevel = sessionEntry.reasoningLevel;
     const hasExplicitReasoningLevel =
       directives.reasoningLevel !== undefined ||
       rawSessionReasoningLevel != null ||
       agentEntry?.reasoningDefault != null ||
       agentCfg?.reasoningDefault != null;
-    if (!hasExplicitReasoningLevel) {
-      const thinkingActive = resolvedThinkLevel !== "off";
-      resolvedReasoningLevel =
-        thinkingActive || hasExplicitThinkLevel
-          ? "off"
-          : await runModelState.resolveDefaultReasoningLevel();
-    }
+    resolveRunModelLevels = createReplyModelLevelResolver({
+      modelState: runModelState,
+      selection: {
+        provider: runModelState.provider,
+        model: runModelState.model,
+        thinkLevel: hasTurnOrSessionThinkLevel
+          ? (await resolveModelLevels()).resolvedThinkLevel
+          : undefined,
+        thinkingExplicit: hasExplicitThinkLevel,
+        reasoningLevel: hasExplicitReasoningLevel
+          ? (await resolveModelLevels()).resolvedReasoningLevel
+          : "off",
+        reasoningExplicit: hasExplicitReasoningLevel,
+      },
+    });
   }
+  const { resolvedThinkLevel, resolvedReasoningLevel } = await resolveRunModelLevels();
 
   let stagedAttachmentPaths = hasStagedMediaFacts(finalized.media)
     ? collectStagedAttachmentPaths(finalized)

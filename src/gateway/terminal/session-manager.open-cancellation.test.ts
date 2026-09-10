@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { TerminalSessionManager } from "./session-manager.js";
 import {
   baseOpenRequest as baseRequest,
@@ -6,17 +7,9 @@ import {
   makeFakePty,
 } from "./session-manager.test-helpers.js";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
 describe("TerminalSessionManager open cancellation", () => {
   it("kills a backend that finishes after its open request is cancelled", async () => {
-    const spawned = deferred<FakeTerminalPty>();
+    const spawned = createDeferred<FakeTerminalPty>();
     const controller = new AbortController();
     const first = makeFakePty();
     const second = makeFakePty();
@@ -48,8 +41,8 @@ describe("TerminalSessionManager open cancellation", () => {
   });
 
   it("bounds cancelled backend operations until they settle", async () => {
-    const firstSpawn = deferred<FakeTerminalPty>();
-    const secondSpawn = deferred<FakeTerminalPty>();
+    const firstSpawn = createDeferred<FakeTerminalPty>();
+    const secondSpawn = createDeferred<FakeTerminalPty>();
     const firstController = new AbortController();
     const secondController = new AbortController();
     let spawnCount = 0;

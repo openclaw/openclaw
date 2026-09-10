@@ -7,6 +7,7 @@ import {
   ModelRegistry as PublicModelRegistry,
 } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const providerOAuthMocks = vi.hoisted(() => ({
   login: vi.fn(),
@@ -24,7 +25,10 @@ vi.mock("../../plugins/provider-runtime.runtime.js", async () => {
   };
 });
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { clearAuthProfileMigrationDiagnostics } from "../auth-profiles/legacy-source-diagnostic.js";
+import {
+  assertAuthProfileMigrationReady,
+  clearAuthProfileMigrationDiagnostics,
+} from "../auth-profiles/legacy-source-diagnostic.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -581,6 +585,148 @@ describe("SQLite auth storage", () => {
     fs.writeFileSync(path.join(agentDir, "auth.json"), '{"openai":{"key":"fake"}}\n');
 
     expect(() => AuthStorage.forAgent(agentDir)).toThrow("requires legacy credential migration");
+  });
+
+  it.each(["local", "shared"])(
+    "keeps unrelated provider fallback available with a %s migration refusal",
+    async (owner) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-session-migration-" },
+        async (state) => {
+          const agentDir = state.agentDir("worker");
+          fs.mkdirSync(agentDir, { recursive: true });
+          writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+          await state.writeJson(
+            `agents/${owner === "local" ? "worker" : "main"}/agent/auth-profiles.json`,
+            {
+              version: 1,
+              profiles: {
+                "anthropic:default": { type: "api_key", provider: "anthropic", key: "legacy-key" },
+              },
+            },
+          );
+          const storage = AuthStorage.forAgent(agentDir);
+          storage.setFallbackResolver(() => "fallback-key");
+          for (const reload of [false, true]) {
+            if (reload) {
+              storage.reload();
+            }
+            await expect(storage.getApiKey("litellm")).resolves.toBe("fallback-key");
+            await expect(storage.getApiKey("anthropic")).rejects.toMatchObject({
+              code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+              affectedProviders: ["anthropic"],
+            });
+          }
+        },
+      );
+    },
+  );
+
+  it.each(["inline", "unresolved-ref"])(
+    "preserves local %s credentials during an inherited migration refusal",
+    async (kind) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "auth-local-selection-" },
+        async (state) => {
+          const agentDir = state.agentDir("worker");
+          fs.mkdirSync(agentDir, { recursive: true });
+          const localKey = "synthetic-local-account-key";
+          vi.stubEnv("OPENAI_API_KEY", "synthetic-other-account-key");
+          writePersistedAuthProfileStoreRaw(
+            {
+              version: 1,
+              profiles: {
+                "openai:default": {
+                  type: "api_key",
+                  provider: "openai",
+                  ...(kind === "inline"
+                    ? { key: localKey }
+                    : {
+                        keyRef: {
+                          source: "env",
+                          provider: "default",
+                          id: "UNRESOLVED_LOCAL_OPENAI",
+                        },
+                      }),
+                },
+              },
+            },
+            agentDir,
+          );
+          await state.writeJson("agents/main/agent/auth-profiles.json", {
+            version: 1,
+            profiles: {
+              "anthropic:default": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "synthetic-legacy-key",
+              },
+            },
+          });
+          if (kind === "unresolved-ref") {
+            expect(() => AuthStorage.forAgent(agentDir)).toThrow(
+              "requires the active secrets runtime to materialize SecretRef credentials",
+            );
+            return;
+          }
+          const storage = AuthStorage.forAgent(agentDir);
+          for (const reload of [false, true]) {
+            if (reload) {
+              storage.reload();
+            }
+            const credential = await storage.getApiKey("openai");
+            // Report provenance without printing credential bytes in a failing assertion.
+            expect(
+              credential === localKey,
+              "returned credential belongs to the local account",
+            ).toBe(true);
+            await expect(storage.getApiKey("anthropic")).rejects.toMatchObject({
+              code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+            });
+          }
+        },
+      );
+    },
+  );
+
+  it("revalidates widened shared refusals on the next credential request without reload", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "auth-shared-refusal-" },
+      async (state) => {
+        const agentDir = state.agentDir("worker");
+        fs.mkdirSync(agentDir, { recursive: true });
+        writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+        const profiles = {
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "synthetic-legacy-key",
+          },
+        };
+        await state.writeJson("agents/main/agent/auth-profiles.json", { version: 1, profiles });
+        const storage = AuthStorage.forAgent(agentDir);
+        storage.setFallbackResolver(() => "synthetic-fallback-key");
+        await expect(storage.getApiKey("nvidia")).resolves.toBeDefined();
+        await state.writeJson("agents/main/agent/auth-profiles.json", {
+          version: 1,
+          profiles: {
+            ...profiles,
+            "nvidia:default": {
+              type: "api_key",
+              provider: "nvidia",
+              key: "synthetic-new-legacy-key",
+            },
+          },
+        });
+        expect(() => assertAuthProfileMigrationReady(undefined, undefined, "nvidia")).toThrow(
+          "requires legacy credential migration",
+        );
+        await expect(storage.getApiKey("nvidia")).rejects.toMatchObject({
+          code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+          affectedProviders: ["anthropic", "nvidia"],
+        });
+      },
+    );
   });
 
   it("fails closed when a legacy credential source appears after construction", async () => {

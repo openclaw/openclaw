@@ -1,5 +1,6 @@
 {
   "id": "fireworks",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

@@ -1054,11 +1054,10 @@ function retainVerifiedArchive(archivePath, bytes, expected, maxBytes) {
 function createArtifactTransfer(params, expected) {
   const token = assertTrimmedString(params.token, "GitHub token");
   const timeoutMs = boundedLimit(params.timeoutMs, DEFAULT_TIMEOUT_MS, "GitHub request timeout");
-  const requestedDeadline =
+  const explicitDeadlineMs =
     params.deadlineMs === undefined
-      ? Number.POSITIVE_INFINITY
+      ? undefined
       : assertPositiveInteger(params.deadlineMs, "GitHub request deadline");
-  const deadlineMs = Math.min(requestedDeadline, Date.now() + DEFAULT_TRANSFER_TIMEOUT_MS);
   const retryAttempts =
     params.retryAttempts === undefined
       ? 3
@@ -1088,9 +1087,11 @@ function createArtifactTransfer(params, expected) {
   };
   const apiRoot = `https://api.github.com/repos/${expected.repository}`;
   const request = { fetchImpl, headers, timeoutMs };
-  const retry = { attempts: retryAttempts, deadlineMs, delayMs: retryDelayMs };
+  const retry = { attempts: retryAttempts, delayMs: retryDelayMs };
+  const phaseDeadlineMs = () => explicitDeadlineMs ?? Date.now() + DEFAULT_TRANSFER_TIMEOUT_MS;
   return {
     json(endpoint, label) {
+      const deadlineMs = phaseDeadlineMs();
       return runBoundedRetry(
         label,
         (remainingMs) =>
@@ -1099,11 +1100,12 @@ function createArtifactTransfer(params, expected) {
             { ...request, timeoutMs: Math.min(timeoutMs, remainingMs) },
             { label, maxBytes: DEFAULT_MAX_JSON_BYTES },
           ),
-        retry,
+        { ...retry, deadlineMs },
       );
     },
     async archive() {
       const label = "GitHub Actions artifact download";
+      const deadlineMs = phaseDeadlineMs();
       remainingTransferMs(deadlineMs, label);
       // Callers validate fresh remote identity and producer state before this
       // content-only reuse; possession of a local archive never grants authority.
@@ -1135,7 +1137,7 @@ function createArtifactTransfer(params, expected) {
           verifyArchiveBytes(bytes, expected, label);
           return bytes;
         },
-        retry,
+        { ...retry, deadlineMs },
       );
       if (archivePath) {
         retainVerifiedArchive(archivePath, archiveBytes, expected, maxArchiveBytes);

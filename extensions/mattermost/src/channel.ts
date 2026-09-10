@@ -5,7 +5,6 @@ import {
   readStringParam,
   withNormalizedTimestamp,
 } from "openclaw/plugin-sdk/channel-actions";
-import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -455,31 +454,11 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       // The runner preserves the caller's spelling in `target` and puts the
       // directory-resolved provider destination in `to` before dispatch.
       const authorizedTarget = normalizeOptionalString(params.to);
-      if (remove) {
-        const result = await (
-          await loadMattermostChannelRuntime()
-        ).removeMattermostReaction({
-          cfg,
-          postId,
-          emojiName,
-          accountId: resolvedAccountId,
-          authorizedTarget,
-          conversationReadOrigin,
-        });
-        if (!result.ok) {
-          throw new Error(result.error);
-        }
-        return {
-          content: [
-            { type: "text" as const, text: `Removed reaction :${emojiName}: from ${postId}` },
-          ],
-          details: {},
-        };
-      }
-
-      const result = await (
-        await loadMattermostChannelRuntime()
-      ).addMattermostReaction({
+      const runtime = await loadMattermostChannelRuntime();
+      const mutateReaction = remove
+        ? runtime.removeMattermostReaction
+        : runtime.addMattermostReaction;
+      const result = await mutateReaction({
         cfg,
         postId,
         emojiName,
@@ -492,7 +471,14 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       }
 
       return {
-        content: [{ type: "text" as const, text: `Reacted with :${emojiName}: on ${postId}` }],
+        content: [
+          {
+            type: "text" as const,
+            text: remove
+              ? `Removed reaction :${emojiName}: from ${postId}`
+              : `Reacted with :${emojiName}: on ${postId}`,
+          },
+        ],
         details: {},
       };
     }
@@ -755,7 +741,6 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
-      inspectAccount: adaptScopedAccountAccessor(inspectMattermostAccount),
       isConfigured: isMattermostConfigured,
       describeAccount: describeMattermostAccount,
     },

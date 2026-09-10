@@ -444,6 +444,8 @@ jobs:
       - name: Capture selected inputs
         id: inputs
         env:
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}/workflow
+          ADMISSION_TOOLING_SHA: ${{ github.sha }}
           RELEASE_REF_INPUT: ${{ inputs.ref }}
           RELEASE_PROVIDER_INPUT: ${{ inputs.provider }}
           RELEASE_MODE_INPUT: ${{ inputs.mode }}
@@ -468,6 +470,8 @@ jobs:
           RELEASE_FILTER_VALIDATOR: workflow/scripts/github/validate-release-suite-filters.sh
         run: |
           set -euo pipefail
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" \
+            --verify-tooling "$ADMISSION_TOOLING_ROOT" "$ADMISSION_TOOLING_SHA"
           phase="$RELEASE_PHASE_INPUT"
           case "$phase" in
             all|independent|candidate) ;;

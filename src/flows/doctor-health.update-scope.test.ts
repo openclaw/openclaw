@@ -37,6 +37,17 @@ vi.mock("../commands/doctor-db-bloat.js", () => ({
     obs.events.push("db-size-advice");
   },
 }));
+vi.mock("../commands/doctor-bootstrap-size.js", () => ({
+  noteBootstrapFileSize: () => {
+    obs.events.push("bootstrap-size-advice");
+  },
+}));
+vi.mock("../gateway/control-ui-github-api.js", () => ({
+  hasConfiguredGitHubApiCredential: () => {
+    obs.events.push("github-credential-advice");
+    return false;
+  },
+}));
 vi.mock("../commands/doctor/shared/active-tool-schema-warnings.js", () => ({
   collectActiveToolSchemaProjectionWarnings: async () => {
     obs.events.push("active-tool-schema");
@@ -91,6 +102,8 @@ describe("update Doctor diagnostic scope", () => {
         "doctor:db-bloat",
         "doctor:active-tool-schema-warnings",
         "doctor:workspace-suggestions",
+        "doctor:github-projects",
+        "doctor:bootstrap-size",
       ]);
       const selected = resolveDoctorHealthContributions().filter((c) => ids.has(c.id));
       expect(selected).toHaveLength(ids.size);
@@ -111,11 +124,13 @@ describe("update Doctor diagnostic scope", () => {
               "project-git",
               "project-git",
               "db-size-advice",
+              "github-credential-advice",
+              "bootstrap-size-advice",
               "workspace-suggestions",
             ]
           : [],
       );
-      expect(snapshot).toHaveBeenCalledTimes(mode === "standalone" ? 4 : 0);
+      expect(snapshot).toHaveBeenCalledTimes(mode === "standalone" ? ids.size : 0);
       if (mode === "standalone") {
         expect(obs.note).toHaveBeenCalledWith("synthetic advisory", "Doctor warnings");
         expect(obs.note).not.toHaveBeenCalledWith(expect.anything(), "Update Doctor scope");

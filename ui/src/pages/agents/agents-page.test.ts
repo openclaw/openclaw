@@ -903,6 +903,7 @@ describe("AgentsPage gateway lifecycle", () => {
       agents: [{ id: "main", name: "Main" }],
     };
     page.agentsSelectedId = "main";
+    page.routeData = { panel: "files" } as AgentsRouteData;
     page.agentFileContents = { "cached.md": "keep" };
     page.routeDataInitialized = true;
     page.context = {
@@ -1030,6 +1031,7 @@ describe("AgentsPage gateway lifecycle", () => {
     } as unknown as ApplicationContext["sessions"];
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     const context = pageContext(currentGateway, agents, { sessions: oldSessions });
+    page.routeData = agentsRouteData(currentGateway);
     page.context = context;
     setPageGateway(page, client);
     page.subscriptions.hostConnected();

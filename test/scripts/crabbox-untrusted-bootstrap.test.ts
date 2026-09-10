@@ -15,6 +15,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const source = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
+const historicalPnpmSpec =
+  "pnpm@12.1.0+sha512.d9b8276d97f6ec86e49815877f91ee9f63cee61f2063b304e43b6dab8fa07ce8a9afd46d2facd39f921e6a9d06b3c75a81349c7b888c2d22886bae0229901037";
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -49,12 +51,14 @@ function fixture(scriptSource = source) {
     join(nodeStage, "bin", "corepack"),
     `#!/bin/bash
 set -eu
+echo "$1" >> ${JSON.stringify(join(root, "corepack-log"))}
 case "$1" in
   enable)
     ln -s corepack "$3/pnpm"
     ln -s corepack "$3/pnpx"
     ;;
   prepare)
+    printf '%s\\n' "$2" "$PWD" > ${JSON.stringify(join(root, "prepared-pin"))}
     version="\${2#pnpm@}"
     version="\${version%%+*}"
     if [[ ! -f "$COREPACK_HOME/v1/pnpm/$version/.corepack" ]]; then
@@ -63,6 +67,9 @@ case "$1" in
     ;;
   install)
     [[ "$2" == "--frozen-lockfile" ]]
+    read -r prepared_pin < ${JSON.stringify(join(root, "prepared-pin"))}
+    candidate_pin="$(${JSON.stringify(process.execPath)} -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager')"
+    [[ "$prepared_pin" == "$candidate_pin" ]]
     echo frozen >> ${JSON.stringify(join(root, "install-log"))}
     ;;
   *) ;;
@@ -173,9 +180,6 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     const pnpmSpec = script.match(/^pnpm_spec="([^"]+)"$/mu)?.[1];
 
     expect(pnpmSpec).toBe(packageJson.packageManager);
-    const warmup = script.indexOf('"$install_root/bin/corepack" "$pnpm_spec" --version');
-    expect(warmup).toBeGreaterThan(script.indexOf('cd "$install_root"'));
-    expect(warmup).toBeLessThan(script.indexOf("actual_package_manager="));
   });
 
   it("bounds both IMDSv2 identity requests", () => {
@@ -206,6 +210,21 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     expect(readFileSync(join(f.root, "ran"), "utf8")).toBe("ran\nran\n");
   });
 
+  it.each(["current", "historical"])(
+    "prepares the approved %s pin outside the checkout before frozen installation",
+    (kind) => {
+      const f = fixture();
+      const spec = kind === "historical" ? historicalPnpmSpec : f.spec;
+      writeFileSync(join(f.root, "package.json"), JSON.stringify({ packageManager: spec }));
+      const result = f.run();
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(join(f.root, "prepared-pin"), "utf8")).toBe(`${spec}\n${f.install}\n`);
+      expect(f.downloads()).toBe(kind === "historical" ? "pnpm-download\n" : "");
+      expect(readFileSync(join(f.root, "install-log"), "utf8")).toBe("frozen\n");
+      expect(readFileSync(join(f.root, "ran"), "utf8")).toBe("ran\n");
+    },
+  );
+
   it.each(["node", "wrapper", "native", "wrong-arch"])(
     "rejects a %s cache substitution despite forged adjacent metadata",
     (kind) => {
@@ -234,10 +253,28 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     },
   );
 
-  it.each(["candidate-pin", "head", "iam"])("rejects %s before workload execution", (kind) => {
+  it.each([
+    "candidate-pin",
+    "missing-pin",
+    "current-wrong-hash",
+    "historical-wrong-hash",
+    "unsupported-historical-pin",
+    "malformed-json",
+    "head",
+    "iam",
+  ])("rejects %s before Corepack setup, installation, or workload execution", (kind) => {
     const f = fixture();
-    if (kind === "candidate-pin") {
-      writeFileSync(join(f.root, "package.json"), '{"packageManager":"pnpm@99.0.0"}');
+    const manifests: Record<string, string> = {
+      "candidate-pin": '{"packageManager":"pnpm@99.0.0"}',
+      "missing-pin": "{}",
+      "current-wrong-hash": JSON.stringify({ packageManager: `${f.spec}0` }),
+      "historical-wrong-hash": JSON.stringify({ packageManager: `${historicalPnpmSpec}0` }),
+      "unsupported-historical-pin": '{"packageManager":"pnpm@11.22.0"}',
+      "malformed-json": "{",
+    };
+    const manifest = manifests[kind];
+    if (manifest !== undefined) {
+      writeFileSync(join(f.root, "package.json"), manifest);
     }
     const result = f.run(
       kind === "iam" ? { FIXTURE_IAM_STATUS: "200" } : {},
@@ -245,12 +282,15 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      kind === "candidate-pin"
-        ? "packageManager pin differs from trusted main"
-        : kind === "head"
-          ? "expected HEAD"
-          : "IAM credentials endpoint returned 200",
+      kind === "head"
+        ? "expected HEAD"
+        : kind === "iam"
+          ? "IAM credentials endpoint returned 200"
+          : kind === "malformed-json"
+            ? "invalid package.json"
+            : "packageManager pin differs from trusted main",
     );
+    expect(existsSync(join(f.root, "corepack-log"))).toBe(false);
     expect(existsSync(join(f.root, "ran"))).toBe(false);
     expect(existsSync(join(f.root, "install-log"))).toBe(false);
   });

@@ -14,6 +14,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import { addStagedPrivatePluginSdkExports } from "../../scripts/live-docker-stage-private-sdk-exports.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -265,6 +266,19 @@ describe("frozen committed source errors", () => {
     rmSync(objectPath);
     return objectPath;
   }
+
+  it("reads committed text through the imported API and distinguishes absent from unreadable blobs", () => {
+    const committedText = "selected committed text\n";
+    const source = committedSourceFixture({ [metadata]: committedText });
+    writeFileSync(path.join(source.root, metadata), "dirty worktree decoy\n");
+    const reader = createFrozenTargetSource(source.root, source.sha);
+    expect(reader.readText(metadata)).toBe(committedText);
+    expect(reader.readText("scripts/absent.ts")).toBeNull();
+
+    removeObject(source, `${source.sha}:${metadata}`);
+    const freshReader = createFrozenTargetSource(source.root, source.sha);
+    expect(() => freshReader.readText(metadata)).toThrow();
+  });
 
   it("distinguishes genuine absence from read errors through fallback and negative predicates", () => {
     const source = committedSourceFixture({ "package.json": "{}\n" });

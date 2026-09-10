@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentHarness } from "../agents/harness/types.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
@@ -54,12 +55,15 @@ export function withCliCommandCleanup<T>(
   if (scope.getStore() !== "process") {
     return run();
   }
+  const pluginResources = new CliPluginInvocationResources();
+  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  pluginResources.adopt({ release: () => sdkResourceHost.close() });
   const cleanup: CliHarnessCleanup = {
     harnesses: new Map(),
     registries: new Set(),
-    pluginResources: new CliPluginInvocationResources(),
+    pluginResources,
   };
-  return scope.run(cleanup, () => run(cleanup));
+  return sdkResourceHost.run(() => scope.run(cleanup, () => run(cleanup)));
 }
 
 export function retainCliRegistryHarnesses(

@@ -2645,33 +2645,6 @@ describe("activateSetupInference", () => {
     });
   });
 
-  it("returns an auth failure when the verified owner drifts during persistence", async () => {
-    const configHarness = createPreRosterConfigTransformHarness();
-    const result = await activateSetupInference({
-      kind: "openai-api-key",
-      deps: {
-        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
-        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
-        // The real revalidation throws when the current route owner no longer
-        // matches the probe credential (e.g. a Codex-imported OAuth profile
-        // outranking the probed env key). The ladder needs a failure result.
-        createSystemAgentVerifiedInferenceBinding: vi.fn(async () => {
-          throw new Error(
-            "The successful inference credential is no longer the active route owner.",
-          );
-        }) as never,
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      status: "auth",
-      error: expect.stringContaining("verified inference owner changed"),
-    });
-    expect(result).not.toHaveProperty("disposition");
-    expect(configHarness.current()).toEqual({});
-  });
-
   it("revalidates a stable CLI runtime owner at the config commit boundary", async () => {
     const configHarness = createPreRosterConfigTransformHarness();
     const resolveCliRuntimeOwnerFingerprint = vi.fn(async () => "test-runtime-owner");
@@ -2757,6 +2730,10 @@ describe("activateSetupInference", () => {
       ok: false,
       status: "auth",
       error: expect.stringContaining("active route owner"),
+    });
+    expect(result).not.toHaveProperty("disposition");
+    expect(result).toMatchObject({
+      error: expect.stringContaining("verified inference owner changed"),
     });
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(configHarness.current()).toEqual({});

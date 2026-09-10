@@ -11,6 +11,7 @@ import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.assertCompleteText
 import ai.openclaw.app.ui.design.contrastThemeCases
@@ -19,6 +20,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Looper
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
@@ -33,6 +35,9 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasAnyChild
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -81,6 +86,7 @@ import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
@@ -325,6 +331,119 @@ class SettingsScreensContrastTest {
           .asAndroidBitmap()
           .compress(Bitmap.CompressFormat.PNG, 100, it),
       )
+    }
+  }
+
+  @Test
+  fun healthChatStatusDoesNotRequestAConnectionWhenTransportIsConnected() {
+    val model = showLiveChatStatus(showHeader = false)
+    chatHealthStatusValue("Ready").performScrollTo().assertIsDisplayed()
+    disconnectAndReconnectStatusControl(model, showHeader = false)
+    chatHealthStatusValue("Ready").performScrollTo().assertIsDisplayed()
+
+    composeRule.runOnIdle {
+      gateway.healthReady = false
+      model.refreshChat()
+    }
+    awaitConnectedHealthFailure(model)
+    chatHealthStatusValue("Not ready").performScrollTo().assertIsDisplayed()
+  }
+
+  @Test
+  fun chatHeaderDoesNotAnnounceOfflineForConnectedHealthFailure() {
+    val model = showLiveChatStatus(showHeader = true)
+    val ready = nativeString("Ready")
+    val readyDescription =
+      composeRule
+        .onNodeWithContentDescription(", $ready", substring = true)
+        .assertIsDisplayed()
+        .fetchSemanticsNode()
+        .config[SemanticsProperties.ContentDescription]
+        .single()
+    disconnectAndReconnectStatusControl(model, showHeader = true)
+    composeRule.onNodeWithContentDescription(readyDescription).assertIsDisplayed()
+
+    composeRule.runOnIdle {
+      gateway.healthReady = false
+      model.refreshChat()
+    }
+    awaitConnectedHealthFailure(model)
+    composeRule.onNodeWithContentDescription(readyDescription.removeSuffix(ready) + nativeString("Not ready")).assertIsDisplayed()
+  }
+
+  private fun chatHealthStatusValue(value: String) =
+    composeRule.onNode(
+      hasText(nativeString(value)) and hasAnyAncestor(hasAnyChild(hasText(nativeString("Chat")))),
+    )
+
+  private fun showLiveChatStatus(showHeader: Boolean): MainViewModel {
+    app = RuntimeEnvironment.getApplication() as NodeApp
+    previousRuntime = app.peekRuntime()
+    gateway = OperationalCaptionsGateway()
+    val prefs = SecurePrefs(app, app.getSharedPreferences("status-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    prefs.setManualTls(false)
+    prefs.saveGatewayCredentials(gateway.endpoint.stableId, token = "synthetic-caption-proof")
+    runtime = NodeRuntime(app, prefs)
+    bindNodeRuntimeTestFixture(app, runtime)
+    val model = MainViewModel(app, prefs, SavedStateHandle())
+    models.put("chat-status", model)
+    model.setForeground(true)
+    composeRule.setContent {
+      ClawDesignTheme(dark = false) {
+        if (showHeader) {
+          ChatScreen(
+            viewModel = model,
+            talkActive = false,
+            showSidebarButton = false,
+            onOpenSidebar = {},
+            onToggleTalk = {},
+            onOpenDashboard = {},
+            onOpenGatewaySettings = {},
+          )
+        } else {
+          SettingsDetailScreen(model, SettingsRoute.Health, onBack = {})
+        }
+      }
+    }
+    composeRule.runOnIdle { model.connect(gateway.endpoint) }
+    awaitHealthyChatStatus(model)
+    return model
+  }
+
+  private fun awaitHealthyChatStatus(model: MainViewModel) {
+    composeRule.waitUntil(10_000) {
+      // Live runtime updates reach ViewModel flows through Robolectric's paused main looper.
+      shadowOf(Looper.getMainLooper()).idle()
+      model.gatewayConnectionDisplay.value.isConnected && model.chatHealthOk.value &&
+        !model.chatHistoryLoading.value && model.chatMessages.value.isEmpty() &&
+        model.pendingRunCount.value == 0 && !model.chatSessionCreating.value
+    }
+  }
+
+  private fun disconnectAndReconnectStatusControl(
+    model: MainViewModel,
+    showHeader: Boolean,
+  ) {
+    composeRule.runOnIdle { model.disconnect() }
+    composeRule.waitUntil(10_000) {
+      shadowOf(Looper.getMainLooper()).idle()
+      !model.gatewayConnectionDisplay.value.isConnected && !model.isConnected.value && !model.chatHealthOk.value
+    }
+    if (showHeader) {
+      composeRule.onAllNodesWithText(nativeString("Gateway offline"))[0].assertIsDisplayed()
+    } else {
+      composeRule.onAllNodesWithText(nativeString("Offline"))[0].performScrollTo().assertIsDisplayed()
+    }
+    composeRule.runOnIdle { model.connect(gateway.endpoint) }
+    awaitHealthyChatStatus(model)
+  }
+
+  private fun awaitConnectedHealthFailure(model: MainViewModel) {
+    composeRule.waitUntil(10_000) {
+      shadowOf(Looper.getMainLooper()).idle()
+      model.gatewayConnectionDisplay.value.isConnected && !model.chatHealthOk.value &&
+        !model.chatHistoryLoading.value && model.chatMessages.value.isEmpty() &&
+        model.pendingRunCount.value == 0 && !model.chatSessionCreating.value
     }
   }
 
@@ -591,6 +710,8 @@ private class OperationalCaptionsGateway : AutoCloseable {
   val methods = CopyOnWriteArrayList<String>()
 
   @Volatile var terminal = false
+
+  @Volatile var healthReady = true
   val endpoint: GatewayEndpoint
 
   init {
@@ -663,7 +784,11 @@ private class OperationalCaptionsGateway : AutoCloseable {
               json.parseToJsonElement("""{"sessions":[]}""")
             }
 
-            "health", "sessions.subscribe", "sessions.messages.subscribe" -> {
+            "health" -> {
+              if (healthReady) JsonObject(emptyMap()) else null
+            }
+
+            "sessions.subscribe", "sessions.messages.subscribe" -> {
               JsonObject(emptyMap())
             }
 

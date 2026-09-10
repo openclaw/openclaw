@@ -104,9 +104,7 @@ export function projectChatTranscript(
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
   const archiveActor = activeSession?.archivedBy;
   const archiveLabel = archiveActor?.id
-    ? t("sessionsView.archivedBy", {
-        name: archiveActor.label ?? archiveActor.id,
-      })
+    ? t("sessionsView.archivedBy", { name: archiveActor.label ?? archiveActor.id })
     : activeSession?.archiveReason
       ? formatSessionArchiveReason(activeSession.archiveReason)
       : undefined;
@@ -135,6 +133,19 @@ export function projectChatTranscript(
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     pendingInputs: props.pendingInputs,
+    workerSetupPendingRunIds: ["requested", "provisioning", "syncing", "starting"].includes(
+      activeSession?.placement?.state ?? "",
+    )
+      ? props.pendingInputs?.flatMap((input) =>
+          input.state === "queued" && input.runId ? [input.runId] : [],
+        )
+      : undefined,
+    workspaceSyncPendingRunIds:
+      (activeSession?.placement?.state === "active" ||
+        activeSession?.placement?.state === "draining") &&
+      activeSession.placement.workspaceResultReconciling === true
+        ? activeSession.activeRunIds
+        : undefined,
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),

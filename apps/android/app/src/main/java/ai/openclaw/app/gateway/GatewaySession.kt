@@ -432,6 +432,7 @@ class GatewaySession(
     val options: GatewayConnectOptions,
     val tls: GatewayTlsParams?,
     val bootstrapHandoff: GatewayBootstrapHandoff?,
+    val onReady: (() -> Unit)?,
   ) {
     var recoveringStoredBootstrap = false
 
@@ -475,10 +476,11 @@ class GatewaySession(
     options: GatewayConnectOptions,
     tls: GatewayTlsParams? = null,
     bootstrapHandoff: GatewayBootstrapHandoff? = null,
+    onReady: (() -> Unit)? = null,
   ) {
     val connectionToClose: Connection?
     synchronized(notificationLock) {
-      val target = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff)
+      val target = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff, onReady)
       synchronized(lifecycleLock) {
         desired?.cleanupDeadline?.cancel()
         desired = target
@@ -2130,6 +2132,10 @@ class GatewaySession(
           sessionRouting = connected.sessionRouting
           drainReconnectSignals()
           onConnected(connected.hello)
+          // The callback can replace or disconnect this intent; only its current socket publishes readiness.
+          if (currentConnection === conn && desired === target && job?.isActive == true && conn.isReady()) {
+            target.onReady?.invoke()
+          }
         }
       }
       conn.awaitClose()

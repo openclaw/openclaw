@@ -4,7 +4,11 @@ import type { ChatWorkspaceDock, UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
 
+export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
+
 export type SessionWorkspaceProps = {
+  filter: SessionWorkspaceFilter;
+  browserSearch: string;
   collapsed: boolean;
   sessionKey: string;
   list: SessionWorkspaceListResult | null;
@@ -21,6 +25,7 @@ export type SessionWorkspaceProps = {
   onBrowsePath: (path: string) => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
+  onSetFilter: (filter: SessionWorkspaceFilter) => void;
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
@@ -31,6 +36,7 @@ export type SessionWorkspaceProps = {
 };
 
 export type SessionWorkspaceState = {
+  filter: SessionWorkspaceFilter;
   activeId: string | null;
   agentId: string;
   browserPath: string;

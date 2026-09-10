@@ -5,10 +5,13 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -126,10 +129,10 @@ function fixture(
     allowFrozenTargetScenarioOmissions: true,
     selection: {},
   };
-  function run(selection: object, overrides: object = {}) {
+  function run(selection: object, overrides: object = {}, entry = join(toolingRoot, entrypoint)) {
     const input = join(root, "request.json");
     writeFileSync(input, JSON.stringify({ ...request, selection, ...overrides }));
-    const result = spawnSync(process.execPath, [join(toolingRoot, entrypoint), input], {
+    const result = spawnSync(process.execPath, [entry, input], {
       cwd: selectedRoot,
       encoding: "utf8",
       timeout: 20_000,
@@ -140,6 +143,572 @@ function fixture(
   }
   return { root, selected, tooling, run, bin };
 }
+
+function survivorFiles(version = "2026.7.33", recipe = "config-recipe.mjs") {
+  const dir = "scripts/e2e/lib/upgrade-survivor";
+  const inertModule = [
+    'import { writeFileSync } from "node:fs";',
+    'writeFileSync("selected-code-executed", "executed");',
+    'throw new Error("selected scenario executed");',
+  ].join("\n");
+  const files: Record<string, string> = {
+    "package.json": JSON.stringify({ type: "module", version }),
+    [`${dir}/run.sh`]: "printf executed > selected-code-executed\nexit 97\n",
+    [`${dir}/assertions.mjs`]: inertModule,
+    [`${dir}/probe-gateway.mjs`]: inertModule,
+    [`${dir}/${recipe}`]: inertModule,
+  };
+  for (const section of [
+    "agents",
+    "channels-discord",
+    "channels-feishu",
+    "channels-matrix",
+    "channels-telegram",
+    "channels-whatsapp",
+    "gateway",
+    "models-openai",
+    "plugins-configured-installs",
+    "plugins-feishu",
+    "plugins",
+    "skills",
+  ]) {
+    files[`${dir}/config-recipe/${section}.json`] = "{}";
+  }
+  for (const path of [
+    "scripts/lib/npm-publish-plan.mjs",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/e2e/lib/plugin-index-sqlite.mjs",
+    "scripts/e2e/lib/env-limits.mjs",
+    "scripts/e2e/lib/text-file-utils.mjs",
+  ]) {
+    files[path] = `// ${path}\n${inertModule}`;
+  }
+  return files;
+}
+
+describe("frozen admission Docker consumer aliases", () => {
+  const cliMetadata = "scripts/print-cli-backend-live-metadata.ts";
+  const pluginAssertions = "scripts/e2e/lib/plugins/assertions.mjs";
+  const aliases = [
+    {
+      lane: "live-gateway",
+      consumer: "live-cli-backend",
+      path: cliMetadata,
+      current: "export function resolveCliBackendDockerPackages() {}",
+      legacy: "// Released metadata without the package resolver.",
+      mode: "OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE",
+    },
+    ...["mcp-channels", "kitchen-sink-rpc", "plugins-offline"].map((lane) => ({
+      lane,
+      consumer: "plugins",
+      path: pluginAssertions,
+      current: "export function assertPluginUninstallConfigState() {}",
+      legacy: "export function assertPluginTgzRemoved() {}",
+      mode: "OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE",
+    })),
+  ];
+  const executionSentinel = [
+    'import { writeFileSync } from "node:fs";',
+    'writeFileSync(`${process.env.HOME}/selected-code-executed`, "executed");',
+  ].join("\n");
+
+  it.each(aliases)(
+    "rejects a missing committed $lane contract before emitting admission",
+    ({ lane, path, current }) => {
+      const source = `${executionSentinel}\n${current}\n`;
+      const f = fixture({ [path]: source });
+      const tree = f.selected.git("rev-parse", "HEAD^{tree}");
+      const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
+      f.selected.git("config", "remote.origin.url", "fixture::unavailable");
+      f.selected.git("config", "remote.origin.promisor", "true");
+      f.selected.git("config", "extensions.partialClone", "origin");
+      f.selected.git("config", "protocol.fixture.allow", "always");
+      rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+      expect(f.selected.git("rev-parse", "HEAD^{tree}")).toBe(tree);
+      expect(readFileSync(join(f.selected.root, path), "utf8")).toBe(source);
+
+      const result = f.run({ docker: { lanes: [lane] } });
+      expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("unable to read selected source");
+      expect(result.stdout).toBe("");
+
+      const currentOnly = f.run(
+        { docker: { lanes: [lane] } },
+        { allowFrozenTargetScenarioOmissions: false },
+      );
+      expect(currentOnly.status, currentOnly.stderr).toBe(0);
+      expect(JSON.parse(currentOnly.stdout).sources.selected).toEqual([]);
+      expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+    },
+  );
+
+  it.each(
+    aliases.flatMap((alias) =>
+      (["current", "legacy"] as const).map((dialect) => Object.assign({}, alias, { dialect })),
+    ),
+  )("admits $lane with the committed $dialect contract", (alias) => {
+    const { lane, consumer, path, mode, dialect } = alias;
+    const f = fixture({ [path]: `${executionSentinel}\n${alias[dialect]}\n` });
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.selection.consumers).toEqual([consumer]);
+    expect(record.contracts).toEqual([
+      {
+        consumer,
+        status: "ADMITTED",
+        modes: {
+          [mode]: dialect,
+          ...(consumer === "plugins"
+            ? { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "current" }
+            : {}),
+        },
+        files: [],
+      },
+    ]);
+    expect(record.selectedSha).toBe(f.selected.sha);
+    expect(record.toolingSha).toBe(f.tooling.sha);
+    expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+    expect(existsSync(join(f.selected.root, "node_modules"))).toBe(false);
+    expect(existsSync(join(f.tooling.root, "node_modules"))).toBe(false);
+  });
+
+  it.each(aliases)(
+    "preserves the legitimate absent-file fallback for $lane",
+    ({ lane, consumer, mode }) => {
+      const f = fixture();
+      const result = f.run({ docker: { lanes: [lane] } });
+      expect(result.status, result.stderr).toBe(0);
+      const record = JSON.parse(result.stdout);
+      expect(record.contracts).toEqual([
+        {
+          consumer,
+          status: "ADMITTED",
+          modes: {
+            [mode]: consumer === "plugins" ? "current" : "legacy",
+            ...(consumer === "plugins"
+              ? { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "current" }
+              : {}),
+          },
+          files: [],
+        },
+      ]);
+      expect(record.sources.selected).toEqual([]);
+    },
+  );
+
+  it("deduplicates plugin aliases without selecting kitchen-sink-plugin files", () => {
+    const f = fixture({
+      [pluginAssertions]: `${executionSentinel}\nexport function assertPluginTgzRemoved() {}\n`,
+    });
+    const result = f.run({
+      docker: { lanes: ["mcp-channels", "kitchen-sink-rpc", "plugins-offline"] },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker.lanes.toSorted()).toEqual([
+      "kitchen-sink-rpc",
+      "mcp-channels",
+      "plugins-offline",
+    ]);
+    expect(record.selection.consumers).toEqual(["plugins"]);
+    expect(record.contracts).toEqual([
+      {
+        consumer: "plugins",
+        status: "ADMITTED",
+        modes: {
+          OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy",
+          OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "current",
+        },
+        files: [],
+      },
+    ]);
+    expect(record.selectedSha).toBe(f.selected.sha);
+    for (const source of [f.selected, f.tooling]) {
+      expect(existsSync(join(source.root, "scripts/e2e/lib/kitchen-sink-plugin"))).toBe(false);
+    }
+    expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+  });
+
+  it.each([
+    { lane: "live-gateway", removed: [pluginAssertions], consumer: "live-cli-backend" },
+    { lane: "mcp-channels", removed: [cliMetadata], consumer: "plugins" },
+    { lane: "kitchen-sink-rpc", removed: [cliMetadata], consumer: "plugins" },
+    { lane: "plugins-offline", removed: [cliMetadata], consumer: "plugins" },
+    { lane: "docker-package-install", removed: [cliMetadata, pluginAssertions], consumer: null },
+  ])("keeps unreadable unrelated contracts inert for $lane", ({ lane, removed, consumer }) => {
+    const f = fixture({
+      [cliMetadata]: `${executionSentinel}\nexport function resolveCliBackendDockerPackages() {}\n`,
+      [pluginAssertions]: `${executionSentinel}\nexport function assertPluginUninstallConfigState() {}\n`,
+    });
+    for (const path of removed) {
+      const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
+      rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+    }
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.selection.consumers).toEqual(consumer ? [consumer] : []);
+    expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
+      consumer ? [consumer] : [],
+    );
+    expect(record.selectedSha).toBe(f.selected.sha);
+    expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+  });
+});
+
+describe("frozen admission upgrade Docker aliases", () => {
+  const lanes = ["root-managed-vps-upgrade", "update-restart-auth"];
+  const companion = "scripts/e2e/lib/plugin-index-sqlite.mjs";
+  const pluginAssertions = "scripts/e2e/lib/plugins/assertions.mjs";
+
+  it.each(
+    lanes.flatMap((lane) =>
+      [
+        {
+          shape: "malformed version",
+          version: "invalid",
+          error: "selected upgrade target has an invalid release version",
+        },
+        {
+          shape: "unsupported correction",
+          version: "2026.7.33-1",
+          error: "unsupported extended-stable correction",
+        },
+        {
+          shape: "missing scenario",
+          version: "2026.7.33",
+          error: "selected extended-stable target lacks its scenario",
+        },
+        {
+          shape: "missing companion blob",
+          version: "2026.7.33",
+          error: "unable to read selected source",
+        },
+      ].map((value) => Object.assign({}, value, { lane })),
+    ),
+  )("rejects $lane with $shape before emitting admission", ({ lane, shape, version, error }) => {
+    const files =
+      shape === "missing companion blob"
+        ? survivorFiles(version)
+        : { "package.json": JSON.stringify({ type: "module", version }) };
+    const f = fixture(files);
+    if (shape === "missing companion blob") {
+      const tree = f.selected.git("rev-parse", "HEAD^{tree}");
+      const oid = f.selected.git("rev-parse", `${f.selected.sha}:${companion}`);
+      for (const path of Object.keys(files).filter((file) => file !== companion)) {
+        expect(f.selected.git("rev-parse", `${f.selected.sha}:${path}`), path).not.toBe(oid);
+      }
+      f.selected.git("config", "remote.origin.url", "fixture::unavailable");
+      f.selected.git("config", "remote.origin.promisor", "true");
+      f.selected.git("config", "extensions.partialClone", "origin");
+      f.selected.git("config", "protocol.fixture.allow", "always");
+      rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+      expect(f.selected.git("rev-parse", "HEAD^{tree}")).toBe(tree);
+      expect(readFileSync(join(f.selected.root, companion), "utf8")).toBe(files[companion]);
+    }
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(error);
+    expect(result.stdout).toBe("");
+    for (const root of [f.root, f.selected.root, f.tooling.root]) {
+      expect(existsSync(join(root, "selected-code-executed"))).toBe(false);
+    }
+    const currentOnly = f.run(
+      { docker: { lanes: [lane] } },
+      { allowFrozenTargetScenarioOmissions: false },
+    );
+    expect(currentOnly.status, currentOnly.stderr).toBe(0);
+    expect(JSON.parse(currentOnly.stdout).sources.selected).toEqual([]);
+  });
+
+  it.each(
+    lanes.flatMap((lane) =>
+      [
+        { version: "2026.6.35", recipe: "config-recipe.mjs", train: "extended-stable" },
+        { version: "2026.7.33", recipe: "config-recipe.mts", train: "extended-stable" },
+        { version: "2026.9.9", recipe: "", train: "stable" },
+      ].map((value) => Object.assign({}, value, { lane })),
+    ),
+  )("admits $lane with committed $version contracts", ({ lane, version, recipe, train }) => {
+    const files = recipe
+      ? survivorFiles(version, recipe)
+      : { "package.json": JSON.stringify({ type: "module", version }) };
+    const f = fixture({
+      ...files,
+      [pluginAssertions]: "throw new Error('unselected plugin code executed');",
+    });
+    const oid = f.selected.git("rev-parse", `${f.selected.sha}:${pluginAssertions}`);
+    rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.selection.consumers).toEqual(["upgrade-survivor"]);
+    expect(record.contracts).toHaveLength(1);
+    expect(record.contracts[0].modes).toEqual({
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE: "current",
+      releaseTrain: train,
+    });
+    expect(record.selectedSha).toBe(f.selected.sha);
+    expect(record.toolingSha).toBe(f.tooling.sha);
+    expect(record.contracts[0].files).toHaveLength(recipe ? 5 : 0);
+    if (recipe) {
+      expect(record.contracts[0].files).toContainEqual({ source: "selected", path: companion });
+    } else {
+      expect(existsSync(join(f.selected.root, "scripts/e2e/lib/upgrade-survivor"))).toBe(false);
+    }
+    for (const root of [f.root, f.selected.root, f.tooling.root]) {
+      expect(existsSync(join(root, "selected-code-executed"))).toBe(false);
+      expect(existsSync(join(root, "node_modules"))).toBe(false);
+    }
+  });
+
+  it("deduplicates upgrade aliases and existing family without dropping the plugin consumer", () => {
+    const f = fixture({ "package.json": '{"type":"module","version":"2026.9.9"}' });
+    const selected = [...lanes, "upgrade-survivor", "plugins-offline"];
+    const result = f.run({ docker: { lanes: selected } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker.lanes.toSorted()).toEqual(selected.toSorted());
+    expect(record.selection.consumers).toEqual(["plugins", "upgrade-survivor"]);
+    expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual([
+      "plugins",
+      "upgrade-survivor",
+    ]);
+  });
+
+  it.each([
+    "plugins-offline",
+    "docker-package-install",
+    "live-cli-backend-claude",
+    "live-cli-backend-gemini",
+    "update-first-hop-compat",
+    "update-run-package-self-upgrade",
+    "release-user-journey",
+    "release-upgrade-user-journey",
+  ])("keeps unselected upgrade contracts inert for %s", (lane) => {
+    const files: Record<string, string> = {
+      "package.json": '{"type":"module","version":"invalid"}',
+      "src/infra/clawhub-install-trust.ts": "throw new Error('unselected upgrade code executed');",
+      "scripts/print-cli-backend-live-metadata.ts":
+        "throw new Error('unselected CLI code executed');",
+    };
+    if (lane === "update-first-hop-compat") {
+      files["scripts/runtime-postbuild.mts"] =
+        `throw new Error("selected postbuild executed");\n${readFileSync("scripts/runtime-postbuild.mts", "utf8")}`;
+    }
+    const f = fixture(files);
+    for (const path of [
+      "src/infra/clawhub-install-trust.ts",
+      "scripts/print-cli-backend-live-metadata.ts",
+    ]) {
+      const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
+      rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+    }
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.selection.consumers).toEqual(lane === "plugins-offline" ? ["plugins"] : []);
+    expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
+      record.selection.consumers,
+    );
+  });
+});
+
+describe("frozen admission bootstrap repairs", () => {
+  const recipeDirectory = "scripts/e2e/lib/upgrade-survivor/config-recipe";
+  const reader = "scripts/lib/frozen-target-source.mjs";
+  const shell = "scripts/lib/frozen-target-compat.sh";
+
+  it.each([reader, "scripts/lib/docker-e2e-scenarios.mts", shell])(
+    "rejects dirty executable %s before any dependent code runs at unchanged HEAD",
+    (path) => {
+      const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
+      const sentinel = join(f.root, "dependent-code-executed");
+      const file = join(f.tooling.root, path);
+      const payload =
+        path === shell
+          ? `\nprintf executed > '${sentinel}'\n`
+          : `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
+      writeFileSync(file, readFileSync(file, "utf8") + payload);
+      expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
+      const result = f.run({ consumers: ["onboard"] });
+      expect(existsSync(sentinel), result.stderr).toBe(false);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(`tooling closure does not match committed source: ${path}`);
+      expect(result.stdout).toBe("");
+    },
+  );
+
+  it.each([
+    entrypoint,
+    "scripts/lib/official-external-channel-catalog.json",
+    `${recipeDirectory}/agents.json`,
+    "package.json",
+    "pnpm-lock.yaml",
+  ])("rejects dirty closure data %s at unchanged HEAD", (path) => {
+    const f = fixture();
+    const file = join(f.tooling.root, path);
+    writeFileSync(file, readFileSync(file, "utf8") + "\n");
+    expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
+    const result = f.run({});
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`tooling closure does not match committed source: ${path}`);
+    expect(result.stdout).toBe("");
+  });
+
+  it.each(["file", "parent directory"] as const)(
+    "rejects a tooling %s symlink even when its bytes match",
+    (shape) => {
+      const f = fixture();
+      const path = shape === "file" ? reader : "scripts/e2e/lib/upgrade-survivor/config-recipe";
+      const original = join(f.tooling.root, path);
+      const outside = join(f.root, "borrowed");
+      cpSync(original, outside, { recursive: true });
+      rmSync(original, { recursive: true });
+      symlinkSync(outside, original);
+      const result = f.run({});
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("tooling closure requires an owned regular file:");
+      expect(result.stdout).toBe("");
+    },
+  );
+
+  it("records the verified closure while ignoring unrelated dirt and selected working bytes", () => {
+    const source = "src/config/zod-schema.ts";
+    const f = fixture({ [source]: "lastRunAt:" });
+    writeFileSync(join(f.tooling.root, "unrelated.txt"), "committed");
+    f.tooling.git("add", "unrelated.txt");
+    f.tooling.git("commit", "-qm", "unrelated file");
+    const sha = f.tooling.git("rev-parse", "HEAD");
+    const overrides = { tooling: { root: f.tooling.root, sha } };
+    const clean = f.run({ consumers: ["onboard"] }, overrides);
+    expect(clean.status, clean.stderr).toBe(0);
+    writeFileSync(join(f.tooling.root, "unrelated.txt"), "dirty");
+    writeFileSync(join(f.selected.root, source), "unrecognized working copy");
+    const dirty = f.run({ consumers: ["onboard"] }, overrides);
+    expect(dirty.status, dirty.stderr).toBe(0);
+    expect(dirty.stdout).toBe(clean.stdout);
+    const paths = [
+      ...closure,
+      ...readdirSync(join(f.tooling.root, recipeDirectory)).map(
+        (file) => `${recipeDirectory}/${file}`,
+      ),
+    ];
+    expect(JSON.parse(dirty.stdout).sources.tooling).toEqual(
+      paths
+        .toSorted((a, b) => a.localeCompare(b))
+        .map((path) => ({ path, oid: f.tooling.git("rev-parse", `${sha}:${path}`) })),
+    );
+  });
+
+  it("retains the existing tooling HEAD mismatch rejection", () => {
+    const f = fixture();
+    f.tooling.git("commit", "--allow-empty", "-qm", "different HEAD");
+    const result = f.run({});
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("checkout does not match OPENCLAW_SELECTED_SHA");
+    expect(result.stdout).toBe("");
+  });
+
+  it.each([entrypoint, reader, `${recipeDirectory}/agents.json`])(
+    "rejects a missing committed tooling object %s without hydration",
+    (path) => {
+      const f = fixture();
+      const oid = f.tooling.git("rev-parse", `${f.tooling.sha}:${path}`);
+      f.tooling.git("config", "remote.origin.url", "fixture::unavailable");
+      f.tooling.git("config", "remote.origin.promisor", "true");
+      rmSync(join(f.tooling.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+      const result = f.run({});
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe("");
+    },
+  );
+
+  it.each([
+    entrypoint,
+    "scripts/resolve-frozen-codex-live-suite.mjs",
+    "scripts/resolve-fs-safe-native-contract.mjs",
+  ])("runs %s through a symlink and stays inert when imported", (path) => {
+    const f = fixture();
+    const alias = join(f.root, "entry-alias.mjs");
+    symlinkSync(join(f.tooling.root, path), alias);
+    const output = join(f.root, "github-output");
+    const env = {
+      PATH: `${f.bin}:${process.env.PATH}`,
+      HOME: f.root,
+      GITHUB_OUTPUT: output,
+      OPENCLAW_FROZEN_CODEX_SUITE_ID: "live-codex-harness-docker",
+      OPENCLAW_SELECTED_SHA: f.selected.sha,
+      OPENCLAW_WORKFLOW_SHA: f.tooling.sha,
+    };
+    const run = (args: string[], environment = env) =>
+      spawnSync(process.execPath, args, {
+        cwd: f.selected.root,
+        encoding: "utf8",
+        timeout: 20_000,
+        env: environment,
+      });
+    const valid =
+      path === entrypoint ? f.run({}, {}, alias) : run([alias, f.selected.sha, f.tooling.sha, "0"]);
+    expect(valid.status, valid.stderr).toBe(0);
+    if (path === entrypoint) {
+      expect(JSON.parse(valid.stdout).toolingSha).toBe(f.tooling.sha);
+    } else if (path.includes("codex")) {
+      expect(existsSync(output)).toBe(true);
+      expect(readFileSync(output, "utf8")).toBe("run_lane=true\n");
+      rmSync(output);
+    } else {
+      expect(valid.stdout).toBe("required\n");
+    }
+    const invalid = run([alias], { ...env, GITHUB_OUTPUT: "" });
+    expect(invalid.status, invalid.stderr).not.toBe(0);
+    expect(invalid.stdout).toBe("");
+    const imported = run([
+      "--input-type=module",
+      "-e",
+      `await import(${JSON.stringify(pathToFileURL(alias).href)});`,
+    ]);
+    expect(imported.status, imported.stderr).toBe(0);
+    expect(imported.stdout).toBe("");
+    expect(imported.stderr).toBe("");
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it.each([
+    "scripts/resolve-frozen-codex-live-suite.mjs",
+    "scripts/resolve-fs-safe-native-contract.mjs",
+  ])("preserves standalone sparse execution of %s without shared helpers", (path) => {
+    const root = temps.make("openclaw-frozen-standalone-");
+    const entry = join(root, "resolver.mjs");
+    copyFileSync(join(repo, path), entry);
+    const output = join(root, "github-output");
+    const sha = "a".repeat(40);
+    const result = spawnSync(process.execPath, [entry, sha, sha, "0"], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 20_000,
+      env: {
+        PATH: process.env.PATH,
+        GITHUB_OUTPUT: output,
+        OPENCLAW_FROZEN_CODEX_SUITE_ID: "live-codex-harness-docker",
+        OPENCLAW_SELECTED_SHA: sha,
+        OPENCLAW_WORKFLOW_SHA: sha,
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(path.includes("codex") ? readFileSync(output, "utf8") : result.stdout).toBe(
+      path.includes("codex") ? "run_lane=true\n" : "required\n",
+    );
+    expect(existsSync(join(root, "node_modules"))).toBe(false);
+    expect(existsSync(join(root, "scripts"))).toBe(false);
+  });
+});
 
 describe("frozen admission entry", () => {
   it.each(["nested-tooling", "nested-selected"] as const)(
@@ -502,38 +1071,8 @@ describe("frozen admission entry", () => {
     "checks the selected survivor directory closure: %s",
     (shape) => {
       const dir = "scripts/e2e/lib/upgrade-survivor";
-      const files: Record<string, string> = {
-        [`${dir}/run.sh`]: "do not execute",
-        [`${dir}/assertions.mjs`]: "throw new Error('do not execute');",
-        [`${dir}/probe-gateway.mjs`]: "throw new Error('do not execute');",
-        [`${dir}/config-recipe.mjs`]: "throw new Error('do not execute');",
-      };
-      for (const section of [
-        "agents",
-        "channels-discord",
-        "channels-feishu",
-        "channels-matrix",
-        "channels-telegram",
-        "channels-whatsapp",
-        "gateway",
-        "models-openai",
-        "plugins-configured-installs",
-        "plugins-feishu",
-        "plugins",
-        "skills",
-      ]) {
-        files[`${dir}/config-recipe/${section}.json`] = "{}";
-      }
+      const files = survivorFiles();
       const companion = "scripts/e2e/lib/plugin-index-sqlite.mjs";
-      for (const path of [
-        "scripts/lib/npm-publish-plan.mjs",
-        "scripts/windows-cmd-helpers.mjs",
-        companion,
-        "scripts/e2e/lib/env-limits.mjs",
-        "scripts/e2e/lib/text-file-utils.mjs",
-      ]) {
-        files[path] = `// selected ${path}`;
-      }
       if (shape === "missing run") {
         delete files[`${dir}/run.sh`];
       }

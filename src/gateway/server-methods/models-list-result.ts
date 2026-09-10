@@ -46,6 +46,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
@@ -88,22 +89,27 @@ function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBro
 export function createGatewayAgentModelCatalogProjector(params: ModelsListAuthProjectionParams) {
   const authProjection = createModelsListAuthProjection(params);
   const { evaluateEntry, evaluateNative, snapshot } = authProjection;
-  const view = createModelCatalogView({
-    cfg: params.cfg,
-    catalog: snapshot.entries,
-    routeVariants: snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries,
-  });
   let projectedCatalog: Promise<ModelCatalogEntry[]> | undefined;
   return {
     ...authProjection,
-    projectCatalog: () =>
-      (projectedCatalog ??= Promise.all(
+    projectCatalog: () => {
+      if (projectedCatalog) {
+        return projectedCatalog;
+      }
+      const view = createModelCatalogView({
+        cfg: params.cfg,
+        catalog: snapshot.entries,
+        routeVariants:
+          snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries,
+      });
+      return (projectedCatalog = Promise.all(
         view.logicalEntries.map(async (entry) => {
           const routeVariants = view.variantsOf(entry) ?? [entry];
           const evaluation = evaluateNative(entry, await evaluateEntry(entry, routeVariants));
           return view.project(entry, evaluation).runtimeEntry;
         }),
-      )),
+      ));
+    },
   };
 }
 
@@ -434,6 +440,11 @@ export async function prepareModelsListResult(
     cfg,
     agentId,
     defaultModel,
+    canonicalizeRef: (ref) => ({
+      ...ref,
+      model:
+        resolveProviderModelCatalogId({ provider: ref.provider, modelId: ref.model }) ?? ref.model,
+    }),
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     manifestPlugins: metadataSnapshot,
   }).byKey;

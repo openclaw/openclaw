@@ -10,6 +10,7 @@ import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.j
 import { retainQueuedAgentRunContext } from "../infra/agent-run-registry.js";
 import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
 import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
@@ -56,6 +57,7 @@ export type SessionPlacementAdmissionProvider = {
     params: SessionPlacementTurnParams,
     runLocal: () => Promise<EmbeddedAgentRunResult>,
     onAdmitted?: () => void,
+    assertCurrent?: () => void,
   ) => Promise<EmbeddedAgentRunResult>;
 };
 
@@ -147,10 +149,29 @@ export async function withSessionPlacementTurnAdmission(
     return result;
   };
   const provider = state.provider;
+  const lifecycleGeneration =
+    params.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(claim.runId);
+  const assertAdmittedRunCurrent = params.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
+    : undefined;
+  const assertCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    // Setup waits must not carry revoked ingress or an already-closed execution
+    // into workspace preparation. Runtime admission still owns allocation.
+    params.preparedRunAdmission?.assertSourceCurrent();
+    if (params.admittedRunContext && !assertAdmittedRunCurrent) {
+      throw createAbortError("admitted run authority is no longer active");
+    }
+    assertAdmittedRunCurrent?.();
+    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    if (state.provider !== provider) {
+      throw createAbortError("session placement owner changed during turn admission");
+    }
+  };
   const result = await withPlacementTurnCallerScope(params, () =>
     withoutSessionPlacementForcedTerminalSettlement(() =>
       provider
-        ? provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn)
+        ? provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn, assertCurrent)
         : runAdmittedLocalTurn(),
     ),
   );

@@ -5,6 +5,7 @@ import type { GatewayEventListener } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 
 const uuid = "12345678-90ab-cdef-1234-567890abcdef";
 const sessionKey = `agent:roboclaw:thread:${uuid}`;
@@ -41,6 +42,7 @@ function contextFor(
   onTestFinished(() => {
     lifecycle.abort();
     router.stop();
+    sessions.dispose();
     expect(gatewayListeners.size).toBe(0);
     expect(eventListeners.size).toBe(0);
   });
@@ -54,7 +56,6 @@ function contextFor(
     return resolution;
   });
   const client = { request };
-  const list = vi.fn();
   const context = {
     basePath: "",
     // These tests invoke the loader directly; there is no outlet-owned match.
@@ -78,14 +79,11 @@ function contextFor(
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
     agentSelection: { state: { selectedId: "roboclaw" } },
-    sessions: {
-      state: { result: result(cachedSessions) },
-      canonicalListRevision: 0,
-      list,
-      whenCachedRosterSettled: async () => undefined,
-    },
   } as unknown as ApplicationContext;
-  return { context, list, request };
+  const sessions = createTestSessionCapability(context.gateway, "roboclaw");
+  sessions.state.result = result(cachedSessions);
+  const list = vi.spyOn(sessions, "list");
+  return { context: { ...context, sessions }, list, request };
 }
 
 function installShortResolver(

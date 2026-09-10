@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const isSha = (value) => /^[0-9a-f]{40}$/u.test(value ?? "");
 const NATIVE_MARKER =
@@ -74,9 +75,19 @@ export function resolveFsSafeNativeContract({
     : "required";
 }
 
+let invokedAsMain = false;
+if (process.argv[1]) {
+  try {
+    invokedAsMain =
+      realpathSync.native(fileURLToPath(import.meta.url)) === realpathSync.native(process.argv[1]);
+  } catch {
+    // Inline and stdin importers need not have a filesystem entrypoint.
+  }
+}
+
 // A canonical frozen release source may omit a proof for functionality it cannot use.
 // Current, unknown, and native-consuming sources always verify the installed package.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (invokedAsMain) {
   const [ref, workflowSha, allowFrozenSource] = process.argv.slice(2);
   assert.ok(isSha(ref), "ref must be a full lowercase commit SHA");
   assert.ok(isSha(workflowSha), "workflow SHA must be a full lowercase commit SHA");

@@ -166,7 +166,7 @@ function createRootTestLintFixture() {
     writeRepoFile(dir, file, source);
   }
   materializeNativeCompiler(dir);
-  for (const name of ["@types/node", "vitest"]) {
+  for (const name of ["@types/node", "vitest", "tsx"]) {
     const destination = path.join(dir, "node_modules", name);
     mkdirSync(path.dirname(destination), { recursive: true });
     symlinkSync(path.join(repoRoot, "node_modules", name), destination, "junction");
@@ -197,6 +197,8 @@ function createRootTestLintFixture() {
   }
   // Stub unrelated package gates at the executable boundary: real pnpm could
   // reconcile this partial install. The CLI and source-only lint wrapper stay real.
+  // The export audit is selected normally, but this fixture has only the lint graph.
+  writeRepoFile(dir, "scripts/check-deadcode-exports.mts", "export {};\n");
   const binDir = path.join(dir, "bin");
   for (const bin of ["pnpm", "corepack"]) {
     writeRepoFile(dir, `bin/${bin}`, "#!/bin/sh\nexit 0\n");
@@ -689,6 +691,7 @@ describe("scripts/changed-lanes", () => {
       "pnpm lint:tmp:tsgo-core-boundary",
       "pnpm tsgo:test:root",
       "pnpm check:coercion-helpers",
+      "node --import tsx scripts/check-deadcode-exports.mts",
       "pnpm lint:scripts",
       "node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/github-activity-helper.test.ts",
     ]);
@@ -1130,7 +1133,17 @@ describe("scripts/changed-lanes", () => {
     // touches, so selection is by path; inspecting changed lines would miss it.
     { name: "import-only edit", changedPaths: ["src/agents/tool-surface-plan.ts"], expected: true },
     { name: "docs tree", changedPaths: ["docs/example.ts"], expected: false },
-    { name: "scripts tree", changedPaths: ["scripts/check-changed.mjs"], expected: false },
+    { name: "script entry", changedPaths: ["scripts/check-changed.mjs"], expected: true },
+    {
+      name: "script helper",
+      changedPaths: ["scripts/lib/budget-number-args.mts"],
+      expected: true,
+    },
+    {
+      name: "root test consumer",
+      changedPaths: ["test/scripts/test-perf-budget.test.ts"],
+      expected: true,
+    },
     // knip never reads these, so they must not pull in the scan.
     { name: "markdown under src", changedPaths: ["src/README.md"], expected: false },
     { name: "sql under src", changedPaths: ["src/state/schema.sql"], expected: false },
@@ -1962,23 +1975,26 @@ describe("scripts/changed-lanes", () => {
     expect(shouldDelegateChangedCheckToCrabbox([], {}, { result })).toBe(false);
   });
 
-  it("adds the dead export scan only for production source changes", () => {
+  it.each([
+    ["core source", "src/config/config.ts"],
+    ["script consumer", "scripts/test-perf-budget.mts"],
+    ["root test consumer", "test/scripts/test-perf-budget.test.ts"],
+  ])("adds the dead export scan for %s changes", (_name, changedPath) => {
     const command = {
       name: "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
       bin: "node",
       args: ["--import", "tsx", "scripts/check-deadcode-exports.mts"],
-      env: expect.any(Object),
     };
-    const sourceResult = detectChangedLanes(["src/config/config.ts"]);
-    const toolingResult = detectChangedLanes(["scripts/check-changed.mjs"]);
+    const sourceResult = detectChangedLanes([changedPath]);
+    const commands = (env = {}) =>
+      createChangedCheckPlan(sourceResult, { env }).commands.map(({ name, bin, args }) => ({
+        name,
+        bin,
+        args,
+      }));
 
-    expect(createChangedCheckPlan(sourceResult).commands).toContainEqual(command);
-    expect(createChangedCheckPlan(toolingResult).commands).not.toContainEqual(command);
-    expect(
-      createChangedCheckPlan(sourceResult, {
-        env: { OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" },
-      }).commands,
-    ).not.toContainEqual(command);
+    expect(commands()).toContainEqual(command);
+    expect(commands({ OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" })).not.toContainEqual(command);
   });
 
   it("keeps classified changed gates local", () => {

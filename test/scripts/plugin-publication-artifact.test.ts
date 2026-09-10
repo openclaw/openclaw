@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { crc32, deflateRawSync, gzipSync } from "node:zlib";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { downloadExactActionsArtifactArchive } from "../../scripts/lib/actions-artifact-archive.mjs";
 import {
   createPluginPublicationArtifact,
@@ -887,6 +887,141 @@ describe("plugin publication artifact", () => {
     expect(urls).toContain(
       `https://api.github.com/repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}`,
     );
+  });
+
+  it("honors an explicit artifact transfer deadline beyond the default", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const fixture = createDownloadFixture();
+      const callCounts = { archive: 0, artifact: 0 };
+      const fetchImpl = (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}`)) {
+          callCounts.artifact += 1;
+          return callCounts.artifact === 1
+            ? new Response("rate limited", {
+                status: 429,
+                headers: { "retry-after": "300" },
+              })
+            : Response.json(fixture.artifactMetadata);
+        }
+        if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}/zip`)) {
+          callCounts.archive += 1;
+          return new Response(fixture.zip as unknown as BodyInit, {
+            status: 200,
+            headers: { "content-length": String(fixture.zip.length) },
+          });
+        }
+        return new Response("unexpected", { status: 404 });
+      }) as typeof fetch;
+
+      const result = downloadExactActionsArtifactArchive({
+        deadlineMs: Date.now() + 480_000,
+        expected: fixture.expected,
+        fetchImpl,
+        retryAttempts: 2,
+        retryDelayMs: 1,
+        token: "test-token",
+      });
+      const assertion = expect(result).resolves.toMatchObject({
+        archiveBytes: fixture.zip,
+      });
+
+      await vi.advanceTimersByTimeAsync(300_000);
+      await assertion;
+      expect(callCounts).toEqual({ archive: 1, artifact: 2 });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses a fresh default deadline for each artifact transfer phase", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const fixture = createDownloadFixture();
+      const producerJobName = PRODUCER_JOB_NAME;
+      const workflowRun = {
+        ...fixture.workflowRun,
+        status: "in_progress",
+        conclusion: null,
+      };
+      const workflowJobs = {
+        total_count: 1,
+        jobs: [
+          {
+            name: producerJobName,
+            run_id: RUN_ID,
+            run_attempt: RUN_ATTEMPT,
+            head_sha: WORKFLOW_SHA,
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      };
+      const callCounts = { archive: 0, artifact: 0, jobs: 0, run: 0 };
+      const fetchImpl = (async (input: string | URL | Request) => {
+        const url = String(input);
+        let phase;
+        let successResponse;
+        if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}`)) {
+          phase = "artifact" as const;
+          successResponse = () => Response.json(fixture.artifactMetadata);
+        } else if (url.endsWith(`/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}`)) {
+          phase = "run" as const;
+          successResponse = () => Response.json(workflowRun);
+        } else if (
+          url.endsWith(`/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}/jobs?per_page=100`)
+        ) {
+          phase = "jobs" as const;
+          successResponse = () => Response.json(workflowJobs);
+        } else if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}/zip`)) {
+          phase = "archive" as const;
+          successResponse = () =>
+            new Response(fixture.zip as unknown as BodyInit, {
+              status: 200,
+              headers: { "content-length": String(fixture.zip.length) },
+            });
+        } else {
+          return new Response("unexpected", { status: 404 });
+        }
+        callCounts[phase] += 1;
+        return callCounts[phase] === 1
+          ? new Response("rate limited", {
+              status: 429,
+              headers: { "retry-after": "90" },
+            })
+          : successResponse();
+      }) as typeof fetch;
+
+      const result = downloadActionsArtifactArchive({
+        expected: {
+          ...fixture.expected,
+          consumerRunAttempt: RUN_ATTEMPT,
+          producerJobName,
+          runStatePolicy: "same-run-producer-success",
+        },
+        fetchImpl,
+        retryAttempts: 2,
+        retryDelayMs: 1,
+        token: "test-token",
+      });
+      const assertion = expect(result).resolves.toMatchObject({
+        archiveBytes: fixture.zip,
+        workflowJobs,
+        workflowRun,
+      });
+
+      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(90_000);
+      await assertion;
+      expect(callCounts).toEqual({ archive: 2, artifact: 2, jobs: 2, run: 2 });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it.each([401, 403, 404, 410])(

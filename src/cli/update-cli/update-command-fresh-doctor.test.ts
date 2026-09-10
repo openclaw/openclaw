@@ -89,27 +89,49 @@ describe("post-plugin update readiness", () => {
     }));
   });
 
-  it("runs declared readiness checks in the updated process before accepting restart", async () => {
-    await completePostCorePluginUpdate({
+  it.each([undefined, 5_000])("propagates the primary Doctor timeout %s", async (timeoutMs) => {
+    await runUpdateFinalizationDoctorInFreshProcess({
       ...updateOptions,
+      phase: "pre-plugin",
+      timeoutMs,
     });
-
-    expect(mocks.runExec.mock.calls.map(([, args]) => args)).toEqual([
-      [
-        "/opt/openclaw/dist/index.js",
-        "doctor",
-        "--repair",
-        "--non-interactive",
-        "--no-workspace-suggestions",
-        "--yes",
-      ],
-      ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
-      ["/opt/openclaw/dist/index.js", "doctor", "--lint", "--json", "--severity-min", "error"],
-    ]);
-    expect(mocks.runExec.mock.calls[2]?.[2]).toMatchObject({
-      env: { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
-    });
+    expect(mocks.runExec).toHaveBeenCalledExactlyOnceWith(
+      "/usr/bin/node",
+      expect.arrayContaining(["doctor", "--repair"]),
+      expect.objectContaining({ timeoutMs }),
+    );
   });
+
+  it.each([undefined, 5_000])(
+    "bounds post-plugin checks separately from Doctor (%s)",
+    async (timeoutMs) => {
+      await completePostCorePluginUpdate({
+        ...updateOptions,
+        timeoutMs,
+      });
+
+      expect(mocks.runExec.mock.calls.map(([, args]) => args)).toEqual([
+        [
+          "/opt/openclaw/dist/index.js",
+          "doctor",
+          "--repair",
+          "--non-interactive",
+          "--no-workspace-suggestions",
+          "--yes",
+        ],
+        ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
+        ["/opt/openclaw/dist/index.js", "doctor", "--lint", "--json", "--severity-min", "error"],
+      ]);
+      expect(mocks.runExec.mock.calls[2]?.[2]).toMatchObject({
+        env: { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+      });
+      expect(mocks.runExec.mock.calls.map((call) => call[2].timeoutMs)).toEqual([
+        timeoutMs,
+        timeoutMs ?? 180_000,
+        timeoutMs ?? 180_000,
+      ]);
+    },
+  );
 
   it("runs updated readiness checks even when no plugin package changed", async () => {
     const beforeDoctor = vi.fn(async () => undefined);

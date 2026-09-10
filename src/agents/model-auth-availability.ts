@@ -1100,9 +1100,7 @@ export function createModelAuthAvailabilityResolver(
       ref.preferredProfileId,
       ref.pinnedProfileId,
     );
-    const materializedModelId = ref.modelId
-      ? normalizeModelIdForProvider(provider, ref.modelId)?.toLowerCase()
-      : undefined;
+    const materializedModelId = normalizeModelIdForProvider(provider, ref.modelId ?? "");
     const materialized =
       !modelLock &&
       !ref.pinnedProfileId &&

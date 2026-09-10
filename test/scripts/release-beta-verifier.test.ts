@@ -8,6 +8,10 @@ import { crc32 } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  parsePublicationDiagnostic,
+  parsePublicationRun,
+} from "../../scripts/frv-publication-status.mts";
+import {
   downloadClawHubBootstrapReadback,
   fetchJsonWithRetry,
   fetchStatusWithRetry,
@@ -102,12 +106,32 @@ describe("verifyBetaRelease workflow outcomes", () => {
     overrides: Record<string, unknown> = {},
     telegram = true,
     npmError?: string,
+    npm: {
+      version: string;
+      distTag: string;
+      tags: Record<string, Record<string, string>>;
+      transientlyMissing?: string;
+      npm12?: boolean;
+    } = {
+      version,
+      distTag: "beta",
+      tags: { openclaw: { beta: version, latest: "2026.5.9" } },
+    },
   ) {
     const rootDir = tempDirs.make("release-workflow-outcome-");
     const binDir = join(rootDir, "bin");
     mkdirSync(binDir);
     mkdirSync(join(rootDir, "extensions"));
-    writeFileSync(join(rootDir, "package.json"), JSON.stringify({ version }));
+    writeFileSync(join(rootDir, "package.json"), JSON.stringify({ version: npm.version }));
+    writeFileSync(join(binDir, "npm.json"), JSON.stringify(npm));
+    for (const name of Object.keys(npm.tags).filter((packageName) => packageName !== "openclaw")) {
+      writePublishablePluginFixture(rootDir, {
+        extensionId: name.slice("@openclaw/".length),
+        packageName: name,
+        version: npm.version,
+        publishTo: "npm",
+      });
+    }
     const run = {
       workflowName: telegram ? "NPM Telegram Beta E2E" : "OpenClaw NPM Release",
       headBranch: "main",
@@ -126,7 +150,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
 fs.appendFileSync(path.join(path.dirname(process.argv[1]), "commands.jsonl"), JSON.stringify([path.basename(process.argv[1]), ...args]) + "\\n");
-if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1].endsWith("@${version}")) {
+if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
   if (${JSON.stringify(npmError ?? "")}) {
     process.stderr.write(${JSON.stringify(npmError ?? "")});
     process.exit(7);
@@ -136,7 +160,23 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1].en
     const failure = JSON.parse(fs.readFileSync(failures, "utf8"))[args[1]];
     if (failure) { process.stderr.write(failure); process.exit(9); }
   }
-  console.log(JSON.stringify({version: "${version}", "dist-tags.beta": "${version}", "dist.integrity": "sha512-test", "dist.tarball": "https://example.invalid/openclaw.tgz"}));
+  const npm = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), "npm.json")));
+  const print = (value) => console.log(JSON.stringify(npm.npm12 ? [value] : value));
+  const name = Object.keys(npm.tags).find((name) => args[1] === name || args[1] === name + "@" + npm.version);
+  if (!name) throw new Error("Unexpected npm package: " + args[1]);
+  if (args[2] === "dist-tags") {
+    const visible = path.join(path.dirname(process.argv[1]), "npm-visible");
+    if (npm.transientlyMissing === name && !fs.existsSync(visible)) {
+      fs.writeFileSync(visible, "ready");
+      console.error("npm ERR! code E404");
+      process.exit(1);
+    }
+    if (args[1] === name && !npm.tags[name].latest) process.exit(0);
+    print(npm.tags[name]);
+  } else {
+    if (args[1] !== name + "@" + npm.version) throw new Error("Expected an exact npm version");
+    print({version: npm.version, "dist-tags": npm.tags[name], "dist.integrity": "sha512-test", "dist.tarball": "https://example.invalid/package.tgz"});
+  }
 } else if (args[0] === "run" && args[1] === "view" && args[2] === "44") {
   process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), "run.json")));
 } else if (args[0] === "api" && args[1].endsWith("/actions/runs/34")) {
@@ -154,7 +194,9 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1].en
     }
     vi.stubEnv("PATH", `${binDir}:${process.env.PATH}`);
     const args = parseReleaseVerifyBetaArgs([
-      version,
+      npm.version,
+      "--dist-tag",
+      npm.distTag,
       "--skip-postpublish",
       "--skip-github-release",
       "--skip-clawhub",
@@ -165,7 +207,7 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1].en
       "--evidence-out",
       "evidence.json",
     ]);
-    return { args, rootDir, binDir };
+    return { args, rootDir, binDir, npm };
   }
 
   function runCli(fixture: ReturnType<typeof workflowFixture>, extra: string[] = [], preload = "") {
@@ -337,7 +379,9 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1].en
           extensionId,
           publishTo: "both",
         });
+        fixture.npm.tags[`@openclaw/${extensionId}`] = { beta: version };
       }
+      writeFileSync(join(fixture.binDir, "npm.json"), JSON.stringify(fixture.npm));
       // The collector's order is alphabetical: first, last, middle.
       if (surface === "npm") {
         writeFileSync(
@@ -458,6 +502,191 @@ syncBuiltinESMExports();
     expect(diagnostic.selection.workflowRef).toBeNull();
     expect(Buffer.byteLength(text)).toBeLessThanOrEqual(128 * 1024);
     expect(text).not.toMatch(/password|token=|synthetic-secret/u);
+  });
+
+  it.each(
+    [
+      { label: "missing", beta: undefined, fails: true },
+      { label: "older same-train prerelease", beta: "2026.9.3-beta.1", fails: true },
+      { label: "older final", beta: "2026.9.1", fails: true },
+      { label: "equal", beta: "2026.9.3", fails: false },
+      { label: "newer next-train prerelease", beta: "2026.9.4-beta.1", fails: false },
+    ].flatMap(({ label, beta, fails }) =>
+      [false, true].map((npm12) => ({ label, beta, fails, npm12 })),
+    ),
+  )(
+    "enforces the beta floor for a plugin with $label beta (npm 12: $npm12)",
+    async ({ beta, fails, npm12 }) => {
+      const latest = "2026.9.3";
+      const fixture = workflowFixture({}, true, undefined, {
+        version: latest,
+        distTag: "latest",
+        npm12,
+        tags: {
+          openclaw: { latest, beta: latest },
+          "@openclaw/demo": { latest, ...(beta === undefined ? {} : { beta }) },
+        },
+      });
+
+      const verification = verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+      if (fails) {
+        await expect(verification).rejects.toThrow(
+          `@openclaw/demo: beta=${beta ?? "<missing>"}, latest=${latest}`,
+        );
+      } else {
+        await expect(verification).resolves.toContain("plugin npm OK: 1");
+      }
+    },
+  );
+
+  it("lists every core and plugin beta floor violation together", async () => {
+    const latest = "2026.9.3";
+    const fixture = workflowFixture({}, true, undefined, {
+      version: latest,
+      distTag: "latest",
+      tags: {
+        openclaw: { latest, beta: "2026.9.1" },
+        "@openclaw/demo": { latest, beta: "2026.9.3-beta.1" },
+        "@openclaw/other": { latest },
+      },
+    });
+
+    const verification = verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+    await expect(verification).rejects.toThrow(
+      "openclaw: beta=2026.9.1, latest=2026.9.3\n" +
+        "@openclaw/demo: beta=2026.9.3-beta.1, latest=2026.9.3\n" +
+        "@openclaw/other: beta=<missing>, latest=2026.9.3",
+    );
+    await expect(verification).rejects.toThrow("npm dist-tag add <pkg>@<latest> beta");
+  });
+
+  it.each([false, true])(
+    "queries a beta-only plugin without latest (npm 12 and initial E404: %s)",
+    async (transientlyMissing) => {
+      const beta = "2026.9.4-beta.1";
+      const fixture = workflowFixture({}, true, undefined, {
+        version: beta,
+        distTag: "beta",
+        npm12: transientlyMissing,
+        tags: {
+          openclaw: { latest: "2026.9.3", beta },
+          "@openclaw/demo": { beta },
+        },
+        transientlyMissing: transientlyMissing ? "@openclaw/demo" : undefined,
+      });
+
+      await expect(
+        verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir }),
+      ).resolves.toContain("plugin npm OK: 1");
+    },
+  );
+
+  it("retains a core beta failure if later plugin verification is interrupted", () => {
+    const fixture = workflowFixture({}, true, undefined, {
+      version,
+      distTag: "beta",
+      tags: {
+        openclaw: { beta: version, latest: "2026.5.10" },
+        "@openclaw/demo": { beta: version },
+      },
+    });
+    const result = runCli(
+      fixture,
+      [],
+      `import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const exec = childProcess.execFileSync;
+childProcess.execFileSync = (command, args, options) => {
+  if (command === "npm" && args?.[1]?.startsWith("@openclaw/demo@")) process.exit(23);
+  return exec(command, args, options);
+};
+syncBuiltinESMExports();`,
+    );
+    expect(result.status, result.stderr).toBe(23);
+    const diagnostic: unknown = JSON.parse(
+      readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+    );
+    expect(diagnostic).toMatchObject({
+      verification: "failure",
+      stages: {
+        coreNpm: { state: "failure", publication: "observed" },
+        pluginNpm: { state: "started" },
+      },
+    });
+    expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+  });
+
+  it.each([
+    { coreStale: true, pluginStale: false },
+    { coreStale: false, pluginStale: true },
+    { coreStale: true, pluginStale: true },
+  ])("retains publication facts when beta floors fail: %j", async ({ coreStale, pluginStale }) => {
+    vi.stubEnv("GITHUB_RUN_ID", "");
+    const latest = "2026.9.3";
+    const fixture = workflowFixture({}, true, undefined, {
+      version: latest,
+      distTag: "latest",
+      npm12: true,
+      tags: {
+        openclaw: { latest, beta: coreStale ? "2026.9.1" : latest },
+        "@openclaw/a-plugin": { latest, beta: pluginStale ? "2026.9.3-beta.1" : latest },
+        "@openclaw/z-healthy": { latest, beta: latest },
+      },
+    });
+
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+      "npm beta must be at or above latest",
+    );
+    const diagnostic: unknown = JSON.parse(
+      readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+    );
+    expect(diagnostic).toMatchObject({
+      verification: "failure",
+      currentStage: coreStale ? "coreNpm" : "pluginNpm",
+      stages: {
+        coreNpm: {
+          state: coreStale ? "failure" : "success",
+          publication: "observed",
+        },
+        pluginNpm: {
+          state: pluginStale ? "failure" : "success",
+          packages: [
+            {
+              name: "@openclaw/a-plugin",
+              state: pluginStale ? "failure" : "success",
+              publication: "observed",
+              error: pluginStale ? { class: "selector-mismatch" } : null,
+            },
+            {
+              name: "@openclaw/z-healthy",
+              state: "success",
+              publication: "observed",
+              error: null,
+            },
+          ],
+        },
+        evidence: { state: "unattempted" },
+      },
+    });
+    expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+    const run = parsePublicationRun(
+      {
+        id: 44,
+        run_attempt: 1,
+        workflow_id: 2,
+        repository: { full_name: "openclaw/openclaw" },
+        head_sha: "a".repeat(40),
+        head_branch: "main",
+        path: ".github/workflows/openclaw-release-publish.yml",
+        event: "workflow_dispatch",
+        status: "completed",
+        conclusion: "failure",
+      },
+      "openclaw/openclaw",
+      "44",
+    );
+    // The existing v1 reader validates the shape before rejecting this unbound fixture.
+    expect(parsePublicationDiagnostic(diagnostic, run)).toBeNull();
   });
 
   it.each([

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { createTranscriptEventReader } from "../../commands/doctor-session-sqlite-readers.js";
 import * as sqliteDirectories from "../../infra/sqlite-private-directory.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -206,6 +207,61 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
   });
 });
 
+it("keeps legacy Codex assistant rows that precede later transcript rows during repair", async () => {
+  await withOpenClawTestState({ label: "import-codex-rows" }, async (state) => {
+    const params = target(state, "codex");
+    const codexReply = (id: string, parentId: string, content: string) => ({
+      type: "message",
+      id,
+      parentId,
+      message: { role: "assistant", provider: "codex", api: "openai-chatgpt-responses", content },
+    });
+    const events = [
+      { type: "session", id: "codex", version: 3 },
+      { type: "message", id: "user-1", parentId: null, message: { role: "user", content: "hi" } },
+      codexReply("reply-1", "user-1", "a"),
+      {
+        type: "message",
+        id: "user-2",
+        parentId: "reply-1",
+        message: { role: "user", content: "b" },
+      },
+      codexReply("reply-2", "user-2", "c"),
+      {
+        type: "message",
+        id: "user-3",
+        parentId: "reply-2",
+        message: { role: "user", content: "d" },
+      },
+    ];
+
+    expect(
+      await importSqliteSessionRows({
+        ...params,
+        repairLegacyTranscript: true,
+        readTranscriptEvents: (append) => events.forEach(append),
+      }),
+    ).toMatchObject({ transcriptEvents: events.length });
+
+    // Every row survives in order, and the Codex replies carry normalized provider metadata.
+    expect(loadTranscriptEventsSync({ ...params, sessionId: "codex" })).toEqual(
+      events.map((event) =>
+        expect.objectContaining(
+          event.id.startsWith("reply-")
+            ? {
+                id: event.id,
+                message: expect.objectContaining({
+                  provider: "openai",
+                  api: "openai-chatgpt-responses",
+                }),
+              }
+            : { id: event.id },
+        ),
+      ),
+    );
+  });
+});
+
 it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without append normalization", async () => {
   await withOpenClawTestState({ label: "import-exact" }, async (state) => {
     const params = target(state, "exact");
@@ -284,78 +340,141 @@ it("rejects batches spanning implicit agent stores before reading sources", asyn
   });
 });
 
-it.each(["implicit", "leaf", "root", "opaque"])(
+it.each(["implicit", "leaf", "root", "opaque", "parentless"])(
   "repairs an original-only prompt rewrite branch in staging (leaf control=%s)",
   async (mode) => {
     const leafControl = mode !== "implicit";
     await withOpenClawTestState({ label: "import-branch-repair" }, async (state) => {
       const scope = target(state, "repair");
+      const turn = (
+        id: string,
+        parentId: string | null | undefined,
+        role: "user" | "assistant",
+        text: string,
+      ) => ({
+        type: "message",
+        id,
+        ...(parentId === undefined ? {} : { parentId }),
+        message: { role, content: [{ type: "text", text }] },
+      });
+      const parentless = mode === "parentless";
+      const hasOpaque = mode === "opaque" || parentless;
+      const parent = turn("parent", parentless ? undefined : null, "assistant", "previous");
+      const original = turn(
+        "original",
+        leafControl ? "parent" : undefined,
+        "user",
+        "hello\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nretired context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      );
+      const abandoned = turn("abandoned", "original", "assistant", "hidden answer");
+      const visible = turn(
+        "visible",
+        leafControl && !parentless ? "parent" : undefined,
+        "user",
+        "hello",
+      );
+      const answer = turn("answer", parentless ? undefined : "visible", "assistant", "answer");
+      const opaque = [
+        { type: "metadata", id: "append-root", parentId: "abandoned", payload: { keep: "root" } },
+        { type: "metadata", id: "append-tail", parentId: "append-root", payload: { keep: "tail" } },
+      ];
+      const postLeaf = {
+        type: "metadata",
+        id: "post-leaf",
+        parentId: "append-tail",
+        payload: { keep: "after" },
+      };
+      const header = {
+        type: "session",
+        version: 3,
+        id: "repair",
+        timestamp: "2026-08-30T00:00:00Z",
+        cwd: "/fixture",
+      };
       const events = [
-        {
-          type: "session",
-          version: 3,
-          id: "repair",
-          timestamp: "2026-08-30T00:00:00Z",
-          cwd: "/fixture",
-        },
-        {
-          type: "message",
-          id: "original",
-          ...(leafControl ? { parentId: null } : {}),
-          message: {
-            role: "user",
-            content:
-              "hello\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nretired context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-          },
-        },
-        {
-          type: "message",
-          id: "visible",
-          ...(leafControl ? { parentId: null } : {}),
-          message: { role: "user", content: "hello" },
-        },
-        ...(mode === "opaque" ? [{ type: "metadata", id: "append-root", parentId: null }] : []),
+        header,
+        ...(parentless
+          ? [parent, visible, answer, original, abandoned]
+          : leafControl
+            ? [parent, original, abandoned, visible, answer]
+            : [original, visible]),
+        ...(mode === "opaque" ? opaque : parentless ? [{ ...opaque[0], parentId: null }] : []),
         ...(leafControl
           ? [
               {
                 type: "leaf",
                 id: "selection",
-                parentId: "visible",
-                targetId: "visible",
+                parentId: "abandoned",
+                targetId: "answer",
                 ...(mode === "root"
                   ? { appendParentId: null }
                   : mode === "opaque"
-                    ? { appendParentId: "append-root" }
-                    : {}),
+                    ? { appendParentId: "append-tail" }
+                    : parentless
+                      ? { appendParentId: "append-root" }
+                      : {}),
               },
             ]
           : []),
+        ...(mode === "opaque" ? [postLeaf] : []),
       ];
+      const sourceBytes = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
+      const filename = await state.writeText("branch.jsonl", sourceBytes);
       const result = await importSqliteSessionRows({
         ...scope,
         repairLegacyTranscript: true,
-        readTranscriptEvents: (append) => {
-          for (const event of events) {
-            append(event);
-          }
-        },
+        readTranscriptEvents: createTranscriptEventReader(filename, "repair"),
       });
-      expect(result.recovery).toMatchObject({ complete: mode !== "opaque", repaired: true });
-      const persisted = loadTranscriptEventsSync({ ...scope, sessionId: "repair" });
-      expect(persisted).toEqual(
-        [
-          "repair",
-          "visible",
-          ...(mode === "opaque" ? ["append-root"] : []),
-          ...(leafControl ? ["selection"] : []),
-        ].map((id) => expect.objectContaining({ id })),
+      expect(result.recovery).toMatchObject({ complete: !hasOpaque, repaired: true });
+      const transcript = { ...scope, sessionId: "repair" };
+      const persisted = loadTranscriptEventsSync(transcript);
+      const appendParentId =
+        mode === "root"
+          ? null
+          : mode === "opaque"
+            ? "post-leaf"
+            : parentless
+              ? "append-root"
+              : leafControl
+                ? "answer"
+                : "visible";
+      expect(persisted).toEqual([
+        header,
+        ...(leafControl ? [{ ...parent, parentId: null }] : []),
+        leafControl ? { ...visible, parentId: "parent" } : visible,
+        ...(leafControl ? [{ ...answer, parentId: "visible" }] : []),
+        ...(hasOpaque ? [{ ...opaque[0], parentId: "answer" }] : []),
+        ...(mode === "opaque" ? [opaque[1], postLeaf] : []),
+        ...(leafControl
+          ? [
+              {
+                type: "leaf",
+                id: "selection",
+                parentId: mode === "opaque" ? "post-leaf" : parentless ? "append-root" : "answer",
+                targetId: "answer",
+                appendParentId,
+              },
+            ]
+          : []),
+      ]);
+      const manager = SessionManager.open(transcript, state.workspaceDir);
+      expect(manager.buildSessionContext().messages.map((entry) => entry.role)).toEqual(
+        leafControl ? ["assistant", "user", "assistant"] : ["user"],
       );
-      if (mode === "root" || mode === "opaque") {
-        expect(persisted.at(-1)).toMatchObject({
-          targetId: "visible",
-          appendParentId: mode === "root" ? null : "append-root",
-        });
-      }
+      const nextId = manager.appendMessage({
+        role: "user",
+        content: "continued",
+        timestamp: Date.now(),
+      });
+      const continued = loadTranscriptEventsSync(transcript);
+      expect(continued.slice(0, persisted.length)).toEqual(persisted);
+      expect(continued.at(-1)).toMatchObject({
+        id: nextId,
+        type: "message",
+        parentId: appendParentId,
+      });
+      expect(SessionManager.open(transcript, state.workspaceDir).getLeafId()).toBe(nextId);
+      expect(fs.readFileSync(filename, "utf8")).toBe(sourceBytes);
     });
   },
 );
@@ -442,5 +561,43 @@ it.each([
       { event_id: "repeated", count: 1 },
       { event_id: "root", count: 1 },
     ]);
+  });
+});
+
+it.each([
+  ["openai-codex", "openai-codex-responses"],
+  ["codex", "openai-chatgpt-responses"],
+])("normalizes legacy provider %s during canonical import", async (provider, api) => {
+  await withOpenClawTestState({ label: "import-provider-repair" }, async (state) => {
+    const scope = target(state, "provider-repair");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant",
+      parentId: null,
+      message: {
+        role: "assistant",
+        provider,
+        api,
+        content: [{ type: "text", text: "preserved" }],
+      },
+    };
+    const original =
+      [{ type: "session", version: 3, id: "provider-repair" }, assistantEntry]
+        .map((event) => JSON.stringify(event))
+        .join("\n") + "\n";
+    const filename = await state.writeText("provider.jsonl", original);
+
+    const result = await importSqliteSessionRows({
+      ...scope,
+      repairLegacyTranscript: true,
+      readTranscriptEvents: createTranscriptEventReader(filename, "provider-repair"),
+    });
+
+    expect(loadTranscriptEventsSync({ ...scope, sessionId: "provider-repair" }).at(-1)).toEqual({
+      ...assistantEntry,
+      message: { ...assistantEntry.message, provider: "openai", api: "openai-chatgpt-responses" },
+    });
+    expect(result.recovery).toEqual({ complete: true, repaired: true, events: 2 });
+    expect(fs.readFileSync(filename, "utf8")).toBe(original);
   });
 });

@@ -20,7 +20,6 @@ import {
 import { renderSkillDocument, renderSkillWorkshopCollection } from "./collection-view.ts";
 import { renderSkillWorkshopEmptyDetail, renderWorkshopEmptyState } from "./empty-states.ts";
 import { renderSkillWorkshopEvaluation } from "./evaluation-view.ts";
-import { renderSkillWorkshopHistoryScan } from "./history-scan.ts";
 import { renderSkillWorkshopProposalList } from "./proposal-list.ts";
 import { renderSelfLearningError } from "./self-learning.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
@@ -179,20 +178,14 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
 }
 
 function renderSuggestions(props: SkillWorkshopProps, section: SkillWorkshopSection) {
-  const historyScan = renderSkillWorkshopHistoryScan({
-    state: props.historyScan,
-    canScan: props.access.canScanHistory,
-    onScan: props.onHistoryScan,
-  });
   if (props.proposals.length === 0 && !props.loading && !props.error) {
-    return html`${historyScan}${renderWorkshopEmptyState({
+    return renderWorkshopEmptyState({
       agentName: resolveSkillWorkshopAgentName(props, t("skillWorkshop.empty.defaultAgent")),
       selfLearning: props.selfLearning,
       onSelfLearningToggle: props.onSelfLearningToggle,
-    })}`;
+    });
   }
   return html`
-    ${historyScan}
     <div
       class="sw-triage sw-triage--standalone"
       style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}

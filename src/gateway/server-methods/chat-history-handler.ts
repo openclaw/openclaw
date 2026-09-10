@@ -283,7 +283,7 @@ async function handleChatHistoryRequest({
   const requested = typeof limit === "number" ? limit : 200;
   const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, requested);
   const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
-  const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
+  const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
   const pendingInputs =
     sessionId && sessionId === entry?.sessionId
       ? readChatPendingInputs(
