@@ -44,7 +44,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.mediaGenerationDuplicateGuardTestApi",
   ),
   "src/agents/models-config.plan.ts": Symbol.for("openclaw.modelsConfigPlanTestApi"),
-  "src/agents/models-config.ts": Symbol.for("openclaw.modelsConfigTestApi"),
   "src/agents/prepared-model-runtime.ts": Symbol.for("openclaw.preparedModelRuntimeTestApi"),
   "src/agents/session-suspension.ts": Symbol.for("openclaw.sessionSuspensionTestApi"),
   "src/agents/sessions/tools/bash.ts": Symbol.for("openclaw.bashToolTestApi"),
