@@ -231,7 +231,7 @@ describe("executeAgentTurn: authentication failures", () => {
         new FailoverError("All OpenAI auth profiles are unavailable", {
           reason: "auth_permanent",
           provider,
-          model: "gpt-5.6-sol",
+          model: "fixture-model",
           authMode: "oauth",
           authProfileFailure: { allInCooldown: true },
         }),
