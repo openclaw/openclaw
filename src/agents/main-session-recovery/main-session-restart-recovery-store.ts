@@ -12,7 +12,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
+import {
+  readSessionMessagesAsync,
+  readSessionMessagesPageWithStatsAsync,
+} from "../../gateway/session-transcript-readers.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
 import {
@@ -35,9 +38,9 @@ import {
   resumeMainSession,
 } from "./main-session-restart-dispatch.js";
 import {
-  hasCompletionReportUserTail,
-  hasInterSessionRecoverySource,
+  classifyMainSessionRestartRecoverySource,
   hasOnlyAnnounceRecoveryRuns,
+  type MainSessionRestartRecoverySource,
   markSessionCompletedAfterRecoveryCheckpoint,
   reconcileInterruptedCompletionReport,
 } from "./main-session-restart-recovery-checkpoint.js";
@@ -87,6 +90,32 @@ function pendingFinalRecoveryAction(
   // Records without notice identity cannot carry debt, so they keep the
   // visible fail path instead of completing silently.
   return pending.context && pending.intentId ? "notice" : "fail";
+}
+
+async function readMainSessionRestartRecoverySource(
+  scope: Parameters<typeof readSessionMessagesPageWithStatsAsync>[0],
+): Promise<MainSessionRestartRecoverySource | undefined> {
+  const maxMessages = 64;
+  let expectedTotal: number | undefined;
+  let offset = 0;
+  while (true) {
+    const page = await readSessionMessagesPageWithStatsAsync(scope, { offset, maxMessages });
+    expectedTotal ??= page.totalMessages;
+    if (page.totalMessages !== expectedTotal) {
+      throw new Error("session transcript changed during restart recovery source lookup");
+    }
+    for (const message of page.messages.toReversed()) {
+      const source = classifyMainSessionRestartRecoverySource(message);
+      if (source) {
+        return source;
+      }
+    }
+    const consumed = page.transcriptEvents?.length ?? page.messages.length;
+    if (consumed === 0 || offset + consumed >= page.totalMessages) {
+      return undefined;
+    }
+    offset += consumed;
+  }
 }
 
 async function completePendingFinalRecoveryWithNotice(
@@ -482,7 +511,7 @@ export async function recoverStore(params: {
       entry.restartRecoverySuppressTextDelivery !== true;
     const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
     let replaySafeCheckpoint = false;
-    let interSessionSource: boolean;
+    let recoverySource: MainSessionRestartRecoverySource | undefined;
     let fullAccess: boolean;
     let messages: unknown[];
     try {
@@ -496,12 +525,8 @@ export async function recoverStore(params: {
         maxMessages: 20,
         maxBytes: 256 * 1024,
       });
-      const staleCompletionSource =
-        hasRecoveryRuns &&
-        !hasOnlyAnnounceRecoveryRuns(entry) &&
-        hasCompletionReportUserTail(messages);
-      interSessionSource = !staleCompletionSource && hasInterSessionRecoverySource(messages);
-      fullAccess = configuredFullAccess && !interSessionSource;
+      recoverySource = await readMainSessionRestartRecoverySource(transcriptScope);
+      fullAccess = configuredFullAccess && recoverySource !== "inter_session";
       if (fullAccess && !entry.pendingFinalDelivery) {
         replaySafeCheckpoint = await readMainSessionReplaySafeCheckpoint(transcriptScope);
       }
@@ -531,7 +556,7 @@ export async function recoverStore(params: {
     // same fact from the already-persisted user-message provenance.
     const completionSource = hasOnlyAnnounceRecoveryRuns(entry)
       ? "announce_runs"
-      : !hasRecoveryRuns && hasCompletionReportUserTail(messages)
+      : !hasRecoveryRuns && recoverySource === "completion"
         ? "transcript"
         : undefined;
     if (completionSource) {
@@ -557,7 +582,7 @@ export async function recoverStore(params: {
       continue;
     }
 
-    if (interSessionSource) {
+    if (recoverySource === "inter_session") {
       if (stopped()) {
         return result;
       }

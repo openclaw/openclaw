@@ -33,31 +33,23 @@ export function hasOnlyAnnounceRecoveryRuns(entry: SessionEntry): boolean {
   return Boolean(runs?.length && runs.every((run) => isAnnounceRunId(run.runId)));
 }
 
-export function hasCompletionReportUserTail(messages: readonly unknown[]): boolean {
-  const message = messages.findLast((candidate) => getMessageRole(candidate) === "user");
-  if (!message || typeof message !== "object") {
-    return false;
+export type MainSessionRestartRecoverySource = "completion" | "inter_session" | "other";
+
+/** Classify a candidate source turn while excluding canonical recovery continuations. */
+export function classifyMainSessionRestartRecoverySource(
+  message: unknown,
+): MainSessionRestartRecoverySource | undefined {
+  if (getMessageRole(message) !== "user" || !message || typeof message !== "object") {
+    return undefined;
   }
   const userMessage = message as { role?: unknown; provenance?: unknown };
-  return (
-    hasInterSessionUserProvenance(userMessage) &&
-    isCompletionReportInputProvenance(userMessage.provenance)
-  );
-}
-
-/** Resolve the original user turn beneath any restart-recovery continuation prompts. */
-export function hasInterSessionRecoverySource(messages: readonly unknown[]): boolean {
-  for (const message of messages.toReversed()) {
-    if (getMessageRole(message) !== "user" || !message || typeof message !== "object") {
-      continue;
-    }
-    const userMessage = message as { role?: unknown; provenance?: unknown };
-    if (isMainSessionRestartRecoveryInputProvenance(userMessage.provenance)) {
-      continue;
-    }
-    return hasInterSessionUserProvenance(userMessage);
+  if (isMainSessionRestartRecoveryInputProvenance(userMessage.provenance)) {
+    return undefined;
   }
-  return false;
+  if (!hasInterSessionUserProvenance(userMessage)) {
+    return "other";
+  }
+  return isCompletionReportInputProvenance(userMessage.provenance) ? "completion" : "inter_session";
 }
 
 export async function reconcileInterruptedCompletionReport(

@@ -6124,6 +6124,10 @@ describe("main-session-restart-recovery", () => {
           content: "read the file after restart",
           provenance: { kind: "inter_session", sourceTool: "sessions_send" },
         },
+        ...Array.from({ length: 80 }, (_, index) => ({
+          role: index % 2 === 0 ? "assistant" : "toolResult",
+          content: `delegated turn detail ${index}`,
+        })),
         {
           role: "user",
           content: "continue after restart",
