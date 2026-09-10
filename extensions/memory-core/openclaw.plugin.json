@@ -1,5 +1,6 @@
 {
   "id": "memory-core",
+  "categories": ["memory", "tools"],
   "doctorContract": {
     "stateMigrations": [
       { "id": "memory-core-host-events-jsonl-to-sqlite", "doctorOnly": true },

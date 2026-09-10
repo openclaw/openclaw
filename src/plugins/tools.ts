@@ -8,9 +8,10 @@ import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/c
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
 import {
   getLoadedRuntimePluginRegistry,
-  registryMatchesManifestPluginIds,
+  createRuntimePluginManifestLookup,
 } from "./active-runtime-registry.js";
 import {
   isBundledConversationReadToolRegistration,
@@ -19,7 +20,11 @@ import {
 } from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
-import { loadPluginRegistryHandle, type PluginLoadOptions } from "./loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadPluginRegistryHandle,
+  type PluginLoadOptions,
+} from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
@@ -111,12 +116,16 @@ function wrapPluginToolCallbacks(
     signal?: AbortSignal,
     onUpdate?: unknown,
   ) =>
-    runScoped(
-      () =>
-        Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
-          AnyAgentTool["execute"]
-        >,
-    );
+    runScoped(() => {
+      const execute = (executionSignal?: AbortSignal) =>
+        Reflect.apply(tool.execute, tool, [
+          toolCallId,
+          params,
+          executionSignal,
+          onUpdate,
+        ]) as ReturnType<AnyAgentTool["execute"]>;
+      return signal ? runWithTrackedCancellation(signal, execute) : execute();
+    });
   const wrapped = new Proxy<AnyAgentTool>(tool, {
     get(target, prop) {
       if (prop === "prepareArguments" && scopedPrepareArguments) {
@@ -639,15 +648,16 @@ function registryHasScopedPluginTools(
   if (pluginIds === undefined) {
     return (registry.tools?.length ?? 0) > 0;
   }
-  const scopedPluginIds = new Set(pluginIds);
-  if (scopedPluginIds.size === 0) {
+  if (pluginIds.length === 0) {
     return true;
   }
   const registryPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
-  return (
-    Array.from(scopedPluginIds).every((pluginId) => registryPluginIds.has(pluginId)) &&
-    (manifestPlugins === undefined ||
-      registryMatchesManifestPluginIds(registry, manifestPlugins, pluginIds))
+  const isOwnerEligible = manifestPlugins
+    ? createRuntimePluginManifestLookup(registry, manifestPlugins)
+    : undefined;
+  return pluginIds.every(
+    (pluginId) =>
+      registryPluginIds.has(pluginId) && (!isOwnerEligible || Boolean(isOwnerEligible(pluginId))),
   );
 }
 
@@ -655,6 +665,15 @@ type PreparedPluginToolRuntime = {
   loadContext?: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   metadataSnapshot: PluginMetadataManifestView;
   registry?: PluginRegistry;
+};
+
+type PluginToolLoadState = {
+  context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
+  env: NodeJS.ProcessEnv;
+  loadOptions: PluginLoadOptions;
+  onlyPluginIds: string[];
+  allowlist: PluginToolAllowlist;
+  snapshot: PluginMetadataManifestView;
 };
 
 function resolvePluginToolLoadState(params: {
@@ -665,16 +684,7 @@ function resolvePluginToolLoadState(params: {
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
   preparedRuntime?: PreparedPluginToolRuntime;
-}):
-  | {
-      context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
-      env: NodeJS.ProcessEnv;
-      loadOptions: PluginLoadOptions;
-      onlyPluginIds: string[];
-      allowlist: PluginToolAllowlist;
-      snapshot: PluginMetadataManifestView;
-    }
-  | undefined {
+}): PluginToolLoadState | undefined {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const preparedLoadContext = params.preparedRuntime?.loadContext;
@@ -745,7 +755,7 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
   });
 }
 
-export function resolvePluginTools(params: {
+type PluginToolResolutionParams = {
   context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
   clientCaps?: string[];
@@ -757,14 +767,63 @@ export function resolvePluginTools(params: {
   env?: NodeJS.ProcessEnv;
   runtimeRegistry?: PluginRegistry;
   preparedRuntime?: PreparedPluginToolRuntime;
-}): AnyAgentTool[] {
+};
+
+export type PluginToolRegistryAcquisition = {
+  registry?: PluginRegistry;
+  resolveTools: () => AnyAgentTool[];
+  release: () => Promise<void>;
+};
+
+/** The serving owner retains this view before invoking factories or applying tool policy. */
+export async function acquireStandalonePluginToolRegistry(
+  params: Omit<PluginToolResolutionParams, "runtimeRegistry" | "preparedRuntime">,
+): Promise<PluginToolRegistryAcquisition> {
+  const loadState = resolvePluginToolLoadState(params);
+  if (!loadState || loadState.onlyPluginIds.length === 0) {
+    return { resolveTools: () => [], release: async () => {} };
+  }
+  const acquisition = await acquirePluginRegistryForInspection(loadState.loadOptions);
+  const hasAuthority = capturePluginLifecycleAuthority(acquisition.registry, undefined, {
+    scopedRuntime: true,
+  });
+  return {
+    ...acquisition,
+    resolveTools: () => {
+      if (!hasAuthority?.()) {
+        throw new Error("Plugin tool registry has been released");
+      }
+      return resolvePluginToolsFromRegistry(params, loadState, acquisition.registry);
+    },
+  };
+}
+
+export function resolvePluginTools(params: PluginToolResolutionParams): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
   // This matters a lot for unit tests and for tool construction hot paths.
   const loadState = resolvePluginToolLoadState(params);
-  if (!loadState) {
+  if (!loadState || loadState.onlyPluginIds.length === 0) {
     return [];
   }
-  const { context, env, onlyPluginIds, allowlist, loadOptions, snapshot } = loadState;
+  const runtimeRegistry =
+    loadState.context === params.preparedRuntime?.loadContext
+      ? params.preparedRuntime.registry
+      : params.runtimeRegistry;
+  const registry = resolvePluginToolRegistry({
+    loadOptions: loadState.loadOptions,
+    onlyPluginIds: loadState.onlyPluginIds,
+    runtimeRegistry,
+    manifestPlugins: loadState.snapshot.plugins,
+  });
+  return resolvePluginToolsFromRegistry(params, loadState, registry);
+}
+
+function resolvePluginToolsFromRegistry(
+  params: PluginToolResolutionParams,
+  loadState: PluginToolLoadState,
+  registry: PluginRegistry | undefined,
+): AnyAgentTool[] {
+  const { context, env, onlyPluginIds, allowlist, snapshot } = loadState;
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolPolicyName(tool)));
@@ -774,19 +833,6 @@ export function resolvePluginTools(params: {
   const pluginToolOwnersByName = new Map<string, string>();
   const denylist = normalizeDenylist(params.toolDenylist);
   const clientCaps = new Set(params.clientCaps ?? []);
-  const runtimeRegistry =
-    context === params.preparedRuntime?.loadContext
-      ? params.preparedRuntime.registry
-      : params.runtimeRegistry;
-  if (onlyPluginIds.length === 0) {
-    return tools;
-  }
-  const registry = resolvePluginToolRegistry({
-    loadOptions,
-    onlyPluginIds,
-    runtimeRegistry,
-    manifestPlugins: snapshot.plugins,
-  });
   if (!registry) {
     context.logger.warn(
       `plugin tool registry unavailable for plugin ids [${onlyPluginIds.join(", ")}]`,
@@ -810,7 +856,6 @@ export function resolvePluginTools(params: {
   const blockedPlugins = new Set<string>();
   const factoryTimingStartedAt = Date.now();
   const factoryTimings: PluginToolFactoryTiming[] = [];
-  const manifestPluginsById = new Map(snapshot.plugins.map((plugin) => [plugin.id, plugin]));
 
   for (const entry of registry.tools) {
     if (!scopedPluginIds.has(entry.pluginId)) {
@@ -843,7 +888,7 @@ export function resolvePluginTools(params: {
       blockedPlugins.add(entry.pluginId);
       continue;
     }
-    const manifestPlugin = manifestPluginsById.get(entry.pluginId);
+    const manifestPlugin = snapshot.byPluginId.get(entry.pluginId);
     const declaredNames = entry.names ?? [];
     const availabilityNames =
       declaredNames.length > 0 ? declaredNames : (entry.declaredNames ?? []);
@@ -977,6 +1022,24 @@ export function resolvePluginTools(params: {
         continue;
       }
       const tool = toolRaw as AnyAgentTool;
+      // The pre-factory gate narrows on registration names, but a factory can
+      // return any tool in its declared contract. Re-check actual factory
+      // output so a non-bundled factory returning a host-restricted
+      // conversation-read tool (e.g. feishu_chat) is blocked in delegated
+      // runs, mirroring the pre-factory denial.
+      if (
+        blocksHostRestrictedConversationReadTool({
+          pluginId: entry.pluginId,
+          toolNames: [tool.name],
+          bundledOwner: isBundledConversationReadToolRegistration({
+            entry,
+            manifestPlugin,
+          }),
+          ctx: params.context,
+        })
+      ) {
+        continue;
+      }
       const undeclared = entry.declaredNames
         ? findUndeclaredPluginToolNames({
             declaredNames: entry.declaredNames,

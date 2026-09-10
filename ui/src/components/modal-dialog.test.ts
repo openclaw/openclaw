@@ -2,6 +2,7 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { showToast } from "../lib/toast.ts";
 import {
   getRenderedModalDialog,
@@ -9,6 +10,10 @@ import {
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
 import { OpenClawModalDialog } from "./modal-dialog.ts";
+
+vi.mock("../app/native-browser-host.ts", () => ({
+  hasNativeBrowserBridge: () => true,
+}));
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
@@ -71,6 +76,39 @@ describe("openclaw-modal-dialog", () => {
     expect(document.openClawModalLayers?.has(modal)).toBe(false);
   });
 
+  it("occludes native tabs through nested dialogs, closing animations, and removal", async () => {
+    const changes = vi.fn();
+    const unsubscribe = subscribeNativeOverlayOcclusion(changes);
+    try {
+      const { modal, webAwesomeDialog } = await renderModal();
+      const nested = document.createElement("openclaw-modal-dialog");
+      modal.append(nested);
+      await getRenderedModalDialog(modal);
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+
+      nested.remove();
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+      modal.hide();
+      await modal.updateComplete;
+      // The platform view must stay hidden until the dialog leaves the top layer.
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+      webAwesomeDialog.dispatchEvent(new Event("wa-after-hide"));
+      expect(changes.mock.calls).toEqual([[false], [true], [false]]);
+      await modal.updateComplete;
+      modal.show();
+      await modal.updateComplete;
+      expect(changes).toHaveBeenLastCalledWith(true);
+      modal.remove();
+      expect(changes).toHaveBeenLastCalledWith(false);
+      container.append(modal);
+      expect(changes).toHaveBeenLastCalledWith(true);
+      modal.remove();
+      expect(changes).toHaveBeenLastCalledWith(false);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("focuses the dialog container first", async () => {
     const focus = vi.spyOn(HTMLDialogElement.prototype, "focus");
     const { dialog } = await renderModal();
@@ -118,29 +156,34 @@ describe("openclaw-modal-dialog", () => {
     expect(dialog.open).toBe(true);
   });
 
-  it("hands an active toast back to the app layer when it closes", async () => {
-    const shell = document.createElement("div");
-    shell.className = "shell";
-    const appHost = document.createElement("openclaw-toast-host");
-    shell.append(appHost);
-    document.body.append(shell);
-    try {
-      const { modal } = await renderModal();
-      const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
+  it.each(["hide", "remove"] as const)(
+    "hands an active toast back to the app layer on %s",
+    async (action) => {
+      const shell = document.createElement("div");
+      shell.className = "shell";
+      const appHost = document.createElement("openclaw-toast-host");
+      shell.append(appHost);
+      document.body.append(shell);
+      try {
+        const { modal } = await renderModal();
 
-      showToast({ message: "Saved" });
-      modal.hide();
-      await modal.updateComplete;
-      await appHost.updateComplete;
+        showToast({ message: "Saved" });
+        expect(appHost.parentElement).toBe(modal);
+        modal[action]();
+        await modal.updateComplete;
+        if (action === "hide") {
+          modal.dispatchEvent(new Event("wa-after-hide"));
+        }
+        await appHost.updateComplete;
 
-      expect(moveBefore).toHaveBeenCalledWith(appHost, null);
-      expect(moveBefore.mock.contexts).toContain(modal);
-      expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
-      expect(modal.querySelector(".app-toast")).toBeNull();
-    } finally {
-      shell.remove();
-    }
-  });
+        expect(appHost.parentElement).toBe(shell);
+        expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
+        expect(modal.querySelector(".app-toast")).toBeNull();
+      } finally {
+        shell.remove();
+      }
+    },
+  );
 
   it("assigns overlay motion by interaction type", () => {
     const styles = OpenClawModalDialog.styles.cssText;

@@ -6,15 +6,13 @@ import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admissi
 
 const reviews = createBackgroundWorkOwner({ owner: "core:skill-workshop", maxConcurrent: 1 });
 
-/** All Workshop reviewers share admission, model locking, and background capacity. */
+/** Experience reviews retain admission, model locking, and background capacity. */
 export async function runSkillWorkshopReview(
   params: RunEmbeddedAgentParams & {
     agentId: string;
     config: OpenClawConfig;
-    reviewKind: "experience" | "history-scan";
   },
 ) {
-  const { reviewKind, ...runParams } = params;
   const restartSignal = getGatewayRestartDrainSignal();
   const abortSignal = params.abortSignal
     ? AbortSignal.any([restartSignal, params.abortSignal])
@@ -26,12 +24,12 @@ export async function runSkillWorkshopReview(
       params.config,
       params.runId,
       params.agentId,
-      `skill-workshop.${reviewKind}`,
+      "skill-workshop.experience",
     );
   try {
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     return await runEmbeddedAgent({
-      ...runParams,
+      ...params,
       preparedRunAdmission,
       abortSignal,
       lane: reviews.lane,

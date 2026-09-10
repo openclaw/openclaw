@@ -4,7 +4,8 @@ import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
-import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
+import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
@@ -51,6 +52,12 @@ async function resolveProviderChoiceModelPrompt(params: {
   const resolved = resolveProviderPluginChoice({
     providers,
     choice: params.authChoice,
+    manifestChoice: resolveManifestProviderAuthChoice(params.authChoice, {
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      includeUntrustedWorkspacePlugins: false,
+    }),
   });
   const wizard = resolved?.provider.wizard?.setup;
   if (!wizard) {
@@ -172,7 +179,7 @@ export function buildGatewayAuthConfig(params: {
     }
     // Keep token mode always valid: treat empty/undefined/"undefined"/"null" as missing and generate a token.
     const token =
-      typeof params.token === "string" && !isInvalidGatewayToken(params.token)
+      typeof params.token === "string" && !isInvalidGatewaySecret(params.token)
         ? params.token.trim()
         : randomToken();
     return { ...base, mode: "token", token };

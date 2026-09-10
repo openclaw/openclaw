@@ -31,7 +31,7 @@ import {
   type SkillProposalInspectResult,
   type SkillProposalManifest,
 } from "./proposal-records.ts";
-import { createSkillWorkshopHistoryScanState, type SkillWorkshopState } from "./state.ts";
+import type { SkillWorkshopState } from "./state.ts";
 export {
   createSkillWorkshopState,
   skillWorkshopRouteData,
@@ -85,7 +85,6 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
   state.skillWorkshopRevisionDraft = "";
   state.skillWorkshopFilePreviewKey = null;
   state.skillWorkshopFilePreviewQuery = "";
-  state.skillWorkshopHistoryScan = createSkillWorkshopHistoryScanState();
   inspectRequestsByState.delete(state);
   selectionRequestByState.delete(state);
 }
@@ -429,7 +428,7 @@ function loadSkillWorkshopProposalDetail(
     return Promise.resolve(false);
   }
   const existing = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
-  if (existing?.bodyLoaded && !options?.force) {
+  if (existing?.degradedState || (existing?.bodyLoaded && !options?.force)) {
     return Promise.resolve(true);
   }
   const requests = inspectRequests(state);
@@ -475,7 +474,12 @@ async function refreshAfterMutation(
 ): Promise<void> {
   state.skillWorkshopLoaded = false;
   await loadSkillWorkshopProposals(state, context, { force: true });
-  await loadSkillWorkshopProposalDetail(state, context, proposalId, { force: true });
+  if (
+    state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId)?.status ===
+    "pending"
+  ) {
+    await loadSkillWorkshopProposalDetail(state, context, proposalId, { force: true });
+  }
 }
 
 function markSkillWorkshopRevisionChanged(
@@ -508,6 +512,10 @@ export async function runSkillWorkshopLifecycleAction(
     return;
   }
   const previous = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+  if (action === "apply" && previous?.degradedState) {
+    state.skillWorkshopError = t("skillWorkshop.detail.draftMissing");
+    return;
+  }
   if (!expectedRevisionHash) {
     clearActionNoticeTimer(state);
     state.skillWorkshopActionNotice = null;
@@ -588,6 +596,9 @@ export async function runSkillWorkshopEvaluation(
       return false;
     }
     const current = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+    if (current?.degradedState) {
+      throw new Error(t("skillWorkshop.detail.draftMissing"));
+    }
     if (!current || current.status !== "pending" || !current.revisionHash) {
       throw new Error(t("skillWorkshop.evaluation.errors.revisionHashUnavailable"));
     }
@@ -652,6 +663,10 @@ export async function requestSkillWorkshopRevision(
   const proposal = state.skillWorkshopProposals.find((item) => item.key === proposalId);
   const instructions = state.skillWorkshopRevisionDraft.trim();
   if (!proposal || !instructions) {
+    return null;
+  }
+  if (proposal.degradedState) {
+    state.skillWorkshopError = t("skillWorkshop.detail.draftMissing");
     return null;
   }
   const proposalAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;

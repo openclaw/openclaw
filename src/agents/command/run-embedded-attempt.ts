@@ -1,6 +1,6 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -14,7 +14,6 @@ import {
 } from "../../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
-import type { prepareAgentCommandExecutionIdentity } from "../agent-command-execution-identity.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -27,7 +26,6 @@ import {
   type EmbeddedAgentRunEntryTerminal,
 } from "../embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
-import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import { resolveFastModeState } from "../fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
@@ -36,7 +34,6 @@ import { prepareModelRunCapabilities } from "../model-catalog-lookup.js";
 import { modelKey, resolveThinkingDefault } from "../model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
 import {
   isAgentRunRestartAbortReason,
   resolveAgentRunErrorLifecycleFields,
@@ -57,29 +54,13 @@ import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createCommandCompactionAccounting } from "./compaction-accounting.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 import { normalizeAgentCommandModelRef } from "./model-ref.js";
-import type { EmbeddedModelSelection } from "./model-selection.js";
-import type { PreparedAgentCommandExecution } from "./prepare.js";
+import type { RunEmbeddedAgentAttemptParams } from "./run-embedded-attempt.types.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
 import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
-import type { EmbeddedSessionState } from "./session-preparation.js";
-import type { AgentCommandOpts } from "./types.js";
 const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
-export async function runEmbeddedAgentAttempt(params: {
-  preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity>;
-  prepared: PreparedAgentCommandExecution;
-  opts: AgentCommandOpts;
-  sessionEntry?: SessionEntry;
-  lifecycleGeneration: string;
-  onLifecycleGenerationChanged: (lifecycleGeneration: string) => void;
-  onCompactionAccounting?: (fact: CompactionAccountingFact) => void;
-  suppressVisibleSessionEffects: boolean;
-  preserveUserFacingSessionModelState: boolean;
-  modelSelection: EmbeddedModelSelection;
-  embeddedSessionState: EmbeddedSessionState;
-  trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
-}) {
+export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptParams) {
   const {
     cfg,
     body,
@@ -364,6 +345,7 @@ export async function runEmbeddedAgentAttempt(params: {
           fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
         },
         runCandidate: async (providerOverride, modelOverride, runOptions) => {
+          clearAgentRunTerminalWriteContext(params.preparedRunAdmission.operationalRunInstance);
           const candidateAccounting = compactionAccounting.beginCandidate(deferredLifecycle.signal);
           maintenanceAuthProfile = undefined;
           attemptMediaTaskIds = sessionKey

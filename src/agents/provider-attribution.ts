@@ -7,7 +7,10 @@ import type {
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
 } from "../plugins/manifest.js";
-import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
+import {
+  matchesPluginProviderEndpoint,
+  normalizePluginProviderBaseUrl,
+} from "../plugins/plugin-metadata-provider-facts.js";
 import {
   getCurrentPluginMetadataSnapshotRequiredRuntime as getCurrentPluginMetadataSnapshot,
   loadPluginMetadataSnapshotRuntime as loadPluginMetadataSnapshot,
@@ -208,15 +211,6 @@ function resolveManifestProviderRequest(params: {
     : undefined;
 }
 
-function hostMatchesSuffix(host: string, suffix: string): boolean {
-  if (!suffix) {
-    return false;
-  }
-  return suffix.startsWith(".") || suffix.startsWith("-")
-    ? host.endsWith(suffix)
-    : host === suffix || host.endsWith(`.${suffix}`);
-}
-
 function buildManifestEndpointResolution(
   endpoint: PluginManifestProviderEndpoint,
   host: string,
@@ -239,13 +233,7 @@ function resolveManifestProviderEndpoint(params: {
 }): ProviderEndpointResolution | undefined {
   for (const endpoint of resolveProviderMetadataOwners(params.providerMetadataOwners)
     .providerEndpoints) {
-    if ((endpoint.hosts ?? []).includes(params.host)) {
-      return buildManifestEndpointResolution(endpoint, params.host);
-    }
-    if ((endpoint.hostSuffixes ?? []).some((suffix) => hostMatchesSuffix(params.host, suffix))) {
-      return buildManifestEndpointResolution(endpoint, params.host);
-    }
-    if (params.normalizedBaseUrl && (endpoint.baseUrls ?? []).includes(params.normalizedBaseUrl)) {
+    if (matchesPluginProviderEndpoint(endpoint, params)) {
       return buildManifestEndpointResolution(endpoint, params.host);
     }
   }

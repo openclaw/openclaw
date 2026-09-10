@@ -62,6 +62,30 @@ const PRIVATE_QA_TOOLING_TEST = "test/e2e/qa-lab/runtime/gateway-codex-delivery-
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
+function isNumberedToolingGroup(group: { shard_name: string }) {
+  return /^core-tooling-\d+(?:-hosted-\d+)?$/u.test(group.shard_name);
+}
+function nonToolingPlacement(plan: CompactNodeTestShard[]) {
+  return plan
+    .flatMap((job) => {
+      const groups = job.groups
+        .filter((group) => !isNumberedToolingGroup(group))
+        .map((group) => group.shard_name)
+        .toSorted();
+      return groups.length === 0
+        ? []
+        : [
+            {
+              groups,
+              planConcurrency: job.planConcurrency,
+              pretestBuildMode: job.pretestBuildMode,
+              requiresDist: job.requiresDist,
+              runner: job.runner,
+            },
+          ];
+    })
+    .toSorted((a, b) => a.groups.join("\0").localeCompare(b.groups.join("\0")));
+}
 function isCombinedUnbuiltCliJob(job: CompactNodeTestShard) {
   return (
     job.groups.length > 1 &&
@@ -416,6 +440,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "ui/src/styles/cursor-policy.node.test.ts",
     ]);
     expect(resolvePolicyTestTargets(["docs/web/control-ui.md"])).toEqual([]);
+    expect(resolvePolicyTestTargets(["extensions/anthropic/openclaw.plugin.json"])).toEqual([
+      "src/agents/model-ref-shared.test.ts",
+    ]);
   });
 
   it("matches policy owners only for exact changed paths", () => {
@@ -515,7 +542,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(payload.includePatterns).toBeGreaterThan(0);
   });
 
-  it("bundles split shards deterministically without changing coverage", () => {
+  it("bundles split shards with deterministic unique identities and unchanged coverage", () => {
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
     const bundled = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
     const basePatterns = base
@@ -526,6 +553,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       .toSorted((a, b) => a.localeCompare(b));
 
     expect(bundled.length).toBeLessThan(base.length);
+    expect(new Set(bundled.map((shard) => shard.checkName)).size).toBe(bundled.length);
     expect(bundledPatterns).toEqual(basePatterns);
     expect(
       bundled
@@ -1728,6 +1756,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/commands/doctor-heartbeat-cadence-migration.test.ts",
       "src/commands/doctor-heartbeat-scratch-migration.test.ts",
       "src/commands/doctor-heartbeat-session-target.test.ts",
+      "src/commands/doctor-heartbeat-source-archive.test.ts",
       "src/commands/doctor-heartbeat-task-migration.test.ts",
       "src/commands/doctor-session-canonical-keys.memory.test.ts",
       "src/commands/doctor-session-canonical-keys.retention.test.ts",
@@ -2106,7 +2135,76 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     });
   });
 
+  it("keeps non-tooling placement checks independent of singleton tooling split names", () => {
+    const anchor: CompactNodeTestShard = {
+      checkName: "checks-node-compact-small-1",
+      shardName: "compact-small-1",
+      runner: BUNDLED_NODE_TEST_RUNNER,
+      requiresDist: false,
+      planConcurrency: 1,
+      groups: [
+        {
+          shard_name: "core-unit-fast",
+          configs: ["test/vitest/vitest.unit-fast.config.ts"],
+          requiresDist: false,
+          runner: BUNDLED_NODE_TEST_RUNNER,
+        },
+      ],
+    };
+    // Projection fixture from the real six-file inventory proof: the 330-second
+    // file stays alone with the same execution policy when its stripe is named.
+    const unsplit: CompactNodeTestShard = {
+      ...anchor,
+      checkName: "checks-node-compact-small-22",
+      shardName: "compact-small-22",
+      predictedSeconds: 330,
+      groups: [
+        {
+          shard_name: "core-tooling-1",
+          configs: ["test/vitest/vitest.tooling.config.ts"],
+          includePatterns: ["test/scripts/pr-merge-outcome.test.ts"],
+          requiresDist: false,
+          runner: BUNDLED_NODE_TEST_RUNNER,
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        },
+      ],
+    };
+    const split: CompactNodeTestShard = {
+      ...unsplit,
+      checkName: "checks-node-compact-small-33",
+      shardName: "compact-small-33",
+      groups: [{ ...unsplit.groups[0]!, shard_name: "core-tooling-1-hosted-1" }],
+    };
+    const original = structuredClone({ anchor, unsplit, split });
+    const expected = [
+      {
+        groups: ["core-unit-fast"],
+        planConcurrency: 1,
+        pretestBuildMode: undefined,
+        requiresDist: false,
+        runner: BUNDLED_NODE_TEST_RUNNER,
+      },
+    ];
+    expect(nonToolingPlacement([anchor, unsplit])).toEqual(expected);
+    expect(nonToolingPlacement([anchor, split])).toEqual(expected);
+    expect(nonToolingPlacement([split])).not.toEqual(expected);
+    for (const changed of [
+      { ...anchor, runner: DEFAULT_NODE_TEST_RUNNER },
+      { ...anchor, planConcurrency: 2 },
+      { ...anchor, requiresDist: true },
+      { ...anchor, pretestBuildMode: "runtime" as const },
+    ]) {
+      expect(nonToolingPlacement([changed, split])).not.toEqual(expected);
+    }
+    expect({ anchor, unsplit, split }).toEqual(original);
+  });
+
   it("keeps hosted tooling within the GitHub job cap when its inventory grows", async () => {
+    // The checkout is fixed; keep real discovery caches while rebuilding each planner snapshot.
+    const unitFastPaths = await vi.importActual<
+      typeof import("../vitest/vitest.unit-fast-paths.mjs")
+    >("../vitest/vitest.unit-fast-paths.mjs");
+    const trackedTestFiles = new Map<string, readonly string[]>();
     const options = {
       compactMode: "pull-request" as const,
       runnerBackend: "github",
@@ -2117,51 +2215,39 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       Array.from({ length: 10 }, (_, index) => `test/scripts/zz-growth-probe-${index}.test.ts`),
       ["test/scripts/openclaw-performance-crabbox.test.ts"],
       ["test/scripts/install-smoke-ref-admission.test.ts"],
+      [
+        "test/scripts/npm-package-locks-report.test.ts",
+        "test/scripts/openclaw-performance-crabbox.test.ts",
+        "test/scripts/install-smoke-ref-admission.test.ts",
+      ],
     ];
     const growthFiles = new Set([inventoryGrowthFile, ...extraInventories.flat()]);
     const isHostedToolingGroup = (group: { shard_name: string }) =>
       /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name);
-    const isNumberedToolingGroup = (group: { shard_name: string }) =>
-      /^core-tooling-\d+(?:-hosted-\d+)?$/u.test(group.shard_name);
     const runnerRanks = new Map([
       [BUNDLED_NODE_TEST_RUNNER, 0],
       [DEFAULT_NODE_TEST_RUNNER, 1],
       [EXTRA_LARGE_NODE_TEST_RUNNER, 2],
     ]);
-    const nonToolingPlacement = (plan: CompactNodeTestShard[]) =>
-      plan
-        .flatMap((job) => {
-          const groups = job.groups
-            .filter((group) => !isHostedToolingGroup(group))
-            .map((group) => group.shard_name)
-            .toSorted();
-          return groups.length === 0
-            ? []
-            : [
-                {
-                  groups,
-                  planConcurrency: job.planConcurrency,
-                  pretestBuildMode: job.pretestBuildMode,
-                  requiresDist: job.requiresDist,
-                  runner: job.runner,
-                },
-              ];
-        })
-        .toSorted((a, b) => a.groups.join("\0").localeCompare(b.groups.join("\0")));
     const createPlanWithInventory = async (
       includeGrowthFile: boolean,
       extraFiles: string[] = [],
     ) => {
       vi.resetModules();
+      vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => unitFastPaths);
       vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => {
         const actual =
           await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>();
         return {
           ...actual,
-          listTrackedTestFiles(rootDir: string, suffix?: string) {
-            const files = actual
-              .listTrackedTestFiles(rootDir, suffix)
-              .filter((file) => !growthFiles.has(file));
+          listTrackedTestFiles(rootDir: string, suffix = ".test.ts") {
+            const key = JSON.stringify([rootDir, suffix]);
+            let rawFiles = trackedTestFiles.get(key);
+            if (rawFiles === undefined) {
+              rawFiles = actual.listTrackedTestFiles(rootDir, suffix);
+              trackedTestFiles.set(key, rawFiles);
+            }
+            const files = rawFiles.filter((file) => !growthFiles.has(file));
             return rootDir === "test" && (includeGrowthFile || extraFiles.length > 0)
               ? [
                   ...new Set([
@@ -2180,6 +2266,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         return createPlan(options);
       } finally {
         vi.doUnmock("../../scripts/lib/list-test-files.mts");
+        vi.doUnmock("../vitest/vitest.unit-fast-paths.mjs");
         vi.resetModules();
       }
     };
@@ -3045,6 +3132,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(createChangedExtensionFallbackShards([target])).toEqual([]);
   });
 
+  it("prepares the sticker provider runtime in extension fallback", () => {
+    const target = "extensions/telegram/src/sticker-cache.selection.test.ts";
+    const owners = createChangedExtensionFallbackShards([target]).filter((shard) =>
+      (shard.groups ?? [shard]).some((group) => group.includePatterns?.includes(target)),
+    );
+
+    expect(owners).toHaveLength(1);
+    expect(owners[0]?.pretestBuildMode).toBe("runtime");
+  });
+
   it("retains the changed host plugin test when the store-alias diff forces fallback", () => {
     expect(createChangedNodeTestShards(STORE_ALIAS_CHANGED_PATHS)).toBeNull();
     const options = {
@@ -3215,20 +3312,27 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           // Allocation may change, but every file must retain its complete execution policy.
           tooling: nonPlugin
             .filter(isRepartitionableTooling)
-            .flatMap((group) =>
-              expectDefined(group.includePatterns, "repartitionable tooling membership").map(
-                (file) => ({
-                  parent: toolingParent(group),
-                  file,
-                  configs: group.configs,
-                  env: group.env,
-                  pretestBuildMode: group.pretestBuildMode,
-                  requiresDist: group.requiresDist,
-                  runner: group.runner,
-                  exclusive: isExclusiveCompactShardName(group.shard_name),
-                }),
-              ),
-            )
+            .flatMap((group) => {
+              const files = expectDefined(
+                group.includePatterns,
+                "repartitionable tooling membership",
+              );
+              // A split can move tests out of the compiler's larger runner group.
+              expect(group.runner).toBe(
+                files.includes("test/scripts/write-unified-entry-dts.test.ts")
+                  ? DEFAULT_NODE_TEST_RUNNER
+                  : BUNDLED_NODE_TEST_RUNNER,
+              );
+              return files.map((file) => ({
+                parent: toolingParent(group),
+                file,
+                configs: group.configs,
+                env: group.env,
+                pretestBuildMode: group.pretestBuildMode,
+                requiresDist: group.requiresDist,
+                exclusive: isExclusiveCompactShardName(group.shard_name),
+              }));
+            })
             .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
         };
       };
@@ -3285,7 +3389,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expectTimingFamilies(mutated);
           expect(
             () => expect(policies(mutated)).toEqual(policies(before)),
-            `${mutation} must fail policy equality even with valid timing keys`,
+            `${mutation} must fail policy validation even with valid timing keys`,
           ).toThrow();
         }
         for (const identity of ["parent", "part"] as const) {

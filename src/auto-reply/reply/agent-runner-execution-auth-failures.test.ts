@@ -7,7 +7,7 @@ import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
-  createFailureRunAgentTurnParams,
+  createRunAgentTurnParams,
   createFollowupRun,
   createMinimalRunAgentTurnParams,
   createTestFallbackSummaryError,
@@ -37,7 +37,7 @@ describe("executeAgentTurn: authentication failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -385,7 +385,7 @@ describe("executeAgentTurn: authentication failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -517,7 +517,7 @@ describe("executeAgentTurn: authentication failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -533,7 +533,7 @@ describe("executeAgentTurn: authentication failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../infra/file-lock.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
 import { setConfigValueAtPath } from "./config-paths.js";
 import {
@@ -221,7 +222,12 @@ describe("config mutate helpers", () => {
           auth: { mode: "token" },
         },
       },
-      { baseSnapshot: snapshot, expectedConfigPath: snapshot.path, afterWrite: { mode: "auto" } },
+      {
+        baseSnapshot: snapshot,
+        expectedConfigPath: snapshot.path,
+        afterWrite: { mode: "auto" },
+        inputBase: "source",
+      },
     );
   });
 
@@ -280,6 +286,7 @@ describe("config mutate helpers", () => {
       },
       {
         baseSnapshot: fresh,
+        inputBase: "source",
         expectedConfigPath: fresh.path,
         ownedConfigPathForWrite: initial.path,
         afterWrite: { mode: "auto" },
@@ -466,7 +473,12 @@ describe("config mutate helpers", () => {
           list: [{ id: "first" }, { id: "second" }],
         },
       },
-      { baseSnapshot: fresh, expectedConfigPath: fresh.path, afterWrite: { mode: "auto" } },
+      {
+        baseSnapshot: fresh,
+        expectedConfigPath: fresh.path,
+        afterWrite: { mode: "auto" },
+        inputBase: "source",
+      },
     );
   });
 
@@ -616,49 +628,53 @@ describe("config mutate helpers", () => {
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("refuses replace writes in Nix mode before touching disk", async () => {
-    process.env.OPENCLAW_NIX_MODE = "1";
-    const snapshot = createSnapshot({
-      hash: "hash-1",
-      sourceConfig: { gateway: { port: 18789 } },
-    });
-    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
-    });
+  it.each(["OPENCLAW_NIX_MODE", "OPENCLAW_CONFIG_READONLY"])(
+    "refuses replace writes in %s before touching disk",
+    async (mode) =>
+      withEnvAsync({ [mode]: "1" }, async () => {
+        const snapshot = createSnapshot({
+          hash: "hash-1",
+          sourceConfig: { gateway: { port: 18789 } },
+        });
+        ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+          snapshot,
+          writeOptions: { expectedConfigPath: snapshot.path },
+        });
 
-    await expect(
-      replaceConfigFile({
-        nextConfig: { gateway: { port: 19001 } },
+        await expect(
+          replaceConfigFile({
+            nextConfig: { gateway: { port: 19001 } },
+          }),
+        ).rejects.toThrow(`${mode}=1`);
+
+        expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
       }),
-    ).rejects.toThrow(
-      "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
-    );
+  );
 
-    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
-  });
+  it.each(["OPENCLAW_NIX_MODE", "OPENCLAW_CONFIG_READONLY"])(
+    "refuses mutate writes in %s before touching disk",
+    async (mode) =>
+      withEnvAsync({ [mode]: "1" }, async () => {
+        const snapshot = createSnapshot({
+          hash: "hash-1",
+          sourceConfig: { gateway: { port: 18789 } },
+        });
+        ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+          snapshot,
+          writeOptions: { expectedConfigPath: snapshot.path },
+        });
 
-  it("refuses mutate writes in Nix mode before touching disk", async () => {
-    process.env.OPENCLAW_NIX_MODE = "1";
-    const snapshot = createSnapshot({
-      hash: "hash-1",
-      sourceConfig: { gateway: { port: 18789 } },
-    });
-    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
-    });
+        await expect(
+          mutateConfigFile({
+            mutate(draft) {
+              draft.gateway = { ...draft.gateway, port: 19001 };
+            },
+          }),
+        ).rejects.toThrow(`${mode}=1`);
 
-    await expect(
-      mutateConfigFile({
-        mutate(draft) {
-          draft.gateway = { ...draft.gateway, port: 19001 };
-        },
+        expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
       }),
-    ).rejects.toThrow("OpenClaw Nix overview: https://docs.openclaw.ai/install/nix");
-
-    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
-  });
+  );
 
   it("reuses a provided snapshot and write options for replace", async () => {
     const snapshot = createSnapshot({

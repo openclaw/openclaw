@@ -21,10 +21,13 @@ Provider references:
 Prompt-cache reuse depends on provider request configuration as well as prompt
 text. Changing the model always starts a different cache lineage. Changing the
 thinking or reasoning level can also invalidate reuse even when the prompt and
-model stay the same. In particular, OpenAI reasoning-effort changes alter the
-reusable request state and can force the next turn to process the full prefix or
-conversation again. Anthropic likewise documents cache invalidation when its
-thinking budget, effort, or mode changes.
+model stay the same. Supported native OpenAI Responses requests preserve the
+original effort and append turn-scoped configuration controls, including after
+transport expiry or a Gateway restart when saved replay metadata and history
+still match. See [OpenAI reasoning changes](/providers/openai). Other OpenAI
+models or incompatible modes can still reprocess the full prefix. Anthropic
+likewise documents cache invalidation when its thinking budget, effort, or mode
+changes.
 
 If cache continuity matters, choose the model and thinking level when creating
 the session and keep both stable. Start a new session for a planned change.
@@ -150,8 +153,22 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`, plus AWS system inference profile prefixes `us.`/`eu.`/`global.anthropic.claude*`) support explicit `cacheRetention` pass-through.
 - The stable system prefix is checkpointed separately from dynamic runtime additions. Conversation checkpoints advance through retained history, including tool results; transient runtime-context carriers remain outside the cached prefix. Bedrock Mantle's Anthropic Messages transport also preserves the separate stable system boundary.
-- Non-Anthropic Bedrock models (for example `amazon.nova-*`) resolve to no cache retention at runtime, regardless of any configured `cacheRetention` value.
+- Nova Micro, Lite, Pro, Premier (`amazon.nova-{micro,lite,pro,premier}-v1:0`), and Nova 2 Lite (`amazon.nova-2-lite-v1:0`) support explicit checkpoints in `system` and `messages`, including their AWS geographic inference profiles and foundation-model ARNs. Both `short` and `long` use Nova's five-minute TTL; `none` disables explicit checkpoints. OpenClaw does not add tool checkpoints for Nova.
+- Other non-Claude Bedrock models remain at `cacheRetention: "none"`.
+- Nova explicit caching is opt-in: set `cacheRetention` explicitly to `short` or `long`. With retention unset, Nova requests keep their existing payload layout with no checkpoints; neither the default `short` window nor `OPENCLAW_CACHE_RETENTION` enables Nova checkpoints.
 - Opaque Bedrock application inference profile ARNs (profile IDs that do not contain `claude`) also resolve to no cache retention unless `cacheRetention` is set explicitly, since the model family cannot be inferred from the ARN alone.
+
+AWS's [prompt caching guide](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html)
+and model cards for [Micro](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-micro.html),
+[Lite](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-lite.html),
+[Pro](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-pro.html),
+[Premier](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-premier.html),
+and [Nova 2 Lite](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-lite.html)
+list these limits: a 1K-token minimum, four checkpoints, and at most 20K cached
+tokens for Nova. Provider token limits still determine whether a checkpoint is cached.
+
+Nova explicit caching has not been live-verified against AWS by OpenClaw maintainers yet.
+Live AWS acceptance proof remains a gap until a maintainer with Bedrock access runs it.
 
 ### OpenRouter
 
@@ -167,7 +184,8 @@ DeepSeek cache construction on OpenRouter is best-effort and can take a few seco
 
 - Direct Gemini transport (`api: "google-generative-ai"`) reports cache hits through upstream `cachedContentTokenCount`, mapped to `cacheRead`.
 - Eligible model families: `gemini-2.5*` and `gemini-3*` (excludes Live/preview variants outside that prefix match, for example `gemini-live-2.5-flash-preview`).
-- When `cacheRetention` is set on an eligible model, OpenClaw automatically creates, reuses, and refreshes a `cachedContents` resource for the final assembled system prompt, including hook-added instructions - no manual cached-content handle needed. TTL is `300s` for `cacheRetention: "short"` and `3600s` for `"long"`.
+- When `cacheRetention` is set on an eligible model, OpenClaw automatically creates, reuses, and refreshes a `cachedContents` resource containing the stable system prefix above the cache boundary plus tools and tool configuration - no manual cached-content handle needed. TTL is `300s` for `cacheRetention: "short"` and `3600s` for `"long"`.
+- The volatile system suffix travels first inside the current turn's hidden runtime-context carrier, before other runtime facts. This carrier is transient, so suffix changes reuse the same resource without accumulating history. Stable-prefix or tool changes create a new resource. If creation fails or the prompt has no cache boundary, the complete system prompt stays inline.
 - You can still pass a pre-existing Gemini cached-content handle through as `params.cachedContent` (or legacy `params.cached_content`); an explicit handle skips the automatic cache-management path entirely.
 - This is separate from Anthropic/OpenAI prompt-prefix caching: OpenClaw manages a provider-native `cachedContents` resource for Gemini instead of injecting inline cache markers.
 
@@ -224,6 +242,15 @@ Key design choices:
 - System-prompt fingerprints are normalized (whitespace, line endings, hook-added context, runtime capability ordering) so semantically unchanged prompts share cache across turns.
 
 If you see unexpected `cacheWrite` spikes after a config or workspace change, check whether the change lands above or below the cache boundary. Moving volatile content below the boundary (or stabilizing it) usually resolves the issue.
+
+Chat Completions routes without an explicit message-cache breakpoint move the
+bounded Runtime facts line to the first emitted user message. This keeps session
+identifiers behind the system-and-tools prefix on compatible local servers.
+The line stays on that first message during follow-ups. Behavioral instructions,
+including hook additions, permission notices, and Git coauthor guidance, retain
+their system/developer role. Routes with explicit message breakpoints keep their
+existing system layout. Current-turn Runtime Context snapshots still use their
+separate transient carrier; they do not become permanent first-message context.
 
 ## OpenClaw cache-stability guards
 
@@ -297,7 +324,7 @@ pnpm test:docker:live-cli-backend:claude:cache
 
 - Expect `cacheRead` only; `cacheWrite` stays `0` on Chat Completions.
 - Treat repeated-turn cache reuse as a provider-specific plateau, not Anthropic-style moving full-history reuse.
-- Floors are watch-only (a miss is logged as a warning, not a test failure), derived from observed live behavior on `gpt-5.4-mini`:
+- Floors are watch-only (a miss is logged as a warning, not a test failure), derived from live behavior observed on `gpt-5.4-mini` and unchanged since 2026.4.5:
 
 | Scenario             | `cacheRead` floor | Hit-rate floor |
 | -------------------- | ----------------: | -------------: |
@@ -306,7 +333,7 @@ pnpm test:docker:live-cli-backend:claude:cache
 | Image transcript     |             3,840 |           0.82 |
 | MCP-style transcript |             4,096 |           0.85 |
 
-The most recently observed baseline numbers (from `live-cache-regression-baseline.ts`) landed at: stable prefix `cacheRead=4864`, hit rate `0.966`; tool transcript `cacheRead=4608`, hit rate `0.896`; image transcript `cacheRead=4864`, hit rate `0.954`; MCP-style transcript `cacheRead=4608`, hit rate `0.891`.
+The most recently observed baseline numbers (from `live-cache-regression-baseline.ts`, recorded 2026-04-04) landed at: stable prefix `cacheRead=4864`, hit rate `0.966`; tool transcript `cacheRead=4608`, hit rate `0.896`; image transcript `cacheRead=4864`, hit rate `0.954`; MCP-style transcript `cacheRead=4608`, hit rate `0.891`.
 
 Why the assertions differ: Anthropic exposes explicit cache breakpoints and moving conversation-history reuse, while OpenAI's effective reusable prefix in live traffic can plateau earlier than the full prompt. Comparing the two providers against a single cross-provider percentage threshold produces false regressions.
 
@@ -332,6 +359,8 @@ diagnostics:
 
 ### What to inspect
 
+Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix/tools fingerprint, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. Observations and warnings require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) or debug logging, and trace results identify each request within its attempt.
+
 - Cache trace events are JSONL with staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
 - Per-turn cache token impact is visible in normal usage surfaces: `cacheRead` and `cacheWrite` show up in `/usage tokens`, `/status`, session usage summaries, and custom `messages.usageTemplate` layouts.
 - For Anthropic, expect both `cacheRead` and `cacheWrite` when caching is active.
@@ -344,7 +373,7 @@ diagnostics:
 - **High `cacheWrite` on Anthropic**: often means the cache breakpoint is landing on content that changes every request.
 - **Low OpenAI `cacheRead`**: verify the stable prefix is at the front, the repeated prefix is at least 1024 tokens, and the same `prompt_cache_key` is reused for turns that should share a cache.
 - **No effect from `cacheRetention`**: confirm the model key matches `agents.defaults.models["provider/model"]`.
-- **Bedrock Nova requests with cache settings**: expected - these resolve to no cache retention at runtime.
+- **Bedrock Nova requests without cache hits**: set `cacheRetention` explicitly to `short` or `long`, verify that the model is one of the supported variants above, and check that the prefix meets AWS's token limits; `long` still uses a five-minute TTL.
 
 Related docs:
 
@@ -357,3 +386,4 @@ Related docs:
 
 - [Token use and costs](/reference/token-use)
 - [API usage and costs](/reference/api-usage-costs)
+- [Usage tracking](/concepts/usage-tracking)

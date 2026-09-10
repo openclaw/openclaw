@@ -89,7 +89,7 @@ function mockWindowsCommands(params: {
   powershell?: CommandReply;
   wmic?: CommandReply;
 }): void {
-  setPlatform("win32");
+  mockProcessPlatform("win32");
   runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
     const command = argv[0];
     const reply =
@@ -104,10 +104,6 @@ function mockWindowsCommands(params: {
               : undefined;
     return resolveCommandReply(reply);
   });
-}
-
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
 }
 
 async function listenServer(
@@ -881,7 +877,7 @@ describeUnix("inspectPortUsage", () => {
 
 describe("inspectPortUsage on Windows", () => {
   it("classifies SSH through locale-independent tasklist CSV output", async () => {
-    setPlatform("win32");
+    mockProcessPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];
       if (command === getWindowsSystem32ExePath("netstat.exe")) {

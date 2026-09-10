@@ -249,11 +249,14 @@ describe("models.list native account catalog", () => {
                 pinnedProfileId: "openai:missing",
               });
               const locked = await buildModelsListResult({
-                context: {
-                  getRuntimeConfig: () => config,
-                  loadGatewayModelCatalogSnapshot: vi.fn(),
-                  logGateway: { debug: vi.fn() },
-                } as unknown as GatewayRequestContext,
+                source: {
+                  kind: "gateway",
+                  context: {
+                    getRuntimeConfig: () => config,
+                    loadGatewayModelCatalogSnapshot: vi.fn(),
+                    logGateway: { debug: vi.fn() },
+                  } as unknown as GatewayRequestContext,
+                },
                 agentId: "main",
                 params: { view: "configured" },
                 preloadedOnly: true,
@@ -339,6 +342,7 @@ describe("models.list native account catalog", () => {
                   cfg: hostConfig,
                   catalog: rows,
                   view: "configured",
+                  refresh: true,
                 });
                 expect(readiness(hostConfig)).toEqual({ accountType: "apiKey" });
                 expect(host.models[0]?.available, `host route ${routeIndex}`).toBe(false);

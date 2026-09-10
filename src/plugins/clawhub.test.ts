@@ -283,7 +283,6 @@ type PackageLookupCall = {
 
 type ArchiveInstallCall = {
   archivePath?: string;
-  dangerouslyForceUnsafeInstall?: boolean;
   expectedPluginId?: string;
   onInstallPolicyWarning?: unknown;
   installPolicyRequest?: {
@@ -1895,16 +1894,6 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).not.toHaveBeenCalled();
   });
 
-  it("passes dangerous force unsafe install through to archive installs", async () => {
-    await installPluginFromClawHub({
-      spec: "clawhub:demo",
-      dangerouslyForceUnsafeInstall: true,
-    });
-
-    expect(archiveInstallCall().archivePath).toBe("/tmp/clawhub-demo/archive.zip");
-    expect(archiveInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
-  });
-
   it("passes install policy acknowledgement through to archive installs", async () => {
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
 
@@ -1914,6 +1903,7 @@ describe("installPluginFromClawHub", () => {
     });
 
     expect(archiveInstallCall().onInstallPolicyWarning).toBe(onInstallPolicyWarning);
+    expect(archiveInstallCall().archivePath).toBe("/tmp/clawhub-demo/archive.zip");
   });
 
   it("cleans up the downloaded archive even when archive install fails", async () => {

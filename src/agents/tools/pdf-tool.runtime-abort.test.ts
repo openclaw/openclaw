@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
 import { createEmptyPluginMetadataSnapshot } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
 import { createPdfToolInfraStub, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
@@ -86,14 +87,15 @@ describe("PDF tool prepared-runtime cancellation", () => {
     });
   });
 
-  it("releases the runtime when a generic provider ignores cancellation", async () => {
+  it("reports cancellation while retaining the runtime until the generic provider settles", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const { release } = await stubPdfToolInfra(agentDir, { provider: "openai" });
       vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "extractable text",
         images: [],
       });
-      completeMock.mockImplementationOnce(() => new Promise(() => {}));
+      const completion = createDeferredCore<never>();
+      completeMock.mockImplementationOnce(() => completion.promise);
       const cfg = {
         agents: { defaults: { pdfModel: { primary: "openai/gpt-5.4-mini" } } },
       } as OpenClawConfig;
@@ -115,7 +117,9 @@ describe("PDF tool prepared-runtime cancellation", () => {
       controller.abort(new Error("PDF provider cancelled"));
       await assertion;
 
-      expect(release).toHaveBeenCalledOnce();
+      expect(release).not.toHaveBeenCalled();
+      completion.reject(new Error("late provider failure"));
+      await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
     });
   });
 });

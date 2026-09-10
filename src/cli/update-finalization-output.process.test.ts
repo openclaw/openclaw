@@ -2,13 +2,20 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { listUpdateRuns } from "../infra/update-run-ledger.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import {
+  formatCliProcessFailure,
+  runCliProcessChild,
+  waitForCliProcessStderrMarker,
+} from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Keep source transforms reusable across fresh children; each case still owns its state.
+const childTempDir = useAutoCleanupTempDirTracker(afterAll).make("openclaw-update-child-tmp-");
 const fixture = fileURLToPath(
   new URL("./update-finalization-output.test-support.ts", import.meta.url),
 );
@@ -32,6 +39,8 @@ const scenarios = [
 const finalizeScenarios = [
   "json",
   "phase-hang",
+  "doctor-hang",
+  "doctor-progress",
   "completion-hang",
   "handle-hang",
   "borrowed-phase",
@@ -73,11 +82,13 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       );
       const json = !scenario.startsWith("human");
       const blockedPhase =
-        scenario === "phase-hang"
-          ? "configSnapshot"
-          : scenario === "completion-hang"
-            ? "completionCache"
-            : undefined;
+        scenario === "doctor-hang" || scenario === "doctor-progress"
+          ? "doctor"
+          : scenario === "phase-hang"
+            ? "configSnapshot"
+            : scenario === "completion-hang"
+              ? "completionCache"
+              : undefined;
       const args = [
         "update",
         ...(scenario === "inherited-json" ? ["--json"] : []),
@@ -86,8 +97,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         "dev",
         ...(scenario === "human-recovery-plugin-error" ? [] : ["--yes"]),
         "--no-restart",
-        "--timeout",
-        blockedPhase || scenario === "borrowed-phase" ? "1" : "9",
+        ...(blockedPhase ? [] : ["--timeout", scenario === "borrowed-phase" ? "1" : "9"]),
         ...(json && scenario !== "inherited-json" ? ["--json"] : []),
       ];
       const readRun = () =>
@@ -100,27 +110,23 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
                 child: import("node:child_process").ChildProcessWithoutNullStreams,
               ) => {
                 child.stdin.end();
-                await new Promise<void>((resolve, reject) => {
-                  let stderr = "";
-                  const onData = (chunk: string) => {
-                    stderr += chunk;
-                    if (!stderr.includes("fixture configSnapshot entered")) {
-                      return;
-                    }
-                    child.stderr.off("data", onData);
-                    try {
-                      observedPhaseStart = readRun();
-                      resolve();
-                    } catch (error) {
-                      reject(new Error("Could not read the phase-start ledger", { cause: error }));
-                    }
-                  };
-                  child.stderr.on("data", onData);
-                });
+                await waitForCliProcessStderrMarker(child, "fixture configSnapshot entered");
+                try {
+                  observedPhaseStart = readRun();
+                } catch (error) {
+                  throw new Error("Could not read the phase-start ledger", { cause: error });
+                }
               },
             }
           : {}),
-        nodeArgs: ["--import", "tsx", fixture, scenario, ...args],
+        nodeArgs: [
+          "--import",
+          "tsx",
+          fixture,
+          JSON.stringify(runtimeProcessEntrypoints),
+          scenario,
+          ...args,
+        ],
         env: {
           ESBUILD_WORKER_THREADS: "0",
           PATH: path.dirname(process.execPath),
@@ -136,7 +142,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           XDG_CACHE_HOME: path.join(root, "xdg-cache"),
           XDG_STATE_HOME: path.join(root, "xdg-state"),
           XDG_RUNTIME_DIR: path.join(root, "xdg-runtime"),
-          TMPDIR: root,
+          TMPDIR: childTempDir,
           NODE_DISABLE_COMPILE_CACHE: "1",
           NO_COLOR: "1",
           TERM: "dumb",
@@ -145,8 +151,39 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       const failure = formatCliProcessFailure({ reason: `${command} ${scenario}`, ...result });
       expect(result.signal, failure).toBeNull();
       expect(result.code, failure).toBe(
-        scenario.endsWith("error") || scenario === "phase-hang" ? 1 : 0,
+        scenario.endsWith("error") || scenario === "phase-hang" || blockedPhase === "doctor"
+          ? 1
+          : 0,
       );
+      if (blockedPhase === "doctor") {
+        const output = JSON.parse(result.stdout);
+        expect(output, failure).toMatchObject({ status: "failed", stuckPhase: "doctor" });
+        for (const marker of ["STEP completed fixture-schema", "STEP active fixture-validation"]) {
+          expect(JSON.stringify(output.doctorOutput), failure).toContain(marker);
+          expect(result.stderr, failure).toContain(marker);
+          expect(readRun(), failure).toMatchObject({
+            status: "failed",
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                step: "finalize:doctor",
+                status: "failed",
+                detail: expect.stringContaining(marker),
+              }),
+            ]),
+          });
+        }
+        const timing = output.phaseTimings.find(
+          (entry: { phase: string }) => entry.phase === "doctor",
+        );
+        expect(timing.durationMs, failure).toBeGreaterThanOrEqual(1_000);
+        expect(timing.durationMs, failure).toBeLessThan(3_000);
+        if (scenario === "doctor-progress") {
+          expect(output.doctorOutput.stderr.excerpt, failure).toContain(
+            "PROGRESS fixture-validation",
+          );
+        }
+        return;
+      }
       if (scenario.startsWith("borrowed-")) {
         expect(result.stderr, failure).toContain("Borrowed caller completed.");
         expect(result.stderr, failure).not.toContain("Process still alive after terminal output");
@@ -160,7 +197,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       }
       if (blockedPhase) {
         if (scenario === "phase-hang") {
-          expect(observedPhaseStart?.steps).toContainEqual(
+          expect(observedPhaseStart?.steps, failure).toContainEqual(
             expect.objectContaining({
               step: "finalize:configSnapshot",
               status: "in_progress",
@@ -175,6 +212,19 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         });
         if (scenario === "phase-hang") {
           expect(output.stuckPhase).toBe(blockedPhase);
+          const pid = Number(await fs.readFile(path.join(root, "blocked-child.pid"), "utf8"));
+          expect(output.childProcesses, failure).toContainEqual({
+            pid,
+            parentPid: expect.any(Number),
+            command: expect.stringMatching(/^node(?:\.exe)?$/u),
+          });
+          expect(output.childProcessInspection, failure).toBe("complete");
+          expect(result.stdout + result.stderr, failure).not.toContain("fixture-private-argument");
+          const prerequisite = output.phaseTimings.find(
+            (entry: { phase: string }) => entry.phase === "targetConfigValidation",
+          );
+          expect(prerequisite, failure).toMatchObject({ outcome: "completed" });
+          expect(prerequisite.durationMs, failure).toBeGreaterThanOrEqual(1_000);
         } else {
           expect(output.stuckPhase).toBeUndefined();
           const pid = Number(await fs.readFile(path.join(root, "completion.pid"), "utf8"));
@@ -205,6 +255,19 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       if (scenario === "handle-hang") {
         expect(result.stderr).toContain("activeResources");
         expect(result.stderr).toContain("unsettledDisposers");
+        const pid = Number(await fs.readFile(path.join(root, "blocked-child.pid"), "utf8"));
+        const diagnostic = result.stderr
+          .split("\n")
+          .find((line) => line.includes("Process still alive after terminal output:"));
+        expect(diagnostic, failure).toBeDefined();
+        const payload = JSON.parse(diagnostic!.slice(diagnostic!.indexOf("{")));
+        expect(payload.childProcesses, failure).toContainEqual({
+          pid,
+          parentPid: expect.any(Number),
+          command: expect.stringMatching(/^node(?:\.exe)?$/u),
+        });
+        expect(payload.unsettledDisposers, failure).toContain("fixture-stdin-child");
+        expect(result.stdout + result.stderr, failure).not.toContain("fixture-private-argument");
         expect(readRun()).toMatchObject({
           status: "succeeded",
           steps: expect.arrayContaining([

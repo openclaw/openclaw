@@ -427,6 +427,19 @@ export async function createServiceChildRelayAdapter(
     } else if (message.type === "closing") {
       closingReceipt = true;
       state = "closing";
+      if (control) {
+        // Retire cancellation before acknowledging this exact POSIX receipt.
+        // The ACK releases the sender, not the independent native extinction join.
+        outboundSequence += 1;
+        void sendControlMessage({
+          type: "closing-ack",
+          generation,
+          sequence: outboundSequence,
+          closingSequence: message.sequence,
+        }).catch((error: unknown) => {
+          controlError ??= toErrorObject(error, "closing acknowledgement failed");
+        });
+      }
     } else if (message.type === "startup-error") {
       if (useWindowsJobAnchor) {
         startup.reject(new Error(message.error));
@@ -567,6 +580,7 @@ export async function createServiceChildRelayAdapter(
     stdinMode: params.stdinMode,
     secretFd: params.secretInput?.fd,
     controlFd,
+    ...(control ? { acknowledgeClosing: true as const } : {}),
     windowsShellCommand: params.windowsShellCommand,
   };
   const stdin = createManagedChildStdin(child.stdin);

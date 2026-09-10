@@ -13,6 +13,7 @@ import {
   resizeSidebarPanel,
   setSidebarDock,
   setSidebarExpanded,
+  toggleSidebarPanelExpanded,
   setSidebarOpen,
   sidebarActivePanel,
   sidebarMainPanel,
@@ -25,6 +26,53 @@ function openAll(): SidebarLayout {
 }
 
 describe("sidebar layout", () => {
+  it.each(["left", "right", "bottom"] as const)(
+    "restores the original %s split after focusing the side in place",
+    (dock) => {
+      const split = normalizeSidebarLayout(
+        ensureSidebarConversation(setSidebarDock(activatePanel(openAll(), "dashboard"), dock)),
+      );
+      const focused = toggleSidebarPanelExpanded(split, "dashboard");
+      expect(sidebarMainPanel(focused)).toEqual(sidebarMainPanel(split));
+      expect(focused.columns).toEqual(split.columns);
+      expect(isSidebarSlotVisible(focused, "dashboard")).toBe(true);
+      expect(isSidebarSlotVisible(focused, "conversation")).toBe(false);
+      expect(toggleSidebarPanelExpanded(normalizeSidebarLayout(focused), "dashboard")).toEqual(
+        split,
+      );
+      const closed = setSidebarOpen(focused, false);
+      expect(isSidebarSlotVisible(closed, "conversation")).toBe(true);
+      expect(isSidebarSlotVisible(closed, "dashboard")).toBe(false);
+      expect(setSidebarOpen(closed, true)).toEqual(split);
+    },
+  );
+
+  it("expands inactive tabs and exits side focus on normal activation or closing its tab", () => {
+    const split = normalizeSidebarLayout(ensureSidebarConversation(openAll()));
+    const focused = toggleSidebarPanelExpanded(split, "dashboard");
+    expect(sidebarActivePanel(focused)?.slot).toBe("dashboard");
+    expect(sidebarMainPanel(focused)).toEqual(sidebarMainPanel(split));
+    expect(activatePanel(focused, "detail")).toEqual(split);
+    expect(isSidebarSlotVisible(openSlot(focused, "conversation"), "conversation")).toBe(true);
+    const closed = closeSlot(focused, "dashboard");
+    expect(closed.expanded).toBe(false);
+    expect(isSidebarSlotVisible(closed, "conversation")).toBe(true);
+    expect(isSidebarSlotVisible(closed, "detail")).toBe(true);
+    expect(toggleSidebarPanelExpanded(split, "missing")).toEqual(split);
+    expect(toggleSidebarPanelExpanded(split, split.mainPanelId!)).toEqual(split);
+  });
+
+  it("does not hide the main view when stored side focus has no surviving side panel", () => {
+    const layout = normalizeSidebarLayout({
+      columns: [],
+      expanded: true,
+      expandedSide: true,
+      open: true,
+    });
+    expect(isSidebarSlotVisible(layout, "conversation")).toBe(true);
+    expect(layout.expandedSide).toBeUndefined();
+  });
+
   it("opens every slot as a tab in one right-side column", () => {
     const layout = openAll();
     expect(layout.columns).toHaveLength(1);

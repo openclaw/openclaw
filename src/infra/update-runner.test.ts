@@ -11,6 +11,7 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
@@ -173,6 +174,12 @@ describe("runGatewayUpdate", () => {
       }
       if (key === `git -C ${tempDir} rev-parse HEAD`) {
         return { stdout: "abc123", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} remote`) {
+        return toCommandResult({ stdout: "origin\n" });
+      }
+      if (key === `git -C ${tempDir} config --get branch.main.remote`) {
+        return toCommandResult({ stdout: "origin\n" });
       }
       if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
         return { stdout: `${params.stableTag}\n`, stderr: "", code: 0 };
@@ -381,7 +388,13 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
       [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
-      [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
+      [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} config --get branch.main.remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} fetch --no-tags --no-prune --no-prune-tags origin +refs/tags/*:refs/tags/*`]:
+        {
+          stdout: "",
+        },
       [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${tagOutput}\n` },
       [`git -C ${tempDir} rev-parse ${stableTag}^{commit}`]: { stdout: "b".repeat(40) },
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
@@ -756,6 +769,7 @@ describe("runGatewayUpdate", () => {
       tag?: string;
       cwd?: string;
       devTarget?: DevUpdateTarget;
+      progress?: NonNullable<Parameters<typeof runGatewayUpdate>[0]>["progress"];
       deferConfiguredPluginInstallRepair?: boolean;
       allowGatewayServiceRepair?: boolean;
       allowGatewayActivation?: boolean;
@@ -813,6 +827,7 @@ describe("runGatewayUpdate", () => {
         : { allowGatewayServiceRepair: options.allowGatewayServiceRepair }),
       ...(options?.allowGatewayActivation ? { allowGatewayActivation: true } : {}),
       ...(options?.beforeGitMutation ? { beforeGitMutation: options.beforeGitMutation } : {}),
+      ...(options?.progress ? { progress: options.progress } : {}),
     });
   }
 
@@ -928,12 +943,12 @@ describe("runGatewayUpdate", () => {
     { name: "target ref", options: { devTarget: { mode: "detached", ref: "main" } } },
   ] as const)("stops dev update when fetch fails before resolving $name", async ({ options }) => {
     await setupGitCheckout();
-    const fetchCommand = `git -C ${tempDir} fetch --all --prune --no-tags`;
+    const fetchCommand = `git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`;
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [fetchCommand]: {
         code: 1,
-        stderr: "! [rejected] v2026.5.3 -> v2026.5.3 (would clobber existing tag)",
+        stderr: "fatal: unable to access remote repository",
       },
     });
 
@@ -960,7 +975,7 @@ describe("runGatewayUpdate", () => {
     });
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
       [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
         stdout: "refs/remotes/origin/main",
       },
@@ -988,8 +1003,9 @@ describe("runGatewayUpdate", () => {
     expect(beforeGitMutation).toHaveBeenCalledWith({
       schemaVersions: { state: 3, agent: 11 },
     });
-    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
-    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
+    expect(calls.filter((call) => call.includes(" fetch "))).toEqual([
+      `git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`,
+    ]);
     const cleanupIndex = calls.findIndex(
       (call) =>
         call.startsWith(`git -C ${tempDir} worktree remove --force `) &&
@@ -1000,6 +1016,78 @@ describe("runGatewayUpdate", () => {
     expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
       calls.indexOf(`git -C ${tempDir} checkout -B main ${upstreamSha}`),
     );
+  });
+
+  it.each([
+    { channel: "stable", remotes: "origin\nupstream\n", tracked: "upstream", expected: "upstream" },
+    { channel: "beta", remotes: "upstream\norigin\n", tracked: "upstream", expected: "upstream" },
+    { channel: "stable", remotes: "fork\norigin\n", tracked: "", expected: "origin" },
+    { channel: "beta", remotes: "releases\n", tracked: "", expected: "releases" },
+  ] as const)(
+    "force-refreshes $channel tags only from $expected with tracked remote '$tracked'",
+    async ({ channel, remotes, tracked, expected }) => {
+      await setupGitPackageManagerFixture();
+      const { runner, calls } = createRunner({
+        ...buildStableTagResponses("v1.0.1"),
+        [`git -C ${tempDir} remote`]: { stdout: remotes },
+        [`git -C ${tempDir} config --get branch.main.remote`]: {
+          stdout: tracked,
+          code: tracked ? 0 : 1,
+        },
+      });
+
+      const result = await runWithRunner(runner, { channel });
+
+      expect(result.status).toBe("ok");
+      expect(calls.filter((call) => call.includes(" fetch "))).toEqual([
+        `git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`,
+        `git -C ${tempDir} fetch --no-tags --no-prune --no-prune-tags ${expected} +refs/tags/*:refs/tags/*`,
+      ]);
+    },
+  );
+
+  it.each([
+    { name: "branch fetch", failedCommand: "fetch --all --prune --no-tags --no-prune-tags" },
+    { name: "remote enumeration", failedCommand: "remote" },
+    { name: "tracking config", failedCommand: "config --get branch.main.remote" },
+    {
+      name: "release tag fetch",
+      failedCommand: "fetch --no-tags --no-prune --no-prune-tags origin +refs/tags/*:refs/tags/*",
+    },
+  ])("stops release updates before mutation when $name fails", async ({ failedCommand }) => {
+    await setupGitCheckout();
+    const beforeGitMutation = vi.fn<() => Promise<void>>();
+    const failedKey = `git -C ${tempDir} ${failedCommand}`;
+    const { runner, calls } = createRunner({
+      ...buildStableTagResponses("v1.0.1"),
+      [failedKey]: { code: 128, stderr: "Git operation failed" },
+    });
+
+    const result = await runWithRunner(runner, { channel: "stable", beforeGitMutation });
+
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({ exitCode: 128, stderrTail: "Git operation failed" }),
+    );
+    expect(calls.slice(calls.indexOf(failedKey) + 1)).toEqual([]);
+    expect(beforeGitMutation).not.toHaveBeenCalled();
+  });
+
+  it("refuses release tags from ambiguous remotes before selecting a local tag", async () => {
+    await setupGitCheckout();
+    const { runner, calls } = createRunner({
+      ...buildStableTagResponses("v1.0.1"),
+      [`git -C ${tempDir} remote`]: { stdout: "fork\nupstream\n" },
+      [`git -C ${tempDir} config --get branch.main.remote`]: { code: 1 },
+    });
+
+    const result = await runWithRunner(runner, { channel: "stable" });
+
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(calls.filter((call) => call.includes(" fetch "))).toEqual([
+      `git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`,
+    ]);
+    expect(calls).not.toContain(`git -C ${tempDir} tag --list v* --sort=-v:refname`);
   });
 
   it("rejects target-incompatible live config before allowing git mutation", async () => {
@@ -1049,7 +1137,7 @@ describe("runGatewayUpdate", () => {
     });
     const { runner } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
       [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
         stdout: "refs/remotes/origin/main",
       },
@@ -1076,7 +1164,7 @@ describe("runGatewayUpdate", () => {
     const beforeGitMutation = vi.fn<() => Promise<void>>();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses({ branch: "feature" }),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
       [`git -C ${tempDir} show-ref --verify refs/heads/main`]: { stdout: "main\n" },
       [`git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`]: {
         code: 1,
@@ -1186,78 +1274,106 @@ describe("runGatewayUpdate", () => {
     );
   });
 
-  it("rolls back when upstream setup fails after creating local main", async () => {
-    await setupGitPackageManagerFixture();
+  it.each([false, true])(
+    "finishes with a recorded warning when upstream setup fails after creating local main (interrupted=%s)",
+    async (interrupted) => {
+      await setupGitPackageManagerFixture();
 
-    const selectedSha = "upstream123";
-    const calls: string[] = [];
-    const beforeGitMutation = vi.fn(async () => {
-      calls.push("beforeGitMutation");
-    });
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      calls.push(key);
-      const responses = buildGitWorktreeProbeResponses({ branch: "feature" });
-      const response = responses[key];
-      if (response) {
-        return toCommandResult(response);
-      }
-      if (key === `git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`) {
-        return {
-          stdout: "",
-          stderr: "no upstream configured for branch 'main'",
-          code: 1,
-        };
-      }
-      if (key === `git -C ${tempDir} remote`) {
-        return { stdout: "origin\n", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} rev-parse refs/remotes/origin/main`) {
-        return { stdout: selectedSha, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} rev-list --max-count=10 ${selectedSha}`) {
-        return { stdout: `${selectedSha}\n`, stderr: "", code: 0 };
-      }
-      if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
-        key.endsWith(` ${selectedSha}`) &&
-        preflightPrefixPattern.test(key)
-      ) {
-        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
-        return { stdout: `HEAD is now at ${selectedSha}`, stderr: "", code: 0 };
-      }
-      if (key === "pnpm --version") {
-        return { stdout: PNPM_VERSION, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} show-ref --verify refs/heads/main`) {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (key === `git -C ${tempDir} branch --set-upstream-to origin/main main`) {
-        return { stdout: "", stderr: "requested upstream does not exist", code: 1 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
+      const selectedSha = "upstream123";
+      const calls: string[] = [];
+      const beforeGitMutation = vi.fn(async () => {
+        calls.push("beforeGitMutation");
+      });
+      const runCommand = async (argv: string[]) => {
+        const key = argv.join(" ");
+        calls.push(key);
+        const responses = buildGitWorktreeProbeResponses({ branch: "feature" });
+        const response = responses[key];
+        if (response) {
+          return toCommandResult(response);
+        }
+        if (key === `git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`) {
+          return {
+            stdout: "",
+            stderr: "no upstream configured for branch 'main'",
+            code: 1,
+          };
+        }
+        if (key === `git -C ${tempDir} remote`) {
+          return { stdout: "origin\n", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-parse refs/remotes/origin/main`) {
+          return { stdout: selectedSha, stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-list --max-count=10 ${selectedSha}`) {
+          return { stdout: `${selectedSha}\n`, stderr: "", code: 0 };
+        }
+        if (
+          key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
+          key.endsWith(` ${selectedSha}`) &&
+          preflightPrefixPattern.test(key)
+        ) {
+          await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
+          return { stdout: `HEAD is now at ${selectedSha}`, stderr: "", code: 0 };
+        }
+        if (key === "pnpm --version") {
+          return { stdout: PNPM_VERSION, stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} show-ref --verify refs/heads/main`) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        if (key === `git -C ${tempDir} branch --set-upstream-to origin/main main`) {
+          if (interrupted) {
+            return {
+              stdout: "",
+              stderr: "interrupted",
+              code: 143,
+              signal: "SIGTERM" as const,
+              termination: "signal" as const,
+            };
+          }
+          return { stdout: "", stderr: "requested upstream does not exist", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      };
 
-    const result = await runWithCommand(runCommand, { channel: "dev", beforeGitMutation });
+      const onStepComplete = vi.fn();
+      const result = await runWithCommand(runCommand, {
+        channel: "dev",
+        beforeGitMutation,
+        progress: { onStepComplete },
+      });
 
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("checkout-failed");
-    expect(calls).toContain(`git -C ${tempDir} checkout -B main ${selectedSha}`);
-    expect(calls).toContain(`git -C ${tempDir} branch --set-upstream-to origin/main main`);
-    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
-    expect(calls).toContain(`git -C ${tempDir} checkout --force feature`);
-    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
-    expect(calls).toContain(`git -C ${tempDir} branch -D main`);
-    expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
-      calls.indexOf(`git -C ${tempDir} checkout -B main ${selectedSha}`),
-    );
-    expect(
-      calls.indexOf(`git -C ${tempDir} branch --set-upstream-to origin/main main`),
-    ).toBeLessThan(calls.indexOf(`git -C ${tempDir} reset --hard`));
-    expect(calls.indexOf(`git -C ${tempDir} reset --hard abc123`)).toBeLessThan(
-      calls.indexOf(`git -C ${tempDir} branch -D main`),
-    );
-  });
+      if (interrupted) {
+        expect(result.status).toBe("error");
+        expect(result.reason).toBe("checkout-failed");
+        expect(
+          result.steps.find((step) => step.name.startsWith("git branch --set-upstream-to"))
+            ?.advisory,
+        ).toBeUndefined();
+        expect(calls).toContain(`git -C ${tempDir} checkout --force feature`);
+        return;
+      }
+
+      expect(result.status).toBe("ok");
+      expect(calls).toContain(`git -C ${tempDir} checkout -B main ${selectedSha}`);
+      expect(calls).toContain(`git -C ${tempDir} branch --set-upstream-to origin/main main`);
+      expect(calls).not.toContain(`git -C ${tempDir} reset --hard`);
+      expect(calls).not.toContain(`git -C ${tempDir} checkout --force feature`);
+      expect(calls).not.toContain(`git -C ${tempDir} branch -D main`);
+      expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
+        calls.indexOf(`git -C ${tempDir} checkout -B main ${selectedSha}`),
+      );
+      const report = renderUpdateRunReport(updateRunReportInputFromResult(result));
+      expect(onStepComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+        }),
+      );
+      expect(report.markdown).toContain("requested upstream does not exist");
+      expect(report.markdown).toContain("branch --set-upstream-to origin/main main");
+    },
+  );
 
   it("fetches only the requested tag for explicit dev tag target refs", async () => {
     await setupGitPackageManagerFixture();
@@ -1266,7 +1382,7 @@ describe("runGatewayUpdate", () => {
     const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
       [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
       [`git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]: {
         stdout: "",
@@ -1291,11 +1407,10 @@ describe("runGatewayUpdate", () => {
     });
 
     expect(result.status).toBe("ok");
-    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
-    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
-    expect(calls).toContain(
+    expect(calls.filter((call) => call.includes(" fetch "))).toEqual([
+      `git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`,
       `git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
-    );
+    ]);
     expect(calls).toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`);
   });
 
@@ -1303,7 +1418,7 @@ describe("runGatewayUpdate", () => {
     await setupGitCheckout();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
       [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
       [`git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]: {
         code: 1,
@@ -1405,7 +1520,7 @@ describe("runGatewayUpdate", () => {
       recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       steps: [],
     });
-    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
+    expect(calls.some((call) => call.includes(" fetch "))).toBe(false);
     expect(calls.some((call) => call.includes("checkout"))).toBe(false);
   });
 
@@ -2087,7 +2202,7 @@ describe("runGatewayUpdate", () => {
       calls.push(key);
       const responses = {
         ...buildGitWorktreeProbeResponses(),
-        [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+        [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
         [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
           stdout: "refs/remotes/origin/main",
         },
@@ -2168,7 +2283,7 @@ describe("runGatewayUpdate", () => {
       calls.push(key);
       const responses = {
         ...buildGitWorktreeProbeResponses(),
-        [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+        [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
         [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
           stdout: "refs/remotes/origin/main",
         },
@@ -2593,7 +2708,7 @@ describe("runGatewayUpdate", () => {
     expect(cleanupStep?.stderrTail ?? "").toContain("fallback cleanup removed preflight tree");
   });
 
-  it("stops before live mutation when preflight cleanup fails", async () => {
+  it("finishes with a recorded warning when preflight cleanup fails", async () => {
     await setupGitPackageManagerFixture();
     const remove = fs.rm.bind(fs);
     let preflightRoot: string | undefined;
@@ -2615,25 +2730,34 @@ describe("runGatewayUpdate", () => {
       },
     });
     try {
-      const result = await runWithCommand(runCommand, { channel: "dev" });
-      expect(result.status).toBe("error");
-      expect(result.reason).toBe("preflight-cleanup-failed");
-      // This checkout fixture has no built runtime identity; no mutation is not activation proof.
-      expect(result.recovery).toEqual({
-        serviceRestartSafe: false,
-        reason: "runtime-verification-failed",
+      const onStepComplete = vi.fn();
+      const result = await runWithCommand(runCommand, {
+        channel: "dev",
+        progress: { onStepComplete },
       });
-      expect(calls).not.toContain(`git -C ${tempDir} rebase upstream123`);
-      expect(result.steps).not.toContainEqual(expect.objectContaining({ name: "deps install" }));
+      expect(result.status).toBe("ok");
+      expect(calls).toContain(`git -C ${tempDir} checkout -B main upstream123`);
       expect(result.steps).toContainEqual(
         expect.objectContaining({
           name: "preflight cleanup",
           exitCode: 1,
           stderrTail: "error: failed to delete worktree: Permission denied",
+          advisory: expect.objectContaining({
+            message: expect.stringContaining("Permission denied"),
+          }),
         }),
       );
       expect(calls).toContain(`git -C ${tempDir} worktree prune`);
       expect(preflightRoot && (await pathExists(preflightRoot))).toBe(true);
+      expect(onStepComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "preflight cleanup",
+          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+        }),
+      );
+      expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+        "cleanup",
+      );
     } finally {
       rmSpy.mockRestore();
       if (preflightRoot) {

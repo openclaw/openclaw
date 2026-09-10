@@ -92,7 +92,7 @@ function collectAgentModelRefs(params: {
     });
   }
   const mediaModels = asMutableRecord(agent.mediaModels);
-  for (const key of ["image", "video"] as const) {
+  for (const key of ["image", "video", "music"] as const) {
     collectModelConfigSlot({
       hits: params.hits,
       path: `${params.path}.mediaModels.${key}`,

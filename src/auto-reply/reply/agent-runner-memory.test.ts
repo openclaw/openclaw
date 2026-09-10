@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
@@ -22,11 +23,13 @@ import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import {
+  appendTranscriptEvent,
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
   readSessionTranscriptActiveStats,
   readTranscriptStatsSync,
   upsertSessionEntryCore,
+  waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -226,6 +229,7 @@ async function writeTestSessionTranscript(params: {
   };
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 10 });
   await replaceTranscriptEvents(scope, params.events);
+  await waitForSessionTranscriptProjection(scope);
 }
 
 type ModelFallbackParams = {
@@ -719,11 +723,7 @@ describe("runMemoryFlushIfNeeded", () => {
         expect(memorySession.getSessionTarget()).toBeUndefined();
         admittedContext = await admission.admit("embedded");
         expect(getAdmittedRunDelegatedAuthority(admittedContext)).toBeDefined();
-        const retained = memorySession.appendMessage({
-          role: "user",
-          content: "Private retained work",
-          timestamp: 1,
-        });
+        const retained = memorySession.appendMessage(makeUserMessage("Private retained work", 1));
         memorySession.appendCompaction("Private summary", retained, 120);
         throw primaryError;
       })
@@ -812,70 +812,90 @@ describe("runMemoryFlushIfNeeded", () => {
     );
   });
 
-  it("downgrades an owner-directed flush after a network-tainted embedded turn", async () => {
-    const storePath = path.join(rootDir, "tainted-owner-session.json");
-    const sessionKey = "agent:main:main";
-    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-    const transcript = SessionManager.open(scope, rootDir);
-    const user = {
-      role: "user" as const,
-      content: "Research this",
-      timestamp: 1,
-      __openclaw: { senderIsOwner: true },
-    };
-    transcript.appendMessage(user);
-    const networkResult = {
-      role: "toolResult" as const,
-      toolCallId: "network-read",
-      toolName: "read",
-      isError: false,
-      content: [{ type: "text" as const, text: "untrusted page" }],
-      timestamp: 2,
-      __openclaw: { resultContentSource: "network" as const },
-    };
-    transcript.appendMessage(networkResult);
-    const answer = {
-      ...makeAssistantMessageFixture({
-        content: [{ type: "text", text: "network-derived answer" }],
-        stopReason: "stop",
-        errorMessage: undefined,
-      }),
-      __openclaw: { turnTainted: true },
-    };
-    transcript.appendMessage(answer);
-    // The bounded taint reader loses the original turn marker across this tail.
-    for (let index = 0; index < 512; index += 1) {
-      transcript.appendCustomEntry("fixture-tail", { index });
-    }
-    const targetPath = path.join(rootDir, "memory", "2023-11-14.md");
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await fs.writeFile(targetPath, "network-derived memory\n", "utf8");
-      params.onAgentEvent?.({
-        stream: "tool",
-        data: { name: "write", phase: "result", isError: false },
+  it.each([
+    { label: "bounded tail", customTail: 512, newUser: false, tainted: true },
+    { label: "latest usage", customTail: 0, newUser: false, tainted: true },
+    { label: "new user boundary", customTail: 0, newUser: true, tainted: false },
+  ])(
+    "accounts for usage and owner-turn taint independently across $label",
+    async ({ customTail, newUser, tainted }) => {
+      const storePath = path.join(rootDir, "tainted-owner-session.json");
+      const sessionKey = "agent:main:main";
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+      const transcript = SessionManager.open(scope, rootDir);
+      const user = {
+        role: "user" as const,
+        content: "Research this",
+        timestamp: 1,
+        __openclaw: { senderIsOwner: true },
+      };
+      transcript.appendMessage(user);
+      const networkResult = {
+        role: "toolResult" as const,
+        toolCallId: "network-read",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text" as const, text: "untrusted page" }],
+        timestamp: 2,
+        __openclaw: { resultContentSource: "network" as const },
+      };
+      transcript.appendMessage(networkResult);
+      const answer = {
+        ...makeAssistantMessageFixture({
+          content: [{ type: "text", text: "network-derived answer" }],
+          stopReason: "stop",
+          errorMessage: undefined,
+        }),
+        usage: {
+          ...makeAssistantMessageFixture().usage,
+          input: 78_000,
+          output: 100,
+          totalTokens: 78_100,
+        },
+      };
+      transcript.appendMessage(answer);
+      if (newUser) {
+        transcript.appendMessage({ ...user, content: "Save my own notes", timestamp: 3 });
+      }
+      // The bounded case loses the original turn marker across this tail.
+      for (let index = 0; index < customTail; index += 1) {
+        transcript.appendCustomEntry("fixture-tail", { index });
+      }
+      const targetPath = path.join(rootDir, "memory", "2023-11-14.md");
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await fs.writeFile(targetPath, "network-derived memory\n", "utf8");
+        params.onAgentEvent?.({
+          stream: "tool",
+          data: { name: "write", phase: "result", isError: false },
+        });
+        return { payloads: [], meta: {} };
       });
-      return { payloads: [], meta: {} };
-    });
-    const sessionEntry = createFlushSessionEntry();
+      const sessionEntry = createFlushSessionEntry({ totalTokensFresh: customTail > 0 });
 
-    await runDefaultMemoryFlush(sessionEntry, {
-      followupRun: createTestFollowupRun({
-        workspaceDir: rootDir,
-        sessionId: "session",
+      await runDefaultMemoryFlush(sessionEntry, {
+        followupRun: createTestFollowupRun({
+          workspaceDir: rootDir,
+          sessionId: "session",
+          sessionKey,
+          senderIsOwner: true,
+        }),
+        sessionStore: { [sessionKey]: sessionEntry },
         sessionKey,
-        senderIsOwner: true,
-      }),
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath,
-    });
+        storePath,
+      });
 
-    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ initialTurnTainted: true }),
-    );
-  });
+      expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+        expect.objectContaining({ initialTurnTainted: tainted }),
+      );
+      if (customTail === 0) {
+        expect(loadSessionEntry({ sessionKey, storePath })?.totalTokens).toBeGreaterThanOrEqual(
+          78_000,
+        );
+      }
+    },
+  );
 
   it.each([undefined, "default", "ultra"] as const)(
     "revalidates original thinking for memory-flush fallback with turn request=%s",
@@ -3947,6 +3967,68 @@ describe("runMemoryFlushIfNeeded", () => {
     },
   );
 
+  it.each(["tokens", "transcript_bytes"] as const)(
+    "records %s compaction before a queued continuation claims the session",
+    async (trigger) => {
+      const sessionKey = "agent:main:main";
+      const storePath = path.join(rootDir, "preflight-handoff.json");
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "session",
+        updatedAt: 1,
+        totalTokens: 95_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 0,
+        activeWriterRunId: "preflight",
+      });
+      const manager = SessionManager.open(scope, rootDir);
+      manager.appendMessage({
+        role: "user",
+        content: "Earlier discussion. ".repeat(100),
+        timestamp: 1,
+      });
+      const entry = loadSessionEntry(scope)!;
+      incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+      compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+        await host?.onHostCompactionCommitted?.({
+          entry,
+          tokensAfter: 42,
+          compactionKind: "context-engine",
+        });
+        // The backend releases its lane before its caller's await resumes.
+        await upsertSessionEntryCore(scope, { activeWriterRunId: "queued-continuation" });
+        return {
+          ok: true,
+          compacted: true,
+          compactionKind: "context-engine",
+          result: { tokensAfter: 42 },
+        };
+      });
+
+      await expect(
+        runDefaultPreflight(entry, {
+          sessionKey,
+          storePath,
+          cfg: {
+            agents: {
+              defaults: {
+                compaction: {
+                  maxActiveTranscriptBytes: trigger === "transcript_bytes" ? "10b" : "100mb",
+                },
+              },
+            },
+          },
+        }),
+      ).resolves.toMatchObject({ compactionCount: 1 });
+      expect(loadSessionEntry(scope)).toMatchObject({
+        activeWriterRunId: "queued-continuation",
+        compactionCount: 1,
+      });
+      expect(incrementCompactionCountMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it("persists Codex byte accounting before the accepted compactor returns", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-held-accounting.json");
     const sessionKey = "agent:main:main";
@@ -4533,6 +4615,34 @@ describe("runMemoryFlushIfNeeded", () => {
       expect.objectContaining({ agentId: "main", sessionKey, storePath: expectedStorePath }),
     );
   });
+
+  it.each([
+    { targetId: null, shouldCompact: false },
+    { targetId: "missing", shouldCompact: true },
+  ])(
+    "preserves accounting for an initial leaf control targeting $targetId",
+    async ({ targetId, shouldCompact }) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey: "main",
+        storePath: path.join(rootDir, "sessions.json"),
+      };
+      await appendTranscriptEvent(scope, { type: "leaf", id: "leaf", parentId: null, targetId });
+      await appendTranscriptEvent(scope, {
+        message: {
+          role: "assistant",
+          content: "flat continuation",
+          usage: { input: 90_000, output: 100 },
+        },
+      });
+      await runDefaultPreflight(
+        { sessionId: "session", updatedAt: Date.now(), totalTokensFresh: false },
+        { agentHarnessId: "openclaw" },
+      );
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(shouldCompact ? 1 : 0);
+    },
+  );
 
   it("resolves usage from an active branch whose leaf target predates the bounded tail", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({

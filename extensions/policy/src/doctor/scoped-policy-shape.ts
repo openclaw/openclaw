@@ -5,12 +5,10 @@ import {
   execApprovalsPolicyShapeFinding,
   ingressPolicyShapeFinding,
   scopedDataHandlingPolicyShapeFinding,
-  scopedToolsPolicyShapeFinding,
 } from "./access-shapes.js";
-import { agentWorkspacePolicyShapeFinding } from "./agent-tool-shapes.js";
 import { normalizePolicyChannelId } from "./policy-runtime.js";
 import { duplicateScopedPolicyFieldFinding } from "./policy-scope.js";
-import { sandboxPolicyShapeFinding } from "./sandbox-gateway-shapes.js";
+import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { policyShapeFinding, policyStringArrayPropertyShapeFinding } from "./shape-helpers.js";
 import { ocPathSegment } from "./utils.js";
 
@@ -154,7 +152,7 @@ export function scopedPolicyShapeFinding(
         `Move the rule under agents.workspace or a supported scoped top-level section.`,
       );
     }
-    const workspaceFinding = agentWorkspacePolicyShapeFinding(scopedAgents.workspace, {
+    const workspaceFinding = posturePolicyShapeFinding("workspace", scopedAgents.workspace, {
       policyDocName: params.policyDocName,
       policyPath: params.policyPath,
       targetPrefix: `${targetPrefix}/agents/workspace`,
@@ -183,7 +181,7 @@ export function scopedPolicyShapeFinding(
       );
     }
     if (isRecord(overlay.tools)) {
-      const toolsFinding = scopedToolsPolicyShapeFinding(overlay.tools, {
+      const toolsFinding = posturePolicyShapeFinding("scoped-tools", overlay.tools, {
         policyDocName: params.policyDocName,
         policyPath: params.policyPath,
         targetPrefix: `${targetPrefix}/tools`,
@@ -193,7 +191,7 @@ export function scopedPolicyShapeFinding(
         return toolsFinding;
       }
     }
-    const sandboxFinding = sandboxPolicyShapeFinding(overlay.sandbox, {
+    const sandboxFinding = posturePolicyShapeFinding("sandbox", overlay.sandbox, {
       policyDocName: params.policyDocName,
       policyPath: params.policyPath,
       targetPrefix: `${targetPrefix}/sandbox`,

@@ -1,8 +1,10 @@
 // Session manager tests cover SQLite persistence and in-memory tree behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -16,7 +18,6 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   buildSessionContext,
@@ -296,11 +297,7 @@ describe("SessionManager.open", () => {
     expect(loadSessionEntry(scope)).toBeUndefined();
     const manager = SessionManager.open(scope, dir);
     expect(loadSessionEntry(scope)).toBeUndefined();
-    const messageId = manager.appendMessage({
-      role: "user",
-      content: "first message",
-      timestamp: 1,
-    });
+    const messageId = manager.appendMessage(makeUserMessage("first message", 1));
 
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({

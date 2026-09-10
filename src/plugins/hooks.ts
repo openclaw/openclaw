@@ -22,6 +22,7 @@ import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { projectModelContextMessages } from "../shared/model-context-message.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import {
@@ -684,6 +685,9 @@ export function createHookRunner(
     timeoutMs: number,
     optionsResult: { unref?: boolean } = {},
   ): Promise<T> => {
+    // The handler has started. Retain its work without replacing the raced promise
+    // if its caller's scope has already closed; hook policy still owns its errors.
+    void trackAsyncWork(() => promise).catch(() => {});
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {

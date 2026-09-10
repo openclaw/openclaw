@@ -6,8 +6,10 @@ import type {
   PluginsInspectResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
-import { resolveIsNixMode } from "../config/paths.js";
+import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
+import { fetchClawHubPluginVersionCategories } from "../infra/clawhub-plugin-catalog.js";
 import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
   buildPluginCapabilitySummary,
@@ -24,6 +26,10 @@ import {
 } from "./control-plane-workspace.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import {
+  emptyInstalledPluginComponents,
+  projectInstalledPluginComponents,
+} from "./installed-plugin-components.js";
+import {
   createInstalledPluginEnabledPredicate,
   isInstalledPluginEnabled,
 } from "./installed-plugin-index.js";
@@ -31,7 +37,6 @@ import { createInstalledPluginOwnershipResolver } from "./installed-plugin-packa
 import {
   type ManagedPluginCatalogEntry,
   type ManagedPluginCatalog,
-  type OfficialCatalogResult,
   getManagedPluginCache,
   withManagedPluginCache,
   prepareCatalogEntry,
@@ -40,9 +45,9 @@ import {
   normalizeKinds,
   normalizeCatalogMetadata,
   normalizeFeaturedAt,
-  derivePluginCategory,
   firstPluginError,
   compareCatalogEntries,
+  deriveLegacyPluginCategory,
   resolveInstalledPluginPresentation,
   resolveInstalledHostedOfficialEntry,
   resolveOfficialEntryById,
@@ -55,8 +60,10 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginLabel,
 } from "./official-external-plugin-catalog.js";
+import type { OfficialCatalogResult } from "./official-external-plugin-catalog.types.js";
 import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { createPluginCache, getProcessPluginCache, withPluginCache } from "./plugin-cache.js";
+import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
 import {
   loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
@@ -69,7 +76,27 @@ import {
   projectPluginDependencyHealth,
 } from "./status-dependencies-core.js";
 
+function resolveManagedPluginState(params: {
+  enabled: boolean;
+  hasError: boolean;
+  setupMode: ReturnType<typeof resolvePluginConfigEnablement>["mode"];
+}): ManagedPluginCatalogEntry["state"] {
+  if (params.hasError) {
+    return "error";
+  }
+  if (params.enabled) {
+    return "enabled";
+  }
+  return params.setupMode === "missing" ? "needs-setup" : "disabled";
+}
+
 export type ManagedPluginInspection = PluginsInspectResult;
+
+const CLAWHUB_CATEGORY_BATCH_LIMIT = 200;
+
+function pluginVersionKey(name: string, version: string): string {
+  return JSON.stringify([name, version]);
+}
 
 function resolveManagedPluginDiagnostics(
   snapshot: PluginMetadataSnapshot,
@@ -235,7 +262,20 @@ export const listManagedPlugins = withManagedPluginCache(
     );
     const installedIconsById = new Map<string, ManagedPluginIconSource | undefined>();
     const installedClawHubPackages = new Set<string>();
+    const discoveryRegistry = resolveClawHubBaseUrl();
+    const publicDiscoveryRegistry = isDefaultClawHubBaseUrl(discoveryRegistry);
     const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
+    const categoryTargetsByRegistry = new Map<
+      string,
+      Map<
+        string,
+        {
+          request: { name: string; version: string };
+          plugins: ManagedPluginCatalogEntry[];
+        }
+      >
+    >();
+    let categoryTargetCount = 0;
     // Hosted loading can yield; prepare this phase from the current config.
     const isEnabled = createInstalledPluginEnabledPredicate(
       metadata.index.plugins,
@@ -292,9 +332,16 @@ export const listManagedPlugins = withManagedPluginCache(
           : officialCatalogMetadata
             ? { ...localCatalog, ...officialCatalogMetadata }
             : localCatalog;
-      const error = firstPluginError(pluginDiagnostics, record.pluginId);
+      const setup = resolvePluginConfigEnablement({
+        config: params.config,
+        pluginId: record.pluginId,
+        manifest,
+      });
+      const configError = setup.mode === "invalid" ? setup.error : undefined;
+      const error = firstPluginError(pluginDiagnostics, record.pluginId) ?? configError;
       const kind = normalizeKinds(manifest?.kind);
-      const category = derivePluginCategory(manifest);
+      const categories = manifest?.categories;
+      const legacyCategory = deriveLegacyPluginCategory(manifest);
       // Only externally installed plugins (tracked install record, non-bundled) can be removed.
       const removable = record.origin !== "bundled" && Boolean(installOwner);
       const hostedListingAuthoritative =
@@ -314,11 +361,27 @@ export const listManagedPlugins = withManagedPluginCache(
         name: presentation.name,
         installed: true,
         enabled,
-        state: error ? "error" : enabled ? "enabled" : "disabled",
+        state: resolveManagedPluginState({
+          enabled,
+          hasError: Boolean(error),
+          setupMode: setup.mode,
+        }),
         removable,
       };
       if (record.packageName) {
         plugin.packageName = record.packageName;
+      }
+      const recordedClawHubPackage =
+        installRecord?.source === "clawhub" &&
+        normalizeOptionalString(installRecord.clawhubUrl) &&
+        resolveClawHubBaseUrl(installRecord.clawhubUrl) === discoveryRegistry
+          ? normalizeOptionalString(installRecord.clawhubPackage)
+          : undefined;
+      // Discovery names are registry-scoped; trusted official/npm counterparts belong to the public catalog.
+      const discoveryClawHubPackage =
+        (publicDiscoveryRegistry ? clawhubPackage : undefined) ?? recordedClawHubPackage;
+      if (discoveryClawHubPackage) {
+        plugin.clawhubPackage = discoveryClawHubPackage;
       }
       if (presentation.description) {
         plugin.description = presentation.description;
@@ -355,11 +418,74 @@ export const listManagedPlugins = withManagedPluginCache(
       if (error) {
         plugin.error = error;
       }
-      if (category) {
-        plugin.category = category;
+      if (legacyCategory) {
+        plugin.category = legacyCategory;
+      }
+      if (categories?.length) {
+        plugin.categories = [...categories];
+      } else if (record.origin !== "bundled" && installRecord?.source === "clawhub") {
+        const name = normalizeOptionalString(installRecord.clawhubPackage);
+        const version = normalizeOptionalString(installRecord.version);
+        if (name && version) {
+          const baseUrl = resolveClawHubBaseUrl(installRecord.clawhubUrl);
+          let categoryTargets = categoryTargetsByRegistry.get(baseUrl);
+          if (!categoryTargets) {
+            categoryTargets = new Map();
+            categoryTargetsByRegistry.set(baseUrl, categoryTargets);
+          }
+          const key = pluginVersionKey(name, version);
+          const target = categoryTargets.get(key);
+          if (target) {
+            target.plugins.push(plugin);
+          } else if (categoryTargetCount < CLAWHUB_CATEGORY_BATCH_LIMIT) {
+            categoryTargets.set(key, { request: { name, version }, plugins: [plugin] });
+            categoryTargetCount += 1;
+          }
+        }
       }
       return plugin;
     });
+    const cache = getManagedPluginCache();
+    const categoryCache = cache.pluginVersionCategories ?? new Map();
+    cache.pluginVersionCategories = categoryCache;
+    for (const [baseUrl, categoryTargets] of categoryTargetsByRegistry) {
+      try {
+        let load = categoryCache.get(baseUrl);
+        if (!load) {
+          load = fetchClawHubPluginVersionCategories({
+            baseUrl,
+            skipAuth: true,
+            packages: [...categoryTargets.values()].map((target) => target.request),
+          }).then(
+            (results) =>
+              new Map(
+                results.map(
+                  (result) =>
+                    [pluginVersionKey(result.name, result.version), result.categories] as const,
+                ),
+              ),
+          );
+          categoryCache.set(baseUrl, load);
+          void load.catch(() => {
+            if (categoryCache.get(baseUrl) === load) {
+              categoryCache.delete(baseUrl);
+            }
+          });
+        }
+        const resolved = await load;
+        for (const [key, target] of categoryTargets) {
+          const categories = resolved.get(key);
+          if (!categories?.length) {
+            continue;
+          }
+          for (const plugin of target.plugins) {
+            plugin.categories = [...categories];
+          }
+        }
+      } catch {
+        // Registry metadata is optional presentation data. Installed plugins remain usable offline.
+      }
+    }
     const installedIds = new Set(plugins.map((plugin) => plugin.id));
     const installedPackageNames = new Set(
       plugins.flatMap((plugin) => (plugin.packageName ? [plugin.packageName] : [])),
@@ -435,7 +561,7 @@ export const listManagedPlugins = withManagedPluginCache(
     return {
       plugins: plugins.toSorted(compareCatalogEntries),
       diagnostics,
-      mutationAllowed: !resolveIsNixMode(env),
+      mutationAllowed: !resolveIsConfigReadOnly(env),
     };
   },
 );
@@ -454,6 +580,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
     const enabled = isInstalledPluginEnabled(metadata.index, pluginId, params.config);
     const pendingReview = resolvePendingPluginCapabilityReview(pluginId);
     if (pendingReview) {
+      const manifest = metadata.byPluginId.get(pluginId);
       return {
         ok: true,
         plugin: {
@@ -465,6 +592,10 @@ export const inspectManagedPlugin = withManagedPluginCache(
           enabled,
         },
         declared: pendingReview.declared,
+        components: projectInstalledPluginComponents({
+          manifest,
+          declared: pendingReview.declared,
+        }),
         grants: pendingReview.grants,
         reviewToken: pendingReview.reviewToken,
         ...(pendingReview.source ? { source: pendingReview.source } : {}),
@@ -531,6 +662,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
         ...(source ? { source } : {}),
         ...summary,
         declared,
+        components: projectInstalledPluginComponents({ manifest, declared }),
         reviewToken: computeDeclaredSurfaceHash(declared),
         ...(trust ? { trust } : {}),
       };
@@ -576,6 +708,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
           : {}),
       },
       ...summary,
+      components: emptyInstalledPluginComponents(),
       reviewToken: computeDeclaredSurfaceHash(summary.declared),
     };
   },

@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { extract } from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   validatePackageExtensionEntriesForInstall,
   resolvePackageRuntimeExtensionSources,
@@ -27,6 +27,8 @@ import {
 import { runPluginsPackCommand } from "./plugins-feature-artifact.js";
 
 const directories: string[] = [];
+let pristineParent: string | undefined;
+let pristineFixturePromise: Promise<string> | undefined;
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(
@@ -34,9 +36,16 @@ afterEach(async () => {
   );
 });
 
-async function fixture() {
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feature-pack-"));
-  directories.push(parent);
+afterAll(async () => {
+  await pristineFixturePromise?.catch(() => undefined);
+  if (pristineParent) {
+    await fs.rm(pristineParent, { recursive: true, force: true });
+  }
+});
+
+async function createPristineFixture() {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feature-pack-seed-"));
+  pristineParent = parent;
   const rootDir = path.join(parent, "draft-review");
   await runPluginsInitCommand("draft-review", { directory: rootDir, type: "feature" });
   await fs.symlink(path.resolve("node_modules"), path.join(rootDir, "node_modules"), "dir");
@@ -60,6 +69,17 @@ async function fixture() {
       'const __dirname = "local"; const resourceNames = { __filename: "import.meta.url" }; if (__dirname !== "local" || !resourceNames.__filename) throw new Error("Local resource names failed");\n',
   );
   await runPluginsBuildCommand({ root: rootDir });
+  return rootDir;
+}
+
+async function fixture() {
+  const pristineRoot = await (pristineFixturePromise ??= createPristineFixture());
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feature-pack-"));
+  directories.push(parent);
+  const rootDir = path.join(parent, "draft-review");
+  await fs.cp(pristineRoot, rootDir, { recursive: true, verbatimSymlinks: true });
+  // Preserve the per-path module cache established by the original build before case mutations.
+  await loadToolPlugin({ rootDir, entryPath: path.join(rootDir, "dist/index.js") });
   return { rootDir, parent };
 }
 
@@ -254,22 +274,36 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
         tools: [{ name: "artifact_echo", optional: true }],
       });
       if (setup) {
-        const setupPath = resolvePackageSetupSource(resolution);
+        // Keep native module caches out of the independent source-loader graph.
+        const sourceExtracted = path.join(parent, "source-extracted");
+        await fs.mkdir(sourceExtracted);
+        await extract({ file: archive, cwd: sourceExtracted, strict: true });
+        const sourcePackageDir = path.join(sourceExtracted, "package");
+        const sourceResolution = {
+          ...resolution,
+          packageDir: sourcePackageDir,
+          sourceLabel: sourcePackageDir,
+        };
+        const [sourceEntryPath] = resolvePackageRuntimeExtensionSources({
+          ...sourceResolution,
+          extensions: manifest.openclaw.extensions,
+        });
+        const setupPath = resolvePackageSetupSource(sourceResolution);
         expect(setupPath).toBeTruthy();
         withPluginCache(createPluginCache(), () => {
           const load = getCachedPluginSourceModuleLoader({
-            modulePath: entryPath!,
-            rootDir: packageDir,
+            modulePath: sourceEntryPath!,
+            rootDir: sourcePackageDir,
             importerUrl: import.meta.url,
             aliasMap: buildPluginLoaderAliasMap(
-              entryPath!,
+              sourceEntryPath!,
               process.argv[1],
               import.meta.url,
               "src",
             ),
             transformOpenClawDependencies: true,
           });
-          expect(load(entryPath!)).toMatchObject({ default: { shared: { ready: true } } });
+          expect(load(sourceEntryPath!)).toMatchObject({ default: { shared: { ready: true } } });
           expect(load(setupPath!)).toMatchObject({
             default: {
               artifactMarker: runtime ? "setup-runtime" : "setup-source",

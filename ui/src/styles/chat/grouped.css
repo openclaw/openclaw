@@ -24,11 +24,13 @@
 
 /* User messages on right */
 .chat-group.user {
+  --chat-user-content-align: end;
   flex-direction: row-reverse;
   justify-content: flex-start;
 }
 
 .chat-group.user.chat-group--peer {
+  --chat-user-content-align: start;
   /* The left-aligned identity owns the leading edge while hidden details
      reserve their desktop footprint after it. */
   --chat-footer-detail-position: static;
@@ -131,13 +133,9 @@
   margin-block-start: calc(var(--chat-run-block-gap) - 2px);
 }
 
-/* User messages align content right */
+/* Content follows the same side as the participant's bubble. */
 .chat-group.user .chat-group-messages {
-  align-items: flex-end;
-}
-
-.chat-group.user.chat-group--peer .chat-group-messages {
-  align-items: flex-start;
+  align-items: var(--chat-user-content-align);
 }
 
 .chat-group.tool {
@@ -186,7 +184,8 @@
   pointer-events: auto;
 }
 
-.chat-group-footer--send-failure {
+/* Delivery recovery stays visible even when identity metadata is collapsed. */
+.chat-group-footer.chat-group-footer--send-failure {
   opacity: 1;
   pointer-events: auto;
 }
@@ -641,7 +640,6 @@
 .chat-avatar.user {
   background: var(--accent-subtle);
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 /* Attributed sender initials carry their stable identity color inline. */
@@ -933,6 +931,7 @@ img.chat-avatar.chat-avatar--logo {
 
 .chat-copy-btn__icon-copy,
 .chat-copy-btn__icon-check {
+  display: flex;
   position: absolute;
   top: 0;
   left: 0;
@@ -959,10 +958,28 @@ img.chat-avatar.chat-avatar--logo {
   color: var(--danger);
 }
 
-.chat-copy-btn[data-copy-state="copied"] {
+.chat-copy-btn[data-copy-state="copied"],
+.chat-group
+  :is(.chat-group-footer-actions, .chat-message-actions-row)
+  button[data-copy-state="copied"] {
+  opacity: 1;
   border-color: var(--ok-subtle);
   background: var(--ok-subtle);
   color: var(--ok);
+}
+
+/* The check is the visible confirmation; retain the live status for assistive
+   technology and the footer's transient-feedback disclosure. */
+.chat-group .chat-copy-btn[data-copy-state="copied"] + [data-copy-feedback] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .chat-copy-btn:focus-visible,
@@ -1050,21 +1067,42 @@ img.chat-avatar.chat-avatar--logo {
   color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
-/* Keep sent media outside the text surface: the image gallery remains bare,
-   while the following text retains the normal right-aligned user bubble. */
-.chat-group.user:not(.chat-group--peer) .chat-bubble--with-images {
+.chat-message-avatar-anchor {
+  display: contents;
+}
+
+.chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot) {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: calc(100% + var(--chat-avatar-gap));
+}
+
+.chat-group--peer .chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot) {
+  inset-inline-start: auto;
+  inset-inline-end: calc(100% + var(--chat-avatar-gap));
+}
+
+.chat-group.user .chat-bubble--with-images > .chat-message-avatar-anchor {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+}
+
+/* Match the sender tint's specificity so media stays outside the painted text
+   surface on either participant's side. */
+.chat-group.user .chat-bubble.chat-bubble--with-images {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
+  align-items: var(--chat-user-content-align);
   padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 
-.chat-group.user:not(.chat-group--peer)
-  .chat-bubble--with-images
+.chat-group.user
+  :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
   > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
   width: fit-content;
   max-width: 100%;
@@ -1074,8 +1112,8 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 :where(:root[data-theme-mode="light"])
-  .chat-group.user:not(.chat-group--peer)
-  .chat-bubble--with-images
+  .chat-group.user
+  :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
   > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
   color: var(--text-strong);
 }
@@ -1279,7 +1317,7 @@ img.chat-avatar.chat-avatar--logo {
     margin-inline: 0;
   }
 
-  .chat-group > :is(.chat-avatar, .chat-avatar-slot) {
+  .chat-group :is(.chat-avatar, .chat-avatar-slot) {
     display: none;
   }
 

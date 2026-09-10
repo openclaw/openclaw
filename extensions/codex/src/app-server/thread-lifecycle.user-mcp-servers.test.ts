@@ -521,6 +521,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -617,6 +620,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       dynamicToolsFingerprint: "[]",
     });
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-restricted");
       }
@@ -636,8 +642,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       userMcpServersEnabled: false,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    const startParams = request.mock.calls[0]?.[1] as {
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
+    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
       environments?: unknown[];
       config?: {
         "features.code_mode"?: boolean;
@@ -665,6 +671,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       mcpServersFingerprint: "mcp-v1",
     });
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-restricted");
       }
@@ -683,8 +692,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       userMcpServersEnabled: false,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    const startParams = request.mock.calls[0]?.[1] as {
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
+    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
       config?: {
         "features.code_mode"?: boolean;
         mcp_servers?: Record<string, unknown>;
@@ -794,8 +803,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       userMcpServersEnabled: false,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    const startParams = request.mock.calls[0]?.[1] as {
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
+    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
       config?: { mcp_servers?: Record<string, unknown> };
     };
     expect(startParams?.config?.mcp_servers).toBeUndefined();

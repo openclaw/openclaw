@@ -64,6 +64,11 @@ terminal hatch as `openclaw onboard --tui`. See [Onboard](/cli/onboard) and
 non-interactive examples. `openclaw onboard --modern` remains a compatibility
 entry for the same inference-gated OpenClaw assistant.
 
+Local onboarding generates a Gateway secret in token mode by default, without
+asking you to choose token or password. Existing password-mode configs are
+preserved. Use `--gateway-auth password` or `--gateway-password <value>` to
+choose a password explicitly; Tailscale Funnel still requires password mode.
+
 <Note>
 `openclaw setup` is for mutable config installs. In Nix mode (`OPENCLAW_NIX_MODE=1`) OpenClaw refuses setup writes because the config file is managed by Nix. Use the first-party [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) or the equivalent source config for another Nix package.
 </Note>
@@ -77,6 +82,8 @@ entry for the same inference-gated OpenClaw assistant.
 | `--workspace <dir>`            | Workspace proposal; existing fleets require classic confirmation and are preserved noninteractively. |
 | `--baseline`                   | Create baseline config/workspace/session folders without onboarding.                                 |
 | `--wizard`                     | Force interactive onboarding.                                                                        |
+| `--classic`                    | Run the classic multi-step onboarding wizard; not valid with `--non-interactive`.                    |
+| `--agent-name <name>`          | Name for the first agent (default: `main`).                                                          |
 | `--tui`                        | Use the terminal hatch instead of the browser handoff.                                               |
 | `--non-interactive`            | Run onboarding without prompts.                                                                      |
 | `--accept-risk`                | Acknowledge full-system agent access risk; required with `--non-interactive`.                        |
@@ -98,7 +105,9 @@ In interactive onboarding, `--remote-url`, `--remote-token`, and
 `--remote-password` prefill the remote Gateway step and take precedence over
 stored remote values for that run. Pass either a token or a password, not both.
 Changing the URL does not reuse stored credentials unless you also provide a new
-token or password. The credential remains masked and uses the wizard's selected
+token or password. The interactive step asks for one **Gateway secret** and
+stores it as `gateway.remote.token`; either field is accepted by the Gateway.
+The credential remains masked and uses the wizard's selected
 plaintext or SecretRef storage mode. `--gateway-token`, `--gateway-token-ref-env`,
 and `--gateway-password` configure a local Gateway and are not valid in remote
 mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use

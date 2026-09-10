@@ -282,6 +282,27 @@ function singleButtonBlocks(blockId: string, actionId: string) {
   ];
 }
 
+function approvalContextOptions(pluginApprover: string, execApprover: string) {
+  return {
+    cfg: {
+      channels: {
+        slack: {
+          accounts: {
+            default: {
+              allowFrom: [pluginApprover],
+              execApprovals: {
+                enabled: true,
+                approvers: [execApprover],
+                target: "both",
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 function createContext(overrides?: {
   dmEnabled?: boolean;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
@@ -1664,19 +1685,7 @@ describe("registerSlackInteractionEvents", () => {
       applied: false,
       approval: { status: "denied", decision: "deny" },
     });
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["U123"],
-              target: "both",
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const respond = vi.fn().mockResolvedValue(undefined);
@@ -1747,19 +1756,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("shows canonical typed approval truth when the clicked message update fails", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["U123"],
-              target: "both",
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext();
     app.client.chat.update.mockRejectedValueOnce(new Error("message update failed"));
     registerSlackInteractionEvents({ ctx: ctx as never });
     const respond = vi.fn().mockResolvedValue(undefined);
@@ -1790,19 +1787,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("tells the clicker when a typed approval is no longer pending", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["U123"],
-              target: "both",
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext();
     resolveApprovalOverGatewayMock.mockRejectedValueOnce(
       new Error("unknown or expired approval id"),
     );
@@ -1868,24 +1853,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("uses the typed plugin kind for unprefixed approval ids", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                allowFrom: ["u123owner"],
-                execApprovals: {
-                  enabled: true,
-                  approvers: ["U999EXEC"],
-                  target: "both",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext(approvalContextOptions("u123owner", "U999EXEC"));
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const handler = getHandler();
@@ -1943,24 +1911,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("routes opaque legacy ids through the authorized plugin adapter", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                allowFrom: ["u123owner"],
-                execApprovals: {
-                  enabled: true,
-                  approvers: ["U999EXEC"],
-                  target: "both",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext(approvalContextOptions("u123owner", "U999EXEC"));
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const handler = getHandler();
@@ -2018,24 +1969,9 @@ describe("registerSlackInteractionEvents", () => {
         applied: true,
         approval: { status: "allowed", decision: "allow-once" },
       });
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                allowFrom: ["U123OWNER"],
-                execApprovals: {
-                  enabled: true,
-                  approvers: ["U123OWNER"],
-                  target: "both",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext(
+      approvalContextOptions("U123OWNER", "U123OWNER"),
+    );
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     await getHandler()({
@@ -2085,24 +2021,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("does not treat a plugin-looking legacy id as an owner signal", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                allowFrom: ["U123OWNER"],
-                execApprovals: {
-                  enabled: true,
-                  approvers: ["U999EXEC"],
-                  target: "both",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext(approvalContextOptions("U123OWNER", "U999EXEC"));
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const handler = getHandler();

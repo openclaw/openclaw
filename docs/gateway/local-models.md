@@ -10,13 +10,13 @@ title: "Local models"
 
 OpenClaw can install and manage a local model or connect to a server you already run. For a hardware-aware recommendation, install the [llama.cpp plugin](/plugins/llama-cpp), run `openclaw onboard`, and choose **Managed local server**. Setup shows the Gateway host, model, download size, and execution backend before downloading, then verifies a real tool call before changing the default model. [LM Studio](/providers/lmstudio) and [Ollama](/providers/ollama) remain options when you want to manage the model separately.
 
-This page also covers larger local stacks and custom OpenAI-compatible servers. Local models do not provide hosted providers' safety filters; keep tool permissions and prompt-injection defenses appropriate for the model and task.
+This page also covers larger local stacks and custom OpenAI-compatible servers. Local models do not provide hosted providers' safety filters. Keep tool permissions and prompt-injection defenses appropriate for the model and task.
 
 For local servers that should start only when a selected model needs them, see [Local model services](/gateway/local-model-services).
 
 ## Hardware floor
 
-Memory requirements depend on the model weights, context size, runtime, and other work on the host. Managed llama.cpp setup checks available RAM, supported GPU memory, and disk space instead of assuming a particular machine. Its curated recipes use a 64K context; the smallest has an 8 GiB host-memory floor, while larger recipes need more memory. These floors do not guarantee fit or speed. See [model recommendations](/plugins/llama-cpp#model-recommendations) for the current catalog.
+Memory requirements depend on the model weights, context size, runtime, and other work on the host. Managed llama.cpp setup checks available RAM, supported GPU memory, and disk space instead of assuming a particular machine. Its curated recipes use a 64K context. The smallest has an 8 GiB host-memory floor, while larger recipes need more memory. These floors do not guarantee fit or speed. See [model recommendations](/plugins/llama-cpp#model-recommendations) for the current catalog.
 
 For custom servers, leave room for the full OpenClaw prompt, tools, history, and model output. A model that loads or answers a short prompt may still fail an agent turn. Test actual tasks before making it your default, and review [local-model security](/gateway/security).
 
@@ -39,7 +39,7 @@ Use `api: "openai-responses"` when the backend supports it (LM Studio does). Oth
 
 ## LM Studio + large local model (Responses API)
 
-For a separately managed local server, load a model that fits your hardware in LM Studio, enable the local server (default `http://127.0.0.1:1234`), and use the Responses API to keep reasoning separate from final text.
+For a separately managed local server, load a model that fits your hardware in LM Studio. Enable the local server (default `http://127.0.0.1:1234`). Use the Responses API to keep reasoning separate from final text.
 
 ```json5
 {
@@ -79,9 +79,9 @@ For a separately managed local server, load a model that fits your hardware in L
 Setup checklist:
 
 - Install LM Studio: [https://lmstudio.ai](https://lmstudio.ai)
-- Download the **largest available model build** (avoid "small"/heavily quantized variants), start the server, confirm `http://127.0.0.1:1234/v1/models` lists it.
+- Download the **largest available model build** (avoid "small"/heavily quantized variants), start the server, check that `http://127.0.0.1:1234/v1/models` lists it.
 - Replace `my-local-model` with the actual model ID shown in LM Studio.
-- Keep the model loaded; cold-load adds startup latency.
+- Keep the model loaded. Cold-load adds startup latency.
 - Adjust `contextWindow`/`maxTokens` if your LM Studio build differs.
 - For WhatsApp, stick to the Responses API so only final text is sent.
 - Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
@@ -131,7 +131,7 @@ For local-first with a hosted safety net, swap `primary`/`fallbacks` order and k
 
 ### Regional hosting / data routing
 
-Hosted MiniMax/Kimi/GLM variants also exist on OpenRouter with region-pinned endpoints (for example, US-hosted). Pick the regional variant to keep traffic in your chosen jurisdiction while keeping `models.mode: "merge"` for Anthropic/OpenAI fallbacks. Local-only is still the strongest privacy path; hosted regional routing is the middle ground when you need provider features but want control over data flow.
+Hosted MiniMax/Kimi/GLM variants also exist on OpenRouter with region-pinned endpoints (for example, US-hosted). Pick the regional variant to keep traffic in your chosen jurisdiction while keeping `models.mode: "merge"` for Anthropic/OpenAI fallbacks. Local-only is still the strongest privacy path. Hosted regional routing is the middle ground when you need provider features but want control over data flow.
 
 ## Other OpenAI-compatible local proxies
 
@@ -169,19 +169,19 @@ MLX (`mlx_lm.server`), vLLM, SGLang, LiteLLM, OAI-proxy, or any custom gateway w
 }
 ```
 
-Custom/local provider entries trust their exact configured `baseUrl` origin for guarded model requests, including loopback, LAN, tailnet, and private DNS hosts. Metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins remain blocked without explicit opt-in. Requests to other private origins still need `models.providers.<id>.request.allowPrivateNetwork: true`; set the trust flag to `false` to opt out of exact-origin trust.
+Custom/local provider entries trust their exact configured `baseUrl` origin for guarded model requests, including loopback, LAN, tailnet, and private DNS hosts. Metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins remain blocked without explicit opt-in. Requests to other private origins still need `models.providers.<id>.request.allowPrivateNetwork: true`. Set the trust flag to `false` to opt out of exact-origin trust.
 
 `models.providers.<id>.models[].id` is provider-local - do not include the provider prefix. For an MLX server started with `mlx_lm.server --model mlx-community/Qwen3-30B-A3B-6bit`:
 
 - `models.providers.mlx.models[].id: "mlx-community/Qwen3-30B-A3B-6bit"`
 - `agents.defaults.model.primary: "mlx/mlx-community/Qwen3-30B-A3B-6bit"`
 
-Set `input: ["text", "image"]` on local or proxied vision models so image attachments get injected into agent turns. Interactive custom-provider onboarding infers common vision model IDs and only asks about unknown names; non-interactive onboarding uses the same inference, with `--custom-image-input` / `--custom-text-input` to override it.
+Set `input: ["text", "image"]` on local or proxied vision models so image attachments get injected into agent turns. Interactive custom-provider onboarding infers common vision model IDs and only asks about unknown names. Non-interactive onboarding uses the same inference, with `--custom-image-input` / `--custom-text-input` to override it.
 
-Use `models.providers.<id>.timeoutSeconds` for slow local/remote model servers before raising `agents.defaults.timeoutSeconds`. The provider timeout covers connect, headers, body streaming, and the total guarded-fetch abort for model HTTP requests only - if the agent/run timeout is lower, raise that too, since the provider timeout cannot extend the whole run.
+Use `models.providers.<id>.timeoutSeconds` for slow local/remote model servers before raising `agents.defaults.timeoutSeconds`. The provider timeout covers connect, headers, body streaming, and the total guarded-fetch abort for model HTTP requests only. If the agent or run timeout is lower, raise that too. The provider timeout cannot extend the whole run.
 
 <Note>
-For custom OpenAI-compatible providers, a non-secret local marker such as `apiKey: "ollama-local"` is accepted when `baseUrl` resolves to loopback, a private LAN, `.local`, or a bare hostname - OpenClaw treats it as a valid local credential instead of reporting a missing key. Use a real value for any provider that accepts a public hostname.
+For custom OpenAI-compatible providers, a non-secret local marker such as `apiKey: "ollama-local"` is accepted when `baseUrl` resolves to loopback, a private LAN, `.local`, or a bare hostname. OpenClaw treats it as a valid local credential instead of reporting a missing key. Use a real value for any provider that accepts a public hostname.
 </Note>
 
 Behavior notes for local/proxied `/v1` backends:
@@ -190,15 +190,15 @@ Behavior notes for local/proxied `/v1` backends:
 - Native-OpenAI-only request shaping does not apply: no `service_tier`, no Responses `store`, no OpenAI reasoning-compat payload shaping, no prompt-cache hints.
 - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) are not injected on custom proxy URLs.
 
-Compat declarations are only for the custom endpoint described by this provider row. Catalog-known routes use provider-owned capabilities instead; see the [custom-provider capability guide](/gateway/config-tools#custom-provider-capability-declarations).
+Compat declarations are only for the custom endpoint described by this provider row. Catalog-known routes use provider-owned capabilities instead. See the [custom-provider capability guide](/gateway/config-tools#custom-provider-capability-declarations).
 
 Compat overrides for stricter OpenAI-compatible backends:
 
 - **String-only content**: some servers accept only string `messages[].content`, not structured content-part arrays. Set `models.providers.<provider>.models[].compat.requiresStringContent: true`.
 - **Strict message keys**: if the server rejects message entries with more than `role`/`content`, set `compat.strictMessageKeys: true`.
-- **Bracketed tool text**: some local models emit standalone bracketed tool requests as text, like `[tool_name]` followed by JSON and `[END_TOOL_REQUEST]`. OpenClaw promotes those to real tool calls only when the name exactly matches a registered tool for the turn; otherwise it stays as hidden, unsupported text.
-- **Unstructured tool-call-looking text**: if a model emits JSON/XML/ReAct-style text that looks like a tool call but wasn't a structured invocation, OpenClaw leaves it as text and logs a warning with the run id, provider/model, detected pattern, and tool name when available. That is provider/model incompatibility, not a completed tool run.
-- **Forcing tool use**: if tools show up as assistant text (raw JSON/XML/ReAct, or an empty `tool_calls` array), first confirm the server's chat template/parser supports tool calls. If the parser only works when tool use is forced, override the default proxy value of `tool_choice: "auto"` per model:
+- **Bracketed tool text**: some local models emit standalone bracketed tool requests as text, like `[tool_name]` followed by JSON and `[END_TOOL_REQUEST]`. OpenClaw promotes those to real tool calls only when the name exactly matches a registered tool for the turn. Otherwise it stays as hidden, unsupported text.
+- **Unstructured tool-call-looking text**: a model can emit JSON, XML, or ReAct-style text that looks like a tool call but was not a structured invocation. OpenClaw then leaves it as text and logs a warning. The warning carries the run id, provider and model, detected pattern, and tool name when available. That is provider/model incompatibility, not a completed tool run.
+- **Forcing tool use**: tools can show up as assistant text, as raw JSON, XML, or ReAct, or as an empty `tool_calls` array. First check that the server's chat template and parser support tool calls. If the parser only works when tool use is forced, override the default proxy value of `tool_choice: "auto"` per model:
 
   ```json5
   {
@@ -257,15 +257,15 @@ Compat overrides for stricter OpenAI-compatible backends:
 
 ## Smaller or stricter backends
 
-If the model loads cleanly but full agent turns misbehave, confirm transport first, then inspect tool use and the context budget.
+If the model loads cleanly but full agent turns misbehave, check transport first, then inspect tool use and the context budget.
 
-1. **Confirm the local model responds** - no tools, no agent context:
+1. **Check the local model responds** - no tools, no agent context:
 
    ```bash
    openclaw infer model run --local --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-2. **Confirm Gateway routing** - sends only the prompt, skipping transcript, AGENTS bootstrap, context-engine assembly, tools, and bundled MCP servers, but still exercises Gateway routing, auth, and provider selection:
+2. **Check Gateway routing** - sends only the prompt. It skips transcript, AGENTS bootstrap, context-engine assembly, tools, and bundled MCP servers. It still exercises Gateway routing, auth, and provider selection:
 
    ```bash
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
@@ -280,16 +280,17 @@ If the model loads cleanly but full agent turns misbehave, confirm transport fir
 ## Troubleshooting
 
 - **Gateway can't reach the proxy?** `curl http://127.0.0.1:1234/v1/models`.
-- **LM Studio model unloaded?** Reload; cold start is a common "hanging" cause.
-- **Local server says `terminated`, `ECONNRESET`, or closes the stream mid-turn?** OpenClaw records a low-cardinality `model.call.error.failureKind` plus the OpenClaw process RSS/heap snapshot in diagnostics. For LM Studio/Ollama memory pressure, match that timestamp against the server log or a macOS crash/jetsam log to confirm whether the model server was killed.
-- **Context errors?** OpenClaw derives context-window preflight thresholds from the detected model window or the per-model `models.providers.<provider>.models[].contextTokens` cap, warning below 20% with an **8k** floor and hard-blocking below 10% with a **4k** floor. Lower that model entry's `contextTokens` or raise the server/model context limit.
+- **LM Studio model unloaded?** Reload it. Cold start is a common "hanging" cause.
+- **Local server says `terminated`, `ECONNRESET`, or closes the stream mid-turn?** OpenClaw records a low-cardinality `model.call.error.failureKind` plus the OpenClaw process RSS/heap snapshot in diagnostics. For LM Studio/Ollama memory pressure, match that timestamp against the server log or a macOS crash/jetsam log to check whether the model server was killed.
+- **Context errors?** OpenClaw derives context-window preflight thresholds from the detected model window or the per-model `models.providers.<provider>.models[].contextTokens` cap. It warns below 20% with an **8k** floor. It hard-blocks below 10% with a **4k** floor. Lower that model entry's `contextTokens` or raise the server/model context limit.
 - **`messages[].content ... expected a string`?** Add `compat.requiresStringContent: true` on that model entry.
 - **`validation.keys`, or "message entries only allow `role` and `content`"?** Add `compat.strictMessageKeys: true` on that model entry.
-- **Direct `/v1/chat/completions` calls work, but `openclaw infer model run --local` fails on Gemma or another local model?** Check the provider URL, model ref, auth marker, and server logs first - `model run` skips agent tools entirely. If `model run` succeeds but larger agent turns fail, check Tool Search and the allocated context. Use `compat.supportsTools: false` only for a model that cannot reliably call tools.
-- **Tool calls show up as raw JSON/XML/ReAct text, or the provider returns an empty `tool_calls` array?** Do not add a proxy that blindly converts assistant text into tool execution - fix the server's chat template/parser first. If the model only works when tool use is forced, add the `params.extra_body.tool_choice: "required"` override above and use that model entry only for sessions where a tool call is expected every turn.
+- **Direct `/v1/chat/completions` calls work, but `openclaw infer model run --local` fails on Gemma or another local model?** Check the provider URL, model ref, auth marker, and server logs first. `model run` skips agent tools entirely. If `model run` succeeds but larger agent turns fail, check Tool Search and the allocated context. Use `compat.supportsTools: false` only for a model that cannot reliably call tools.
+- **Tool calls show up as raw JSON/XML/ReAct text, or the provider returns an empty `tool_calls` array?** Do not add a proxy that blindly converts assistant text into tool execution. Fix the server's chat template and parser first. If the model only works when tool use is forced, add the `params.extra_body.tool_choice: "required"` override above. Use that model entry only for sessions where a tool call is expected every turn.
 - **Safety**: local models skip provider-side filters. Keep agents narrow and compaction on to limit prompt-injection blast radius.
 
 ## Related
 
 - [Configuration reference](/gateway/configuration-reference)
 - [Model failover](/concepts/model-failover)
+- [CLI backends](/gateway/cli-backends) — driving a local CLI agent instead of an API model

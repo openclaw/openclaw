@@ -242,8 +242,8 @@ describe("package update recovery safety", () => {
                 ? "doctor"
                 : null,
           );
-          expect(result.activePackageRoot).toBe(outcome === "backup failed" ? null : packageRoot);
-          expect(result.afterVersion).toBe(outcome === "backup failed" ? null : "2.0.0");
+          expect(result.activePackageRoot).toBe(packageRoot);
+          expect(result.afterVersion).toBe(outcome === "backup failed" ? "1.0.0" : "2.0.0");
           if (!transaction) {
             throw new Error("activated package did not retain a transaction");
           }
@@ -260,17 +260,17 @@ describe("package update recovery safety", () => {
             activationFailed ? "old launcher\n" : "new launcher\n",
           );
           if (outcome !== "confirm") {
-            const restored = await transaction.rollback();
+            const restored = await transaction.rollback(() => {});
             expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
-            expect(await transaction.rollback()).toEqual(restored);
+            expect(await transaction.rollback(() => {})).toEqual(restored);
             await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
           }
-          await transaction.complete({ activationVerified: outcome === "confirm" });
-          await transaction.complete({ activationVerified: outcome === "confirm" });
+          await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
+          await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
           await expect(
             fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
           ).resolves.toContain(`"version":"${outcome === "confirm" ? "2.0.0" : "1.0.0"}"`);
-          expect((await transaction.rollback()).exitCode).toBe(1);
+          expect((await transaction.rollback(() => {})).exitCode).toBe(1);
         }
         expect((await fs.readdir(globalRoot)).filter((entry) => entry.startsWith("."))).toEqual([]);
       });
@@ -519,30 +519,19 @@ describe("package update recovery safety", () => {
           renameSpy.mockRestore();
           unlinkSpy.mockRestore();
         }
-        expect(cleanupRejected).toBe(true);
+        expect(cleanupRejected).toBe(failure === "activation");
         expect(await fs.readFile(stateCanary, "utf8")).toBe("migrated by staged lifecycle");
         // Main's old activation decision allowed anything except an explicit false.
         // Restored package bytes cannot undo the lifecycle's state mutation.
         expect(result.recovery?.serviceRestartSafe).toBe(false);
-        expect(result.failedStep?.stderrTail).toContain("source cleanup failed after commit");
-        expect(result.activePackageRoot).toBe(failure === "backup" ? null : packageRoot);
-        if (failure === "backup") {
-          await expect(
-            fs.readFile(path.join(packageRoot, "dist", "index.js")),
-          ).rejects.toMatchObject({ code: "ENOENT" });
-          const backups = (await fs.readdir(globalRoot)).filter((name) =>
-            name.startsWith(`.openclaw.package-backup-${process.pid}-`),
-          );
-          expect(backups).toHaveLength(1);
-          await expect(
-            fs.readFile(path.join(globalRoot, backups[0] ?? "", "dist", "index.js"), "utf8"),
-          ).resolves.toBe("export {};\n");
-        } else {
-          expect(result.afterVersion).toBe("1.0.0");
-          await expect(
-            fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8"),
-          ).resolves.toBe("export {};\n");
-        }
+        expect(result.failedStep?.stderrTail).toContain(
+          failure === "backup" ? "cross-device move" : "source cleanup failed after commit",
+        );
+        expect(result.activePackageRoot).toBe(packageRoot);
+        expect(result.afterVersion).toBe("1.0.0");
+        await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+          "export {};\n",
+        );
       });
     },
   );
@@ -671,7 +660,7 @@ describe("package update recovery safety", () => {
       const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
         const source = String(args[0]);
         if (
-          String(args[1]) === targetCmdShim &&
+          path.basename(source) === "openclaw.cmd" &&
           path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-")
         ) {
           throw Object.assign(new Error("launcher restoration denied"), { code: "EACCES" });
@@ -727,7 +716,7 @@ describe("package update recovery safety", () => {
 
       expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });
       expect(result.failedStep?.stderrTail).toContain("launcher restoration denied");
-      expect(result.failedStep?.stderrTail).toContain(`launcher ${targetCmdShim} was not restored`);
+      expect(result.failedStep?.stderrTail).toContain(targetCmdShim);
       expect(result.recovery).toEqual({
         serviceRestartSafe: false,
         reason: "runtime-verification-failed",
@@ -735,7 +724,7 @@ describe("package update recovery safety", () => {
       });
       expect(result.afterVersion).toBe("1.0.0");
       await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old openclaw\n");
-      await expect(fs.readFile(targetCmdShim, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(targetCmdShim, "utf8")).resolves.toBe("new openclaw.cmd\n");
       const backupDirs = (await fs.readdir(globalRoot)).filter((entry) =>
         entry.startsWith(".openclaw.shim-backup-"),
       );

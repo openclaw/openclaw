@@ -1,11 +1,9 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -332,16 +330,8 @@ export async function executePreparedReplyAgentRun(
         return { ...hookResult, reply: hookReply };
       },
     },
-    () => {
-      const gitCoauthorAttribution = prepareGitCoauthorAttribution({
-        agentId: followupRun.run.agentId,
-        config: cfg,
-        currentProfileId: readSessionInputProfileId(sessionCtx),
-        sessionKey,
-        storePath,
-      });
-      const agentTurnOpts = gitCoauthorAttribution ? { ...opts, gitCoauthorAttribution } : opts;
-      return traceAgentPhase("reply.run_agent_turn", () =>
+    () =>
+      traceAgentPhase("reply.run_agent_turn", () =>
         executeAgentTurn({
           commandBody,
           transcriptCommandBody,
@@ -349,7 +339,7 @@ export async function executePreparedReplyAgentRun(
           sessionCtx,
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
           replyOperation,
-          opts: agentTurnOpts,
+          opts,
           resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
           typingSignals,
           blockReplyPipeline,
@@ -372,8 +362,7 @@ export async function executePreparedReplyAgentRun(
           replyMediaContext,
           isRestartRecoveryArmed,
         }),
-      );
-    },
+      ),
   );
   const operationSuperseded = isReplyOperationSuperseded(replyOperation);
   recordReplyOperationAgentTurn(

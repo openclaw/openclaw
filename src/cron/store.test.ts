@@ -13,6 +13,7 @@ import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
 } from "../commands/doctor/cron/legacy-store-migration.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -139,6 +140,40 @@ describe("resolveCronStorePath", () => {
 });
 
 describe("cron store", () => {
+  it("reads an absent cron table without touching source WAL artifacts", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-cron-readonly-wal-" }, async (state) => {
+      const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      const writer = new DatabaseSync(databasePath);
+      writer.exec(
+        "PRAGMA journal_mode = WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('committed');",
+      );
+      const files = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+      const hashes = () =>
+        Promise.all(
+          files.map(async (file) =>
+            createHash("sha256")
+              .update(await fs.readFile(file))
+              .digest("hex"),
+          ),
+        );
+      const before = await hashes();
+      try {
+        const loaded = await withArtifactPreservingStateReads(() =>
+          loadCronJobsStoreWithConfigJobsReadOnly(
+            path.join(state.stateDir, "cron", "jobs.json"),
+            state.env,
+          ),
+        );
+        expect(loaded.store).toEqual({ version: 1, jobs: [] });
+        expect(await hashes()).toEqual(before);
+        expect(writer.prepare("SELECT value FROM marker").all()).toEqual([{ value: "committed" }]);
+      } finally {
+        writer.close();
+      }
+    });
+  });
+
   it("returns empty store when file does not exist", async () => {
     const store = await makeStorePath();
     const loaded = await loadCronStore(store.storePath);

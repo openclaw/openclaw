@@ -203,6 +203,7 @@ export async function restartChatPanePlacement(params: {
       ...(target.kind === "profile"
         ? {
             profileId: target.profileId,
+            ...(target.os ? { os: target.os } : {}),
             ...(target.machineClass ? { machineClass: target.machineClass } : {}),
           }
         : { deviceId: target.deviceId }),

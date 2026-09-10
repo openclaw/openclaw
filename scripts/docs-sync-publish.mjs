@@ -18,7 +18,7 @@ const SLUGIFY_PACKAGE = "@sindresorhus/slugify";
 const INTERNAL_DOCS_DIRS = ["internal"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
-const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
+export const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
 const DEFAULT_CLAWHUB_REPO_CANDIDATES = [
   path.resolve(ROOT, "..", "clawhub-docs-clawhub"),
   path.resolve(ROOT, "..", "clawhub"),
@@ -165,9 +165,11 @@ const GENERATED_LOCALES = [
     navFile: "fa-navigation.json",
     tmFile: "fa.tm.jsonl",
     navMode: "clone-en",
-    // Mintlify does not currently accept `fa` in navigation.languages.
-    // Keep generated docs and translation memory so the locale stays available
-    // once the docs host accepts it.
+    // Mintlify rejected `fa` in navigation.languages when this override was
+    // added (2026-04-29). The `fa/` docs tree is still generated and published;
+    // only the navigation entry is withheld. Keep generated docs and
+    // translation memory so the locale stays available once the docs host
+    // accepts it. Re-test against the host before removing this flag.
     navigation: false,
   },
   {
@@ -204,9 +206,11 @@ const GENERATED_LOCALES = [
     navFile: "th-navigation.json",
     tmFile: "th.tm.jsonl",
     navMode: "clone-en",
-    // Mintlify does not currently accept `th` in navigation.languages.
-    // Keep generated docs and translation memory so the locale stays available
-    // once the docs host accepts it.
+    // Mintlify rejected `th` in navigation.languages when this override was
+    // added (2026-04-29). The `th/` docs tree is still generated and published;
+    // only the navigation entry is withheld. Keep generated docs and
+    // translation memory so the locale stays available once the docs host
+    // accepts it. Re-test against the host before removing this flag.
     navigation: false,
   },
   {
@@ -515,6 +519,9 @@ function composeLocaleNav(locale, englishNav) {
   }
   const overlayPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.navFile);
   if (!fs.existsSync(overlayPath)) {
+    console.warn(
+      `docs-sync-publish: missing navigation overlay ${locale.navFile} for locale ${locale.language}; publishing the English sidebar labels for that locale.`,
+    );
     return cloned;
   }
   return applyLocaleNavLabelOverlay(cloned, readJson(overlayPath));

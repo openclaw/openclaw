@@ -38,7 +38,9 @@ export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
   ) {
     return undefined;
   }
-  const response = await readCodexEffectiveConfig(params.client, params.cwd, params.signal);
+  const response = await readCodexEffectiveConfig(params.client, params.cwd, {
+    signal: params.signal,
+  });
   const effectiveConfig = response.config;
   const modelProvider = effectiveConfig.model_provider;
   const providers = effectiveConfig.model_providers;

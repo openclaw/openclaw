@@ -15,6 +15,7 @@ import {
   modelSupportsVision,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import type { ModelRegistry } from "./sessions/index.js";
 
 type AugmentModelCatalogWithProviderPlugins =
@@ -39,11 +40,19 @@ function providerManifestSnapshot(params: {
   discovery: "static" | "refreshable" | "runtime";
   modelIds: string[];
   aliases?: string[];
+  modelAliases?: Record<string, string>;
 }): PluginMetadataSnapshot {
   const plugin = createPluginManifestRecordFixture({
     id: params.provider,
     origin: "bundled",
     providers: [params.provider],
+    ...(params.modelAliases
+      ? {
+          modelIdNormalization: {
+            providers: { [params.provider]: { aliases: params.modelAliases } },
+          },
+        }
+      : {}),
     modelCatalog: {
       aliases: Object.fromEntries(
         (params.aliases ?? []).map((alias) => [alias, { provider: params.provider }]),
@@ -92,6 +101,28 @@ describe("prepared model catalog builder", () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
   });
 
+  it.each(["static", "refreshable", "runtime"] as const)(
+    "keeps replace publication closed to %s manifest and augmented inventory",
+    async (discovery) => {
+      mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
+        { provider: "manifest-provider", id: "augmented-only", name: "Augmented" },
+      ]);
+      const snapshot = await build({
+        config: { models: { mode: "replace", providers: {} } },
+        metadataSnapshot: providerManifestSnapshot({
+          provider: "manifest-provider",
+          discovery,
+          modelIds: ["manifest-only"],
+        }),
+        readOnly: false,
+        includeProviderPluginAugmentation: true,
+      });
+      expect(snapshot.entries).toEqual([]);
+      expect(snapshot.routeVariants).toEqual([]);
+      expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["ready", "unavailable", "auth-rejected"] as const)(
     "preserves %s provider membership without replenishing it from metadata",
     async (status) => {
@@ -115,6 +146,39 @@ describe("prepared model catalog builder", () => {
       expect(snapshot.authoritative).toBe(status === "ready");
     },
   );
+
+  it("preserves executable registry identities that are also input aliases", async () => {
+    const snapshot = await build({
+      entries: [{ provider: "custom", id: "middle", name: "Middle", input: ["text", "image"] }],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "custom",
+        discovery: "runtime",
+        modelIds: [],
+        modelAliases: { latest: "middle", middle: "final" },
+      }),
+    });
+    expect(snapshot.entries).toMatchObject([{ id: "middle", input: ["text", "image"] }]);
+    expect(snapshot.entries).toHaveLength(1);
+  });
+
+  it("keeps runtime catalog entitlement attached to emitted identities", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      { provider: "custom", id: "latest", name: "Enriched middle", contextWindow: 64000 },
+      { provider: "custom", id: "denied", name: "Unobserved model", contextWindow: 128000 },
+    ]);
+    const snapshot = await build({
+      entries: [{ provider: "custom", id: "middle", name: "Middle", contextWindow: 32000 }],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "custom",
+        discovery: "runtime",
+        modelIds: ["middle", "final", "denied"],
+        modelAliases: { latest: "middle", middle: "final" },
+      }),
+      readOnly: false,
+    });
+    expect(snapshot.entries).toMatchObject([{ id: "middle", contextWindow: 64000 }]);
+    expect(snapshot.entries).toHaveLength(1);
+  });
 
   it("projects and sorts one lifecycle registry generation", async () => {
     const snapshot = await build({
@@ -561,6 +625,7 @@ describe("prepared model catalog builder", () => {
     "keeps %s manifest models available without runtime account discovery",
     async (discovery) => {
       const snapshot = await build({
+        includeProviderPluginAugmentation: false,
         metadataSnapshot: providerManifestSnapshot({
           provider: "manifest-provider",
           discovery,
@@ -660,6 +725,66 @@ describe("prepared model catalog builder", () => {
     },
   );
 
+  it.each([
+    { accepted: false, pinned: false },
+    { accepted: true, pinned: false },
+    { accepted: true, pinned: true },
+  ])(
+    "preserves captured routes unless the model pins them (accepted=$accepted, pinned=$pinned)",
+    async ({ accepted, pinned }) => {
+      const defaults = {
+        api: "openai-completions",
+        baseUrl: "https://provider.example.test/v1",
+      } as const;
+      const captured = {
+        api: "openai-responses",
+        baseUrl: "https://account.example.test/v1",
+      } as const;
+      const configured: ModelDefinitionConfig = {
+        id: "demo",
+        name: "Configured Demo",
+        contextWindow: 32_000,
+        maxTokens: 4096,
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        ...(pinned ? defaults : {}),
+      };
+      const config: OpenClawConfig = {
+        plugins: { enabled: false },
+        models: { providers: { custom: { ...defaults, models: [configured] } } },
+      };
+      const snapshot = await build({
+        config,
+        entries: accepted
+          ? [{ provider: "custom", id: "demo", name: "Captured Demo", ...captured }]
+          : [],
+      });
+      const expectedRoute = accepted && !pinned ? captured : defaults;
+      const policy = createModelVisibilityPolicy({
+        cfg: config,
+        catalog: snapshot.entries,
+        defaultProvider: "custom",
+        manifestPlugins: metadataSnapshot,
+      });
+
+      for (const catalog of [snapshot.entries, policy.configuredCatalog]) {
+        expect(catalog).toEqual([
+          expect.objectContaining({
+            provider: "custom",
+            id: "demo",
+            ...expectedRoute,
+            contextWindow: 32_000,
+            reasoning: true,
+            input: ["text", "image"],
+          }),
+        ]);
+      }
+      expect(snapshot.routeVariants).toContainEqual(expect.objectContaining(expectedRoute));
+      expect(snapshot.routeVariants).toHaveLength(accepted && pinned ? 2 : 1);
+    },
+  );
+
   it.each([false, true])(
     "keeps the first matching catalog route with borrowed-row retargeting %s",
     async (retarget) => {
@@ -731,6 +856,7 @@ describe("prepared model catalog builder", () => {
       });
 
       const selectedRoute = {
+        name: retarget ? "Earlier Route A" : "Route A",
         api: "openai-responses",
         baseUrl: "https://route-a.example.test/v1",
         thinkingLevelMap: retarget ? { xhigh: "high", max: "max" } : { xhigh: null, max: null },

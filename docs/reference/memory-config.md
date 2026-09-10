@@ -231,12 +231,13 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     Upgrading any existing configuration that already uses
     `gemini-embedding-2` can trigger the same pause even when you do not edit the
-    configuration. Before this release, the stable model's dimension was
+    configuration. Before 2026.8.1, the stable model's dimension was
     omitted from index identity whether `outputDimensionality` was absent or
-    explicitly set. After upgrade, an absent setting resolves to 3072, while an
+    explicitly set. From 2026.8.1 ([#128716](https://github.com/openclaw/openclaw/pull/128716)),
+    an absent setting resolves to 3072, while an
     explicit setting between 128 and 3072 becomes part of the identity. The
     default `gemini-embedding-001` keeps its existing identity when this setting
-    is absent; an explicitly configured value that was previously ignored now
+    is absent; an explicitly configured value that 2026.8.1 no longer ignores
     also changes the identity. For either path, check the affected agent with
     `openclaw memory status --deep --agent <id>`, then rebuild when ready with
     `openclaw memory index --force --agent <id>`.
@@ -465,7 +466,13 @@ If `openclaw doctor --fix` reports an unsafe Memory Core host-event source, chec
 permissions. Back up the legacy journal before replacing any symlink. To import it, preserve its
 contents at `memory/.dreams/events.jsonl` as a regular file under regular directories inside the intended
 workspace, then rerun `openclaw doctor --fix`. Doctor leaves rejected sources untouched. A symlink to
-the workspace root itself is supported; symlinks below that root are refused by this migration.
+the workspace root itself is supported. Symlinks below that root are refused when a legacy event
+source, import claim, or migrated archive is present; directories without those sources need no repair.
+
+If a checkpointed `events.jsonl.migrated` archive changed other than by append, Doctor warns and
+preserves both the archive and the already imported SQLite events. It defers later event generations
+in that workspace while continuing unrelated repairs. Preserve the archive for inspection; this warning
+does not mean its edited contents were imported. Unsafe source paths and failed imports still stop Doctor.
 
 ---
 
@@ -509,6 +516,8 @@ Batch enablement is the only remote batching setting. Concurrency, polling, and 
 
 ---
 
+<a id="session-memory-search-experimental" />
+
 ## Session memory search
 
 Index session transcripts and surface them via `memory_search`:
@@ -533,7 +542,7 @@ Ordinary user-session transcripts, including retained, reset, and
 deleted-session archives, remain eligible until explicitly targeted.
 
 <Note>
-The [session-memory hook](/automation/hooks#session-memory) saves conversation
+The [session-memory hook](/automation/hooks/bundled-hooks#session-memory) saves conversation
 excerpts to `<workspace>/memory/`, which the `memory` source already indexes.
 If transcript indexing is also enabled, the same conversation can appear from
 both `memory` and `sessions`, resulting in overlapping search results and
@@ -594,6 +603,8 @@ default `all`:
 | ---------------------------- | --------- | ------- | --------------------------------- |
 | `store.vector.enabled`       | `boolean` | `true`  | Use sqlite-vec for vector queries |
 | `store.vector.extensionPath` | `string`  | bundled | Override sqlite-vec path          |
+
+For Bun on macOS, install Homebrew SQLite to enable extension loading; see [Bun SQLite setup](/install/bun-compatibility#sqlite-library-selection) for automatic discovery and the `OPENCLAW_SQLITE_LIBRARY` library override.
 
 When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similarity automatically.
 
