@@ -36,12 +36,7 @@ import {
   type DateInterpretation,
   type DateRange,
 } from "./usage-date-range.js";
-import {
-  costUsageCache,
-  sessionsUsageCache,
-  loadCostUsageSummaryCached,
-  loadSessionsUsageResultCached,
-} from "./usage-result-cache.js";
+import { loadCostUsageSummaryCached, loadSessionsUsageResultCached } from "./usage-result-cache.js";
 import { loadUsageSessionSummaries } from "./usage-session-loading.js";
 import {
   resolveSessionUsageTarget,
@@ -109,14 +104,6 @@ function resolveUsageDateRangeOrRespond(
   }
   return { interpretation: interpretation.value, range: range.value };
 }
-
-// Exposed for unit tests (kept as a single export to avoid widening the public API surface).
-export const testApi = {
-  resolveDateRange,
-  loadCostUsageSummaryCached,
-  costUsageCache,
-  sessionsUsageCache,
-};
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
