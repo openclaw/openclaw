@@ -556,28 +556,33 @@ function enforcePostRegisterLimits(params: {
   if (params.overflowPolicy === "reject-new") {
     return;
   }
-  const namespaceCount =
-    params.retention?.namespaceCount ??
-    countLivePluginStateNamespaceEntries(params.store.db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      now: params.now,
-    });
-  if (namespaceCount > params.maxEntries) {
-    const deleted = deleteOldestPluginStateNamespaceEntries(params.store.db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      protectedKey: params.protectedKey,
-      now: params.now,
-      limit: namespaceCount - params.maxEntries,
-    });
-    if (params.retention) {
-      params.retention.namespaceCount -= deleted;
-      params.retention.pluginCount -= deleted;
+  const maxPluginEntries =
+    params.enforcePluginLimit === false ? undefined : resolveMaxPluginStateEntriesPerPlugin();
+  // A plugin cap no larger than the namespace cap sheds the same oldest prefix.
+  if (params.retention || maxPluginEntries === undefined || params.maxEntries < maxPluginEntries) {
+    const namespaceCount =
+      params.retention?.namespaceCount ??
+      countLivePluginStateNamespaceEntries(params.store.db, {
+        pluginId: params.pluginId,
+        namespace: params.namespace,
+        now: params.now,
+      });
+    if (namespaceCount > params.maxEntries) {
+      const deleted = deleteOldestPluginStateNamespaceEntries(params.store.db, {
+        pluginId: params.pluginId,
+        namespace: params.namespace,
+        protectedKey: params.protectedKey,
+        now: params.now,
+        limit: namespaceCount - params.maxEntries,
+      });
+      if (params.retention) {
+        params.retention.namespaceCount -= deleted;
+        params.retention.pluginCount -= deleted;
+      }
     }
   }
 
-  if (params.enforcePluginLimit === false) {
+  if (maxPluginEntries === undefined) {
     return;
   }
 
@@ -587,7 +592,6 @@ function enforcePostRegisterLimits(params: {
       pluginId: params.pluginId,
       now: params.now,
     });
-  const maxPluginEntries = resolveMaxPluginStateEntriesPerPlugin();
   if (pluginCount <= maxPluginEntries) {
     return;
   }

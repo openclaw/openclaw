@@ -279,27 +279,40 @@ describe("plugin metadata snapshot", () => {
     },
   );
 
-  it("promotes one scoped lifecycle graph and reuses it across runtime resolutions", () => {
+  it.each([
+    { scope: "full", pluginIds: undefined },
+    { scope: "narrowed", pluginIds: ["demo"] },
+    { scope: "empty", pluginIds: [] },
+  ])("completes a $scope planning view and retains its lifecycle graph", ({ pluginIds }) => {
     const config = {};
     const workspaceDir = "/workspace";
     const index = makeIndex();
+    index.plugins = [...index.plugins, ...makeIndex("other").plugins];
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    const manifestRegistry = makeManifestRegistry();
+    manifestRegistry.plugins.push(...makeManifestRegistry("other").plugins);
     mockRegistrySnapshot(index);
-    const scoped = loadPluginMetadataSnapshot({
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    const unscoped = loadPluginMetadataSnapshot({ config, env: {}, index, workspaceDir });
+    const planning = loadPluginMetadataSnapshot({
       config,
       env: {},
       index,
-      pluginIds: ["demo"],
+      pluginIds,
       workspaceDir,
     });
 
     const complete = completePluginMetadataSnapshot({
-      snapshot: scoped,
+      snapshot: planning,
       config,
       env: {},
       workspaceDir,
     });
     expect(complete?.pluginIds).toBeUndefined();
+    expect(complete?.plugins.map((plugin) => plugin.id)).toEqual(["demo", "other"]);
+    expect(complete?.owners).toBe(unscoped.owners);
+    expect(complete?.normalizePluginId).toBe(unscoped.normalizePluginId);
+    expect(complete?.bundledManifestRegistry).toBeDefined();
     setCurrentPluginMetadataSnapshot(complete, { config, env: {}, workspaceDir });
     loadPluginRegistrySnapshotWithMetadata.mockClear();
     loadPluginManifestRegistryForInstalledIndex.mockClear();

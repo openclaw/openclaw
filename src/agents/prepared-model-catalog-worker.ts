@@ -31,6 +31,7 @@ import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.lifecycle.js";
+import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
@@ -310,7 +311,14 @@ export function createPreparedModelCatalogWorker(
                     ...listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
                     ...workerInput.providerIds,
                   ]
-                : [...workerInput.providerIds, ...command.providerIds],
+                : [
+                    ...workerInput.providerIds,
+                    ...command.providerIds,
+                    ...scopeSyntheticAuthProviderRefs(
+                      listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
+                      [...workerInput.providerIds, ...command.providerIds],
+                    ),
+                  ],
             signal: controller.signal,
           }),
       );

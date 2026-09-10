@@ -9,13 +9,13 @@ import {
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
-import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "./execution-auth-binding.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
+import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 // Hoisted mocks keep Vitest module replacement stable while the implementation
@@ -201,22 +201,24 @@ function createOpenAIRouteModelResolver(params: {
   api: "openai-responses" | "openai-chatgpt-responses";
   baseUrl: string;
 }) {
-  return vi.fn<typeof resolveModelAsync>(async (provider, modelId, _agentDir, cfg, options) => {
-    if (!options?.authStorage || !options.modelRegistry) {
-      throw new Error("Prepared model stores were not bound");
-    }
-    const configured = cfg?.models?.providers?.openai;
-    return {
-      model: makeProviderModelFixture({
-        provider,
-        id: modelId,
-        api: configured?.api ?? params.api,
-        baseUrl: configured?.baseUrl ?? params.baseUrl,
-      }),
-      authStorage: options.authStorage,
-      modelRegistry: options.modelRegistry,
-    };
-  });
+  return vi.fn<SimpleCompletionModelResolver>(
+    async (provider, modelId, _agentDir, cfg, options) => {
+      if (!options?.authStorage || !options.modelRegistry) {
+        throw new Error("Prepared model stores were not bound");
+      }
+      const configured = cfg?.models?.providers?.openai;
+      return {
+        model: makeProviderModelFixture({
+          provider,
+          id: modelId,
+          api: configured?.api ?? params.api,
+          baseUrl: configured?.baseUrl ?? params.baseUrl,
+        }),
+        authStorage: options.authStorage,
+        modelRegistry: options.modelRegistry,
+      };
+    },
+  );
 }
 
 describe("prepareSimpleCompletionModel", () => {
@@ -234,7 +236,7 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "claude-opus-4-6",
       agentDir: "/tmp/openclaw-agent",
       workspaceDir: "/tmp/runtime-workspace",
-      modelResolver: hoisted.resolveModelAsyncMock as typeof resolveModelAsync,
+      modelResolver: hoisted.resolveModelAsyncMock as SimpleCompletionModelResolver,
     });
 
     expectPreparedModelResult(result);

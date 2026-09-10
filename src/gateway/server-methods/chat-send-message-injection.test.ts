@@ -218,6 +218,7 @@ describe("createChatSendMessageInjectionStarter", () => {
         accountId: undefined,
         ctx: { Provider: "dashboard", Body: params?.body, media: params?.media },
         isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
+        managedMediaApplyMode: "replace-empty",
         queuedFollowupOwnerKey: undefined,
         pluginBoundMediaPromise: Promise.resolve([]),
         replyOptionImages: params?.replyOptionImages ?? [],

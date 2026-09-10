@@ -3349,8 +3349,12 @@ function resolvePreciseChangedTestTargets(
   options: ChangedTestTargetOptions & { skipImportGraph?: boolean },
 ) {
   const cwd = options.cwd ?? process.cwd();
+  const pluginSdkInclude = resolvePluginSdkLightIncludePattern(changedPath);
   const mappedTargets =
     SOURCE_TEST_TARGETS.get(changedPath) ??
+    (pluginSdkInclude
+      ? pluginSdkLightTestFiles.filter((file) => path.matchesGlob(file, pluginSdkInclude))
+      : null) ??
     (/^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(changedPath)
       ? [changedPath, DOCS_CONFIG_EXAMPLES_TEST_TARGET]
       : null) ??

@@ -2729,6 +2729,41 @@ describe("session_status tool", () => {
     expect(saved.liveModelSwitchPending).toBe(true);
   });
 
+  it("rejects a colliding provider-wildcard model change without writing the session", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        providerOverride: "custom/team",
+        modelOverride: "Reader",
+        modelOverrideSource: "user",
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+          modelPolicy: { allow: ["custom/*"] },
+        },
+      },
+    };
+
+    await expect(
+      getSessionStatusTool().execute("literal-denied", { model: "Reader" }),
+    ).rejects.toThrow('Model "custom/team/Reader" is not allowed.');
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+
+    await getSessionStatusTool().execute("literal-allowed", { model: "custom/team/Reader" });
+    const saved = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
+    expect(saved.main).toMatchObject({
+      providerOverride: "custom",
+      modelOverride: "team/Reader",
+      modelOverrideSource: "user",
+    });
+  });
+
   it("resolves a model alias configured only on the target agent", async () => {
     resetSessionStore({
       main: { sessionId: "s1", updatedAt: 10 },

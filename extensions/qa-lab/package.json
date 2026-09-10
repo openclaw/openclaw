@@ -15,6 +15,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@openclaw/crabbox-provider": "workspace:*",
     "@openclaw/discord": "workspace:*",
     "@openclaw/matrix": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",

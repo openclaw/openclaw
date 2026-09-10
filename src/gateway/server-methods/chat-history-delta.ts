@@ -6,6 +6,7 @@ import {
   type SessionTranscriptDisplayDeltaResult,
 } from "../../config/sessions/session-accessor.sqlite-history-events.js";
 import { jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessagesWithState,
@@ -81,6 +82,14 @@ export function readChatHistoryDelta(params: {
     );
     if (!entryMessage) {
       continue;
+    }
+    if (
+      isOpenClawDeliveryMirrorAssistantMessage(entryMessage) &&
+      asOptionalRecord(asOptionalRecord(entryMessage)?.openclawDeliveryMirror)?.kind ===
+        "channel-final"
+    ) {
+      // Mirror suppression needs the preceding reply, which can be before this cursor.
+      return { kind: "reset" };
     }
     const messageId = asOptionalRecord(row.event)?.id;
     const historyProjection = projectChatDisplayMessagesWithState([entryMessage], {

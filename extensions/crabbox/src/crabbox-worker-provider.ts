@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import {
@@ -34,7 +35,6 @@ import {
   operationSlug,
   parseCrabboxOperatingSystem,
   parseCrabboxProfile,
-  resolveCrabboxBinary,
   resolveCrabboxProvisionProfile,
   resolveCrabboxWarmImageProfile,
 } from "./crabbox-worker-profile.js";
@@ -204,7 +204,7 @@ export function createCrabboxWorkerProvider(
     if (existing) {
       return existing;
     }
-    const binary = await ensureManagedCrabboxBinary({ binary: candidate, runCommand, signal });
+    const { binary } = await ensureManagedCrabboxBinary({ binary: candidate, runCommand, signal });
     binaries.set(candidate, binary);
     return binary;
   };

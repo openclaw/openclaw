@@ -23,6 +23,7 @@ import {
 } from "./update-managed-service-handoff-database.js";
 import { assertNoRetainedSourceBorrower } from "./update-managed-service-handoff-retained-custody.js";
 import {
+  isRetiredManagedHandoffLeasePayload,
   managedHandoffBootSchema,
   parseManagedHandoffLeasePayload,
   type HandoffProcessIdentity,
@@ -628,7 +629,14 @@ export function createManagedHandoffLeaseStore(
         leaseQueries(db)
           .selectFrom("managed_update_handoffs")
           .select(["install_root", "owner", "payload_json", "updated_at"]),
-      ).rows.map((entry) => handle(entry.install_root, entry)),
+      ).rows.flatMap((entry) =>
+        // A retired record decodes exactly, so unlike unreadable data it proves
+        // the row predates native custody and cannot borrow any source. Every
+        // other undecodable row still refuses.
+        isRetiredManagedHandoffLeasePayload(entry.payload_json)
+          ? []
+          : [handle(entry.install_root, entry)],
+      ),
     );
   }
   function assertSourceUnborrowed(resource: string) {

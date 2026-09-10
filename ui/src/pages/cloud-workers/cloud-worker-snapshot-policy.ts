@@ -8,11 +8,11 @@ import { renderSettingsRow, renderSettingsSection } from "../../components/setti
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 
 registerSettingsEnglish();
 
@@ -22,16 +22,15 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
   @state() private draft: PolicyDraft | null = null;
-  @state() private busy = false;
-  @state() private error: string | null = null;
   @state() private saved = false;
+
+  private readonly configSave = new CloudWorkerConfigSave(this);
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => {
       this.draft = null;
-      this.busy = false;
-      this.error = null;
+      this.configSave.update({ busy: false, error: null });
       this.saved = false;
     },
   });
@@ -70,13 +69,13 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
       config?.configSnapshot?.hash &&
       !config.configLoading &&
       !config.configSaving &&
-      !this.busy,
+      !this.configSave.state.busy,
     );
   }
 
   private edit(patch: Partial<PolicyDraft>) {
     this.draft = { ...(this.draft ?? this.policy()), ...patch };
-    this.error = null;
+    this.configSave.update({ error: null });
     this.saved = false;
   }
 
@@ -95,57 +94,41 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
         !/^[1-9][0-9]{0,7}(m|h|d)(?![\s\S])/.test(draft[key]) ||
         parseDurationMs(draft[key]) < minimum
       ) {
-        this.error = t(`cloudWorkersPage.snapshots.${key}Invalid`);
+        this.configSave.update({ error: t(`cloudWorkersPage.snapshots.${key}Invalid`) });
         return;
       }
     }
-    this.busy = true;
-    this.error = null;
     this.saved = false;
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
-    try {
-      const patched = await runtimeConfig.patchFromSnapshot(() => ({
-        options: {
-          raw: {
-            plugins: {
-              entries: {
-                crabbox: {
-                  config: {
-                    warmImages: {
-                      refreshAfter: draft.refreshAfter,
-                      retainUnused: draft.retainUnused,
-                      keepPrevious: Number(draft.keepPrevious),
-                    },
+    await this.configSave.save(runtimeConfig, isCurrent, {
+      build: () => ({
+        patch: {
+          plugins: {
+            entries: {
+              crabbox: {
+                config: {
+                  warmImages: {
+                    refreshAfter: draft.refreshAfter,
+                    retainUnused: draft.retainUnused,
+                    keepPrevious: Number(draft.keepPrevious),
                   },
                 },
               },
             },
           },
-          note: "cloud workers: update snapshot retention policy",
-          canDispatch: () =>
-            isCurrent() &&
-            canCallGatewayMethod(this.gateway.snapshot, "config.patch", "operator.admin"),
         },
-      }));
-      if (isCurrent()) {
-        if (patched) {
-          this.draft = null;
-          this.saved = true;
-        } else {
-          this.error =
-            runtimeConfig.state.lastError ?? t("cloudWorkersPage.snapshots.policySaveFailed");
-        }
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (isCurrent()) {
-        this.busy = false;
-      }
-    }
+      }),
+      note: "cloud workers: update snapshot retention policy",
+      canDispatch: () =>
+        isCurrent() &&
+        canCallGatewayMethod(this.gateway.snapshot, "config.patch", "operator.admin"),
+      failed: () => t("cloudWorkersPage.snapshots.policySaveFailed"),
+      success: () => {
+        this.draft = null;
+        this.saved = true;
+      },
+    });
   }
 
   override render() {
@@ -206,7 +189,7 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
             ${t("cloudWorkersPage.snapshots.savePolicy")}
           </button>`,
         })}
-        ${this.error ? html`<div class="callout warning" role="alert">${this.error}</div>` : nothing}
+        ${this.configSave.state.error ? html`<div class="callout warning" role="alert">${this.configSave.state.error}</div>` : nothing}
         ${this.saved ? html`<div class="callout" role="status">${t("cloudWorkersPage.snapshots.policySaved")}</div>` : nothing}
       `,
     );

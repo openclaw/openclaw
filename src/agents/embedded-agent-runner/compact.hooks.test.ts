@@ -237,6 +237,7 @@ function mockResolvedModel(params?: {
           | undefined
       )?.models?.providers?.[provider];
       return {
+        logicalRef: { provider, model: modelId },
         model: {
           provider,
           api: providerConfig?.api ?? "openai-responses",
@@ -1844,12 +1845,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
     });
-    resolveModelMock.mockReturnValueOnce({
+    resolveModelMock.mockImplementationOnce((provider = "openai", modelId = "fake") => ({
+      logicalRef: { provider, model: modelId },
       model: { provider: "openai", api: "openai-responses", id: "fake", input: [] },
       error: null,
       authStorage: { setRuntimeApiKey: vi.fn() },
       modelRegistry: {},
-    });
+    }));
     createOpenClawCodingToolsMock.mockReturnValueOnce([
       {
         name: "healthy_lookup",
@@ -3438,6 +3440,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         const api = providerConfig?.api ?? defaultApi;
         const subscription = api === "openai-chatgpt-responses";
         return {
+          logicalRef: { provider, model: modelId },
           model: {
             provider,
             id: modelId,
@@ -3930,7 +3933,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       dispose,
     } as never);
     resolveModelAsyncMock
-      .mockResolvedValueOnce({
+      .mockImplementationOnce(async (provider, modelId) => ({
+        logicalRef: { provider, model: modelId },
         model: {
           provider: "openai",
           id: "fake",
@@ -3941,7 +3945,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         error: null,
         authStorage,
         modelRegistry: {},
-      })
+      }))
       .mockRejectedValueOnce(new Error("route materialization failed"));
 
     await expect(
@@ -3979,10 +3983,11 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     const releaseModelResolution = createDeferred();
     const authStorage = { setRuntimeApiKey: vi.fn() };
     let hostActive = true;
-    resolveModelAsyncMock.mockImplementationOnce(async () => {
+    resolveModelAsyncMock.mockImplementationOnce(async (provider, modelId) => {
       modelResolutionStarted.resolve(undefined);
       await releaseModelResolution.promise;
       return {
+        logicalRef: { provider, model: modelId },
         model: {
           provider: "openai",
           id: "fake",

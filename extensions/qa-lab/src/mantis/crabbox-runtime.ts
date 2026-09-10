@@ -1,7 +1,8 @@
-// Qa Lab plugin module implements crabbox runtime behavior.
 import { spawn, type SpawnOptions } from "node:child_process";
-import path from "node:path";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import {
+  ensureManagedCrabboxBinary,
+  resolveCrabboxBinary,
+} from "@openclaw/crabbox-provider/cli-runtime-api.js";
 import { trimToValue } from "../mantis-options.runtime.js";
 
 type CommandResult = {
@@ -77,15 +78,18 @@ export async function resolveCrabboxBin(params: {
   explicit?: string;
   repoRoot: string;
 }) {
-  const configured = trimToValue(params.explicit) ?? trimToValue(params.env[params.envName]);
-  if (configured) {
-    return configured;
-  }
-  const sibling = path.resolve(params.repoRoot, "../crabbox/bin/crabbox");
-  if (await pathExists(sibling)) {
-    return sibling;
-  }
-  return "crabbox";
+  const candidate = resolveCrabboxBinary({
+    cwd: params.repoRoot,
+    explicit: trimToValue(params.explicit) ?? trimToValue(params.env[params.envName]),
+    openclawRoot: params.repoRoot,
+    pathEnv: params.env.PATH,
+  });
+  const { binary } = await ensureManagedCrabboxBinary({
+    binary: candidate,
+    cwd: params.repoRoot,
+    env: params.env,
+  });
+  return binary;
 }
 
 function extractLeaseId(output: string) {

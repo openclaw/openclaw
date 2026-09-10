@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import {
   createNpmTarget,
   writePackageRoot,
@@ -88,3 +89,80 @@ it.each([
     });
   },
 );
+
+it("runs package post-update doctor from the verified package root after a staged swap", async () => {
+  await withTestDir({ prefix: "update-staged-doctor-" }, async (base) => {
+    const globalRoot = path.join(base, "prefix", "lib", "node_modules");
+    const root = path.join(globalRoot, "openclaw");
+    const entryPath = path.join(root, "dist", "index.js");
+    await writePackageRoot(root, "2026.4.21");
+    const commands = vi
+      .spyOn(processRunner, "runCommandWithTimeout")
+      .mockImplementation(async (argv, options) => {
+        if (argv[0] === "npm" && argv[1] === "i") {
+          const prefix = argv[argv.indexOf("--prefix") + 1];
+          if (!argv.includes("--prefix") || !prefix) {
+            throw new Error("Missing actual staged prefix");
+          }
+          await writePackageRoot(path.join(prefix, "lib", "node_modules", "openclaw"), "2026.5.14");
+        } else if (argv[2] === "doctor") {
+          expect(argv.slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
+          expect(options).toMatchObject({
+            cwd: root,
+            env: {
+              OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+              OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.14",
+            },
+          });
+          expect(
+            JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")),
+          ).toMatchObject({ version: "2026.5.14" });
+        } else {
+          throw new Error(`Unexpected package command: ${argv.join(" ")}`);
+        }
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      });
+    let transaction: PackageUpdateTransaction | undefined;
+    try {
+      const result = await runPackageInstallUpdate({
+        root,
+        installKind: "package",
+        tag: "2026.5.14",
+        installSpec: "openclaw@2026.5.14",
+        installTarget: createNpmTarget(globalRoot),
+        installEnv: {},
+        managedServiceEnv: {
+          OPENCLAW_STATE_DIR: path.join(base, "state"),
+          OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
+        },
+        timeoutMs: 1000,
+        startedAt: Date.now(),
+        progress: {},
+        jsonMode: true,
+        validateCandidate: async () => [],
+        beforeActivate: async () => {},
+        onTransaction: (retained) => {
+          transaction = retained;
+        },
+      });
+      expect(result).toMatchObject({ status: "ok", root, after: { version: "2026.5.14" } });
+      expect(commands.mock.calls.filter(([argv]) => argv[2] === "doctor")).toHaveLength(1);
+    } finally {
+      if (transaction) {
+        const assertCurrent = () => {};
+        // This test never starts a service; restore before retiring the retained package backup.
+        const rollback = await transaction.rollback(assertCurrent);
+        const retirement = await transaction.complete({ activationVerified: false }, assertCurrent);
+        expect(rollback.exitCode).toBe(0);
+        expect(retirement).toBeUndefined();
+      }
+    }
+  });
+});

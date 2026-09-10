@@ -1,4 +1,3 @@
-// Crabbox Wrapper tests cover crabbox wrapper script behavior.
 import { spawn, spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -38,6 +37,7 @@ const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = process.cwd();
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
+let bundledSetupPath: string;
 const fakeCrabboxBinDirs = new Map<string, string>();
 const fakeGitBinDirs = new Map<string, string>();
 const timingPreloads = new Map<string, string>();
@@ -209,6 +209,9 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
       crabboxPath,
       [
         'if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then',
+        '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
+        `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
+        "  fi",
         `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.55.0}"`,
         "  exit 0",
         "fi",
@@ -812,6 +815,15 @@ describe("scripts/crabbox-wrapper", () => {
       ...bundleOptions,
       outfile: realBundledWrapperPath,
     });
+    bundledSetupPath = path.join(
+      makeTempDir(tempDirs, "openclaw-crabbox-setup-"),
+      "openclaw/scripts/crabbox-setup.mjs",
+    );
+    buildSync({
+      ...bundleOptions,
+      entryPoints: [path.join(repoRoot, "scripts/crabbox-setup.mts")],
+      outfile: bundledSetupPath,
+    });
     // Argument routing tests isolate source preparation; the real-Git fixture below
     // executes the unmocked producer and generated receiver together.
     const producerStub = path.join(
@@ -847,6 +859,34 @@ describe("scripts/crabbox-wrapper", () => {
       outfile: bundledWrapperPath,
     });
     runSourceWrapper("provider: aws\n", ["--version"]);
+  });
+
+  it("prepares the supported executable for later workflow steps", () => {
+    const directory = invocationLogTempDirs.make("openclaw-crabbox-setup-path-");
+    const githubPath = path.join(directory, "github-path");
+    const invocationLog = makeInvocationLog();
+    const result = spawnSync(process.execPath, [bundledSetupPath], {
+      cwd: directory,
+      encoding: "utf8",
+      env: wrapperEnv(defaultProviderHelp, {
+        env: {
+          GITHUB_PATH: githubPath,
+          OPENCLAW_STATE_DIR: path.join(directory, "state"),
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.56.0",
+          OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
+        },
+      }),
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    const binary = path.join(
+      makeFakeCrabbox(defaultProviderHelp),
+      process.platform === "win32" ? "crabbox.cmd" : "crabbox",
+    );
+    expect(JSON.parse(result.stdout)).toEqual({ binary, version: "0.56.0" });
+    expect(readFileSync(githubPath, "utf8")).toBe(`${path.dirname(binary)}\n`);
+    expect(readInvocations(invocationLog)).toEqual([["--version"]]);
+    expect(existsSync(path.join(directory, "state"))).toBe(false);
   });
 
   it("routes CI workloads through the first ready provider", () => {
@@ -1050,13 +1090,14 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("chain=aws");
   });
 
-  it("uses one provider-scoped doctor per candidate and never calls standalone whoami", () => {
+  it("reuses the admitted version and runs one provider-scoped doctor per candidate", () => {
     const invocationLog = makeInvocationLog();
     const { output, result } = runSuccessfulBrokerWrapper(
       ["run", "--workload", "desktop", "--", "echo ok"],
       {
         env: {
           OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.56.0",
           OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "azure",
           OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
         },
@@ -1066,6 +1107,8 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("aws");
     expect(result.stderr).toContain("selected=aws chain=azure,aws");
     const invocations = readInvocations(invocationLog);
+    expect(invocations.filter(([command]) => command === "--version")).toEqual([["--version"]]);
+    expect(result.stderr).toContain("version=0.56.0");
     expect(invocations.filter(([command]) => command === "doctor").map((args) => args[2])).toEqual([
       "azure",
       "aws",
@@ -3289,9 +3332,7 @@ esac
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.stderr).not.toContain("could not parse provider list");
-    expect(result.stderr).not.toContain(
-      "selected binary failed basic --version/--help sanity checks",
-    );
+    expect(result.stderr).not.toContain("selected binary failed --help sanity checks");
     expect(result.stderr).toContain(
       "providers=hetzner,aws,local-container,blacksmith-testbox,cloudflare",
     );

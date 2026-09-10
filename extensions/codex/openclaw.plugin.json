@@ -1,6 +1,9 @@
 {
   "id": "codex",
   "categories": ["runtime", "tools", "web"],
+  "providers": ["codex"],
+  "syntheticAuthRefs": ["codex"],
+  "providerCatalogEntry": "./provider-discovery.ts",
   "backupResources": [
     {
       "disposition": "regenerable",

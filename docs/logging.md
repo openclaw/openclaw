@@ -448,6 +448,51 @@ the warning threshold or prove that a nearby request caused the work. Rounding
 and work outside the measured subphases can leave a difference from
 `writerExecutionMs`; do not assign that remainder to a specific phase.
 
+For `session.history.archive-prune`, the same slow or failure warning can include
+one bounded `archivePruning` object. Its `trigger` is recorded at the call site:
+`initial`, `after-eviction`, or `final`. It distinguishes pruning passes within
+the maintenance flow; it does not identify the request that caused maintenance.
+
+The object aggregates observations across the pruning pass:
+
+- `admissionMs`, `cachedAdmissions`, and `asyncAdmissions` measure database
+  acquisition and count its observed modes. Admission time ends at callback entry
+  or acquisition failure and can include shared admission and integrity-check waits.
+  A refusal before mode selection adds admission time without incrementing either mode count.
+- `checkpointMs`, `checkpointMaxMs`, and `checkpointCalls` report total time,
+  longest call, and calls entered. `checkpointIncomplete` counts calls returning
+  false, which can mean a busy checkpoint or an error; it does not identify a lock
+  holder or distinguish those outcomes. A thrown checkpoint contributes to call
+  count and time without incrementing `checkpointIncomplete`.
+- `vacuumMs`, `vacuumPasses`, and `vacuumPagesRequested` measure incremental vacuum
+  calls and their requested page counts. Requested pages are not confirmed
+  reclaimed pages.
+- `queryMs` covers existing archive-presence, candidate, unpublished-name, and
+  freelist reads. `rowDeletionMs` covers the canonical archive row-deletion
+  transaction.
+- `fileRemovalMs`, `removedFiles`, `missingFiles`, and `failedRemovals` report
+  existing file-removal outcomes. `removedFiles` counts successful canonical and
+  legacy removals. `missingFiles` counts canonical removal attempts that return
+  `ENOENT`. Other canonical failures and all unsuccessful legacy removals count
+  under `failedRemovals`; the legacy count includes missing paths, non-files,
+  and stat or removal failures.
+- `measurementMs` and `measurements` cover awaited disk-usage measurement attempts,
+  including failures and time queued for the measurement Worker, scanning, and
+  returning the result. `legacyInventoryMs` covers legacy file inventory,
+  filtering, and sorting.
+
+All durations are wall time, including asynchronous waits, rather than CPU
+measurements. `completed: false` retains partial observations when pruning
+throws; an absent stage timing field means that stage was not entered.
+`completed: true` means the pruning pass returned normally. It does not prove
+that every checkpoint completed, every removal succeeded, or the high-water
+target was reached. Rounding and unmeasured work can leave a remainder relative
+to `writerExecutionMs`; `checkpointMaxMs` is already included in `checkpointMs`.
+
+These fields reuse existing operations without additional store reads, per-file
+records, paths, names, or content. They do not change the warning threshold,
+checkpoint mode or timeout, or archive-retention behavior.
+
 ### Slow reply preparation
 
 When a reply spends a long time preparing, inspect the normal Gateway logs:

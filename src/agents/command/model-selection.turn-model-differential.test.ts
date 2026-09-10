@@ -97,7 +97,7 @@ vi.mock("../model-visibility-policy.js", () => ({
     allowAny: true,
     allowedCatalog: [],
     selectionAliasIndex: { byAlias: new Map(), byKey: new Map() },
-    allowsKey: () => true,
+    allows: () => true,
     resolveSelection: (ref: { provider: string; model: string }) => ref,
   }),
 }));

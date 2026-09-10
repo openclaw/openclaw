@@ -196,6 +196,7 @@ export function buildConfiguredFallbackModel(params: {
               cfg,
               configuredModel,
               catalogCost: staticCatalogModel?.cost,
+              providerMetadataOwners: params.providerMetadataOwners,
             }),
             contextWindow: resolvedFallbackContextWindow,
             contextTokens: configuredModel?.contextTokens ?? staticCatalogModel?.contextTokens,
