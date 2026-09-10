@@ -45,7 +45,7 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
-  protected commitSidebarLayout(layout: SidebarLayout): void {
+  protected commitSidebarLayout(layout: SidebarLayout, options?: { persist?: boolean }): void {
     const state = this.state;
     if (!state) {
       return;
@@ -54,7 +54,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
         : layout;
-    state.updateSidebarLayout(fitted);
+    state.updateSidebarLayout(fitted, options);
   }
 
   protected commitSidebarPanelResize(

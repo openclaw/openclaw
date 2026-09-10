@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { loadSettings, saveSettings } from "../../app/settings.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import {
@@ -3065,6 +3066,47 @@ describe("ChatStateController render lifecycle", () => {
       sessions: {},
     } as unknown as ApplicationContext;
   }
+
+  it.each(["minimize", "close-resource"])("remembers resource dismissal through %s", (action) => {
+    const savedSettings = loadSettings();
+    saveSettings({ ...savedSettings, sidebarSessionLayouts: {} });
+    try {
+      const context = createPageContext();
+      const renderLifecycle = { invalidate: vi.fn(), afterCommit: () => () => {} };
+      const host = {
+        dispatchEvent: () => true,
+        getBoundingClientRect: () => new DOMRect(0, 0, 1440, 900),
+        querySelector: () => null,
+      };
+      const state = createPageState(context, renderLifecycle, host);
+      state.updateSidebarLayout(openSlot(state.sidebarLayout, "desktop"), { persist: false });
+      const beforeDismissalReload = createPageState(context, renderLifecycle, host);
+      expect(beforeDismissalReload.sidebarLayout.columns).toEqual([]);
+      state.updateSidebarLayout(openSlot(state.sidebarLayout, "browser"), { persist: false });
+      state.updateSidebarLayout({ ...openSlot(state.sidebarLayout, "workspace"), dock: "bottom" });
+      const afterLayoutChange = createPageState(context, renderLifecycle, host);
+      expect(
+        afterLayoutChange.sidebarLayout.columns.flatMap((column) =>
+          column.panels.map((panel) => panel.slot),
+        ),
+      ).toEqual(["workspace"]);
+      expect(afterLayoutChange.sidebarLayout.dock).toBe("bottom");
+      expect(state.sidebarLayout.resourceAutoOpenDismissed).toBeUndefined();
+      if (action === "minimize") {
+        state.updateSidebarLayout({ ...state.sidebarLayout, open: false });
+      } else {
+        state.updateSidebarLayout({ ...state.sidebarLayout, columns: [] });
+      }
+      expect(state.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
+      const reloaded = createPageState(context, renderLifecycle, host);
+      expect(reloaded.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
+      state.updateSidebarLayout(openSlot(state.sidebarLayout, "browser"));
+      expect(state.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
+      expect(state.sidebarLayout.open).toBe(true);
+    } finally {
+      saveSettings(savedSettings);
+    }
+  });
 
   it("owns attachment views in Files without replacing Detail content", () => {
     const state = createPageState(

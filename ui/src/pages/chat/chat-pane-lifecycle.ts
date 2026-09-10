@@ -4,7 +4,7 @@ import type {
   TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
-import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import {
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
@@ -18,10 +18,12 @@ import {
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
+import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -33,6 +35,7 @@ import {
   type InitialChatSnapshotHydration,
 } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import {
   type ChatAttachmentGatewayOwner,
   ChatPaneComposerHandoff,
@@ -67,6 +70,7 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
@@ -96,6 +100,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     requestUpdate: () => this.requestUpdate(),
     updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
   });
+
+  protected readonly activeSessionResources = new ChatPaneActiveResources();
 
   private chatRouteReadyReported = false;
   private currentSessionArchived: boolean | undefined;
@@ -502,6 +508,16 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
             this.clearTypingActorForSessionMessage(event.payload);
           }
           handlePageGatewayEvent(state, event, () => this.presented);
+          const changed =
+            event.event === "sessions.changed" ? readSessionChangedEvent(event.payload) : null;
+          if (
+            (changed && areUiSessionKeysEquivalent(changed.key, state.sessionKey)) ||
+            event.event === "presence" ||
+            event.event === "node.runnerInventory.changed"
+          ) {
+            this.activeSessionResources.invalidate();
+            this.requestUpdate();
+          }
         }
       }),
     );
@@ -612,6 +628,50 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     const board = this.resolveBoardView();
     this.syncRetainedBoardSession(board);
     this.sessionPanelToggles.flush();
+    const state = this.state;
+    const client = state?.client;
+    const sessionKey = state?.sessionKey;
+    const connectionEpoch = state?.connectionEpoch;
+    const agentId = state
+      ? scopedAgentParamsForSession(state, state.sessionKey).agentId
+      : undefined;
+    this.activeSessionResources.sync(
+      state &&
+        client &&
+        sessionKey &&
+        state.connected &&
+        this.active &&
+        this.presented &&
+        !parseCatalogSessionKey(sessionKey)
+        ? {
+            client,
+            sessionKey,
+            agentId,
+            connectionEpoch: state.connectionEpoch,
+            desktopAvailable: isDesktopPanelAvailable(this.context.gateway.snapshot),
+            browserAvailable: isBrowserPanelAvailable(this.context.gateway.snapshot),
+            placement: selectedChatSessionRow(state)?.placement,
+            browserTab: [
+              ...latestBrowserTabCards(state.chatMessages, state.chatToolMessages).values(),
+            ].at(-1),
+            layout: () => state.sidebarLayout,
+            // Discovery is not a saved layout preference. Reload must validate again
+            // before mounting a resource; explicit UI actions still persist normally.
+            commit: (layout) => this.commitSidebarLayout(layout, { persist: false }),
+            requestUpdate: () => this.requestUpdate(),
+            isCurrent: () =>
+              this.isConnected &&
+              this.state === state &&
+              state.client === client &&
+              state.sessionKey === sessionKey &&
+              scopedAgentParamsForSession(state, state.sessionKey).agentId === agentId &&
+              state.connectionEpoch === connectionEpoch &&
+              state.connected &&
+              this.active &&
+              this.presented,
+          }
+        : null,
+    );
     this.setConversationVisible(
       Boolean(
         this.state &&
@@ -628,6 +688,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   override disconnectedCallback() {
+    this.activeSessionResources.sync(null);
     this.composerPresentation?.dispose();
     this.composerPresentation = undefined;
     if (this.state) {

@@ -162,5 +162,6 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     panels.some((panel) => panel.id === activePanelId && panel.id !== mainPanelId)
       ? { expandedSide: true }
       : {}),
+    ...(value.resourceAutoOpenDismissed === true ? { resourceAutoOpenDismissed: true } : {}),
   };
 }

@@ -58,6 +58,7 @@ import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
   closeSlot,
+  type SidebarSlotId,
   fitSidebarLayout,
   normalizeSidebarLayout,
   openSlot,
@@ -387,8 +388,51 @@ export function createPageState(
     }
     renderLifecycle.invalidate();
   };
-  state.updateSidebarLayout = (layout) => {
+  const transientSidebarSlots = new Set<SidebarSlotId>();
+  let transientSidebarScope = "";
+  state.updateSidebarLayout = (layout, options) => {
+    const layoutSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
+    const scope = JSON.stringify([state.settings.gatewayUrl, layoutSessionKey]);
+    if (scope !== transientSidebarScope) {
+      transientSidebarSlots.clear();
+      transientSidebarScope = scope;
+    }
     const normalized = normalizeSidebarLayout(layout);
+    const previous = state.sidebarLayout;
+    const slots = new Set(
+      normalized.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+    );
+    const previousSlots = new Set(
+      previous.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+    );
+    if (options?.persist === false) {
+      for (const slot of slots) {
+        if (!previousSlots.has(slot)) {
+          transientSidebarSlots.add(slot);
+        }
+      }
+    }
+    for (const slot of transientSidebarSlots) {
+      if (!slots.has(slot)) {
+        transientSidebarSlots.delete(slot);
+      }
+    }
+    const removedResource = previous.columns.some((column) =>
+      column.panels.some(
+        (panel) =>
+          (panel.slot === "browser" || panel.slot === "desktop") &&
+          !normalized.columns.some((next) =>
+            next.panels.some((entry) => entry.slot === panel.slot),
+          ),
+      ),
+    );
+    if (
+      previous.resourceAutoOpenDismissed ||
+      (previous.open && !normalized.open) ||
+      removedResource
+    ) {
+      normalized.resourceAutoOpenDismissed = true;
+    }
     // Every close route commits here; tab switches retain the pending selection.
     if (
       (state.sidebarContent?.kind === "loading" || state.sidebarContent?.kind === "unavailable") &&
@@ -397,13 +441,21 @@ export function createPageState(
       state.sidebarContent = null;
     }
     state.sidebarLayout = normalized;
-    state.settings = patchSettings({
-      sidebarSessionLayouts: updateSidebarSessionLayout(
-        loadSettings().sidebarSessionLayouts,
-        canonicalUiSessionKeyForPersistence(state, state.sessionKey),
-        normalized,
-      ),
-    });
+    if (options?.persist !== false) {
+      // Resizing/docking another tool must not turn automatic discovery into a
+      // saved resource tab that mounts before ownership is revalidated on reload.
+      let persisted = normalized;
+      for (const slot of transientSidebarSlots) {
+        persisted = closeSlot(persisted, slot);
+      }
+      state.settings = patchSettings({
+        sidebarSessionLayouts: updateSidebarSessionLayout(
+          loadSettings().sidebarSessionLayouts,
+          layoutSessionKey,
+          persisted,
+        ),
+      });
+    }
     renderLifecycle.invalidate();
   };
   state.updateSidebarActivePanel = (panelId) => {
@@ -413,6 +465,13 @@ export function createPageState(
     }
     state.sidebarFocusPanelId = normalizedPanelId;
     state.sidebarFocusVersion += 1;
+    const selectedSlot = state.sidebarLayout.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.id === normalizedPanelId)?.slot;
+    if (selectedSlot && transientSidebarSlots.has(selectedSlot)) {
+      renderLifecycle.invalidate();
+      return;
+    }
     state.settings = patchSettings({
       sidebarSessionActivePanels: updateSidebarSessionActivePanel(
         loadSettings().sidebarSessionActivePanels,
