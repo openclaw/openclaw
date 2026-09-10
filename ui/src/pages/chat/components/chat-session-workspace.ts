@@ -387,6 +387,7 @@ export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: st
   workspace.collapsed = false;
   workspace.browserPath = separator > 0 ? normalizedPath.slice(0, separator) : "";
   workspace.browserSearch = "";
+  workspace.filter = "all";
   workspace.activeId = `file:${path}`;
   loadSessionWorkspace(state, workspace, true);
   requestWorkspaceUpdate(state);
