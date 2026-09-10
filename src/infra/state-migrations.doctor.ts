@@ -237,6 +237,10 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "conversation bindings → exact target keys without agent/session projections";
     case "skill-workshop-directory-ownership-v16":
       return "Skill Workshop ownership → per-agent directory containment";
+    case "supervised-workflow-custody-v17":
+      return "supervised workflows → durable operations and controller acceptance";
+    case "supervised-attempt-custody-v18":
+      return "model attempts → physical resource custody and atomic candidate acceptance";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":

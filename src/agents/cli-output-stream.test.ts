@@ -452,6 +452,7 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()).toEqual({
       text: expectedText,
       sessionId: "not-synthetic",
+      ...(expectedText ? { terminalResultText: "" } : {}),
       usage: undefined,
     });
   });

@@ -1,9 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import {
+  consumeSupervisedAttemptSettlement,
+  type SupervisedAttemptSettlement,
+} from "./supervised-attempt-candidate.js";
+import { hasSupervisedAttemptResourceCapacity } from "./supervised-attempt-custody.js";
+import { sweepSupervisedAttemptResources } from "./supervised-attempt-recovery.js";
+import { startSupervisedOperationDispatcher } from "./supervised-operation.dispatcher.js";
+import { enqueueSupervisedOperation } from "./supervised-operation.store.js";
+import { SupervisedDecisionFormatError } from "./supervised-task.decision.js";
+import {
   assertSupervisedAttemptCurrent,
   claimSupervisedTask,
   failSupervisedAttempt,
+  getSupervisedTask,
   heartbeatTaskSupervisor,
   listSupervisedTasks,
   reconcileSupervisedTasks,
@@ -16,11 +26,23 @@ import {
   type SupervisedDecision,
   type SupervisedTask,
 } from "./supervised-task.types.js";
+import {
+  verifySupervisedWorkflowAcceptance,
+  type SupervisedAcceptanceProof,
+} from "./supervised-workflow.acceptance.js";
+import {
+  startSupervisedWorkspaceRetention,
+  retireSupervisedWorkspaces,
+} from "./supervised-workspace-retention.js";
 
 export type SupervisedAttemptRunner = (
   task: SupervisedTask,
-  context: { signal: AbortSignal; assertCurrent: () => void },
-) => Promise<SupervisedDecision>;
+  context: {
+    signal: AbortSignal;
+    assertCurrent: () => void;
+    options?: OpenClawStateDatabaseOptions;
+  },
+) => Promise<SupervisedDecision | SupervisedAttemptSettlement>;
 
 /**
  * Native continuation owner. Timers are merely triggers: SQL owns ready work,
@@ -43,6 +65,8 @@ export function startSupervisedTaskWorker(params: {
   let stopped = false;
   let active: { task: SupervisedTask; controller: AbortController } | undefined;
   let ticking = false;
+  let sweepingResources = false;
+  let resourceCursor: string | undefined;
 
   // Observer failures must never change execution or endpoint settlement.
   const reportError = (error: unknown) => {
@@ -66,6 +90,8 @@ export function startSupervisedTaskWorker(params: {
     }
     stopped = true;
     clearInterval(timer);
+    operations.stop();
+    retention?.stop();
     active?.controller.abort(new Error("Supervised task worker stopped"));
     try {
       stopTaskSupervisor(ownerId, Date.now(), options);
@@ -104,41 +130,101 @@ export function startSupervisedTaskWorker(params: {
     // retry unknown effects, and retain the local slot until runtime cleanup ends.
     const execute = async () => {
       assertCurrent();
-      const decision = await params.runAttempt(task, { signal: controller.signal, assertCurrent });
+      const attemptResult = await params.runAttempt(task, {
+        signal: controller.signal,
+        assertCurrent,
+        options,
+      });
+      const committed = consumeSupervisedAttemptSettlement(attemptResult, task);
+      if (committed) {
+        // Candidate owner already committed artifact + decision/operation wait.
+        // Task execution authority has ended; do not assert it or settle twice.
+        reportChange(committed);
+        return;
+      }
+      let decision = SupervisedDecisionSchema.parse(attemptResult);
       assertCurrent();
+      let acceptance: SupervisedAcceptanceProof | undefined;
+      if (decision.kind === "succeeded" || decision.kind === "partial") {
+        const verified = await verifySupervisedWorkflowAcceptance(task, decision, options);
+        assertCurrent();
+        if (verified.kind === "verified") {
+          acceptance = verified.proof;
+        } else if (verified.kind === "check") {
+          decision = {
+            kind: "operation",
+            operation: {
+              key: verified.key,
+              kind: verified.profile.kind,
+              profile: verified.profile.id,
+              input: {},
+            },
+          };
+        } else if (verified.kind === "rejected") {
+          decision = verified.operatorRequired
+            ? {
+                kind: "input_required",
+                reason: verified.reason,
+                question: "Resolve the explicit acceptance requirement before resuming.",
+              }
+            : { kind: "continue", next: verified.reason };
+        }
+      }
+      if (decision.kind === "operation") {
+        enqueueSupervisedOperation(task, decision.operation, Date.now(), options);
+        const waiting = getSupervisedTask(task.flowId, options, task.episode);
+        if (waiting) {
+          reportChange(waiting);
+        }
+        return;
+      }
       const result = settleSupervisedDecision(
         task,
         SupervisedDecisionSchema.parse(decision),
         Date.now(),
         options,
+        acceptance,
       );
       reportChange(result);
     };
     void Promise.resolve()
-      .then(() => (admission ? admission.run(execute) : execute()))
-      .catch((error: unknown) => {
+      .then(async () => {
         try {
-          const endpoint = failSupervisedAttempt(
-            task,
-            "Attempt failed or returned an invalid task decision; inspect the attempt before resuming",
-            Date.now(),
-            options,
-          );
-          if (endpoint) {
-            reportChange(endpoint);
+          await (admission ? admission.run(execute) : execute());
+        } catch (error: unknown) {
+          try {
+            const endpoint = failSupervisedAttempt(
+              task,
+              error instanceof SupervisedDecisionFormatError
+                ? error.message
+                : "Attempt failed or returned an invalid task decision; inspect the attempt before resuming",
+              Date.now(),
+              options,
+              error instanceof SupervisedDecisionFormatError ? "invalid_decision" : undefined,
+            );
+            if (endpoint) {
+              reportChange(endpoint);
+            }
+          } catch (storeError) {
+            reportError(storeError);
+            stop();
           }
-        } catch (storeError) {
-          reportError(storeError);
-          stop();
+          reportError(error);
+        } finally {
+          // Retire only accepted, joined scratch after the decision is durable.
+          // Cleanup errors remain observable without rewriting that decision.
+          try {
+            await retireSupervisedWorkspaces(Date.now(), options);
+          } catch (error) {
+            reportError(error);
+          }
+          admission?.release();
+          if (active?.task.attempt?.id === task.attempt?.id) {
+            active = undefined;
+          }
         }
-        reportError(error);
       })
-      .finally(() => {
-        admission?.release();
-        if (active?.task.attempt?.id === task.attempt?.id) {
-          active = undefined;
-        }
-      });
+      .catch(reportError);
   };
 
   const tick = () => {
@@ -154,6 +240,28 @@ export function startSupervisedTaskWorker(params: {
       }
       const now = Date.now();
       heartbeatTaskSupervisor(ownerId, now, 10_000, options, params.onlyFlowId);
+      if (!sweepingResources) {
+        sweepingResources = true;
+        void sweepSupervisedAttemptResources({
+          supervisorId: ownerId,
+          options,
+          onlyFlowId: params.onlyFlowId,
+          afterResourceId: resourceCursor,
+          onError: reportError,
+          assertCleanupCurrent: () => {
+            if (stopped) {
+              throw new Error("Supervisor cleanup ownership stopped");
+            }
+          },
+        })
+          .then((result) => {
+            resourceCursor = result.nextResourceId;
+          })
+          .catch(reportError)
+          .finally(() => {
+            sweepingResources = false;
+          });
+      }
       reconcileSupervisedTasks(now, options);
       if (active) {
         try {
@@ -167,7 +275,8 @@ export function startSupervisedTaskWorker(params: {
         if (
           (params.onlyFlowId && task.flowId !== params.onlyFlowId) ||
           task.phase === "running" ||
-          task.dueAt > now
+          task.dueAt > now ||
+          !hasSupervisedAttemptResourceCapacity(task.flowId, options)
         ) {
           continue;
         }
@@ -188,6 +297,8 @@ export function startSupervisedTaskWorker(params: {
           if (claimed) {
             reportChange(claimed);
           }
+        } catch (error) {
+          reportError(error);
         } finally {
           if (!launched) {
             admission?.release();
@@ -204,6 +315,15 @@ export function startSupervisedTaskWorker(params: {
 
   // Admission can only use this worker after its first durable heartbeat.
   heartbeatTaskSupervisor(ownerId, Date.now(), 10_000, options, params.onlyFlowId);
+  const operations = startSupervisedOperationDispatcher({
+    options,
+    onlyFlowId: params.onlyFlowId,
+    canDispatch: params.canObserve,
+    onError: reportError,
+  });
+  const retention = params.onlyFlowId
+    ? undefined
+    : startSupervisedWorkspaceRetention(options, reportError);
   const timer = setInterval(tick, 1000);
   tick();
   return {

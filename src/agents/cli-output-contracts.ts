@@ -45,6 +45,8 @@ export type CliTerminalInterruption = {
 export type CliOutput = {
   text: string;
   rawText?: string;
+  /** Exact successful CLI result envelope when display text also retains earlier messages. */
+  terminalResultText?: string;
   sessionId?: string;
   /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
   resumeCheckpointId?: string;

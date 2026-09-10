@@ -119,6 +119,10 @@ export type AgentCommandOpts = {
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /** Narrow host-owned file tools to this run's workspace without changing global config. */
+  toolWorkspaceOnly?: true;
+  /** Host-owned task snapshot already prepared; do not seed agent-home files or git. */
+  workspacePrepared?: true;
   /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Consumed in-process subagent-completion capability; never accepted from public RPC params. */

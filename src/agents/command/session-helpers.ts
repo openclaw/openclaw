@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelOutboundTargetMode,
@@ -19,6 +20,7 @@ import {
   isDeliverableMessageChannel,
 } from "../../utils/message-channel.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
+import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export function clearPendingFinalDelivery(entry: SessionEntry, updatedAt: number): SessionEntry {
@@ -131,5 +133,51 @@ export function resolveInternalSessionEffectsSource(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
+  };
+}
+
+/** Delivery is prepared once; the command retains its mutable opts and run context. */
+export function createCurrentRunDeliveryPreparer(params: {
+  prepared: PreparedAgentCommandExecution;
+  getOpts: () => AgentCommandOpts;
+  assertCurrent: () => void;
+  onWarning: (message: string) => void;
+  onPrepared: (delivery: PreparedCurrentRunDelivery, opts: AgentCommandOpts) => void;
+}) {
+  let currentRunDeliveryPrepared = false;
+  return async (sessionEntry?: SessionEntry) => {
+    const opts = params.getOpts();
+    if (currentRunDeliveryPrepared || opts.deliver !== true) {
+      return;
+    }
+    currentRunDeliveryPrepared = true;
+    let preparedDelivery: PreparedCurrentRunDelivery | undefined;
+    try {
+      preparedDelivery = await prepareCurrentRunDelivery({
+        cfg: params.prepared.cfg,
+        opts,
+        agentId: params.prepared.sessionAgentId,
+        currentSessionKey: params.prepared.sessionKey,
+        sessionEntry,
+      });
+    } catch (error) {
+      if (params.getOpts().bestEffortDeliver !== true) {
+        throw error;
+      }
+      params.onWarning(
+        `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${coerceErrorMessage(error)}`,
+      );
+    }
+    params.assertCurrent();
+    if (preparedDelivery) {
+      params.onPrepared(preparedDelivery, {
+        ...params.getOpts(),
+        replyChannel: preparedDelivery.context.channel,
+        replyTo: preparedDelivery.context.to,
+        replyAccountId: preparedDelivery.context.accountId,
+        threadId: preparedDelivery.context.threadId,
+        deliveryTargetMode: preparedDelivery.targetMode,
+      });
+    }
   };
 }

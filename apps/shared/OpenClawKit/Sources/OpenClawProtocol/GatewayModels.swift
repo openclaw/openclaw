@@ -13086,6 +13086,267 @@ public struct TaskSummary: Codable, Sendable {
     }
 }
 
+public struct SupervisionControlParams: Codable, Sendable {
+    public let flowid: String
+    public let episode: Int
+    public let revision: Int
+    public let inputid: String
+    public let action: AnyCodable
+
+    public init(
+        flowid: String,
+        episode: Int,
+        revision: Int,
+        inputid: String,
+        action: AnyCodable)
+    {
+        self.flowid = flowid
+        self.episode = episode
+        self.revision = revision
+        self.inputid = inputid
+        self.action = action
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flowid = "flowId"
+        case episode
+        case revision
+        case inputid = "inputId"
+        case action
+    }
+}
+
+public struct SupervisionArtifactParams: Codable, Sendable {
+    public let flowid: String
+    public let versionid: String
+    public let sourcehash: String
+    public let after: String?
+    public let path: String?
+    public let offset: Int?
+
+    public init(
+        flowid: String,
+        versionid: String,
+        sourcehash: String,
+        after: String? = nil,
+        path: String? = nil,
+        offset: Int? = nil)
+    {
+        self.flowid = flowid
+        self.versionid = versionid
+        self.sourcehash = sourcehash
+        self.after = after
+        self.path = path
+        self.offset = offset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flowid = "flowId"
+        case versionid = "versionId"
+        case sourcehash = "sourceHash"
+        case after
+        case path
+        case offset
+    }
+}
+
+public struct SupervisionArtifactResult: Codable, Sendable {
+    public let versionid: String
+    public let sourcehash: String
+    public let files: [[String: AnyCodable]]
+    public let next: String?
+    public let file: [String: AnyCodable]?
+
+    public init(
+        versionid: String,
+        sourcehash: String,
+        files: [[String: AnyCodable]],
+        next: String? = nil,
+        file: [String: AnyCodable]? = nil)
+    {
+        self.versionid = versionid
+        self.sourcehash = sourcehash
+        self.files = files
+        self.next = next
+        self.file = file
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case versionid = "versionId"
+        case sourcehash = "sourceHash"
+        case files
+        case next
+        case file
+    }
+}
+
+public struct SupervisionGetParams: Codable, Sendable {
+    public let flowid: String
+
+    public init(
+        flowid: String)
+    {
+        self.flowid = flowid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flowid = "flowId"
+    }
+}
+
+public struct SupervisionListParams: Codable, Sendable {
+    public let agentid: String
+    public let sessionkey: String
+    public let after: String?
+    public let limit: Int?
+
+    public init(
+        agentid: String,
+        sessionkey: String,
+        after: String? = nil,
+        limit: Int? = nil)
+    {
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.after = after
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case after
+        case limit
+    }
+}
+
+public struct SupervisionSummary: Codable, Sendable {
+    public let flowid: String
+    public let episode: Int
+    public let revision: Int
+    public let agentid: String
+    public let runtime: AnyCodable?
+    public let phase: AnyCodable
+    public let continuation: AnyCodable
+    public let observedat: Int
+    public let supervisorexpiresat: AnyCodable
+    public let operatorrequired: Bool
+    public let title: String
+    public let attempts: Int
+    public let maxattempts: Int
+    public let deadlineat: Int
+    public let endpoint: [String: AnyCodable]?
+    public let artifact: [String: AnyCodable]?
+    public let operatorcriteria: [[String: AnyCodable]]
+    public let operations: [[String: AnyCodable]]
+    public let notifications: [[String: AnyCodable]]
+
+    public init(
+        flowid: String,
+        episode: Int,
+        revision: Int,
+        agentid: String,
+        runtime: AnyCodable? = nil,
+        phase: AnyCodable,
+        continuation: AnyCodable,
+        observedat: Int,
+        supervisorexpiresat: AnyCodable,
+        operatorrequired: Bool,
+        title: String,
+        attempts: Int,
+        maxattempts: Int,
+        deadlineat: Int,
+        endpoint: [String: AnyCodable]? = nil,
+        artifact: [String: AnyCodable]? = nil,
+        operatorcriteria: [[String: AnyCodable]],
+        operations: [[String: AnyCodable]],
+        notifications: [[String: AnyCodable]])
+    {
+        self.flowid = flowid
+        self.episode = episode
+        self.revision = revision
+        self.agentid = agentid
+        self.runtime = runtime
+        self.phase = phase
+        self.continuation = continuation
+        self.observedat = observedat
+        self.supervisorexpiresat = supervisorexpiresat
+        self.operatorrequired = operatorrequired
+        self.title = title
+        self.attempts = attempts
+        self.maxattempts = maxattempts
+        self.deadlineat = deadlineat
+        self.endpoint = endpoint
+        self.artifact = artifact
+        self.operatorcriteria = operatorcriteria
+        self.operations = operations
+        self.notifications = notifications
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flowid = "flowId"
+        case episode
+        case revision
+        case agentid = "agentId"
+        case runtime
+        case phase
+        case continuation
+        case observedat = "observedAt"
+        case supervisorexpiresat = "supervisorExpiresAt"
+        case operatorrequired = "operatorRequired"
+        case title
+        case attempts
+        case maxattempts = "maxAttempts"
+        case deadlineat = "deadlineAt"
+        case endpoint
+        case artifact
+        case operatorcriteria = "operatorCriteria"
+        case operations
+        case notifications
+    }
+}
+
+public struct SupervisionGetResult: Codable, Sendable {
+    public let task: SupervisionSummary
+
+    public init(
+        task: SupervisionSummary)
+    {
+        self.task = task
+    }
+}
+
+public struct SupervisionControlResult: Codable, Sendable {
+    public let acknowledgement: [String: AnyCodable]
+    public let currenttask: SupervisionSummary
+
+    public init(
+        acknowledgement: [String: AnyCodable],
+        currenttask: SupervisionSummary)
+    {
+        self.acknowledgement = acknowledgement
+        self.currenttask = currenttask
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case acknowledgement
+        case currenttask = "currentTask"
+    }
+}
+
+public struct SupervisionListResult: Codable, Sendable {
+    public let tasks: [SupervisionSummary]
+    public let next: String?
+
+    public init(
+        tasks: [SupervisionSummary],
+        next: String? = nil)
+    {
+        self.tasks = tasks
+        self.next = next
+    }
+}
+
 public struct TasksListParams: Codable, Sendable {
     public let status: AnyCodable?
     public let agentid: String?

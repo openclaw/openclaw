@@ -44,6 +44,7 @@ const repositoryScriptEntries = [
   "scripts/dev/supervised-task-mutation-proof.ts!",
   "scripts/dev/supervised-task-process-proof.ts!",
   "scripts/dev/supervised-task-runtime-proof.ts!",
+  "scripts/dev/supervised-workflow-runtime-proof.ts!",
   "scripts/diffs-shiki-curated.ts!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
   "scripts/docker-e2e.mts!",

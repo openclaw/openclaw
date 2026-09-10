@@ -167,6 +167,8 @@ type AgentHarnessIsolatedCompletionParams = {
   workspaceDir: string;
   systemPrompt: string;
   prompt: string;
+  /** Caller requires a locally spawned child; reject configured remote/socket placement. */
+  ownedLocalProcessRequired?: true;
   timeoutMs: number;
   abortSignal?: AbortSignal;
   /** Revalidate after preparation and before credential or inference I/O, including retries. */

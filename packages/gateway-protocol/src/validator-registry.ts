@@ -549,3 +549,9 @@ export const validateTranscriptsListParams = compile(S.TranscriptsListParamsSche
 export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);
 export const validateTranscriptsExportParams = compile(S.TranscriptsExportParamsSchema);
 export const validateTranscriptsStatusParams = compile(S.TranscriptsStatusParamsSchema);
+
+export const validateSupervisionControlParams = compile(S.SupervisionControlParamsSchema);
+export const validateSupervisionGetParams = compile(S.SupervisionGetParamsSchema);
+export const validateSupervisionListParams = compile(S.SupervisionListParamsSchema);
+
+export const validateSupervisionArtifactParams = compile(S.SupervisionArtifactParamsSchema);

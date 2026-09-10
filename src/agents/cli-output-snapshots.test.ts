@@ -228,3 +228,41 @@ describe("Claude CLI assistant snapshots", () => {
     expect(deltas).toEqual([]);
   });
 });
+
+it("retains the terminal result separately from tool-split conversational text", () => {
+  const final = '{"kind":"continue","next":"Run the check"}';
+  const parser = createCliJsonlStreamingParser({
+    backend: BACKEND,
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+  });
+  parser.push(
+    joinJsonlFrames(
+      {
+        type: "assistant",
+        message: {
+          id: "intro",
+          stop_reason: null,
+          content: [
+            { type: "text", text: "I'll inspect the code first." },
+            { type: "tool_use", id: "read-1", name: "read", input: { path: "SPEC.md" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "read-1", content: "spec" }] },
+      },
+      {
+        type: "assistant",
+        message: { id: "final", stop_reason: null, content: [{ type: "text", text: final }] },
+      },
+      { type: "result", subtype: "success", result: final },
+    ),
+  );
+  parser.finish();
+  const result = parser.getOutput();
+  expect(result?.text).toContain("I'll inspect the code first.");
+  expect(result?.text).toContain(final);
+  expect(result).toHaveProperty("terminalResultText", final);
+});

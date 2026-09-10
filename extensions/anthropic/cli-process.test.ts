@@ -1,15 +1,17 @@
+import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type {
-  CliBackendExecuteContext,
-  CliBackendLiveSessionHandle,
-  CliBackendPreparedExecution,
+import {
+  CliBackendTransportError,
+  type CliBackendExecuteContext,
+  type CliBackendLiveSessionHandle,
+  type CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
-import type { ClaudeCliSecretInput } from "./cli-process.js";
+import { createClaudeCliProcessOwner, type ClaudeCliSecretInput } from "./cli-process.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
 const roots: string[] = [];
@@ -41,6 +43,7 @@ const PROTOCOL_CHILD = `
         process.exit(text === "exit without result" ? 0 : 1);
       }
       if (text === "success with stderr") writeSync(2, "previous turn diagnostic\\n");
+      if (text === "success with crash banner") writeSync(2, "Bun has crashed.\\n");
       if (text === "success with delayed stderr") {
         delayedDiagnostic = "previous turn diagnostic " + credential + "\\n";
       }
@@ -141,6 +144,154 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
     await expect(collect(context)).rejects.toThrow(/^Claude Code process exited with code 1$/);
   });
 
+  it.each([
+    { banner: "Bun has crashed.", crashBanner: true, outOfMemoryBanner: false },
+    { banner: "Bun has run out of memory.", crashBanner: false, outOfMemoryBanner: true },
+    {
+      banner: "Bun has crashed. Bun has run out of memory.",
+      crashBanner: true,
+      outOfMemoryBanner: true,
+    },
+  ])(
+    "retains fixed banner observations despite split writes and tail clipping: $banner",
+    async ({ banner, crashBanner, outOfMemoryBanner }) => {
+      const context = await contextForChild(`
+      import { writeSync } from "node:fs";
+      import { setTimeout } from "node:timers/promises";
+      writeSync(2, "unbroken clipped prefix".repeat(1_000));
+      writeSync(2, ${JSON.stringify(banner.slice(0, 9))});
+      await setTimeout(30);
+      writeSync(2, ${JSON.stringify(banner.slice(9))});
+      writeSync(2, "unbroken clipped suffix".repeat(1_000) + "\\n");
+      writeSync(2, "synthetic-private-diagnostic\\n");
+      process.exit(1);
+    `);
+      const error = await collect(context).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(CliBackendTransportError);
+      if (!(error instanceof CliBackendTransportError)) {
+        throw new Error("Expected a typed native transport failure.");
+      }
+      expect(error.diagnostic).toEqual({
+        kind: "exit",
+        exitCode: 1,
+        signal: null,
+        processStderr: { received: true, complete: true, crashBanner, outOfMemoryBanner },
+      });
+      expect(JSON.stringify(error.diagnostic)).not.toContain("synthetic-private-diagnostic");
+      expect(formatErrorMessageForDisplay(error)).toContain("synthetic-private-diagnostic");
+      expect(formatErrorMessageForDisplay(error)).not.toContain(banner);
+    },
+  );
+
+  it.each(["", "ordinary synthetic diagnostic\n", "Bun has crashed", "Bun has run out of memory"])(
+    "reports complete EOF without inventing a fixed banner: %j",
+    async (stderr) => {
+      const context = await contextForChild(`
+        import { writeSync } from "node:fs";
+        writeSync(2, ${JSON.stringify(stderr)});
+        process.exit(1);
+      `);
+      const error = await collect(context).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(CliBackendTransportError);
+      if (!(error instanceof CliBackendTransportError)) {
+        throw new Error("Expected a typed native transport failure.");
+      }
+      expect(error.diagnostic).toEqual({
+        kind: "exit",
+        exitCode: 1,
+        signal: null,
+        processStderr: {
+          received: stderr.length > 0,
+          complete: true,
+          crashBanner: false,
+          outOfMemoryBanner: false,
+        },
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a descendant-held diagnostic pipe incomplete after the drain grace expires",
+    async () => {
+      const context = await contextForChild(`
+        import { spawn } from "node:child_process";
+        import { writeSync } from "node:fs";
+        spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000)"],
+          { stdio: ["ignore", "ignore", 2] });
+        writeSync(2, "Bun has crashed.\\n");
+        process.exit(1);
+      `);
+      using owner = createClaudeCliProcessOwner(() => context);
+      const child = owner.spawn(context);
+      const stderrClosed = once(child.stderr, "close");
+      try {
+        await once(child, "exit");
+        const error = await owner.withDiagnostics(
+          new CliBackendTransportError("Exited", {
+            kind: "exit",
+            exitCode: 1,
+            signal: null,
+          }),
+        );
+        expect(error).toMatchObject({
+          diagnostic: {
+            processStderr: {
+              received: true,
+              complete: false,
+              crashBanner: true,
+              outOfMemoryBanner: false,
+            },
+          },
+        });
+        expect(child.stderr.closed).toBe(false);
+      } finally {
+        // The process owner owns this detached group even after its root has exited.
+        child.kill("SIGKILL");
+        await stderrClosed;
+      }
+    },
+  );
+
+  it("does not call a closed diagnostic pipe complete when it never delivered EOF", async () => {
+    const context = await contextForChild(`
+      process.stderr.write("Bun has crashed.\\n");
+      setTimeout(() => {}, 10000);
+    `);
+    using owner = createClaudeCliProcessOwner(() => context);
+    const child = owner.spawn(context);
+    const exited = once(child, "exit");
+    try {
+      await once(child.stderr, "data");
+      const closed = once(child.stderr, "close");
+      child.stderr.destroy();
+      await closed;
+      child.kill("SIGKILL");
+      await exited;
+      const error = await owner.withDiagnostics(
+        new CliBackendTransportError("Terminated", {
+          kind: "exit",
+          exitCode: null,
+          signal: "SIGKILL",
+        }),
+      );
+      expect(error).toMatchObject({
+        diagnostic: {
+          processStderr: {
+            received: true,
+            complete: false,
+            crashBanner: true,
+            outOfMemoryBanner: false,
+          },
+        },
+      });
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await exited;
+    }
+  });
+
   it("masks opaque descriptor and environment credentials without copying native stdout", async () => {
     const context = await contextForChild(`
       import { readFileSync, writeSync } from "node:fs";
@@ -225,16 +376,37 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
   it("keeps diagnostics isolated between live processes", async () => {
     const warm = await contextForChild(PROTOCOL_CHILD);
     attachLiveSession(warm);
-    await collect({ ...warm, prompt: "success with stderr" });
+    await collect({ ...warm, prompt: "success with crash banner" });
     const other = await contextForChild("process.exit(1);");
     attachLiveSession(other);
-    await expect(collect(other)).rejects.toThrow(/^Claude Code process exited with code 1$/);
+    const otherError = await collect(other).catch((failure: unknown) => failure);
+    expect(otherError).toMatchObject({
+      diagnostic: {
+        processStderr: {
+          received: false,
+          complete: true,
+          crashBanner: false,
+          outOfMemoryBanner: false,
+        },
+      },
+    });
+    expect(formatErrorMessageForDisplay(otherError)).toBe("Claude Code process exited with code 1");
     const error = await collect({ ...warm, prompt: "fail silently" }).catch(
       (failure: unknown) => failure,
     );
     expect(formatErrorMessageForDisplay(error)).toContain(
-      "stderr (process-wide; may include earlier turns): previous turn diagnostic",
+      "stderr (process-wide; may include earlier turns): Bun has crashed.",
     );
+    expect(error).toMatchObject({
+      diagnostic: {
+        processStderr: {
+          received: true,
+          complete: true,
+          crashBanner: true,
+          outOfMemoryBanner: false,
+        },
+      },
+    });
   });
 
   it.each([

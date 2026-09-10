@@ -87,7 +87,11 @@ describe("runCodexIsolatedCompletion", () => {
   });
 
   it("uses native authorization on a ring-zero configured-transport turn", async () => {
-    const params = { ...createParams(), assertCurrent: vi.fn() };
+    const params = {
+      ...createParams(),
+      assertCurrent: vi.fn(),
+      ownedLocalProcessRequired: true as const,
+    };
 
     await expect(runCodexIsolatedCompletion(params, {})).resolves.toEqual({
       assistant: expect.objectContaining({
@@ -118,6 +122,7 @@ describe("runCodexIsolatedCompletion", () => {
         profile: "openai:test",
         authRequirement: "subscription",
         isolation: "configured-transport",
+        ownedLocalProcessRequired: true,
         assertCurrent: params.assertCurrent,
         requireNoExternalCapabilities: true,
         developerInstructions: "Name the conversation.",

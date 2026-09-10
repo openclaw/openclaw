@@ -2701,6 +2701,40 @@ describe("runCliAgent reliability", () => {
     operation.complete();
   });
 
+  it("carries the exact CLI terminal result independently of preserved commentary", async () => {
+    const final = '{"kind":"continue","next":"check"}';
+    const event = (value: unknown) => ({ type: "stream_event", event: value });
+    const stdout = [
+      event({ type: "message_start" }),
+      event({
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: "Inspecting the source." },
+      }),
+      event({
+        type: "content_block_start",
+        content_block: { type: "tool_use", id: "read-1", name: "read" },
+      }),
+      event({ type: "message_stop" }),
+      event({ type: "message_start" }),
+      event({ type: "content_block_delta", delta: { type: "text_delta", text: final } }),
+      { type: "result", subtype: "success", result: final },
+    ]
+      .map((frame) => JSON.stringify(frame))
+      .join("\n");
+    supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout }));
+    const context = makeClaudePreparedContext();
+    const backend = {
+      ...context.backendResolved.config,
+      output: "jsonl" as const,
+      jsonlDialect: "claude-stream-json" as const,
+    };
+    context.backendResolved = { ...context.backendResolved, config: backend };
+    context.preparedBackend = { ...context.preparedBackend, backend };
+    const result = await runPreparedCliAgent(context);
+    expect(result.meta.finalAssistantRawText).toBe(`Inspecting the source.\n\n${final}`);
+    expect(result.meta.cliTerminalResultText).toBe(final);
+  });
+
   it("keeps raw assistant output separate from transformed visible CLI output", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from cli" }));
 

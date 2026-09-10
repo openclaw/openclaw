@@ -53,6 +53,7 @@ import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
+import { constrainAgentCommandWorkspaceTools } from "./workspace-tool-policy.js";
 
 const OVERRIDE_VALUE_MAX_LENGTH = 256;
 
@@ -99,6 +100,9 @@ export async function prepareAgentCommandExecution(
   if (!message.trim()) {
     throw new Error("Message (--message) is required");
   }
+  if (opts.workspacePrepared && !opts.workspaceDir?.trim()) {
+    throw new Error("Prepared workspace requires an explicit task directory");
+  }
   const rawExplicitSessionKey = opts.sessionKey?.trim();
   const requestedSessionId = opts.sessionId?.trim() || undefined;
   const rawTo = opts.to?.trim();
@@ -122,13 +126,16 @@ export async function prepareAgentCommandExecution(
     );
   }
 
-  const cfg = await resolveAgentRuntimeConfig(runtime, {
+  const resolvedConfig = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
     runtimeChannelSecretScope:
       opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
         ? { channel: recipientChannel, accountId: opts.accountId }
         : undefined,
   });
+  const cfg = opts.toolWorkspaceOnly
+    ? constrainAgentCommandWorkspaceTools(resolvedConfig)
+    : resolvedConfig;
   const normalizedSpawned = normalizeSpawnedRunMetadata({
     spawnedBy: opts.spawnedBy,
     groupId: opts.groupId,
@@ -365,12 +372,14 @@ export async function prepareAgentCommandExecution(
       sessionKey: sessionKey ?? undefined,
       sessionEntry: sessionEntryRaw ?? undefined,
     });
-    await ensureAgentWorkspace({
-      dir: workspaceDirRaw,
-      ensureBootstrapFiles: !agentCfg?.skipBootstrap,
-      skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-      provisioning: workspaceProvisioning,
-    });
+    if (!opts.workspacePrepared) {
+      await ensureAgentWorkspace({
+        dir: workspaceDirRaw,
+        ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+        skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+        provisioning: workspaceProvisioning,
+      });
+    }
     const runId = opts.runId?.trim() || sessionId;
     let promptMessage = message;
     if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {

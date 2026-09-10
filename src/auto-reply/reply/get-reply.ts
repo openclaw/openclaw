@@ -1198,6 +1198,33 @@ export async function getReplyFromConfig(
     );
   }
 
+  if (
+    cfg.agents?.entries?.[agentId]?.taskSupervision?.enabled &&
+    sessionKey &&
+    command.senderIsOwner &&
+    !hasInboundMedia(sessionCtx) &&
+    !preparedReplyOpts?.images?.length &&
+    !preparedReplyOpts?.media?.length
+  ) {
+    const { maybeAdmitSupervisedChannelTask } = await import("./supervised-admission.js");
+    const supervised = await maybeAdmitSupervisedChannelTask({
+      config: cfg,
+      agentId,
+      sessionKey,
+      sessionId,
+      ctx: sessionCtx,
+      message: cleanedBody,
+      model: `${runProvider}/${runModel}`,
+      senderIsOwner: command.senderIsOwner,
+      spawnedBy: sessionEntry.spawnedBy,
+      options: internalResolvedOpts,
+    });
+    if (supervised) {
+      logResolverTiming("completed", "supervised_task_admission");
+      return typeof supervised === "string" ? { text: supervised } : undefined;
+    }
+  }
+
   logResolverTiming("milestone", "before_run_prepared_reply");
   const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
     runPreparedReply({

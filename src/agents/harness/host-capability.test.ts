@@ -14,6 +14,10 @@ import {
 import { withInstallationTarget } from "../../infra/installation-target-context.js";
 import { takeMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import {
+  withOwnedRuntimeProcess,
+  requiresOwnedRuntimeProcess,
+} from "../../infra/owned-runtime-process-context.js";
+import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
@@ -302,6 +306,23 @@ describe("agent harness host capability", () => {
     expect(getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBeUndefined();
   });
 
+  it("captures the owned-process requirement without an installation or environment override", async () => {
+    const { attempt } = await admittedAttempt("owned-local-process");
+    const host = withOwnedRuntimeProcess(() =>
+      createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
+    );
+    expect(requiresOwnedRuntimeProcess()).toBe(false);
+    expect(host.capabilities.preparedEnvironment?.()).toMatchObject({
+      ownedLocalProcessRequired: true,
+    });
+    expect(host.capabilities.preparedEnvironment?.().localProcessEnv).toBeUndefined();
+    const ordinary = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    expect(ordinary.capabilities.preparedEnvironment?.()).not.toHaveProperty(
+      "ownedLocalProcessRequired",
+    );
+    host.close();
+    ordinary.close();
+  });
   it("keeps policy snapshots independent from later attempt mutation", async () => {
     const config = { tools: { loopDetection: { enabled: true } } };
     const skillsSnapshot = { prompt: "safe", version: 1, skills: [{ name: "safe" }] };

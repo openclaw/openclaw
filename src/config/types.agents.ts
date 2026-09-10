@@ -95,6 +95,8 @@ export type AgentConfig = {
   model?: AgentModelConfig;
   /** Optional per-agent model for short internal tasks such as generated session titles. */
   utilityModel?: string;
+  /** Opt-in automatic owner-request supervision using a host-owned immutable operation policy. */
+  taskSupervision?: { enabled: boolean; policyFile: string };
   /**
    * @deprecated Legacy raw config accepted only by doctor/migration repair.
    * Normal schema parsing rejects this key; use per-model agentRuntime instead.

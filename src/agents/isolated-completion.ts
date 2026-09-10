@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requiresOwnedRuntimeProcess } from "../infra/owned-runtime-process-context.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { AssistantMessage, Model } from "../llm/types.js";
@@ -502,6 +503,7 @@ export async function runIsolatedCompletion(
         );
       }
       const commonParams = {
+        ...(requiresOwnedRuntimeProcess() ? { ownedLocalProcessRequired: true as const } : {}),
         provider,
         modelId: request.model,
         ...context,

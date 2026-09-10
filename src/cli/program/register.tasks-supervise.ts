@@ -46,6 +46,14 @@ export function registerSupervisedTasksCommand(tasks: Command): void {
       ),
     );
   supervised
+    .command("control <request>")
+    .description("Apply an exact-revision JSON cancel, steer, resume, or artifact acceptance")
+    .action(async (request: string) =>
+      runCommandWithRuntime(defaultRuntime, async () =>
+        (await load()).controlSupervisedTaskCommand(request, defaultRuntime),
+      ),
+    );
+  supervised
     .command("cancel <flowId>")
     .description("Record cancellation and revoke the current attempt")
     .action(async (flowId: string) =>

@@ -80,6 +80,35 @@
   gap: var(--space-2);
 }
 
+.tasks-supervision-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.tasks-supervision-details p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tasks-supervision-details pre {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.tasks-supervision-details .field {
+  min-width: 0;
+}
+
+.tasks-supervision-details .btn {
+  justify-self: start;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 640px) {
   .tasks-page-list {
     gap: var(--space-4);

@@ -67,6 +67,12 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { supervisedInputIdentity } from "../../tasks/supervised-task.source.js";
+import {
+  createSupervisedTask,
+  getSupervisedTask,
+  heartbeatTaskSupervisor,
+} from "../../tasks/supervised-task.store.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
@@ -5088,6 +5094,70 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryTerminalRunIds: ["control-ui-run"],
     });
   });
+
+  it.each([
+    ["gateway", "exact"],
+    ["gateway", "different-session"],
+    ["local", "exact"],
+    ["local", "different-session"],
+  ] as const)(
+    "reconciles a committed supervised %s handoff only for the %s source incarnation",
+    async (namespace, variant) => {
+      const { sessionsDir, storePath, sessionKey } = await makeControlUiRecoveryFixture({
+        restartRecoverySourceIngress: namespace === "local" ? "local-cli" : "control-ui",
+      });
+      const options = { env: { OPENCLAW_STATE_DIR: tmpDir } };
+      const now = Date.now();
+      const source = {
+        agentId: "main",
+        namespace,
+        sessionKey,
+        sessionId: variant === "exact" ? "main-session" : "older-session",
+        inputId: "control-ui-run",
+        ownerScope: "authorized-session",
+      };
+      const prompt = "Repair the fixture";
+      heartbeatTaskSupervisor("durable-owner", now, 10_000, options);
+      const task = createSupervisedTask(
+        {
+          agentId: "main",
+          model: "openai/test-model",
+          runtime: "codex",
+          prompt,
+          policy: { deadlineAt: now + 60_000, maxAttempts: 3, attemptTimeoutMs: 10_000 },
+          admission: {
+            source,
+            ...supervisedInputIdentity(source, prompt),
+            assertCurrent: () => {},
+          },
+        },
+        "durable-owner",
+        now,
+        options,
+      );
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: prompt, idempotencyKey: "control-ui-run:user" },
+      ]);
+      // The source process disappeared after the task transaction, before ACK
+      // or clearing its ordinary recovery claim. Recovery must not run it twice.
+      closeOpenClawStateDatabaseForTest();
+      await expectRecovery(
+        variant === "exact"
+          ? { started: 0, settled: 1, failed: 0, skipped: 0 }
+          : { started: 1, settled: 0, failed: 0, skipped: 0 },
+      );
+      expect(callGateway).toHaveBeenCalledTimes(variant === "exact" ? 0 : 1);
+      expect(getSupervisedTask(task.flowId, options)).toEqual(task);
+      if (variant === "exact") {
+        expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+          status: "done",
+          abortedLastRun: false,
+          restartRecoveryTerminalRunIds: ["control-ui-run"],
+        });
+      }
+      closeOpenClawStateDatabaseForTest();
+    },
+  );
 
   it("resumes safely when a silent checkpoint belongs to an earlier turn", async () => {
     const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({

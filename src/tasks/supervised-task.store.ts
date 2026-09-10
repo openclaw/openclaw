@@ -1,165 +1,64 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
-  applySupervisedDecision,
-  endSupervisedTask,
-  expireSupervisedTask,
-} from "./supervised-task.transitions.js";
+  expireSupervisedEpisodeInTransaction,
+  supervisedEpisodeHasDispatchedEffects,
+} from "./supervised-task.effects.js";
 import {
-  serializeSupervisedTaskForWrite,
+  readTask,
+  decodeTaskRow,
+  insertTask,
+  replaceTask,
+  supervisorCurrent,
+} from "./supervised-task.persistence.js";
+import {
+  readSupervisedRecoveryInTransaction,
+  recoverManagedSupervisedAttemptInTransaction,
+  quarantineSupervisedTask,
+  selectActiveSupervisedEpisodes,
+} from "./supervised-task.recovery.js";
+import {
+  insertSupervisedTaskSourceInTransaction,
+  type SupervisedTaskAdmission,
+} from "./supervised-task.source.js";
+import { applySupervisedDecision, endSupervisedTask } from "./supervised-task.transitions.js";
+import {
   validateSupervisedTask,
   type SupervisedDecision,
   type SupervisedGoal,
   type SupervisedPolicy,
   type SupervisedTask,
 } from "./supervised-task.types.js";
+import {
+  commitSupervisedAcceptanceInTransaction,
+  type SupervisedAcceptanceProof,
+} from "./supervised-workflow.acceptance.js";
+import {
+  readSupervisedWorkflow,
+  writeSupervisedWorkflow as write,
+} from "./supervised-workflow.persistence.js";
+import {
+  insertSupervisedWorkflowContractInTransaction,
+  readSupervisedWorkflowContractInTransaction,
+} from "./supervised-workflow.store.js";
+import type { SupervisedWorkflowContract } from "./supervised-workflow.types.js";
 
 type Database = Pick<DB, "task_flow_episodes" | "task_flow_supervisors">;
 type Options = OpenClawStateDatabaseOptions;
+const MAX_ACTIVE_EPISODES = 128;
 function readSnapshot<T>(
   operation: (database: { db: DatabaseSync }) => T,
   options: Options,
 ): T | undefined {
-  return withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) => runSqliteDeferredTransactionSync(db, () => operation({ db })),
-    options,
-  );
-}
-const activePhases = ["ready", "waiting", "running"];
-const MAX_ACTIVE_EPISODES = 128;
-const schemaStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-  "CREATE TABLE IF NOT EXISTS task_flow_episodes (",
-);
-const schemaEnd = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-  "CREATE TABLE IF NOT EXISTS flow_runs (",
-  schemaStart,
-);
-if (schemaStart < 0 || schemaEnd < 0) {
-  throw new Error("Supervised TaskFlow schema missing");
-}
-const schema = OPENCLAW_STATE_SCHEMA_SQL.slice(schemaStart, schemaEnd);
-
-function readTask(db: DatabaseSync, flowId: string, episode?: number): SupervisedTask | undefined {
-  let query = getNodeSqliteKysely<Database>(db)
-    .selectFrom("task_flow_episodes")
-    .selectAll()
-    .where("flow_id", "=", flowId);
-  if (episode !== undefined) {
-    query = query.where("episode", "=", episode);
-  }
-  const row = executeSqliteQueryTakeFirstSync(db, query.orderBy("episode", "desc").limit(1));
-  if (!row) {
-    return undefined;
-  }
-  return decodeTaskRow(row);
-}
-
-function decodeTaskRow(row: Selectable<DB["task_flow_episodes"]>): SupervisedTask {
-  const task = validateSupervisedTask(JSON.parse(row.record_json));
-  if (
-    row.revision !== task.revision ||
-    row.phase !== task.phase ||
-    row.flow_id !== task.flowId ||
-    row.episode !== task.episode ||
-    row.due_at_ms !== task.dueAt ||
-    row.deadline_at_ms !== task.policy.deadlineAt
-  ) {
-    throw new Error("Supervised TaskFlow row identity disagrees with its record");
-  }
-  return task;
-}
-
-function write<T>(operation: (db: DatabaseSync) => T, options: Options): T {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      db.exec(schema); // sqlite-allow-raw -- Canonical first-use additive DDL in the admitting transaction.
-      return operation(db);
-    },
-    options,
-    { operationLabel: "taskflow.supervision" },
-  );
-}
-
-function rowForTask(task: SupervisedTask, previous?: SupervisedTask) {
-  const recordJson = serializeSupervisedTaskForWrite(task, previous);
-  return {
-    flow_id: task.flowId,
-    episode: task.episode,
-    revision: task.revision,
-    phase: task.phase,
-    due_at_ms: task.dueAt,
-    deadline_at_ms: task.policy.deadlineAt,
-    record_json: recordJson,
-  };
-}
-
-function insertTask(db: DatabaseSync, task: SupervisedTask): SupervisedTask {
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<Database>(db).insertInto("task_flow_episodes").values(rowForTask(task)),
-  );
-  return task;
-}
-
-function replaceTask(
-  db: DatabaseSync,
-  previous: SupervisedTask,
-  next: SupervisedTask,
-): SupervisedTask {
-  if (previous.endpoint) {
-    throw new Error("An episode endpoint cannot be rewritten");
-  }
-  const task = {
-    ...next,
-    lastAttemptId: previous.attempt && !next.attempt ? previous.attempt.id : next.lastAttemptId,
-    revision: previous.revision + 1,
-  };
-  const result = executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<Database>(db)
-      .updateTable("task_flow_episodes")
-      .set(rowForTask(task, previous))
-      .where("flow_id", "=", previous.flowId)
-      .where("episode", "=", previous.episode)
-      .where("revision", "=", previous.revision),
-  );
-  if (result.numAffectedRows !== 1n) {
-    throw new Error("Supervised TaskFlow revision conflict");
-  }
-  return task;
-}
-
-function supervisorCurrent(
-  db: DatabaseSync,
-  ownerId: string,
-  now: number,
-  flowId: string,
-): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      getNodeSqliteKysely<Database>(db)
-        .selectFrom("task_flow_supervisors")
-        .select("owner_id")
-        .where("owner_id", "=", ownerId)
-        .where("stopped_at_ms", "is", null)
-        .where("expires_at_ms", ">", now)
-        .where((eb) => eb.or([eb("flow_id", "is", null), eb("flow_id", "=", flowId)])),
-    ) !== undefined
-  );
+  return readSupervisedWorkflow((db) => operation({ db }), options);
 }
 
 export function heartbeatTaskSupervisor(
@@ -220,6 +119,7 @@ export function stopTaskSupervisor(ownerId: string, now: number, options: Option
 }
 
 export type SupervisedTaskInput = {
+  admission?: SupervisedTaskAdmission;
   flowId?: string;
   agentId: string;
   model: string;
@@ -227,6 +127,7 @@ export type SupervisedTaskInput = {
   prompt: string;
   goal?: SupervisedGoal;
   policy: SupervisedPolicy;
+  workflow?: SupervisedWorkflowContract;
 };
 
 export function createSupervisedTask(
@@ -247,7 +148,7 @@ export function createSupervisedTask(
     if (readTask(db, flowId)) {
       throw new Error("Supervised TaskFlow already exists");
     }
-    return insertTask(
+    const task = insertTask(
       db,
       validateSupervisedTask({
         version: 1,
@@ -272,6 +173,13 @@ export function createSupervisedTask(
         updatedAt: now,
       }),
     );
+    if (input.workflow) {
+      insertSupervisedWorkflowContractInTransaction(db, task, input.workflow);
+    }
+    if (input.admission) {
+      insertSupervisedTaskSourceInTransaction(db, task, input.admission);
+    }
+    return task;
   }, options);
 }
 
@@ -292,14 +200,25 @@ export function listSupervisedTasks(options: Options = {}, activeOnly = false): 
       if (!tableExists(db, "task_flow_episodes")) {
         return [];
       }
-      let query = getNodeSqliteKysely<Database>(db).selectFrom("task_flow_episodes").selectAll();
-      if (activeOnly) {
-        query = query.where("phase", "in", activePhases);
-      }
+      const query = activeOnly
+        ? selectActiveSupervisedEpisodes(db).selectAll()
+        : getNodeSqliteKysely<DB>(db).selectFrom("task_flow_episodes").selectAll();
       return executeSqliteQuerySync(
         db,
         query.orderBy("due_at_ms").orderBy("flow_id").limit(256),
-      ).rows.map(decodeTaskRow);
+      ).rows.flatMap((row) => {
+        if (
+          activeOnly &&
+          readSupervisedRecoveryInTransaction(db, row.flow_id, row.episode)?.fault_json
+        ) {
+          return [];
+        }
+        try {
+          return [decodeTaskRow(row)];
+        } catch {
+          return [];
+        }
+      });
     }, options) ?? []
   );
 }
@@ -313,11 +232,16 @@ export function claimSupervisedTask(
 ): SupervisedTask | undefined {
   return write((db) => {
     const task = readTask(db, flowId);
-    if (!task || task.endpoint || !supervisorCurrent(db, ownerId, now, flowId)) {
+    if (
+      !task ||
+      task.endpoint ||
+      readSupervisedRecoveryInTransaction(db, task.flowId, task.episode)?.fault_json ||
+      !supervisorCurrent(db, ownerId, now, flowId)
+    ) {
       return undefined;
     }
     if (now >= task.policy.deadlineAt) {
-      return replaceTask(db, task, expireSupervisedTask(task, now));
+      return replaceTask(db, task, expireSupervisedEpisodeInTransaction(db, task, now));
     }
     if (task.attempt) {
       if (
@@ -327,15 +251,35 @@ export function claimSupervisedTask(
         return undefined;
       }
       if (task.attempt.dispatched) {
-        return replaceTask(db, task, expireSupervisedTask(task, now));
+        const recovered = recoverManagedSupervisedAttemptInTransaction(db, task, now);
+        return replaceTask(
+          db,
+          task,
+          recovered ?? expireSupervisedEpisodeInTransaction(db, task, now),
+        );
       }
       // No dispatch reservation exists. A successor can safely reclaim, but
       // this still consumes an attempt: crashes cannot reset the episode budget.
     } else if (task.dueAt > now) {
       return undefined;
     }
+    if (
+      tableExists(db, "task_flow_operations") &&
+      executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<DB>(db)
+          .selectFrom("task_flow_operations")
+          .select("operation_id")
+          .where("flow_id", "=", task.flowId)
+          .where("episode", "=", task.episode)
+          .where("state", "in", ["queued", "running", "reconciling"])
+          .limit(1),
+      )
+    ) {
+      return undefined;
+    }
     if (task.attempts >= task.policy.maxAttempts) {
-      return replaceTask(db, task, expireSupervisedTask(task, now));
+      return replaceTask(db, task, expireSupervisedEpisodeInTransaction(db, task, now));
     }
     const expiresAt = Math.min(task.policy.deadlineAt, now + task.policy.attemptTimeoutMs);
     return replaceTask(db, task, {
@@ -359,11 +303,59 @@ function readOwnedTask(db: DatabaseSync, expected: SupervisedTask, now: number):
     task.phase !== "running" ||
     task.attempt.expiresAt <= now ||
     task.policy.deadlineAt <= now ||
+    readSupervisedRecoveryInTransaction(db, task.flowId, task.episode)?.fault_json ||
     !supervisorCurrent(db, task.attempt.ownerId, now, task.flowId)
   ) {
     throw new Error("Supervised attempt no longer owns execution");
   }
   return task;
+}
+
+/** Compose operation admission with its task wait under the canonical writer. */
+export function parkSupervisedAttemptForOperationInTransaction(
+  db: DatabaseSync,
+  expected: SupervisedTask,
+  operationId: string,
+  now: number,
+): SupervisedTask {
+  const task = readOwnedTask(db, expected, now);
+  return replaceTask(db, task, {
+    ...task,
+    phase: "waiting",
+    attempt: null,
+    next: `Await durable operation ${operationId}`,
+    dueAt: Math.min(task.policy.deadlineAt, now + 1000),
+    updatedAt: now,
+  });
+}
+
+/** This is a wake observation, not permission to overwrite an endpoint/attempt. */
+export function wakeSupervisedEpisodeInTransaction(
+  db: DatabaseSync,
+  flowId: string,
+  episode: number,
+  now: number,
+): void {
+  const task = readTask(db, flowId, episode);
+  if (task && !task.endpoint && !task.attempt && task.dueAt > now) {
+    replaceTask(db, task, { ...task, dueAt: now, updatedAt: now });
+  }
+}
+
+export function readSupervisedEpisodeInTransaction(
+  db: DatabaseSync,
+  flowId: string,
+  episode: number,
+): SupervisedTask | undefined {
+  return readTask(db, flowId, episode);
+}
+
+export function assertSupervisedAttemptInTransaction(
+  db: DatabaseSync,
+  expected: SupervisedTask,
+  now: number,
+): SupervisedTask {
+  return readOwnedTask(db, expected, now);
 }
 
 export function assertSupervisedAttemptCurrent(
@@ -400,11 +392,38 @@ export function settleSupervisedDecision(
   decision: SupervisedDecision,
   now: number,
   options: Options = {},
+  acceptance?: SupervisedAcceptanceProof,
 ): SupervisedTask {
-  return write((db) => {
-    const task = readOwnedTask(db, expected, now);
-    return replaceTask(db, task, applySupervisedDecision(task, decision, now));
-  }, options);
+  return write(
+    (db) => settleSupervisedDecisionInTransaction(db, expected, decision, now, acceptance),
+    options,
+  );
+}
+
+/** Compose artifact installation and semantic settlement in one synchronous transaction. */
+export function settleSupervisedDecisionInTransaction(
+  db: DatabaseSync,
+  expected: SupervisedTask,
+  decision: SupervisedDecision,
+  now: number,
+  acceptance?: SupervisedAcceptanceProof,
+): SupervisedTask {
+  const task = readOwnedTask(db, expected, now);
+  if (
+    (decision.kind === "succeeded" || decision.kind === "partial") &&
+    readSupervisedWorkflowContractInTransaction(db, task.flowId, task.episode)
+  ) {
+    if (!acceptance) {
+      throw new Error("Managed workflow completion requires controller verification");
+    }
+    const evidence = commitSupervisedAcceptanceInTransaction(db, task, decision, acceptance, now);
+    const next = applySupervisedDecision(task, { ...decision, evidence }, now);
+    if (next.endpoint) {
+      next.endpoint.acceptedBy = "supervisor";
+    }
+    return replaceTask(db, task, next);
+  }
+  return replaceTask(db, task, applySupervisedDecision(task, decision, now));
 }
 
 export function failSupervisedAttempt(
@@ -412,6 +431,7 @@ export function failSupervisedAttempt(
   reason: string,
   now: number,
   options: Options = {},
+  failure?: "invalid_decision",
 ): SupervisedTask | undefined {
   return write((db) => {
     const task = readTask(db, expected.flowId, expected.episode);
@@ -425,6 +445,10 @@ export function failSupervisedAttempt(
       return undefined;
     }
     const uncertain = task.attempt.dispatched;
+    const recovered = recoverManagedSupervisedAttemptInTransaction(db, task, now, failure);
+    if (recovered) {
+      return replaceTask(db, task, recovered);
+    }
     return replaceTask(
       db,
       task,
@@ -457,27 +481,33 @@ export function cancelSupervisedTask(
   if (!getSupervisedTask(flowId, options)) {
     throw new Error("Unknown supervised task");
   }
-  return write((db) => {
-    const task = readTask(db, flowId);
-    if (!task) {
-      throw new Error("Unknown supervised task");
-    }
-    if (task.endpoint) {
-      return task;
-    }
-    return replaceTask(
-      db,
-      task,
-      endSupervisedTask(task, {
-        kind: "cancelled",
-        reason: "Operator cancelled supervision",
-        evidence: [],
-        acceptedBy: "operator",
-        effects: task.attempt?.dispatched ? "unknown" : "not_dispatched",
-        at: now,
-      }),
-    );
-  }, options);
+  return write((db) => cancelSupervisedTaskInTransaction(db, flowId, now), options);
+}
+
+export function cancelSupervisedTaskInTransaction(
+  db: DatabaseSync,
+  flowId: string,
+  now: number,
+): SupervisedTask {
+  const task = readTask(db, flowId);
+  if (!task) {
+    throw new Error("Unknown supervised task");
+  }
+  if (task.endpoint) {
+    return task;
+  }
+  return replaceTask(
+    db,
+    task,
+    endSupervisedTask(task, {
+      kind: "cancelled",
+      reason: "Operator cancelled supervision",
+      evidence: [],
+      acceptedBy: "operator",
+      effects: supervisedEpisodeHasDispatchedEffects(db, task) ? "unknown" : "not_dispatched",
+      at: now,
+    }),
+  );
 }
 
 export function resumeSupervisedTask(
@@ -489,39 +519,80 @@ export function resumeSupervisedTask(
   now: number,
   options: Options = {},
 ): SupervisedTask {
-  return write((db) => {
-    const previous = readTask(db, flowId);
-    if (
-      !previous ||
-      previous.episode !== expectedEpisode ||
-      previous.phase !== "input_required" ||
-      !supervisorCurrent(db, ownerId, now, flowId)
-    ) {
-      throw new Error("Resume requires the latest input endpoint and a current supervisor");
-    }
-    if (policy.deadlineAt <= now) {
-      throw new Error("Resume deadline must be in the future");
-    }
-    assertAdmissionCapacity(db);
-    return insertTask(
+  return write(
+    (db) =>
+      resumeSupervisedTaskInTransaction(db, flowId, expectedEpisode, input, policy, ownerId, now),
+    options,
+  );
+}
+
+export function resumeSupervisedTaskInTransaction(
+  db: DatabaseSync,
+  flowId: string,
+  expectedEpisode: number,
+  input: string,
+  policy: SupervisedPolicy,
+  ownerId: string,
+  now: number,
+): SupervisedTask {
+  const previous = readTask(db, flowId);
+  if (
+    !previous ||
+    previous.episode !== expectedEpisode ||
+    previous.phase !== "input_required" ||
+    !supervisorCurrent(db, ownerId, now, flowId)
+  ) {
+    throw new Error("Resume requires the latest input endpoint and a current supervisor");
+  }
+  if (policy.deadlineAt <= now) {
+    throw new Error("Resume deadline must be in the future");
+  }
+  assertAdmissionCapacity(db);
+  const task = insertTask(
+    db,
+    validateSupervisedTask({
+      ...previous,
+      episode: previous.episode + 1,
+      revision: 0,
+      phase: "ready",
+      next: input,
+      policy,
+      attempts: 0,
+      lastAttemptId: null,
+      dueAt: now,
+      attempt: null,
+      endpoint: null,
+      createdAt: now,
+      updatedAt: now,
+    }),
+  );
+  const workflow = readSupervisedWorkflowContractInTransaction(
+    db,
+    previous.flowId,
+    previous.episode,
+  );
+  if (workflow) {
+    insertSupervisedWorkflowContractInTransaction(db, task, workflow.contract);
+    const previousHead = executeSqliteQueryTakeFirstSync(
       db,
-      validateSupervisedTask({
-        ...previous,
-        episode: previous.episode + 1,
-        revision: 0,
-        phase: "ready",
-        next: input,
-        policy,
-        attempts: 0,
-        lastAttemptId: null,
-        dueAt: now,
-        attempt: null,
-        endpoint: null,
-        createdAt: now,
-        updatedAt: now,
-      }),
+      getNodeSqliteKysely<DB>(db)
+        .selectFrom("task_flow_workspace_heads")
+        .select("version_id")
+        .where("flow_id", "=", previous.flowId)
+        .where("episode", "=", previous.episode),
     );
-  }, options);
+    if (previousHead) {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<DB>(db).insertInto("task_flow_workspace_heads").values({
+          flow_id: task.flowId,
+          episode: task.episode,
+          version_id: previousHead.version_id,
+        }),
+      );
+    }
+  }
+  return task;
 }
 
 export function inspectTaskSupervision(flowId: string, now: number, options: Options = {}) {
@@ -549,12 +620,21 @@ export function inspectTaskSupervision(flowId: string, now: number, options: Opt
       : false;
     return {
       task,
-      continuation: task.endpoint ? "stopped" : observer ? "armed" : "unknown",
+      continuation:
+        task.endpoint ||
+        readSupervisedRecoveryInTransaction(db, task.flowId, task.episode)?.fault_json
+          ? "stopped"
+          : observer
+            ? "armed"
+            : "unknown",
       execution:
         task.attempt && currentOwner && task.attempt.expiresAt > now
           ? "attempt_owned"
           : "not_observed",
-      operatorRequired: task.phase === "input_required",
+      operatorRequired:
+        task.phase === "input_required" ||
+        Boolean(readSupervisedRecoveryInTransaction(db, task.flowId, task.episode)?.fault_json),
+      fault: readSupervisedRecoveryInTransaction(db, task.flowId, task.episode)?.fault_json ?? null,
       observedAt: now,
       supervisorObservedAt: observer?.observed_at_ms ?? null,
       supervisorExpiresAt: observer?.expires_at_ms ?? null,
@@ -563,11 +643,7 @@ export function inspectTaskSupervision(flowId: string, now: number, options: Opt
 }
 
 function assertAdmissionCapacity(db: DatabaseSync): void {
-  const query = getNodeSqliteKysely<Database>(db)
-    .selectFrom("task_flow_episodes")
-    .select("flow_id")
-    .where("phase", "in", activePhases)
-    .limit(MAX_ACTIVE_EPISODES);
+  const query = selectActiveSupervisedEpisodes(db).select("flow_id").limit(MAX_ACTIVE_EPISODES);
   if (executeSqliteQuerySync(db, query).rows.length >= MAX_ACTIVE_EPISODES) {
     throw new Error("Supervised TaskFlow capacity reached; no custody accepted");
   }
@@ -575,37 +651,55 @@ function assertAdmissionCapacity(db: DatabaseSync): void {
 
 /** Deadline processing is independent of whether a model promise settles. */
 export function reconcileSupervisedTasks(now: number, options: Options = {}): void {
-  write((db) => {
-    const rows = executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<Database>(db)
-        .selectFrom("task_flow_episodes")
-        .select(["flow_id", "episode"])
-        .where("phase", "in", activePhases)
-        .limit(MAX_ACTIVE_EPISODES),
-    ).rows;
-    for (const row of rows) {
-      const task = readTask(db, row.flow_id, row.episode);
-      if (!task || task.endpoint) {
-        continue;
-      }
-      const abandoned =
-        task.attempt &&
-        (task.attempt.expiresAt <= now ||
-          !supervisorCurrent(db, task.attempt.ownerId, now, task.flowId));
-      if (task.policy.deadlineAt <= now || (abandoned && task.attempt?.dispatched)) {
-        replaceTask(db, task, expireSupervisedTask(task, now));
-      } else if (abandoned) {
-        replaceTask(
-          db,
-          task,
-          task.attempts >= task.policy.maxAttempts
-            ? expireSupervisedTask(task, now)
-            : { ...task, phase: "ready", attempt: null, dueAt: now, updatedAt: now },
-        );
-      }
+  const rows =
+    readSnapshot(
+      ({ db }) =>
+        tableExists(db, "task_flow_episodes")
+          ? executeSqliteQuerySync(
+              db,
+              selectActiveSupervisedEpisodes(db)
+                .select(["flow_id", "episode"])
+                .limit(MAX_ACTIVE_EPISODES),
+            ).rows
+          : [],
+      options,
+    ) ?? [];
+  for (const row of rows) {
+    try {
+      write((db) => {
+        if (readSupervisedRecoveryInTransaction(db, row.flow_id, row.episode)?.fault_json) {
+          return;
+        }
+        const task = readTask(db, row.flow_id, row.episode);
+        if (!task || task.endpoint) {
+          return;
+        }
+        const abandoned =
+          task.attempt &&
+          (task.attempt.expiresAt <= now ||
+            !supervisorCurrent(db, task.attempt.ownerId, now, task.flowId));
+        if (task.policy.deadlineAt <= now || (abandoned && task.attempt?.dispatched)) {
+          const recovered =
+            task.policy.deadlineAt > now
+              ? recoverManagedSupervisedAttemptInTransaction(db, task, now)
+              : undefined;
+          replaceTask(db, task, recovered ?? expireSupervisedEpisodeInTransaction(db, task, now));
+        } else if (abandoned) {
+          replaceTask(
+            db,
+            task,
+            task.attempts >= task.policy.maxAttempts
+              ? expireSupervisedEpisodeInTransaction(db, task, now)
+              : { ...task, phase: "ready", attempt: null, dueAt: now, updatedAt: now },
+          );
+        }
+      }, options);
+    } catch {
+      // The failed transaction retained the exact source bytes. Isolate this
+      // episode in a separate transaction; do not roll back healthy siblings.
+      quarantineSupervisedTask(row.flow_id, row.episode, now, options);
     }
-  }, options);
+  }
 }
 
 export function findCurrentTaskSupervisor(now: number, options: Options = {}): string | undefined {

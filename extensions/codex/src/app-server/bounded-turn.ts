@@ -105,6 +105,7 @@ type CodexBoundedTurnParams = {
   input: CodexUserInput[];
   requiredModalities: string[];
   isolation: "configured-transport" | "private-stdio";
+  ownedLocalProcessRequired?: true;
   threadConfig?: JsonObject;
   historyItems?: JsonValue[];
   requireNoExternalCapabilities?: boolean;
@@ -120,6 +121,9 @@ export async function runBoundedCodexAppServerTurn(
     pluginConfig: params.options.pluginConfig,
     managedCommandOrder: params.isolation === "private-stdio" ? "package-first" : undefined,
   });
+  if (params.ownedLocalProcessRequired && appServer.start.transport !== "stdio") {
+    throw new Error("Supervised isolated completion requires an owned local Codex stdio process");
+  }
   if (params.isolation === "configured-transport") {
     return await runBoundedCodexAppServerTurnInWorkspace(params, appServer, {
       cwd: params.agentDir?.trim() || process.cwd(),

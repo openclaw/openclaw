@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 
+// v18 fences workers that ignore physical attempt resource custody.
+// v17 prevents older supervised workers from ignoring accepted workflow contracts.
 // v16 makes Skill Workshop ownership directory-based instead of row-provenance-based.
 // v15 removes redundant agent/session projections from conversation bindings.
 // v14 retains unknown creator namespaces on historical cron jobs.
@@ -13,13 +15,30 @@ import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 16;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 18;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
   "task_flow_episodes",
   "task_flow_supervisors",
+  "task_flow_contracts",
+  "task_flow_workspace_allocations",
+  "task_flow_workspace_roots",
+  "task_flow_workspace_versions",
+  "task_flow_workspace_heads",
+  "task_flow_recovery",
+  "task_flow_sources",
+  "task_flow_inputs",
+  "task_flow_operator_acceptance",
+  "task_flow_notifications",
+  "task_flow_operations",
+  "task_flow_operation_executions",
+  "task_flow_operation_launches",
+  "task_flow_command_resources",
+  "task_flow_attempt_resources",
+  "task_flow_attempt_candidates",
+  "task_flow_acceptance",
   "update_runs",
   "session_repository_workspaces",
   "github_repository_publication_requests",
@@ -44,7 +63,16 @@ export const FIRST_USE_STATE_TABLES = [
   "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
+  "idx_task_flow_workspace_allocations_owner",
+  "idx_task_flow_workspace_allocations_retention",
+  "idx_task_flow_operation_launches_state",
+  "idx_task_flow_command_resources_state",
+  "idx_task_flow_attempt_resources_state",
+  "idx_task_flow_attempt_resources_episode",
+  "idx_task_flow_sources_session",
+  "idx_task_flow_notifications_due",
   "idx_task_flow_episodes_due",
+  "idx_task_flow_operations_due",
   "idx_update_runs_created",
   "idx_update_runs_active",
   "idx_github_repository_publication_shared_request",
@@ -124,6 +152,8 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "creator-namespace-v14"
     | "conversation-binding-targets-v15"
     | "skill-workshop-directory-ownership-v16"
+    | "supervised-workflow-custody-v17"
+    | "supervised-attempt-custody-v18"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";

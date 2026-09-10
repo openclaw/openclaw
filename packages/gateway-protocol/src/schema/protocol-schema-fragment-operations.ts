@@ -5,6 +5,7 @@ import * as config from "./config.js";
 import * as humanMentions from "./human-mentions.js";
 import * as openclaw from "./openclaw.js";
 import * as taskSuggestions from "./task-suggestions.js";
+import * as supervision from "./tasks-supervision.js";
 import * as tasks from "./tasks.js";
 import * as users from "./users.js";
 import * as wizard from "./wizard.js";
@@ -85,6 +86,16 @@ export const OperationsProtocolSchemas = {
   TaskSuggestionsListParams: taskSuggestions.TaskSuggestionsListParamsSchema,
   TaskSuggestionsListResult: taskSuggestions.TaskSuggestionsListResultSchema,
   TaskSummary: tasks.TaskSummarySchema,
+  SupervisionControlParams: supervision.SupervisionControlParamsSchema,
+  SupervisionArtifactParams: supervision.SupervisionArtifactParamsSchema,
+  SupervisionArtifactResult: supervision.SupervisionArtifactResultSchema,
+  SupervisionGetParams: supervision.SupervisionGetParamsSchema,
+  SupervisionListParams: supervision.SupervisionListParamsSchema,
+  SupervisionSummary: supervision.SupervisionSummarySchema,
+  SupervisionGetResult: supervision.SupervisionGetResultSchema,
+  SupervisionControlResult: supervision.SupervisionControlResultSchema,
+  SupervisionListResult: supervision.SupervisionListResultSchema,
+
   TasksListParams: tasks.TasksListParamsSchema,
   TasksListResult: tasks.TasksListResultSchema,
   TasksGetParams: tasks.TasksGetParamsSchema,

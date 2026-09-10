@@ -675,3 +675,18 @@ export {
   FsListDirParamsSchema,
   FsListDirResultSchema,
 } from "./schema-modules.js";
+
+export {
+  SupervisionControlParamsSchema,
+  SupervisionGetParamsSchema,
+  SupervisionListParamsSchema,
+  SupervisionSummarySchema,
+  SupervisionGetResultSchema,
+  SupervisionListResultSchema,
+  SupervisionControlResultSchema,
+} from "./schema/tasks-supervision.js";
+
+export {
+  SupervisionArtifactParamsSchema,
+  SupervisionArtifactResultSchema,
+} from "./schema/tasks-supervision.js";

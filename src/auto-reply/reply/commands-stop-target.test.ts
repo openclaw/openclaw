@@ -7,18 +7,34 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import type { maybeAdmitSupervisedRootTask } from "../../tasks/supervised-task.admission.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
-import { handleStopCommand } from "./commands-session-abort.js";
-import "./commands-session-abort.test-support.js";
+import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
+import type { resolveCommandSessionEntryForKey } from "./commands-session-store.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import "./commands-session-abort.test-support.js";
+import { setChannelSourceTurnId } from "./source-turn-id.js";
 
+const supervision = vi.hoisted(() => ({
+  admit: vi.fn<typeof maybeAdmitSupervisedRootTask>(),
+  session: vi.fn(),
+}));
+vi.mock("../../tasks/supervised-task.admission.js", () => ({
+  maybeAdmitSupervisedRootTask: supervision.admit,
+}));
+vi.mock("../../tasks/supervised-task.root-source.js", () => ({
+  bindSupervisedRootSource: (p: object) => p,
+}));
+vi.mock("../../gateway/session-utils.js", () => ({
+  loadGatewaySessionEntryReadOnly: supervision.session,
+}));
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
 const createInternalHookEventMock = vi.hoisted(() => vi.fn(() => ({})));
 const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
 const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
-  vi.fn(() => ({ entry: undefined, key: undefined })),
+  vi.fn<typeof resolveCommandSessionEntryForKey>(() => ({ entry: undefined, key: undefined })),
 );
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() =>
@@ -53,7 +69,7 @@ vi.mock("./abort-cutoff.js", () => ({
 vi.mock("./abort.js", () => ({
   abortSessionRunTargetWithOutcome: abortSessionRunTargetWithOutcomeMock,
   formatAbortReplyText: formatAbortReplyTextMock,
-  isAbortTrigger: vi.fn(() => false),
+  isAbortTrigger: vi.fn((raw: string) => raw === "stop"),
   setAbortMemory: vi.fn(),
   stopSubagentsForRequester: stopSubagentsForRequesterMock,
 }));
@@ -291,3 +307,113 @@ describe("handleStopCommand target fallback", () => {
     expect(stopSubagentsForRequesterMock).not.toHaveBeenCalled();
   });
 });
+
+it.each([
+  { raw: "/stop", enabled: true },
+  { raw: "/stop@FixtureBot", enabled: true },
+  { raw: "/stop", enabled: false },
+  { raw: "/stop", enabled: undefined },
+])(
+  "stops the exact supervised target through canonical $raw with admission $enabled",
+  async ({ raw, enabled }) => {
+    supervision.admit.mockReset();
+    formatAbortReplyTextMock.mockReturnValue("⚙️ Agent was aborted.");
+    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: false, aborted: false });
+    const params = buildStopParams();
+    params.command.rawBodyNormalized = raw;
+    params.command.commandBodyNormalized = "/stop";
+    params.agentId = "target";
+    params.provider = "openai";
+    params.model = "fixture";
+    params.cfg.agents = {
+      entries: {
+        target:
+          enabled === undefined
+            ? {}
+            : {
+                taskSupervision: { enabled, policyFile: "/unused-policy.json" },
+              },
+      },
+    };
+    setChannelSourceTurnId(params.ctx, "accepted-stop-input");
+    const target = { sessionId: "durable-session", updatedAt: 1000 };
+    resolveCommandSessionEntryForKeyMock.mockReturnValue({
+      entry: target,
+      key: "agent:target:telegram:direct:123",
+    });
+    supervision.session.mockReturnValue({ entry: target });
+    supervision.admit.mockImplementation(async (input) => {
+      input.assertCurrent();
+      expect(input.message).toBe("/stop");
+      expect(input.source).toMatchObject({
+        sessionId: "durable-session",
+        sessionKey: "agent:target:telegram:direct:123",
+        inputId: "accepted-stop-input",
+      });
+      expect(abortSessionRunTargetWithOutcomeMock).not.toHaveBeenCalled();
+      return {
+        kind: "handled",
+        control: "cancel",
+        replay: false,
+        message: "Supervised task cancelled; earlier effects remain unknown.",
+      };
+    });
+    abortSessionRunTargetWithOutcomeMock.mockClear();
+    const result = await handleStopCommand(params, true);
+    expect(supervision.admit).toHaveBeenCalledTimes(1);
+    expect(abortSessionRunTargetWithOutcomeMock).toHaveBeenCalledTimes(1);
+    expect(result?.reply?.text).toContain("Supervised task cancelled");
+    expect(result?.reply?.text).toContain("Agent was aborted");
+  },
+);
+
+// The command boundary must still stop the exact ordinary target if supervision
+// fails either before the control write or in the durable store itself.
+it.each([
+  { command: "/stop", failure: "database" },
+  { command: "/stop", failure: "source" },
+  { command: "stop", failure: "database" },
+  { command: "stop", failure: "source" },
+])(
+  "preserves ordinary $command and reports supervised $failure failure",
+  async ({ command, failure }) => {
+    vi.clearAllMocks();
+    supervision.admit.mockReset().mockRejectedValue(new Error("Supervision store unavailable"));
+    formatAbortReplyTextMock.mockReturnValue("⚙️ Agent was aborted.");
+    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: true, aborted: true });
+    const params = buildStopParams();
+    params.command.rawBodyNormalized = command;
+    params.command.commandBodyNormalized = command;
+    params.agentId = "target";
+    params.provider = "openai";
+    params.model = "fixture";
+    params.cfg.agents = {
+      entries: {
+        target: { taskSupervision: { enabled: true, policyFile: "/unused-policy.json" } },
+      },
+    };
+    setChannelSourceTurnId(params.ctx, "failed-stop-input");
+    const target = { sessionId: "durable-session", updatedAt: 1000 };
+    resolveCommandSessionEntryForKeyMock.mockReturnValue({
+      entry: target,
+      key: "agent:target:telegram:direct:123",
+    });
+    supervision.session.mockReturnValue({
+      entry: failure === "source" ? { ...target, sessionId: "replacement-session" } : target,
+    });
+    const handler = command === "/stop" ? handleStopCommand : handleAbortTrigger;
+    const result = await handler(params, true);
+    expect(abortSessionRunTargetWithOutcomeMock).toHaveBeenCalledExactlyOnceWith({
+      key: "agent:target:telegram:direct:123",
+      sessionId: "durable-session",
+    });
+    expect(persistAbortTargetEntryMock).toHaveBeenCalledTimes(1);
+    if (command === "/stop") {
+      expect(stopSubagentsForRequesterMock).toHaveBeenCalledTimes(1);
+      expect(createInternalHookEventMock).toHaveBeenCalledTimes(1);
+    }
+    expect(result?.reply?.text).toContain("Agent was aborted");
+    expect(result?.reply?.text).toContain("Supervised task cancellation could not be confirmed");
+    expect(result?.reply?.text).toContain("Retry /stop");
+  },
+);

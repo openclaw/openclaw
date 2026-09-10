@@ -1,5 +1,9 @@
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -46,6 +50,73 @@ describe("resolveRuntimeWorkerUrl", () => {
 });
 
 describe("resolveRuntimeWorkerArgv", () => {
+  it("keeps installation workspace aliases when the worker cwd is a private artifact", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "runtime-worker-alias-"));
+    try {
+      const worker = path.join(directory, "worker.mts");
+      // This actual source dependency relies on repository paths, not a package
+      // installed in the task-controlled working directory.
+      const dependency = new URL("../agents/agent-scope-config.ts", import.meta.url).href;
+      await writeFile(
+        worker,
+        `await import(${JSON.stringify(dependency)}); process.stdout.write("loaded");`,
+      );
+      const result = await promisify(execFile)(
+        process.execPath,
+        resolveRuntimeWorkerArgv(pathToFileURL(worker)),
+        { cwd: directory, timeout: 15_000 },
+      );
+      expect(result.stdout).toBe("loaded");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves import-only dependencies when a source worker loads compiled ESM", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "runtime-worker-esm-"));
+    try {
+      const dependency = path.join(directory, "node_modules", "import-only");
+      await mkdir(dependency, { recursive: true });
+      await writeFile(path.join(directory, "package.json"), JSON.stringify({ type: "module" }));
+      await writeFile(
+        path.join(dependency, "package.json"),
+        JSON.stringify({ type: "module", exports: { import: "./index.js" } }),
+      );
+      await writeFile(path.join(dependency, "index.js"), "export default 42;");
+      await writeFile(
+        path.join(directory, "compiled.js"),
+        "import value from 'import-only'; export { value };",
+      );
+      const worker = path.join(directory, "worker.mts");
+      await writeFile(
+        worker,
+        "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); process.stdout.write(String(require('./compiled.js').value));",
+      );
+      const result = await promisify(execFile)(
+        process.execPath,
+        resolveRuntimeWorkerArgv(pathToFileURL(worker)),
+        { cwd: directory, timeout: 15_000 },
+      );
+      expect(result.stdout).toBe("42");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it("loads a source worker outside the installation without resolving packages from its cwd", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "runtime-worker-cwd-"));
+    try {
+      const worker = path.join(directory, "worker.mts");
+      await writeFile(worker, "const value: number = 42; process.stdout.write(String(value));");
+      const result = await promisify(execFile)(
+        process.execPath,
+        resolveRuntimeWorkerArgv(pathToFileURL(worker)),
+        { cwd: directory, timeout: 15_000 },
+      );
+      expect(result.stdout).toBe("42");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it.each([
     { runtime: "/usr/bin/node", typescriptLoader: true },
     { runtime: "C:\\Program Files\\nodejs\\node.exe", typescriptLoader: true },
@@ -54,8 +125,19 @@ describe("resolveRuntimeWorkerArgv", () => {
   ])("uses the source loader appropriate for $runtime", ({ runtime, typescriptLoader }) => {
     for (const extension of ["ts", "mts", "cts", "js", "mjs"]) {
       const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
-      const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", "tsx"] : [];
-      expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([...loader, fileURLToPath(url)]);
+      const args = resolveRuntimeWorkerArgv(url, runtime);
+      expect(args.at(-1)).toBe(fileURLToPath(url));
+      if (!typescriptLoader || !extension.endsWith("ts")) {
+        expect(args).toEqual([fileURLToPath(url)]);
+      } else {
+        expect(args).toHaveLength(3);
+        expect(args[0]).toBe("--import");
+        if (extension === "cts") {
+          expect(args[1]).toBe(import.meta.resolve("tsx"));
+        } else {
+          expect(args[1]).toMatch(/^data:text\/javascript;base64,/);
+        }
+      }
     }
   });
 });

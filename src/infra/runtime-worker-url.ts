@@ -26,5 +26,22 @@ export function resolveRuntimeWorkerUrl(params: {
 
 export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
   const entry = fileURLToPath(url);
-  return /\.[cm]?ts$/.test(entry) && !isBunRuntime(execPath) ? ["--import", "tsx", entry] : [entry];
+  // Source workers may run in isolated workspaces without node_modules. Resolve
+  // the trusted loader from this installation, never from the worker's cwd.
+  // For ESM workers, do not install tsx's CJS hook: it rewrites compiled plugin
+  // imports to require(), breaking dependencies with import-only exports.
+  if (!/\.[cm]?ts$/.test(entry) || isBunRuntime(execPath)) {
+    return [entry];
+  }
+  if (entry.endsWith(".cts")) {
+    return ["--import", import.meta.resolve("tsx"), entry];
+  }
+  // Pin aliases to the trusted source installation, not a task-controlled cwd
+  // or tsconfig. ESM-only registration preserves import-only plugin dependencies.
+  const registration = `import { register } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))}; register({ tsconfig: ${JSON.stringify(fileURLToPath(new URL("../../tsconfig.json", import.meta.url)))} });`;
+  return [
+    "--import",
+    `data:text/javascript;base64,${Buffer.from(registration).toString("base64")}`,
+    entry,
+  ];
 }

@@ -109,6 +109,33 @@ describe("agent command worktree admission", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("does not scaffold an explicitly prepared task snapshot", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      mockConfig(home, storePath);
+      const workspace = path.join(home, "prepared-task");
+      await fs.mkdir(workspace);
+      await fs.writeFile(path.join(workspace, "source.txt"), "accepted bytes");
+      await seedSession(storePath, workspace);
+      const prepared = await prepareAgentCommandExecution(
+        {
+          message: "Inspect accepted source",
+          sessionKey,
+          workspaceDir: workspace,
+          cwd: workspace,
+          workspacePrepared: true,
+        },
+        runtime,
+      );
+      try {
+        expect(ensureAgentWorkspace).not.toHaveBeenCalled();
+        expect(await fs.readdir(workspace)).toEqual(["source.txt"]);
+      } finally {
+        await prepared.runLease?.release();
+      }
+    });
+  });
+
   it("holds the lease through workspace preparation so a racing removal is rejected", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");

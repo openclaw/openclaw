@@ -58,7 +58,8 @@ type RestartSafeChatAdmission = {
 export type RestartSafeChatTerminalState = {
   error?: string;
   retryable: boolean;
-  status: "failed" | "killed";
+  // completed settles an ingress handoff, not the delegated task's goal.
+  status: "failed" | "killed" | "completed";
 };
 
 type RetryableUnadoptedChatClaim = SessionEntry & {

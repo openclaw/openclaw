@@ -10,6 +10,7 @@ import {
   installationTargetEnv,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../../infra/installation-target-context.js";
+import { requiresOwnedRuntimeProcess } from "../../infra/owned-runtime-process-context.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
@@ -152,6 +153,11 @@ export async function executePreparedCliRun(
   const backend = context.preparedBackend.backend;
   const executionTarget = context.executionTarget;
   const localProcessEnv = installationTargetEnv(getInstallationTarget());
+  if (requiresOwnedRuntimeProcess() && executionTarget.kind === "node") {
+    throw new Error(
+      "Supervised execution requires an owned local CLI process; node placement is unsupported",
+    );
+  }
   if (localProcessEnv && executionTarget.kind === "node") {
     throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
   }

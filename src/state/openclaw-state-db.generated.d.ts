@@ -1380,6 +1380,70 @@ export interface TaskDeliveryState {
   task_id: string;
 }
 
+export interface TaskFlowAcceptance {
+  accepted_at_ms: number;
+  attempt_id: string;
+  contract_hash: string;
+  episode: number;
+  flow_id: string;
+  record_json: string;
+  source_hash: string;
+}
+
+export interface TaskFlowAttemptCandidates {
+  attempt_id: string;
+  consumed_at_ms: number | null;
+  decision_hash: string;
+  decision_json: string;
+  identity_hash: string;
+  manifest_json: string | null;
+  plan_hash: string;
+  resource_id: string;
+  sealed_at_ms: number | null;
+  settled_task_json: string | null;
+  staged_at_ms: number;
+  state: string;
+  task_json: string;
+  version_id: string | null;
+}
+
+export interface TaskFlowAttemptResources {
+  attempt_id: string;
+  cleanup_expires_at_ms: number | null;
+  cleanup_owner: string | null;
+  created_at_ms: number;
+  episode: number;
+  failure_code: string | null;
+  flow_id: string;
+  identity_json: string | null;
+  launcher_joined_at_ms: number | null;
+  plan_json: string;
+  resource_id: string;
+  revoked_at_ms: number | null;
+  scope_name: string;
+  state: string;
+  updated_at_ms: number;
+}
+
+export interface TaskFlowCommandResources {
+  cleanup_expires_at_ms: number | null;
+  cleanup_owner: string | null;
+  created_at_ms: number;
+  execution_id: string;
+  identity_json: string | null;
+  scope_name: string;
+  state: string;
+  updated_at_ms: number;
+}
+
+export interface TaskFlowContracts {
+  contract_hash: string;
+  episode: number;
+  flow_id: string;
+  record_json: string;
+  workspace: string;
+}
+
 export interface TaskFlowEpisodes {
   deadline_at_ms: number;
   due_at_ms: number;
@@ -1390,12 +1454,140 @@ export interface TaskFlowEpisodes {
   revision: number;
 }
 
+export interface TaskFlowInputs {
+  created_at_ms: number;
+  disposition: string;
+  episode: number | null;
+  fingerprint: string;
+  flow_id: string | null;
+  record_json: Generated<string | null>;
+  source_key: string;
+}
+
+export interface TaskFlowNotifications {
+  attempts: Generated<number>;
+  content: string;
+  created_at_ms: number;
+  due_at_ms: number;
+  episode: number;
+  flow_id: string;
+  lease_expires_at_ms: number | null;
+  notification_id: string;
+  owner_id: string | null;
+  receipt_json: string | null;
+  revision: number;
+  state: string;
+  updated_at_ms: number;
+}
+
+export interface TaskFlowOperationExecutions {
+  dispatched_at_ms: number | null;
+  execution_id: string;
+  finished_at_ms: number | null;
+  generation: number;
+  lease_expires_at_ms: number;
+  operation_id: string;
+  owner_id: string;
+  record_json: string;
+}
+
+export interface TaskFlowOperationLaunches {
+  created_at_ms: number;
+  execution_id: string;
+  launcher_pid: number;
+  launcher_start_time: number;
+  runner_pid: number | null;
+  runner_start_time: number | null;
+  state: string;
+  updated_at_ms: number;
+}
+
+export interface TaskFlowOperations {
+  deadline_at_ms: number;
+  due_at_ms: number;
+  episode: number;
+  flow_id: string;
+  generation: number;
+  idempotency_key: string;
+  input_hash: string;
+  operation_id: string;
+  record_json: string;
+  state: string;
+}
+
+export interface TaskFlowOperatorAcceptance {
+  accepted_at_ms: number;
+  actor_id: string;
+  approval_id: string;
+  contract_hash: string;
+  criterion_id: string;
+  episode: number;
+  flow_id: string;
+  source_hash: string;
+}
+
+export interface TaskFlowRecovery {
+  episode: number;
+  fault_json: string | null;
+  flow_id: string;
+  recoveries: Generated<number>;
+  updated_at_ms: number;
+}
+
+export interface TaskFlowSources {
+  agent_id: string;
+  flow_id: string;
+  record_json: string;
+  session_id: string;
+  session_key: string;
+}
+
 export interface TaskFlowSupervisors {
   expires_at_ms: number;
   flow_id: string | null;
   observed_at_ms: number;
   owner_id: string;
   stopped_at_ms: number | null;
+}
+
+export interface TaskFlowWorkspaceAllocations {
+  allocation_id: string;
+  created_at_ms: number;
+  discardable_at_ms: number | null;
+  episode: number;
+  flow_id: string;
+  kind: string;
+  owner_id: string;
+  owner_kind: string;
+  owner_pid: number;
+  owner_start_time: number;
+  reserved_bytes: number;
+  retention_ms: number;
+  state: string;
+  updated_at_ms: number;
+}
+
+export interface TaskFlowWorkspaceHeads {
+  episode: number;
+  flow_id: string;
+  version_id: string;
+}
+
+export interface TaskFlowWorkspaceRoots {
+  canonical_path: string;
+  device: string;
+  episode: number;
+  flow_id: string;
+  inode: string;
+}
+
+export interface TaskFlowWorkspaceVersions {
+  byte_count: number;
+  created_at_ms: number;
+  episode: number;
+  flow_id: string;
+  source_hash: string;
+  version_id: string;
 }
 
 export interface TaskRuns {
@@ -1808,8 +2000,25 @@ export interface DB {
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
+  task_flow_acceptance: TaskFlowAcceptance;
+  task_flow_attempt_candidates: TaskFlowAttemptCandidates;
+  task_flow_attempt_resources: TaskFlowAttemptResources;
+  task_flow_command_resources: TaskFlowCommandResources;
+  task_flow_contracts: TaskFlowContracts;
   task_flow_episodes: TaskFlowEpisodes;
+  task_flow_inputs: TaskFlowInputs;
+  task_flow_notifications: TaskFlowNotifications;
+  task_flow_operation_executions: TaskFlowOperationExecutions;
+  task_flow_operation_launches: TaskFlowOperationLaunches;
+  task_flow_operations: TaskFlowOperations;
+  task_flow_operator_acceptance: TaskFlowOperatorAcceptance;
+  task_flow_recovery: TaskFlowRecovery;
+  task_flow_sources: TaskFlowSources;
   task_flow_supervisors: TaskFlowSupervisors;
+  task_flow_workspace_allocations: TaskFlowWorkspaceAllocations;
+  task_flow_workspace_heads: TaskFlowWorkspaceHeads;
+  task_flow_workspace_roots: TaskFlowWorkspaceRoots;
+  task_flow_workspace_versions: TaskFlowWorkspaceVersions;
   task_runs: TaskRuns;
   update_runs: UpdateRuns;
   user_preferences: UserPreferences;

@@ -7,12 +7,17 @@ import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
 import type { PortalCloseParams, PortalListParams, PortalOpenParams } from "./schema/portals.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
+import type * as SupervisionSchema from "./schema/tasks-supervision.js";
 import type { UiCommandParams } from "./schema/ui-command.js";
 import type { UpdateRunsGetParams, UpdateRunsListParams } from "./schema/update-runs.js";
 import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "tasks.supervision.list": SupervisionSchema.SupervisionListParams;
+  "tasks.supervision.artifact": SupervisionSchema.SupervisionArtifactParams;
+  "tasks.supervision.get": SupervisionSchema.SupervisionGetParams;
+  "tasks.supervision.control": SupervisionSchema.SupervisionControlParams;
   "canvas.document.view": CanvasDocumentViewParams;
   "board.action": BoardSchema.BoardActionParams;
   "board.data.read": BoardSchema.BoardDataReadParams;

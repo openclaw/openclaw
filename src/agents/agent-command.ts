@@ -56,7 +56,7 @@ import {
 } from "./command/prepare.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
-import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
+import { createCurrentRunDeliveryPreparer } from "./command/session-helpers.js";
 import { prepareEmbeddedSessionState } from "./command/session-preparation.js";
 import { clearRotatedSessionMetadata } from "./command/session.js";
 import type {
@@ -262,42 +262,24 @@ async function agentCommandInternal(
         throw acpResolution.error;
       }
 
-      let currentRunDeliveryPrepared = false;
-      const prepareDeliveryForRun = async (candidateSessionEntry?: typeof sessionEntry) => {
-        if (currentRunDeliveryPrepared || opts.deliver !== true) {
-          return;
-        }
-        currentRunDeliveryPrepared = true;
-        let preparedDelivery: Awaited<ReturnType<typeof prepareCurrentRunDelivery>>;
-        try {
-          preparedDelivery = await prepareCurrentRunDelivery({
-            cfg,
-            opts,
-            agentId: sessionAgentId,
-            currentSessionKey: sessionKey,
-            sessionEntry: candidateSessionEntry,
-          });
-        } catch (error) {
-          if (opts.bestEffortDeliver !== true) {
-            throw error;
-          }
-          log.warn(
-            `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${coerceErrorMessage(error)}`,
-          );
-        }
-        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        if (preparedDelivery) {
-          currentRunDeliveryContext = preparedDelivery.context;
-          opts = {
-            ...opts,
-            replyChannel: preparedDelivery.context.channel,
-            replyTo: preparedDelivery.context.to,
-            replyAccountId: preparedDelivery.context.accountId,
-            threadId: preparedDelivery.context.threadId,
-            deliveryTargetMode: preparedDelivery.targetMode,
-          };
-        }
-      };
+      const prepareDeliveryForRun = createCurrentRunDeliveryPreparer({
+        prepared,
+        getOpts: () => opts,
+        assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
+        onWarning: (message) => log.warn(message),
+        onPrepared: (delivery, deliveryOpts) => {
+          currentRunDeliveryContext = delivery.context;
+          opts = deliveryOpts;
+        },
+      });
+
+      const supervision =
+        admissionIngress.kind === "local-cli" &&
+        cfg.agents?.entries?.[sessionAgentId]?.taskSupervision?.enabled
+          ? await import("./command/supervised-local.js")
+          : undefined;
+      const supervisedLocalRoot =
+        supervision?.isSupervisedLocalRoot({ prepared, opts, ingress: admissionIngress }) === true;
 
       if (
         sessionStore &&
@@ -334,8 +316,12 @@ async function agentCommandInternal(
             entry,
             forceRestartSafeTools: opts.forceRestartSafeTools,
             runId,
-            sourceIngress: generatedMediaSourceRunId ? "internal" : undefined,
-            sourceRunId: generatedMediaSourceRunId,
+            sourceIngress: generatedMediaSourceRunId
+              ? "internal"
+              : supervisedLocalRoot
+                ? "local-cli"
+                : undefined,
+            sourceRunId: generatedMediaSourceRunId ?? (supervisedLocalRoot ? runId : undefined),
             sourceReplyDeliveryMode: opts.sourceReplyDeliveryMode,
             suppressTextDelivery: opts.internalDeliverySuppressText,
           }),
@@ -503,6 +489,20 @@ async function agentCommandInternal(
       if (attemptPrepared.sessionId !== runOwnedSessionId) {
         runOwnedSessionId = attemptPrepared.sessionId;
         compactionSessionIdReporter.onCompactionCommitted(runOwnedSessionId);
+      }
+      if (supervisedLocalRoot && supervision) {
+        const supervisedResult = await supervision.runSupervisedLocalRootCommand({
+          prepared: attemptPrepared,
+          opts,
+          ingress: admissionIngress,
+          model: `${modelSelection.provider}/${modelSelection.model}`,
+          lifecycleGeneration,
+          sessionStoreRuntime,
+          runtime,
+        });
+        if (supervisedResult) {
+          return supervisedResult;
+        }
       }
       const embeddedAttempt = await runEmbeddedAgentAttempt({
         prepared: attemptPrepared,

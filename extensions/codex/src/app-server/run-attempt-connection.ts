@@ -128,6 +128,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const preparedEnvironment = params.hostCapabilities.preparedEnvironment?.();
   const remoteExec = isCodexRemoteExecPlacementSandbox(sandbox);
   const assertLocalTargetSupported = (unsupported: boolean) => {
+    if (preparedEnvironment?.ownedLocalProcessRequired && unsupported) {
+      throw new Error(
+        "Supervised execution requires an owned local Codex stdio process; socket, remote and sandbox placement are unsupported",
+      );
+    }
     if (preparedEnvironment?.localProcessEnv && unsupported) {
       throw new Error(
         "This runtime cannot target the diagnosed local installation. Use an owned local Codex stdio process, or use the saved prompt with a suggested external or manual handoff on this machine.",

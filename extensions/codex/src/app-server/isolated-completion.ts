@@ -58,6 +58,7 @@ export async function runCodexIsolatedCompletion(
     input: [{ type: "text", text: params.prompt, text_elements: [] }],
     requiredModalities: ["text"],
     isolation: "configured-transport",
+    ownedLocalProcessRequired: params.ownedLocalProcessRequired,
     requireNoExternalCapabilities: true,
   });
   params.assertCurrent?.();

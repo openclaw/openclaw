@@ -23,6 +23,7 @@ import {
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { readChannelSourceTurnId } from "./source-turn-id.js";
 
 type AbortTarget = {
   entry?: SessionEntry;
@@ -127,6 +128,82 @@ function buildAbortTargetApplyParams(
   };
 }
 
+/** Preserve the ordinary abort target while also revoking durable task custody.
+ * Only a host-owned channel input identity can address this conversation. */
+function stopSupervisedTarget(params: Parameters<CommandHandler>[0], target: AbortTarget) {
+  const { key: sessionKey, sessionId } = target;
+  const inputId =
+    readChannelSourceTurnId(params.ctx) ??
+    (params.rootCtx ? readChannelSourceTurnId(params.rootCtx) : undefined);
+  if (
+    !inputId ||
+    !sessionKey ||
+    !sessionId ||
+    !params.command.senderIsOwner ||
+    params.opts?.isHeartbeat ||
+    (params.ctx.InputProvenance && params.ctx.InputProvenance.kind !== "external_user")
+  ) {
+    return undefined;
+  }
+  return Promise.all([
+    import("../../tasks/supervised-task.admission.js"),
+    import("../../tasks/supervised-task.root-source.js"),
+    import("../../gateway/session-utils.js"),
+  ]).then(
+    async ([
+      { maybeAdmitSupervisedRootTask },
+      { bindSupervisedRootSource },
+      { loadGatewaySessionEntryReadOnly },
+    ]) => {
+      const assertCurrent = () => {
+        params.commandInvocationSignal?.throwIfAborted();
+        params.opts?.abortSignal?.throwIfAborted();
+        if (params.opts?.isCommandTargetCurrent?.() === false) {
+          throw new Error("Stop target changed before task cancellation");
+        }
+        const current = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: params.agentId });
+        if (
+          !current.entry ||
+          current.entry.sessionId !== sessionId ||
+          current.entry.archivedAt !== undefined
+        ) {
+          throw new Error("Stop target changed before task cancellation");
+        }
+      };
+      assertCurrent();
+      const result = await maybeAdmitSupervisedRootTask({
+        config: params.cfg,
+        source: bindSupervisedRootSource({
+          config: params.cfg,
+          agentId: params.agentId,
+          sessionKey,
+          sessionId,
+          namespace: "channel",
+          inputId,
+        }),
+        message: params.command.commandBodyNormalized,
+        model: `${params.provider}/${params.model}`,
+        ownerAuthorized: true,
+        internal: false,
+        assertCurrent,
+      });
+      if (result.kind === "admitted") {
+        throw new Error("Stop cannot admit new work");
+      }
+      return result.kind === "handled" ? result.message : undefined;
+    },
+  );
+}
+
+// Task custody is optional, but its cancellation failure must be visible without
+// disabling the ordinary run and child-stop path.
+function tryStopSupervisedTarget(params: Parameters<CommandHandler>[0], target: AbortTarget) {
+  return stopSupervisedTarget(params, target)?.catch(
+    () =>
+      "Supervised task cancellation could not be confirmed; it may still be running. Retry /stop or inspect Tasks.",
+  );
+}
+
 export const handleStopCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -144,6 +221,8 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
+  const supervisedStop = tryStopSupervisedTarget(params, abortTarget);
+  const supervised = supervisedStop ? await supervisedStop : undefined;
   let abortOutcome = { active: false, aborted: false };
   // Capture child generations before signalling the parent; cleanup must not discover
   // a replacement conversation's children after the original publisher finishes.
@@ -178,7 +257,11 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
   return {
     shouldContinue: false,
-    reply: { text: formatAbortReplyText(stopped, rejectionReason, failed) },
+    reply: {
+      text: [formatAbortReplyText(stopped, rejectionReason, failed), supervised]
+        .filter(Boolean)
+        .join("\n"),
+    },
   };
 };
 
@@ -199,11 +282,17 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
+  const supervisedStop = tryStopSupervisedTarget(params, abortTarget);
+  const supervised = supervisedStop ? await supervisedStop : undefined;
   const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
   const rejectionReason =
     abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
   return {
     shouldContinue: false,
-    reply: { text: formatAbortReplyText(undefined, rejectionReason) },
+    reply: {
+      text: [formatAbortReplyText(undefined, rejectionReason), supervised]
+        .filter(Boolean)
+        .join("\n"),
+    },
   };
 };

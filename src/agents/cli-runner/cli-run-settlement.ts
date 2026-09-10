@@ -565,6 +565,9 @@ export function buildCliRunResult(params: {
     payloads: payloadsWithToolMedia,
     meta: {
       durationMs: Date.now() - context.started,
+      ...(output.terminalResultText !== undefined
+        ? { cliTerminalResultText: output.terminalResultText }
+        : {}),
       ...(output.finalPromptText ? { finalPromptText: output.finalPromptText } : {}),
       ...(finalAssistantVisibleText || rawText
         ? {

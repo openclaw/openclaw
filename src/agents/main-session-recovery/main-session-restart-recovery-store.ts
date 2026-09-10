@@ -15,6 +15,7 @@ import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runti
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
+import { readSupervisedSourceHandoff } from "../../tasks/supervised-task.source.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -419,6 +420,67 @@ export async function recoverStore(params: {
     const expectedRecoverySourceRunId = normalizeOptionalString(
       entry.restartRecoveryDeliverySourceRunId,
     );
+    // A source can crash between committing independent task custody and
+    // clearing its ordinary restart claim. Observe the immutable handoff before
+    // any delivery/model recovery; a failed reconciliation must not replay it.
+    try {
+      const handoff =
+        expectedRecoverySourceRunId &&
+        readSupervisedSourceHandoff(
+          {
+            agentId,
+            sessionKey: dispatchSessionKey,
+            sessionId: entry.sessionId,
+            namespace:
+              entry.restartRecoverySourceIngress === "channel"
+                ? "channel"
+                : entry.restartRecoverySourceIngress === "local-cli"
+                  ? "local"
+                  : "gateway",
+            inputId: expectedRecoverySourceRunId,
+          },
+          params.stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } } : {},
+        );
+      if (handoff) {
+        const messages = await readSessionMessagesAsync(
+          {
+            agentId,
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey,
+            storePath: params.storePath,
+          },
+          { mode: "recent", maxMessages: 20, maxBytes: 256 * 1024 },
+        );
+        if (stopped()) {
+          return result;
+        }
+        const completion = await markSessionCompletedAfterRecoveryCheckpoint({
+          agentId,
+          entry,
+          messages,
+          reason: "supervised-handoff",
+          sourceTurnId: expectedRecoverySourceRunId,
+          sessionKey,
+          canonicalSessionKey: dispatchSessionKey,
+          storePath: params.storePath,
+          stateDir: params.stateDir,
+        });
+        if (completion.outcome === "completed") {
+          params.handledSessionKeys.add(resumeDedupeKey);
+          result.settled++;
+        } else {
+          result.skipped++;
+        }
+        continue;
+      }
+    } catch (error) {
+      mainSessionRecoveryLog.warn(
+        `supervised source handoff needs reconciliation for ${sessionKey}: ${String(error)}`,
+      );
+      result.failed++;
+      continue;
+    }
     const resumeCurrent = async (
       options: Pick<
         Parameters<typeof resumeMainSession>[0],

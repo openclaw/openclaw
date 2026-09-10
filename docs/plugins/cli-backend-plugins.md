@@ -433,6 +433,37 @@ acknowledgement; a zero exit alone is not proof of compaction. Do not declare
 this capability for a command that creates a separate session or requires an
 ordinary model turn.
 
+## Transport failure diagnostics
+
+Custom executors can throw `CliBackendTransportError` from
+`openclaw/plugin-sdk/cli-backend` to preserve native transport facts. Pass the
+existing error message and one diagnostic object:
+
+- `{ kind: "exit", exitCode, signal }`: values from the native child-process
+  exit event; status or signal may be `null`.
+- `{ kind: "initialize" }`: the native initialization response rejected startup.
+- `{ kind: "protocol" }`: the executor rejected a malformed control record or
+  a record exceeding its framing limit.
+
+The error carries a fixed own-data version marker so source and separately built
+SDK copies can recognize the same bounded diagnostic contract.
+
+This metadata does not select retries, alter timeouts, or quarantine auth
+profiles. Preserve the original error when rethrowing, or retain it as `cause`.
+Do not derive exit status or signal from stdout, stderr, provider messages, or
+credentials. Executors may separately call `error.withProcessStderr()` with four
+boolean observations: `received`, `complete`, `crashBanner`, and
+`outOfMemoryBanner`. `complete` means the stderr stream reached EOF, not merely
+that the process exited or a drain timeout elapsed. Banner flags report only
+recognized fixed markers and must not carry diagnostic text.
+
+These observations belong to the process, which may have served earlier turns;
+they do not establish the current turn's failure cause. Missing metadata means
+unobserved, and an incomplete stream cannot establish that a banner was absent.
+Supervised tasks expose bounded exit statuses, allowed signal names, fixed
+initialization/protocol categories, and closed stderr-observation categories for
+`SIGABRT`. Native diagnostic text stays outside their control records.
+
 ## MCP tool bridge
 
 CLI backends do not receive OpenClaw tools by default. If the CLI can consume

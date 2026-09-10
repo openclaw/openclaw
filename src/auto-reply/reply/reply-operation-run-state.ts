@@ -4,7 +4,7 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 
 type ReplyOperationAdmissionSnapshot =
   | { status: "owned" }
-  | { status: "accepted"; mode: "steer" | "followup" }
+  | { status: "accepted"; mode: "steer" | "followup" | "supervised" }
   | {
       status: "skipped";
       reason:

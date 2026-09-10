@@ -13,6 +13,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
+import { migrateSupervisedAttemptAllocationsV18 } from "./openclaw-state-db-schema-v18-attempts.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
@@ -457,5 +458,9 @@ export const versionedStateMigrations: ReadonlyArray<{
   {
     migrate: migrateSkillWorkshopDirectoryOwnership,
     applied: "Moved Skill Workshop ownership to per-agent directories (v16)",
+  },
+  {
+    migrate: migrateSupervisedAttemptAllocationsV18,
+    applied: "Preserved workspace allocations under episode-owned attempt custody (v18)",
   },
 ];

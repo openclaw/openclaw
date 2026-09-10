@@ -39,6 +39,9 @@ export function applySupervisedDecision(
   if (task.phase !== "running" || !task.attempt) {
     throw new Error("Decision requires a currently owned attempt");
   }
+  if (decision.kind === "operation") {
+    throw new Error("Operation decisions require atomic workflow admission");
+  }
   if (now >= task.policy.deadlineAt || now >= task.attempt.expiresAt) {
     return expireSupervisedTask(task, now);
   }

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { CliBackendTransportError } from "openclaw/plugin-sdk/cli-backend";
 import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
@@ -583,17 +584,49 @@ describe("Claude native stdio boundary", () => {
     expect(resultDetail(records).turn).toBe(1);
   });
 
-  it("reports a native exit with bounded process diagnostics instead of a successful empty reply", async () => {
-    const error = await collect(
-      await createContext("missing-result", {
-        liveSession: createLiveSession(),
-      }),
-    ).catch((failure: unknown) => failure);
-    expect(error).toBeInstanceOf(Error);
-    expect(formatErrorMessageForDisplay(error)).toContain(
-      "PermissionError: fixture cannot read its input",
-    );
-  });
+  it.each([
+    {
+      scenario: "missing-result",
+      detail: { kind: "exit", exitCode: 1, signal: null },
+    },
+    { scenario: "zero-exit", detail: { kind: "exit", exitCode: 0, signal: null } },
+    {
+      scenario: "initialize-exit",
+      detail: { kind: "exit", exitCode: 23, signal: null },
+    },
+    { scenario: "initialize-rejected", detail: { kind: "initialize" } },
+    { scenario: "malformed-control", detail: { kind: "protocol" } },
+    ...(process.platform === "win32"
+      ? []
+      : [
+          {
+            scenario: "signal-exit",
+            detail: { kind: "exit", exitCode: null, signal: "SIGTERM" },
+          },
+        ]),
+  ])(
+    "preserves native facts but not private output for $scenario",
+    async ({ scenario, detail }) => {
+      const liveSession = createLiveSession();
+      const context = await createContext(scenario, { liveSession });
+      const error: unknown = await collect(context).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(CliBackendTransportError);
+      expect(error).toMatchObject({ diagnostic: detail });
+      if (!(error instanceof CliBackendTransportError)) {
+        throw new Error("Expected typed native transport facts.");
+      }
+      expect(JSON.stringify(error.diagnostic)).not.toContain("SYNTHETIC_PRIVATE");
+      if (scenario === "missing-result") {
+        expect(formatErrorMessageForDisplay(error)).toContain(
+          "PermissionError: fixture cannot read its input",
+        );
+        expect(formatErrorMessageForDisplay(error)).toContain("SYNTHETIC_PRIVATE_STDERR");
+      }
+      expect(liveSession.current()).toBeUndefined();
+      const pid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
+      expect(() => process.kill(pid, 0)).toThrow();
+    },
+  );
 
   it("keeps an ordinary failed turn warm when no native background work remains", async () => {
     const liveSession = createLiveSession();

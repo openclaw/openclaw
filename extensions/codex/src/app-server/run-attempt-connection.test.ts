@@ -293,6 +293,48 @@ describe("prepareCodexAttemptConnection", () => {
     expect(connection.appServer.start.env).toMatchObject(localProcessEnv);
     expect(connection.disableLoginShell).toBe(true);
   });
+  it.each(["stdio", "unix", "websocket", "forwarded", "sandbox"])(
+    "requires an owned local model process before %s startup",
+    async (placement) => {
+      const sessionFile = path.join(tempDir, `owned-${placement}.jsonl`);
+      const params = createParams(sessionFile, path.join(tempDir, "owned-workspace"));
+      params.hostCapabilities = Object.freeze({
+        ...params.hostCapabilities,
+        preparedEnvironment: () => ({
+          credentialScrubEnv: {},
+          localIdentityEnv: {},
+          managedLocalIdentity: false,
+          ownedLocalProcessRequired: true,
+        }),
+      });
+      if (placement === "sandbox") {
+        params.sandbox = createSandboxContext({});
+      }
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      const appServer =
+        placement === "unix"
+          ? { transport: "unix", homeScope: "user", url: "unix:///fixture/native.sock" }
+          : placement === "websocket"
+            ? { transport: "websocket", url: "ws://127.0.0.1:19400", authToken: "fixture-token" }
+            : placement === "forwarded"
+              ? { transport: "stdio", remoteWorkspaceRoot: "/remote/workspace" }
+              : { transport: "stdio" };
+      const options = { bindingStore: testCodexAppServerBindingStore, pluginConfig: { appServer } };
+      if (placement === "stdio") {
+        const prepared = await prepareCodexAttemptConnection({ params, options });
+        expect(prepared.appServer.start.transport).toBe("stdio");
+        expect(prepared.shellEnvironment).toBeUndefined();
+        return;
+      }
+      const clientFactory = vi.fn(async () => {
+        throw new Error("unexpected native startup");
+      });
+      await expect(runCodexAppServerAttempt(params, { ...options, clientFactory })).rejects.toThrow(
+        "owned local",
+      );
+      expect(clientFactory).not.toHaveBeenCalled();
+    },
+  );
   it("preserves native process environment and login-shell behavior for an empty overlay", async () => {
     const sessionFile = path.join(tempDir, "native-local-no-overlay.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-native-local-no-overlay");

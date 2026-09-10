@@ -3,6 +3,7 @@ import {
   getInstallationTarget,
   withInstallationTarget,
 } from "../../infra/installation-target-context.js";
+import { withOwnedRuntimeProcess } from "../../infra/owned-runtime-process-context.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
@@ -114,4 +115,22 @@ describe("CLI installation target", () => {
       );
     },
   );
+});
+
+it("rejects node placement before spawn when a physical scope requires a local child", async () => {
+  const context = buildPreparedCliRunContext({
+    model: "fixture-model",
+    backend: {
+      command: "/bin/sh",
+      args: [],
+      output: "text",
+      systemPromptFileArg: undefined,
+      input: "stdin",
+    },
+  });
+  context.executionTarget = { kind: "node", placement: { nodeId: "fixture-node" } };
+  await expect(withOwnedRuntimeProcess(() => executePreparedCliRun(context))).rejects.toThrow(
+    "owned local CLI process",
+  );
+  expect(supervisorSpawnMock).not.toHaveBeenCalled();
 });

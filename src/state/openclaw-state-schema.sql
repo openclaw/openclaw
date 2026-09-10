@@ -1698,6 +1698,252 @@ CREATE TABLE IF NOT EXISTS task_flow_supervisors (
   stopped_at_ms INTEGER
 ) STRICT;
 
+-- Strong continuation companions are lazy. State v17 fences incompatible older workers.
+-- The accepted contract is immutable. Receipts belong to exact operation executions.
+CREATE TABLE IF NOT EXISTS task_flow_contracts (
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  contract_hash TEXT NOT NULL,
+  workspace TEXT NOT NULL,
+  record_json TEXT NOT NULL CHECK (json_valid(record_json) AND length(CAST(record_json AS BLOB)) <= 65536),
+  PRIMARY KEY (flow_id, episode),
+  FOREIGN KEY (flow_id, episode) REFERENCES task_flow_episodes(flow_id, episode)
+) STRICT;
+
+-- Artifact allocation precedes filesystem work. Unknown/live owners retain
+-- capacity independently of task leases; deleted tombstones preserve identity.
+CREATE TABLE IF NOT EXISTS task_flow_workspace_allocations (
+  allocation_id TEXT NOT NULL PRIMARY KEY,
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  owner_kind TEXT NOT NULL CHECK (owner_kind IN ('attempt', 'operation')),
+  owner_id TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL CHECK (owner_pid > 0),
+  owner_start_time INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('draft', 'version')),
+  state TEXT NOT NULL CHECK (state IN ('reserved', 'retained', 'released', 'deleting', 'deleted')),
+  reserved_bytes INTEGER NOT NULL CHECK (reserved_bytes >= 0),
+  retention_ms INTEGER NOT NULL CHECK (retention_ms >= 86400000),
+  discardable_at_ms INTEGER,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (flow_id, episode) REFERENCES task_flow_episodes(flow_id, episode)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_task_flow_workspace_allocations_owner
+  ON task_flow_workspace_allocations(owner_kind, owner_id, state);
+CREATE INDEX IF NOT EXISTS idx_task_flow_workspace_allocations_retention
+  ON task_flow_workspace_allocations(state, updated_at_ms);
+
+-- Preserve the admitted physical root across aliases, resume and initial copy.
+CREATE TABLE IF NOT EXISTS task_flow_workspace_roots (
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  canonical_path TEXT NOT NULL,
+  device TEXT NOT NULL,
+  inode TEXT NOT NULL,
+  PRIMARY KEY (flow_id, episode),
+  FOREIGN KEY (flow_id, episode) REFERENCES task_flow_contracts(flow_id, episode)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS task_flow_workspace_versions (
+  version_id TEXT NOT NULL PRIMARY KEY,
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  source_hash TEXT NOT NULL,
+  byte_count INTEGER NOT NULL CHECK (byte_count >= 0),
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (flow_id, episode) REFERENCES task_flow_contracts(flow_id, episode)
+) STRICT;
+CREATE TABLE IF NOT EXISTS task_flow_workspace_heads (
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  version_id TEXT NOT NULL,
+  PRIMARY KEY (flow_id, episode),
+  FOREIGN KEY (version_id) REFERENCES task_flow_workspace_versions(version_id),
+  FOREIGN KEY (flow_id, episode) REFERENCES task_flow_contracts(flow_id, episode)
+) STRICT;
+CREATE TABLE IF NOT EXISTS task_flow_recovery (
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  recoveries INTEGER NOT NULL DEFAULT 0 CHECK (recoveries BETWEEN 0 AND 8),
+  fault_json TEXT CHECK (fault_json IS NULL OR (json_valid(fault_json) AND length(CAST(fault_json AS BLOB)) <= 8192)),
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (flow_id, episode),
+  FOREIGN KEY (flow_id, episode) REFERENCES task_flow_episodes(flow_id, episode)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS task_flow_sources (
+  flow_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  record_json TEXT NOT NULL CHECK (json_valid(record_json) AND length(CAST(record_json AS BLOB)) <= 16384)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_task_flow_sources_session ON task_flow_sources(agent_id, session_key, session_id);
+CREATE TABLE IF NOT EXISTS task_flow_inputs (
+  source_key TEXT NOT NULL PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  flow_id TEXT,
+  episode INTEGER,
+  disposition TEXT NOT NULL CHECK (disposition IN ('ordinary', 'admitted', 'cancelled', 'resumed', 'steered', 'status', 'approved')),
+  record_json TEXT DEFAULT NULL CHECK (record_json IS NULL OR (json_valid(record_json) AND length(CAST(record_json AS BLOB)) <= 8192)),
+  created_at_ms INTEGER NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS task_flow_operator_acceptance (
+  approval_id TEXT NOT NULL PRIMARY KEY,
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  criterion_id TEXT NOT NULL,
+  contract_hash TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  accepted_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (flow_id, episode) REFERENCES task_flow_episodes(flow_id, episode)
+) STRICT;
+CREATE TABLE IF NOT EXISTS task_flow_notifications (
+  notification_id TEXT NOT NULL PRIMARY KEY,
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  revision INTEGER NOT NULL,
+  content TEXT NOT NULL CHECK (length(CAST(content AS BLOB)) <= 16384),
+  state TEXT NOT NULL CHECK (state IN ('pending', 'queued', 'delivered', 'suppressed', 'failed', 'unknown')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  owner_id TEXT,
+  lease_expires_at_ms INTEGER,
+  due_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  receipt_json TEXT CHECK (receipt_json IS NULL OR (json_valid(receipt_json) AND length(CAST(receipt_json AS BLOB)) <= 8192)),
+  FOREIGN KEY (flow_id) REFERENCES task_flow_sources(flow_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_task_flow_notifications_due ON task_flow_notifications(state, due_at_ms);
+
+CREATE TABLE IF NOT EXISTS task_flow_operations (
+  operation_id TEXT NOT NULL PRIMARY KEY,
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'reconciling', 'succeeded', 'failed', 'cancelled', 'input_required')),
+  due_at_ms INTEGER NOT NULL,
+  deadline_at_ms INTEGER NOT NULL,
+  generation INTEGER NOT NULL,
+  record_json TEXT NOT NULL CHECK (json_valid(record_json) AND length(CAST(record_json AS BLOB)) <= 49152),
+  UNIQUE (flow_id, episode, idempotency_key),
+  FOREIGN KEY (flow_id, episode) REFERENCES task_flow_contracts(flow_id, episode)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_task_flow_operations_due ON task_flow_operations(state, due_at_ms);
+
+CREATE TABLE IF NOT EXISTS task_flow_operation_executions (
+  execution_id TEXT NOT NULL PRIMARY KEY,
+  operation_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  owner_id TEXT NOT NULL,
+  lease_expires_at_ms INTEGER NOT NULL,
+  dispatched_at_ms INTEGER,
+  finished_at_ms INTEGER,
+  record_json TEXT NOT NULL CHECK (json_valid(record_json) AND length(CAST(record_json AS BLOB)) <= 40960),
+  UNIQUE (operation_id, generation),
+  FOREIGN KEY (operation_id) REFERENCES task_flow_operations(operation_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS task_flow_operation_launches (
+  execution_id TEXT NOT NULL PRIMARY KEY,
+  launcher_pid INTEGER NOT NULL CHECK (launcher_pid > 0),
+  launcher_start_time INTEGER NOT NULL,
+  runner_pid INTEGER CHECK (runner_pid > 0),
+  runner_start_time INTEGER,
+  state TEXT NOT NULL CHECK (state IN ('reserved', 'spawned', 'not_spawned', 'gone')),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK ((runner_pid IS NULL) = (runner_start_time IS NULL)),
+  CHECK (state != 'spawned' OR runner_pid IS NOT NULL),
+  FOREIGN KEY (execution_id) REFERENCES task_flow_operation_executions(execution_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_task_flow_operation_launches_state ON task_flow_operation_launches(state);
+
+-- Kernel resource custody outlives a model/runner lease and its outcome receipt.
+CREATE TABLE IF NOT EXISTS task_flow_command_resources (
+  execution_id TEXT NOT NULL PRIMARY KEY,
+  scope_name TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK (state IN ('planned', 'sealed', 'bound', 'closed')),
+  identity_json TEXT CHECK (identity_json IS NULL OR (json_valid(identity_json) AND length(CAST(identity_json AS BLOB)) <= 8192)),
+  cleanup_owner TEXT,
+  cleanup_expires_at_ms INTEGER,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK ((cleanup_owner IS NULL) = (cleanup_expires_at_ms IS NULL)),
+  CHECK (state != 'bound' OR identity_json IS NOT NULL),
+  FOREIGN KEY (execution_id) REFERENCES task_flow_operation_executions(execution_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_task_flow_command_resources_state ON task_flow_command_resources(state);
+
+CREATE TABLE IF NOT EXISTS task_flow_acceptance (
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  attempt_id TEXT NOT NULL,
+  contract_hash TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  accepted_at_ms INTEGER NOT NULL,
+  record_json TEXT NOT NULL CHECK (json_valid(record_json) AND length(CAST(record_json AS BLOB)) <= 32768),
+  PRIMARY KEY (flow_id, episode),
+  FOREIGN KEY (flow_id, episode) REFERENCES task_flow_contracts(flow_id, episode)
+) STRICT;
+
+-- Insert inside the canonical supervised schema slice, before flow_runs.
+-- Non-reusable tombstones: do not cascade deletion from semantic task state.
+CREATE TABLE IF NOT EXISTS task_flow_attempt_resources (
+  resource_id TEXT NOT NULL PRIMARY KEY,
+  flow_id TEXT NOT NULL,
+  episode INTEGER NOT NULL,
+  attempt_id TEXT NOT NULL UNIQUE,
+  scope_name TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK (state IN ('planned', 'launching', 'bound', 'running', 'closed')),
+  plan_json TEXT NOT NULL CHECK (json_valid(plan_json) AND length(CAST(plan_json AS BLOB)) <= 8192),
+  identity_json TEXT CHECK (identity_json IS NULL OR (json_valid(identity_json) AND length(CAST(identity_json AS BLOB)) <= 8192)),
+  revoked_at_ms INTEGER,
+  launcher_joined_at_ms INTEGER,
+  cleanup_owner TEXT,
+  cleanup_expires_at_ms INTEGER,
+  failure_code TEXT CHECK (failure_code IS NULL OR failure_code IN ('invalid_json', 'invalid_shape', 'oversized')),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK ((cleanup_owner IS NULL) = (cleanup_expires_at_ms IS NULL)),
+  CHECK (state NOT IN ('bound', 'running') OR identity_json IS NOT NULL),
+  CHECK (state NOT IN ('planned', 'launching') OR identity_json IS NULL),
+  CHECK (state != 'closed' OR revoked_at_ms IS NOT NULL),
+  FOREIGN KEY (flow_id, episode) REFERENCES task_flow_episodes(flow_id, episode)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_task_flow_attempt_resources_state
+  ON task_flow_attempt_resources(state, resource_id);
+CREATE INDEX IF NOT EXISTS idx_task_flow_attempt_resources_episode
+  ON task_flow_attempt_resources(flow_id, episode, state);
+
+-- Integrate in the canonical supervised slice beside task_flow_attempt_resources.
+-- No cascades: lost-response dispositions outlive semantic task progress.
+CREATE TABLE IF NOT EXISTS task_flow_attempt_candidates (
+  resource_id TEXT NOT NULL PRIMARY KEY REFERENCES task_flow_attempt_resources(resource_id),
+  attempt_id TEXT NOT NULL UNIQUE,
+  plan_hash TEXT NOT NULL,
+  identity_hash TEXT NOT NULL,
+  task_json TEXT NOT NULL CHECK (json_valid(task_json) AND length(CAST(task_json AS BLOB)) <= 65536),
+  decision_json TEXT NOT NULL CHECK (json_valid(decision_json) AND length(CAST(decision_json AS BLOB)) <= 65536),
+  decision_hash TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('decision', 'preparing', 'sealed', 'consumed')),
+  version_id TEXT UNIQUE REFERENCES task_flow_workspace_allocations(allocation_id),
+  manifest_json TEXT CHECK (manifest_json IS NULL OR (json_valid(manifest_json) AND length(CAST(manifest_json AS BLOB)) <= 8388608)),
+  settled_task_json TEXT CHECK (settled_task_json IS NULL OR (json_valid(settled_task_json) AND length(CAST(settled_task_json AS BLOB)) <= 65536)),
+  staged_at_ms INTEGER NOT NULL,
+  sealed_at_ms INTEGER,
+  consumed_at_ms INTEGER,
+  CHECK ((version_id IS NULL) = (manifest_json IS NULL)),
+  CHECK (state != 'decision' OR version_id IS NULL),
+  CHECK (state != 'preparing' OR version_id IS NOT NULL),
+  CHECK ((state IN ('sealed', 'consumed')) = (sealed_at_ms IS NOT NULL)),
+  CHECK ((state = 'consumed') = (consumed_at_ms IS NOT NULL)),
+  CHECK ((state = 'consumed') = (settled_task_json IS NOT NULL))
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS flow_runs (
   flow_id TEXT NOT NULL PRIMARY KEY,
   shape TEXT,

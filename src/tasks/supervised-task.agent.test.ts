@@ -1,7 +1,12 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { agentCommandFromSystem } from "../agents/agent-command.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { runSupervisedAgentAttempt } from "./supervised-task.agent.js";
+import { supervisedRuntimeFailureDiagnostic } from "./supervised-runtime-diagnostic.js";
+import { runSupervisedAgentPayload } from "./supervised-task.agent.js";
+const runSupervisedAgentAttempt = (
+  input: Parameters<typeof runSupervisedAgentPayload>[0],
+  context: Parameters<typeof runSupervisedAgentPayload>[1],
+) => runSupervisedAgentPayload(input, context, "/fixture-private");
 import type { SupervisedTask } from "./supervised-task.types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -143,4 +148,43 @@ it("rejects stale source ownership after an otherwise successful Codex response"
     };
   });
   await expect(runSupervisedAgentAttempt(current, source)).rejects.toThrow("source retired");
+});
+
+it("uses the CLI-owned terminal result while retaining strict decision parsing", async () => {
+  const current = task("claude-cli", "anthropic/fixture");
+  const final = JSON.stringify(decision);
+  const cliResult = (terminal: string) => ({
+    payloads: [{ mediaUrl: null, text: `Earlier tool commentary.\n${final}` }],
+    meta: {
+      durationMs: 1,
+      finalAssistantRawText: `Earlier tool commentary.\n${final}`,
+      cliTerminalResultText: terminal,
+      executionTrace: {
+        runner: "cli" as const,
+        winnerProvider: "claude-cli",
+        winnerModel: "fixture",
+        attempts: [],
+        fallbackUsed: false,
+      },
+      agentMeta: { sessionId: "attempt", provider: "claude-cli", model: "fixture" },
+    },
+  });
+  mocks.command.mockResolvedValue(cliResult(final));
+  await expect(runSupervisedAgentAttempt(current, context())).resolves.toEqual(decision);
+  mocks.command.mockResolvedValue(cliResult(`The result is ready.\n${final}`));
+  await expect(runSupervisedAgentAttempt(current, context())).rejects.toThrow(SyntaxError);
+  mocks.command.mockResolvedValue(cliResult(""));
+  await expect(runSupervisedAgentAttempt(current, context())).rejects.toThrow(SyntaxError);
+});
+
+it("classifies an actual dirty adapter result without leaking its diagnostic message", async () => {
+  mocks.command.mockResolvedValue({
+    payloads: [],
+    meta: { durationMs: 1, error: { kind: "hook_block", message: "SYNTHETIC_PRIVATE_MARKER" } },
+  });
+  const result = await runSupervisedAgentAttempt(
+    task("claude-cli", "anthropic/fixture"),
+    context(),
+  ).catch(supervisedRuntimeFailureDiagnostic);
+  expect(result).toBe("supervised-runtime:result:hook_block");
 });

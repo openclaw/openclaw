@@ -106,7 +106,8 @@ export async function gatherDispatchRequest(
       const admission = replyOperationRunState.admission;
       return (
         replayUnsafeActivity ||
-        (admission?.status === "accepted" && admission.mode === "steer") ||
+        (admission?.status === "accepted" &&
+          (admission.mode === "steer" || admission.mode === "supervised")) ||
         (admission?.status === "skipped" && admission.reason === "question-response-indeterminate")
       );
     },

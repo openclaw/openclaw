@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SupervisedOperationRequestSchema } from "./supervised-operation.types.js";
 
 const text = z.string().trim().min(1).max(4096);
 const id = z.string().min(1).max(128);
@@ -30,6 +31,7 @@ export type SupervisedGoal = z.infer<typeof SupervisedGoalSchema>;
 
 const EvidenceSchema = z.strictObject({ criterionId: id, observation: text });
 export const SupervisedDecisionSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("operation"), operation: SupervisedOperationRequestSchema }),
   z.strictObject({ kind: z.literal("define_goal"), goal: SupervisedGoalSchema }),
   z.strictObject({ kind: z.literal("continue"), next: text }),
   z.strictObject({ kind: z.literal("wait"), next: text, wakeAt: timestamp }),

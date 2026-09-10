@@ -8,6 +8,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { ensureSupervisedTaskAdmissionOwner } from "./supervised-task.admission-owner.js";
 import { startGatewayTaskSupervision } from "./supervised-task.gateway.js";
 import {
   createSupervisedTask,
@@ -25,6 +26,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./supervised-task.agent.js", () => ({
   prepareSupervisedAgentRuntime: mocks.prepare,
   runSupervisedAgentAttempt: mocks.attempt,
+}));
+vi.mock("./supervised-task.notifications.js", () => ({
+  startSupervisedTaskNotifications: () => ({ stop: () => {} }),
 }));
 const dirs = createTempDirTracker();
 const handles: Array<ReturnType<typeof startGatewayTaskSupervision>> = [];
@@ -184,4 +188,30 @@ it("does not admit a worker after its Gateway stops during runtime preparation",
   expect(mocks.attempt).not.toHaveBeenCalled();
   expect(mocks.error).not.toHaveBeenCalled();
   expect(getSupervisedTask(task.flowId)).toMatchObject({ phase: "ready", attempts: 0 });
+});
+
+it("waits for the preparing native owner before accepting concurrent root requests", async () => {
+  heartbeatTaskSupervisor("admitter", Date.now(), 60_000);
+  let release!: () => void;
+  mocks.prepare.mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  start();
+  await vi.waitFor(() => expect(mocks.prepare).toHaveBeenCalledTimes(1));
+  const first = ensureSupervisedTaskAdmissionOwner();
+  const second = ensureSupervisedTaskAdmissionOwner();
+  let completed = false;
+  void first.then(() => {
+    completed = true;
+  });
+  await Promise.resolve();
+  expect(completed).toBe(false);
+  release();
+  const owners = await Promise.all([first, second]);
+  expect(owners[0]).toBe(owners[1]);
+  expect(owners[0]).not.toBe("admitter");
+  expect(mocks.prepare).toHaveBeenCalledTimes(1);
 });

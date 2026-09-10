@@ -8,6 +8,7 @@ import {
   withInstallationTarget,
 } from "../../infra/installation-target-context.js";
 import { registerMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
+import { requiresOwnedRuntimeProcess } from "../../infra/owned-runtime-process-context.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
@@ -185,6 +186,7 @@ export function createAgentHarnessHostCapabilities(params: {
   const attemptSignal = attempt.abortSignal;
   const installationTarget = getInstallationTarget();
   const localProcessEnv = installationTargetEnv(installationTarget);
+  const ownedLocalProcessRequired = requiresOwnedRuntimeProcess();
   const { sessionKey, onAgentEvent } = attempt;
   // Capture the selected harness declaration before plugin code can mutate it.
   // Full must not cover other commands merely because the same plugin owns them.
@@ -498,6 +500,7 @@ export function createAgentHarnessHostCapabilities(params: {
         localIdentityEnv: Object.freeze({ ...preparedRunEnvironment.localIdentityEnv }),
         managedLocalIdentity: preparedRunEnvironment.managedLocalIdentity,
         ...(localProcessEnv ? { localProcessEnv } : {}),
+        ...(ownedLocalProcessRequired ? { ownedLocalProcessRequired: true as const } : {}),
       });
     },
     bindToolSurface,

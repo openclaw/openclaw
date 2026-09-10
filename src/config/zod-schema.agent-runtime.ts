@@ -945,6 +945,10 @@ export const AgentEntrySchema = z
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),
+    taskSupervision: z
+      .object({ enabled: z.boolean(), policyFile: z.string().min(1).max(4096) })
+      .strict()
+      .optional(),
     models: AgentModelMapSchema.optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     thinkingDefault: z

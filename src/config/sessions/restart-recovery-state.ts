@@ -368,6 +368,7 @@ export function normalizeRestartRecoveryEntryFields(
     "restartRecoverySourceIngress",
     entry.restartRecoverySourceIngress === "channel" ||
       entry.restartRecoverySourceIngress === "control-ui" ||
+      entry.restartRecoverySourceIngress === "local-cli" ||
       entry.restartRecoverySourceIngress === "internal"
       ? entry.restartRecoverySourceIngress
       : undefined,

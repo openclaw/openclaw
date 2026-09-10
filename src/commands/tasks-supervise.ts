@@ -4,6 +4,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { RuntimeEnv } from "../runtime.js";
 import {
+  controlSupervisedTask,
+  SupervisedTaskControlSchema,
+} from "../tasks/supervised-task.controls.js";
+import {
   cancelSupervisedTask,
   createSupervisedTask,
   findCurrentTaskSupervisor,
@@ -13,7 +17,9 @@ import {
   resumeSupervisedTask,
 } from "../tasks/supervised-task.store.js";
 import { SupervisedGoalSchema, SupervisedPolicySchema } from "../tasks/supervised-task.types.js";
+import { getSupervisedTaskView } from "../tasks/supervised-task.view.js";
 import { startSupervisedTaskWorker } from "../tasks/supervised-task.worker.js";
+import { SupervisedWorkflowContractSchema } from "../tasks/supervised-workflow.types.js";
 
 const DefinitionSchema = z.strictObject({
   flowId: z.string().min(1).max(128).optional(),
@@ -23,6 +29,7 @@ const DefinitionSchema = z.strictObject({
   prompt: z.string().trim().min(1).max(4096),
   goal: SupervisedGoalSchema.optional(),
   policy: SupervisedPolicySchema,
+  workflow: SupervisedWorkflowContractSchema.optional(),
 });
 const ResponseSchema = z.strictObject({
   episode: z.number().int().positive(),
@@ -200,4 +207,23 @@ export async function resumeSupervisedTaskCommand(
       Date.now(),
     ),
   );
+}
+
+/** Local CLI is the operator authority; request files cannot choose that actor. */
+export async function controlSupervisedTaskCommand(
+  filename: string,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  const request = SupervisedTaskControlSchema.parse(await readDefinition(filename));
+  controlSupervisedTask(
+    request,
+    {
+      actorId: "local-operator",
+      assertCurrent: () => {},
+      supervisorOwnerId:
+        request.action.kind === "resume" ? findCurrentTaskSupervisor(Date.now()) : undefined,
+    },
+    Date.now(),
+  );
+  print(runtime, getSupervisedTaskView(request.flowId, Date.now()));
 }
