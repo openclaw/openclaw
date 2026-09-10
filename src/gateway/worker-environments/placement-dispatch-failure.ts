@@ -79,6 +79,7 @@ export type WorkerDispatchPlacementStore = Pick<
 export type WorkerDispatchEnvironmentService = Pick<
   WorkerEnvironmentService,
   | "attachSession"
+  | "bindPreparedWorkspace"
   | "create"
   | "createFromProfileSnapshot"
   | "destroy"

@@ -7,6 +7,11 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  canRunOpenClawNodeDiagnostics,
+  classifyUnsupportedNodeCommand,
+  formatUnsupportedNodeDiagnosticWarning,
+} from "./node-version.mjs";
 
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
@@ -47,15 +52,21 @@ const ensureSupportedRuntimeVersion = async () => {
     }
     return false;
   }
-
-  process.stderr.write(`openclaw: ${failure}\n`);
+  const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
+  const canRunDiagnostics = canRunOpenClawNodeDiagnostics(process.versions.node, probe.available);
+  const diagnosticExemption = unsupportedCommand === "diagnostic" && canRunDiagnostics;
+  if (!diagnosticExemption) {
+    process.stderr.write(`openclaw: ${failure}\n`);
+  }
   // These invocations have an exact-PID contract and cannot acquire a wrapper process.
   if (
     !isForegroundGmailRunInvocation(process.argv) &&
     !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv))
   ) {
     const { resolveUpdatedNodeRuntime } = await import("./node-runtime-update.mjs");
-    const nodePath = await resolveUpdatedNodeRuntime(resolveLauncherHomeDir());
+    const nodePath = await resolveUpdatedNodeRuntime(resolveLauncherHomeDir(), {
+      allowInstall: !diagnosticExemption,
+    });
     if (nodePath) {
       const env = { ...process.env, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" };
       const pathKey =
@@ -70,12 +81,20 @@ const ensureSupportedRuntimeVersion = async () => {
       );
     }
   }
+  if (diagnosticExemption) {
+    return false;
+  }
   process.stderr.write(
     "If you use nvm, run:\n" +
       `  nvm install ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm use ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm alias default ${RECOMMENDED_NODE_MAJOR}\n`,
   );
+  if (unsupportedCommand === "update" && canRunDiagnostics) {
+    // A later CLI startup respawn must not repeat this invocation's recovery offer.
+    process.env.OPENCLAW_NODE_UPDATE_RESPAWNED = "1";
+    return false;
+  }
   return process.exit(1);
 };
 
@@ -785,9 +804,14 @@ const tryOutputPrecomputedCommandHelp = () => {
 
 // Resolve Node before loading pending package lifecycle code or any built runtime modules.
 const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
+const currentNodeRuntimeFailure = process.versions.bun
+  ? null
+  : nodeRuntimeFailure(process.versions.node, detectCurrentSqliteCapabilities());
 
 if (!waitingForNodeUpdateRespawn) {
+  // Diagnostics must not replay package lifecycle scripts under an unsupported Node.
   if (
+    !currentNodeRuntimeFailure &&
     !isSourceCheckoutLauncher() &&
     (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
       existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
@@ -805,6 +829,9 @@ if (!waitingForNodeUpdateRespawn) {
     }
   }
   if (tryOutputLauncherVersion(process.argv)) {
+    if (currentNodeRuntimeFailure) {
+      process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+    }
     process.exit(0);
   }
 }
@@ -833,7 +860,9 @@ if (
 
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
-    // OK
+    if (currentNodeRuntimeFailure) {
+      process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+    }
   } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
     // OK
   } else {

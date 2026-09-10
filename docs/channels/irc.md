@@ -291,7 +291,7 @@ Default account supports:
 - `IRC_NICKSERV_PASSWORD`
 - `IRC_NICKSERV_REGISTER_EMAIL`
 
-`IRC_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
+`IRC_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security#workspace-env-files).
 
 ## Troubleshooting
 

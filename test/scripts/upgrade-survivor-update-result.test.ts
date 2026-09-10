@@ -9,6 +9,216 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const command = resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
 
+describe.skipIf(process.platform === "win32")("survivor resolved candidate schema contract", () => {
+  it.each([
+    {
+      name: "uses schema 17 for a base tarball after archive removal",
+      scenario: "base",
+      kind: "tarball",
+      baseline: "2026.9.2",
+      version: "2026.9.3",
+      schema: 17,
+      actual: 17,
+      succeeds: true,
+    },
+    {
+      name: "uses schema 17 for a legacy tarball after archive removal",
+      scenario: "legacy-operator-state",
+      kind: "tarball",
+      baseline: "2026.9.2",
+      version: "2026.9.3",
+      schema: 17,
+      actual: 17,
+      succeeds: true,
+    },
+    {
+      name: "rejects an unmigrated base tarball schema",
+      scenario: "base",
+      kind: "tarball",
+      baseline: "2026.9.2",
+      version: "2026.9.3",
+      schema: 17,
+      actual: 16,
+      succeeds: false,
+    },
+    {
+      name: "rejects an unmigrated legacy tarball schema",
+      scenario: "legacy-operator-state",
+      kind: "tarball",
+      baseline: "2026.9.2",
+      version: "2026.9.3",
+      schema: 17,
+      actual: 16,
+      succeeds: false,
+    },
+    {
+      name: "requires metadata for the paired tarball transition",
+      scenario: "base",
+      kind: "tarball",
+      baseline: "2026.9.2",
+      version: "2026.9.3",
+      schema: undefined,
+      actual: 16,
+      succeeds: false,
+    },
+    {
+      name: "rejects a string schema in the candidate contract",
+      scenario: "base",
+      kind: "tarball",
+      baseline: "2026.9.2",
+      version: "2026.9.3",
+      schema: "16",
+      actual: 16,
+      succeeds: false,
+    },
+    {
+      name: "rejects a negative candidate schema",
+      scenario: "base",
+      kind: "tarball",
+      baseline: "2026.9.2",
+      version: "2026.9.3",
+      schema: -1,
+      actual: 16,
+      succeeds: false,
+    },
+    {
+      name: "rejects a fractional candidate schema",
+      scenario: "base",
+      kind: "tarball",
+      baseline: "2026.9.2",
+      version: "2026.9.3",
+      schema: 16.5,
+      actual: 16,
+      succeeds: false,
+    },
+    {
+      name: "keeps older metadata-less tarballs working",
+      scenario: "base",
+      kind: "tarball",
+      baseline: "2026.7.1-2",
+      version: "2026.8.1",
+      schema: undefined,
+      actual: 15,
+      succeeds: true,
+    },
+    {
+      name: "does not require metadata outside the paired baseline",
+      scenario: "base",
+      kind: "tarball",
+      baseline: "2026.8.2",
+      version: "2026.9.3",
+      schema: undefined,
+      actual: 15,
+      succeeds: true,
+    },
+    {
+      name: "keeps the published npm schema-16 contract",
+      scenario: "base",
+      kind: "npm",
+      baseline: "2026.9.2",
+      version: "2026.9.3",
+      schema: undefined,
+      actual: 16,
+      succeeds: true,
+    },
+    {
+      name: "rejects schema 17 for the published npm contract",
+      scenario: "base",
+      kind: "npm",
+      baseline: "2026.9.2",
+      version: "2026.9.3",
+      schema: undefined,
+      actual: 17,
+      succeeds: false,
+    },
+  ])("$name", ({ scenario, kind, baseline, version, schema, actual, succeeds }) => {
+    const root = tempDirs.make("survivor-resolved-schema-");
+    mkdirSync(join(root, "state"));
+    const database = new DatabaseSync(join(root, "state", "openclaw.sqlite"));
+    database.exec(`PRAGMA user_version = ${actual}`);
+    database.close();
+    const candidate = join(root, "candidate.tgz");
+    if (kind === "tarball") {
+      mkdirSync(join(root, "package"));
+      writeFileSync(
+        join(root, "package/package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version,
+          ...(schema === undefined ? {} : { openclaw: { schemaVersions: { state: schema } } }),
+        }),
+      );
+      execFileSync("tar", ["-czf", candidate, "-C", root, "package"]);
+    }
+    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+    const resolveCandidate = source.slice(
+      source.indexOf("resolve_candidate_version()"),
+      source.indexOf("\nresolve_candidate_install_mode()"),
+    );
+    const assertSurvival = source.slice(
+      source.indexOf("assert_survival()"),
+      source.indexOf("\nprobe_gateway_endpoint()"),
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -eu
+ARTIFACT_ROOT="$1"
+SCENARIO="$2"
+CANDIDATE_KIND="$3"
+CANDIDATE_SPEC="$4"
+baseline_version="$5"
+survival_assert_stage=automatic
+read_installed_version() { printf '%s' "$FIXTURE_CANDIDATE_VERSION"; }
+npm() { printf '%s' "$FIXTURE_CANDIDATE_VERSION"; }
+node() {
+  if [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ]; then return 0; fi
+  "$FIXTURE_NODE" "$@"
+}
+${resolveCandidate}
+${assertSurvival}
+resolve_candidate_version
+printf '%s' "$candidate_version" > "$ARTIFACT_ROOT/resolved-version"
+if [ "$CANDIDATE_KIND" = tarball ]; then rm -- "$CANDIDATE_SPEC"; fi
+assert_survival
+`,
+        "survivor-resolved-schema",
+        root,
+        scenario,
+        kind,
+        kind === "tarball" ? candidate : "openclaw@2026.9.3",
+        baseline,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: root,
+          FIXTURE_NODE: process.execPath,
+          FIXTURE_CANDIDATE_VERSION: version,
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status, result.stderr).toBe(succeeds ? 0 : 1);
+    if (succeeds) {
+      expect(readFileSync(join(root, "resolved-version"), "utf8")).toBe(version);
+      if (kind === "tarball") {
+        expect(existsSync(candidate)).toBe(false);
+      }
+      if (baseline === "2026.9.2" && version === "2026.9.3") {
+        expect(JSON.parse(readFileSync(join(root, "schema-after-update.json"), "utf8"))).toEqual({
+          publishedVersion: actual,
+          contentVersion: actual,
+        });
+      }
+    }
+  });
+});
+
 describe("upgrade survivor updater restart ownership", () => {
   it.each(
     [

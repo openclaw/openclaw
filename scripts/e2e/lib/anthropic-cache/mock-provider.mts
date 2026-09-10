@@ -95,8 +95,12 @@ export async function startMockAnthropic() {
       server.close();
       await once(server, "close");
     },
-    assertComplete() {
-      assert.equal(requests, 8, "expected eight installed-builder HTTP requests");
+    assertComplete(expectedRequests = 8) {
+      assert.equal(
+        requests,
+        expectedRequests,
+        `expected ${expectedRequests} installed-builder HTTP requests`,
+      );
     },
   };
 }

@@ -346,7 +346,8 @@ vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
   resolveNodeRuntimeInfo,
 }));
 
-vi.mock("../infra/runtime-guard.js", () => ({
+vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/runtime-guard.js")>()),
   nodeVersionSatisfiesEngine,
   parseSemver: (version: string | null) => {
     if (!version) {

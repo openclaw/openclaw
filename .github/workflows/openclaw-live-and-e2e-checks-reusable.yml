@@ -2411,6 +2411,9 @@ jobs:
           if [[ "$PREPARE_ONLY" == "true" ]]; then
             # Shared artifacts serve both release-path and plugin prerelease consumers.
             # Plan their union here without expanding either child's execution scope.
+            if [[ -z "$OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS" ]]; then
+              export OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS="base legacy-operator-state"
+            fi
             preparation_lanes="$(node --input-type=module <<'NODE'
           import { allReleasePathLanes } from "./.release-harness/scripts/lib/docker-e2e-scenarios.mts";
           import { createPluginPrereleaseTestPlan } from "./.release-harness/scripts/lib/plugin-prerelease-test-plan.mts";

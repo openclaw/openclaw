@@ -63,22 +63,26 @@ export async function forkSessionTranscriptFromParent(
   const crossDatabase =
     target.agentId !== resolved.agentId || (target.path ?? "") !== (resolved.path ?? "");
   if (!crossDatabase) {
-    return await runExclusiveSqliteSessionWrite(resolved, async () => {
-      let result: ForkSessionFromParentTranscriptResult = { status: "failed" };
-      runOpenClawAgentWriteTransaction((database) => {
-        params.commitGuard?.();
-        result = forkSqliteParentTranscriptInTransaction(database, resolved, {
-          enforceTokenLimit: params.enforceTokenLimit,
-          maxTokens: params.maxTokens,
-          parentEntry: params.parentEntry,
-          parentSessionKey: params.parentSessionKey,
-          forkFrom: params.forkFrom,
-          targetSessionId: params.targetSessionId,
-          targetSessionKey: params.sessionKey,
-        });
-      }, toDatabaseOptions(resolved));
-      return result;
-    });
+    return await runExclusiveSqliteSessionWrite(
+      resolved,
+      async () => {
+        let result: ForkSessionFromParentTranscriptResult = { status: "failed" };
+        runOpenClawAgentWriteTransaction((database) => {
+          params.commitGuard?.();
+          result = forkSqliteParentTranscriptInTransaction(database, resolved, {
+            enforceTokenLimit: params.enforceTokenLimit,
+            maxTokens: params.maxTokens,
+            parentEntry: params.parentEntry,
+            parentSessionKey: params.parentSessionKey,
+            forkFrom: params.forkFrom,
+            targetSessionId: params.targetSessionId,
+            targetSessionKey: params.sessionKey,
+          });
+        }, toDatabaseOptions(resolved));
+        return result;
+      },
+      "session.parent.fork-transcript",
+    );
   }
   // Cross-agent fork (worktree/cross-agent sessions.create): parent rows live
   // in the source agent database while the child transcript must be owned by
@@ -105,23 +109,27 @@ export async function forkSessionTranscriptFromParent(
     sessionId: params.parentEntry.sessionId,
     sessionKey: normalizeSqliteSessionKey(params.parentSessionKey),
   });
-  return await runExclusiveSqliteSessionWrite(target, async () => {
-    const sessionId = params.targetSessionId ?? randomUUID();
-    const targetScope = {
-      ...target,
-      sessionId,
-      sessionKey: normalizeSqliteSessionKey(params.sessionKey),
-    };
-    const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
-    runOpenClawAgentWriteTransaction((database) => {
-      params.commitGuard?.();
-      writeSqliteForkedChildTranscriptInTransaction(database, targetScope, {
-        parentSessionFile,
-        source,
-      });
-    }, toDatabaseOptions(target));
-    return { status: "created", transcript: { sessionFile, sessionId } };
-  });
+  return await runExclusiveSqliteSessionWrite(
+    target,
+    async () => {
+      const sessionId = params.targetSessionId ?? randomUUID();
+      const targetScope = {
+        ...target,
+        sessionId,
+        sessionKey: normalizeSqliteSessionKey(params.sessionKey),
+      };
+      const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
+      runOpenClawAgentWriteTransaction((database) => {
+        params.commitGuard?.();
+        writeSqliteForkedChildTranscriptInTransaction(database, targetScope, {
+          parentSessionFile,
+          source,
+        });
+      }, toDatabaseOptions(target));
+      return { status: "created", transcript: { sessionFile, sessionId } };
+    },
+    "session.parent.fork-transcript",
+  );
 }
 
 /** Forks parent context into a child session entry using SQLite rows only. */
@@ -272,6 +280,7 @@ export async function forkSessionEntryFromParentTarget(
       publish?.();
       return result;
     },
+    "session.parent.fork-entry",
   );
 }
 

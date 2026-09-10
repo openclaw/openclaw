@@ -20,8 +20,8 @@ import {
 } from "./crabbox-worker-desktop-setup.js";
 import {
   createCrabboxVersionResolver,
-  CRABBOX_WSL2_MIN_VERSION,
-  supportsCrabboxWsl2,
+  CRABBOX_NON_LINUX_MIN_VERSION,
+  supportsCrabboxNonLinuxTargets,
 } from "./crabbox-worker-doctor-runtime.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
@@ -32,6 +32,7 @@ import {
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
 import {
+  CRABBOX_OS_LABELS,
   CRABBOX_WORKER_PROVIDER_ID,
   nonEmptyString,
   operationLeaseId,
@@ -279,12 +280,12 @@ export function createCrabboxWorkerProvider(
     const allocation = await resolveAllocation(profile, operationId);
     signal?.throwIfAborted();
     const binary = resolveBinary(parsed.binary);
-    if (parsed.target === "windows/wsl2") {
+    if (parsed.target !== "linux") {
       const version = await resolveVersion(binary);
       signal?.throwIfAborted();
-      if (version.status === "indeterminate" || !supportsCrabboxWsl2(version.version)) {
+      if (version.status === "indeterminate" || !supportsCrabboxNonLinuxTargets(version.version)) {
         throw new WorkerProviderError(
-          `Crabbox Windows (WSL2) cloud workers require Crabbox ${CRABBOX_WSL2_MIN_VERSION} or newer; ${version.status === "indeterminate" ? version.reason : `found ${version.version}`}. Upgrade ${binary} and restart the Gateway.`,
+          `Crabbox ${CRABBOX_OS_LABELS[parsed.target]} cloud workers require Crabbox ${CRABBOX_NON_LINUX_MIN_VERSION} or newer; ${version.status === "indeterminate" ? version.reason : `found ${version.version}`}. Upgrade ${binary} and restart the Gateway.`,
         );
       }
     }
@@ -299,6 +300,10 @@ export function createCrabboxWorkerProvider(
 
     return async () => {
       signal?.throwIfAborted();
+      // Completed setup can survive a crash before its capture requirement returns.
+      // Sample before allocate creates the first-call record; enrolled replay stays closed.
+      const priorAllocation = project?.preparation ? warmImages.lookupLease(leaseId) : undefined;
+      const preparedReplay = priorAllocation && priorAllocation.phase !== "enrolled";
       const allocationChoice = await warmImages.allocate({
         ...context,
         id: leaseId,
@@ -370,11 +375,30 @@ export function createCrabboxWorkerProvider(
           setup: createCrabboxWorkerDesktopSetup(leaseId, wallpaperBase64),
         });
       }
+      if (project?.preparation && warmImages.lookupLease(leaseId)?.phase === "enrolled") {
+        // An enrolled replay may have lost its response before core registration.
+        // Verify the preserved completion only; setup and capture remain closed.
+        try {
+          await prepareCrabboxProjectFiles({
+            ...context,
+            id: leaseId,
+            project,
+            inspectPrepared: true,
+            runArgs: leaseRunArgs({ ...context, id: leaseId }),
+            runCommand,
+            signal: preparationSignal,
+            timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
+          });
+        } catch (error) {
+          preparationSignal?.throwIfAborted();
+          return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
+        }
+      }
       if (project && warmImages.lookupLease(leaseId)?.phase !== "enrolled") {
         let preparationFailed = false;
         let captured: boolean;
         try {
-          await prepareCrabboxProjectFiles({
+          const preparedProject = await prepareCrabboxProjectFiles({
             ...context,
             id: leaseId,
             project,
@@ -392,6 +416,8 @@ export function createCrabboxWorkerProvider(
               profile: parsed,
               signal: preparationSignal,
               assertCurrent: project.assertCurrent,
+              projectCaptureRequired:
+                preparedProject?.captureRequired || preparedReplay ? true : undefined,
               ...(allocationChoice.kind === "checkpoint"
                 ? { forkedCheckpointId: allocationChoice.checkpointId }
                 : {}),
@@ -574,6 +600,17 @@ export function createCrabboxWorkerProvider(
         machineClass ?? parsed.class,
         os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
       ).warmImage;
+    },
+    resolvePreparationTarget(profile, machineClass, os) {
+      const parsed = parseCrabboxProfile(profile);
+      const effective = resolveCrabboxWarmImageProfile(
+        parsed,
+        machineClass ?? parsed.class,
+        os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
+      );
+      return effective.warmImage && effective.class
+        ? { machineClass: effective.class, platform: effective.target }
+        : undefined;
     },
     resolveAllocation,
     resolveProvisionTimeoutMs(profile) {

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   isPrePartialFailureRecoveryTarget,
   isPreProgressToolVisibilityTarget,
+  isPreProviderFailureBeforeOutputTarget,
   isPreSettledEmptyResponseTarget,
   resolveFrozenTelegramScenarioOmissions,
 } from "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts";
@@ -461,6 +462,19 @@ describe("package Telegram live Docker E2E", () => {
     expect(isPreProgressToolVisibilityTarget(root)).toBe(false);
   });
 
+  it("omits provider-failure recovery until the frozen source owns its scenario", () => {
+    const root = mkTempRoot();
+    const scenario = path.join(
+      root,
+      "qa/scenarios/channels/telegram-provider-failure-before-output.yaml",
+    );
+
+    expect(isPreProviderFailureBeforeOutputTarget(root)).toBe(true);
+    mkdirSync(path.dirname(scenario), { recursive: true });
+    writeFileSync(scenario, "id: telegram-provider-failure-before-output\n");
+    expect(isPreProviderFailureBeforeOutputTarget(root)).toBe(false);
+  });
+
   it("combines only the unsupported frozen Telegram scenario contracts", () => {
     const root = mkTempRoot();
     const writeOwner = (relativePath: string, source: string) => {
@@ -479,11 +493,13 @@ describe("package Telegram live Docker E2E", () => {
       "telegram-partial-failure-recovery",
       "telegram-empty-response-after-write-recovery",
       "telegram-progress-tool-visibility",
+      "telegram-provider-failure-before-output",
     ]);
     writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-empty-response-after-write-recovery",
       "telegram-progress-tool-visibility",
+      "telegram-provider-failure-before-output",
     ]);
     writeOwner(
       "qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml",
@@ -491,10 +507,18 @@ describe("package Telegram live Docker E2E", () => {
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-progress-tool-visibility",
+      "telegram-provider-failure-before-output",
     ]);
     writeOwner(
       "qa/scenarios/channels/telegram-progress-tool-visibility.yaml",
       "id: telegram-progress-tool-visibility\n",
+    );
+    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-provider-failure-before-output",
+    ]);
+    writeOwner(
+      "qa/scenarios/channels/telegram-provider-failure-before-output.yaml",
+      "id: telegram-provider-failure-before-output\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([]);
   });

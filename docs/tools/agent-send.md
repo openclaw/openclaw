@@ -157,4 +157,7 @@ openclaw agent --agent ops --message "Alert" --deliver --reply-channel telegram 
   <Card title="Slash commands" href="/tools/slash-commands" icon="slash">
     Native command catalog used inside agent sessions.
   </Card>
+  <Card title="ACP agents" href="/tools/acp-agents" icon="robot">
+    External agents reachable over ACP.
+  </Card>
 </CardGroup>

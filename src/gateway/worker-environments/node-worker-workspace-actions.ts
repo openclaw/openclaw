@@ -51,6 +51,7 @@ export type NodeWorkerWorkspaceBinding = {
     | { kind: "repository"; baseCommit: string; baseManifestRef: string };
   manifestRef: string;
   remoteWorkspaceDir: string;
+  sessionKey?: string;
 };
 
 type NodeWorkerWorkspaceActions = Pick<
@@ -60,7 +61,7 @@ type NodeWorkerWorkspaceActions = Pick<
   | "quiesceWorkspace"
   | "reconcileWorkspace"
   | "stageAttachments"
-> & { validateRestoredWorkspace: () => Promise<void> };
+> & { validateRestoredWorkspace: () => Promise<void>; getSessionKey: () => string | undefined };
 
 export function createNodeWorkerWorkspaceActions(params: {
   environmentId: string;
@@ -71,16 +72,20 @@ export function createNodeWorkerWorkspaceActions(params: {
   restoredWorkspace?: NodeWorkerWorkspaceBinding;
   workspaceTransfer: NodeWorkspaceTransferService;
   runWorkspaceCommand: (
-    command: WorkerWorkspaceCommand & { resetWorkspace?: boolean },
+    command: WorkerWorkspaceCommand & { resetWorkspace?: boolean; sessionKey?: string },
   ) => Promise<NodeWorkerWorkspaceExecResult>;
 }): NodeWorkerWorkspaceActions {
   const { restoredWorkspace } = params;
   let workspaceReady = restoredWorkspace !== undefined;
+  let sessionKey = restoredWorkspace?.sessionKey;
   const exec = async (command: WorkerWorkspaceCommand & { resetWorkspace?: boolean }) => {
     if (!workspaceReady) {
       throw new Error("node worker workspace is unavailable before sync");
     }
-    return await params.runWorkspaceCommand(command);
+    return await params.runWorkspaceCommand({
+      ...command,
+      ...(sessionKey === undefined ? {} : { sessionKey }),
+    });
   };
   const workspace = createNodeWorkerWorkspaceFallback(exec);
   const quiesceWorkspace = createWorkerWorkspaceQuiescence({
@@ -376,7 +381,7 @@ export function createNodeWorkerWorkspaceActions(params: {
               base: uploaded.base,
               current: uploaded.current,
               journal: request.journal,
-              publishAcceptedManifest,
+              acceptance: { kind: "reconcile", publish: publishAcceptedManifest },
             }),
         );
       }
@@ -538,6 +543,7 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
     };
   };
   return {
+    getSessionKey: () => sessionKey,
     validateRestoredWorkspace,
     runWorkspaceCommand: exec,
     stageAttachments: async (request) => {
@@ -574,6 +580,13 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
       }
     },
     syncWorkspace: async (request) => {
+      if (
+        request.sessionId !== params.sessionId ||
+        (sessionKey !== undefined && request.sessionKey !== sessionKey)
+      ) {
+        throw new Error("Node workspace sync does not match its bound session");
+      }
+      sessionKey = request.sessionKey;
       workspaceReady = true;
       try {
         if (request.source.kind === "repository") {

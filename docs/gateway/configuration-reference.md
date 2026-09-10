@@ -224,3 +224,4 @@ Moved to [Configuration — environment, secrets, and includes](/gateway/config-
 - [Configuration](/gateway/configuration)
 - [Configuration examples](/gateway/configuration-examples)
 - [Doctor](/gateway/doctor)
+- [Cloud Workers](/gateway/cloud-workers) — the feature these worker settings configure

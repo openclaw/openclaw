@@ -244,37 +244,49 @@ it.each([
     });
 
     void own(
-      runExclusiveSqliteSessionWrite(options, async () => {
-        blockerEntered.resolve();
-        await releaseBlocker.promise;
-        events.push("blocker-released");
-      }),
+      runExclusiveSqliteSessionWrite(
+        options,
+        async () => {
+          blockerEntered.resolve();
+          await releaseBlocker.promise;
+          events.push("blocker-released");
+        },
+        "session.history.archive-prune",
+      ),
     );
     await blockerEntered.promise;
     const work = own(
-      runExclusiveSqliteSessionWrite(options, async () => {
-        active = true;
-        events.push("maintenance-entered");
-        try {
-          return boundary === "drain"
-            ? await reclaimSqliteFreePages(options)
-            : await pruneAllSessionTranscriptArchivesToHighWater({
-                archiveDirectory: path.dirname(archivePath),
-                databaseOptions: options,
-                highWaterBytes: 1,
-                storePath,
-              });
-        } finally {
-          active = false;
-          events.push("maintenance-exited");
-        }
-      }),
+      runExclusiveSqliteSessionWrite(
+        options,
+        async () => {
+          active = true;
+          events.push("maintenance-entered");
+          try {
+            return boundary === "drain"
+              ? await reclaimSqliteFreePages(options)
+              : await pruneAllSessionTranscriptArchivesToHighWater({
+                  archiveDirectory: path.dirname(archivePath),
+                  databaseOptions: options,
+                  highWaterBytes: 1,
+                  storePath,
+                });
+          } finally {
+            active = false;
+            events.push("maintenance-exited");
+          }
+        },
+        "session.history.archive-prune",
+      ),
     );
     const later = own(
-      runExclusiveSqliteSessionWrite(options, async () => {
-        laterWriterRan = true;
-        events.push("later-writer");
-      }),
+      runExclusiveSqliteSessionWrite(
+        options,
+        async () => {
+          laterWriterRan = true;
+          events.push("later-writer");
+        },
+        "session.history.archive-prune",
+      ),
     );
     if (boundary === "drain") {
       void own(

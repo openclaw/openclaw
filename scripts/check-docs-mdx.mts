@@ -232,7 +232,8 @@ function stripFrontmatter(raw: string): string {
   const lines = raw.split(/\r?\n/u);
   for (let index = 1; index < lines.length; index += 1) {
     if (lines[index] === "---" || lines[index] === "...") {
-      return lines.slice(index + 1).join("\n");
+      // Preserve source line numbers for both MDX and component diagnostics.
+      return lines.fill("", 0, index + 1).join("\n");
     }
   }
   return raw;

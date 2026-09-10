@@ -459,9 +459,13 @@ test.runIf(process.platform !== "win32")(
       // The claim and Worker plan already belong to the original open database.
       await fs.unlink(aliasPath);
       symlinkSync(replacementPath, aliasPath);
-      canonicalWrite = runExclusiveSqliteSessionWrite(databaseOptions, async () => {
-        canonicalWriteRan = true;
-      });
+      canonicalWrite = runExclusiveSqliteSessionWrite(
+        databaseOptions,
+        async () => {
+          canonicalWriteRan = true;
+        },
+        "session.transcript.batch",
+      );
       await yieldToEventLoop();
       expect(canonicalWriteRan).toBe(false);
     };
@@ -658,7 +662,11 @@ test("file warnings link an awaited native worker without attributing it to the 
   let second: Promise<string> | undefined;
   hooks.afterWriteAdmission = async () => {
     hooks.afterWriteAdmission = undefined;
-    second = runExclusiveSqliteSessionWrite(databaseOptions, async () => "successor");
+    second = runExclusiveSqliteSessionWrite(
+      databaseOptions,
+      async () => "successor",
+      "session.transcript.batch",
+    );
     // Hold the actual Worker's admission across the real slow-warning threshold.
     await delay(1_100);
   };
@@ -724,9 +732,13 @@ test.each([
         return;
       }
       // The first admission has ended; the second has not entered the writer FIFO.
-      await runExclusiveSqliteSessionWrite(databaseOptions, async () => {
-        otherWriterRan = true;
-      });
+      await runExclusiveSqliteSessionWrite(
+        databaseOptions,
+        async () => {
+          otherWriterRan = true;
+        },
+        "session.transcript.batch",
+      );
       clock = elapsedMs;
       revoked = rejected;
     };
@@ -782,7 +794,11 @@ test.each([
         });
       }
       await expect(
-        runExclusiveSqliteSessionWrite(databaseOptions, async () => "after"),
+        runExclusiveSqliteSessionWrite(
+          databaseOptions,
+          async () => "after",
+          "session.transcript.batch",
+        ),
       ).resolves.toBe("after");
     } finally {
       await Promise.allSettled([operation]);

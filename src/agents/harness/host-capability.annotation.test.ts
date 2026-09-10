@@ -631,6 +631,7 @@ describe("host-owned current admission annotation", () => {
           entered.resolve();
           await release.promise;
         },
+        "session.transcript.batch",
       );
       await entered.promise;
       const updates = vi.fn();
@@ -742,6 +743,7 @@ describe("host-owned current admission annotation", () => {
           entered.resolve();
           await release.promise;
         },
+        "session.transcript.batch",
       );
       await entered.promise;
       const refused = expect(

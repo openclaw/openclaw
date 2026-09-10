@@ -168,7 +168,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["taskSuggestions.create", "task-suggestions", "operator.write", "<=2026.7"],
   ["taskSuggestions.accept", "task-suggestions", "operator.admin", "<=2026.7"],
   ["taskSuggestions.dismiss", "task-suggestions", "operator.write", "<=2026.7"],
-  ["environments.list", "environments", "operator.read", "2026.7"],
+  ["environments.list", "environments", "dynamic", "2026.7"],
   ["environments.status", "environments", "operator.read", "2026.7"],
   ["worktrees.list", "worktrees", "operator.read", "2026.7"],
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the

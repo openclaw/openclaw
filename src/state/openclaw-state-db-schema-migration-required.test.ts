@@ -13,6 +13,7 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
+import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const now = Date.parse("2026-09-07T12:00:00Z");
@@ -49,6 +50,7 @@ function createV15Database(version: string | null = "2026.9.2") {
   closeOpenClawStateDatabaseForTest();
   const db = new DatabaseSync(databasePath);
   try {
+    removePreparedWorkerOwnershipColumns(db);
     db.exec(`
       ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
       ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
@@ -268,7 +270,7 @@ describe("shared state schema publication", () => {
         `);
     } else {
       legacy.exec(
-        "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '17', 1);",
+        `INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION + 1}', 1);`,
       );
     }
     const schema = legacy.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all();
@@ -294,7 +296,7 @@ describe("shared state schema publication", () => {
   });
 
   it.each(["runtime open", "doctor repair"] as const)(
-    "%s applies v16 content while preserving the unfenced updater's v15 floor",
+    "%s applies current content while preserving the unfenced updater's v15 floor",
     (entry) => {
       const { options } = createV15Database();
       if (entry === "doctor repair") {
@@ -302,6 +304,9 @@ describe("shared state schema publication", () => {
       }
       const db = openOpenClawStateDatabase(options).db;
       expectVersion(db, 15);
+      expect(db.prepare("PRAGMA table_info(worker_environments)").all()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "preparation_consumed_at_ms" })]),
+      );
       expect(
         db
           .prepare(
@@ -344,6 +349,9 @@ describe("shared state schema publication", () => {
     expect(repair.warnings).toEqual([]);
     expect(repair.changes).not.toContain(
       "Moved Skill Workshop ownership to per-agent directories (v16)",
+    );
+    expect(repair.changes).not.toContain(
+      "Recorded prepared worker ownership and one-use lifecycle (v17)",
     );
     const after = openOpenClawStateDatabase(options).db;
     expectVersion(after, 15);
