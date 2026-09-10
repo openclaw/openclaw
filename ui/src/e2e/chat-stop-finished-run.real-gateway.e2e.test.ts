@@ -58,7 +58,7 @@ let provider: Awaited<ReturnType<typeof startProvider>>;
 // This directory is eligible for CI upload; full traces and raw protocol proof belong to the private fixture.
 const proof: Record<string, string | number | boolean> = { faultInjection: true };
 async function startProvider() {
-  const completion = createDeferred<void>();
+  const completion = createDeferred();
   const handlers = new Set<Promise<void>>();
   let requests = 0;
   let stopping = false;
