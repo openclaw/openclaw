@@ -215,6 +215,25 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
           "dir-copy",
         );
 
+        // A destination alias into the canonical source subtree is rejected
+        // before mkdirp or any child copy can mutate the destination.
+        const sourceSubdir = path.join(mountDir, "nested", "src-dir", "subdir");
+        await fs.mkdir(sourceSubdir);
+        await fs.symlink(sourceSubdir, path.join(mountDir, "source-subdir-alias"));
+        const mutationsBeforeRejectedCopy = mutationCalls.length;
+        await expect(
+          rpc(socket, "fs/copy", {
+            sourcePath: "file:///workspace/nested/src-dir",
+            destinationPath: "file:///workspace/source-subdir-alias",
+            recursive: true,
+            sandbox: workspacePolicy,
+          }),
+        ).rejects.toThrow("Cannot recursively copy a directory into itself");
+        expect(mutationCalls).toHaveLength(mutationsBeforeRejectedCopy);
+        await expect(fs.stat(path.join(sourceSubdir, "child.txt"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+
         // Recursive directory copy into an existing directory alias: the
         // directory pin follows the canonical directory, so children land in
         // the alias target.

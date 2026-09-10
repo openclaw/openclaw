@@ -466,10 +466,24 @@ async function copySandboxPath(
     if (!params.recursive) {
       throw new Error(`Cannot copy directory without recursive=true: ${params.sourcePath}`);
     }
+    // Directory target resolution is side-effect free, so use the same
+    // canonical directory view for the source containment check. Comparing
+    // only lexical paths lets an alias hide that the destination is inside
+    // the source and can make recursive copy enumerate its own output.
+    const canonicalSource = await fsBridge.resolvePinnedMutationTarget?.({
+      filePath: params.sourcePath,
+      action: "mkdir",
+    });
     if (
       pathContains(
-        normalizeSandboxAbsolutePath(params.sourcePath, "copy source path"),
-        normalizeSandboxAbsolutePath(params.destinationPath, "copy destination path"),
+        normalizeSandboxAbsolutePath(
+          canonicalSource?.policyPath ?? params.sourcePath,
+          "copy source path",
+        ),
+        normalizeSandboxAbsolutePath(
+          canonicalDestination?.policyPath ?? params.destinationPath,
+          "copy destination path",
+        ),
       )
     ) {
       throw new Error("Cannot recursively copy a directory into itself.");

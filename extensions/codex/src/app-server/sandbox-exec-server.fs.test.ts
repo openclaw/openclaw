@@ -712,6 +712,56 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.close();
   });
 
+  it("rejects recursive directory copies into a canonical source subtree", async () => {
+    const mkdirp = vi.fn(async () => undefined);
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Buffer.from("f\tchild.txt\n"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+    const sandbox = createSandboxContext({
+      mkdirp,
+      resolvePinnedMutationTarget: async ({ filePath }) => {
+        if (filePath === "/workspace/source-dir") {
+          return {
+            policyPath: "/workspace/source-dir",
+            pinnedPath: "/workspace/source-dir",
+          };
+        }
+        if (filePath === "/workspace/alias") {
+          return {
+            policyPath: "/workspace/source-dir/subdir",
+            pinnedPath: "/workspace/source-dir/subdir",
+          };
+        }
+        return { policyPath: filePath, pinnedPath: filePath };
+      },
+      runShellCommand,
+      stat: async () => ({
+        type: "directory",
+        size: 1,
+        mtimeMs: 1,
+      }),
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "fs/copy", {
+        sourcePath: "file:///workspace/source-dir",
+        destinationPath: "file:///workspace/alias",
+        recursive: true,
+      }),
+    ).rejects.toThrow("Cannot recursively copy a directory into itself");
+
+    expect(mkdirp).not.toHaveBeenCalled();
+    expect(runShellCommand).not.toHaveBeenCalled();
+    socket.close();
+  });
+
   it("reports missing metadata as an exec-server not found error", async () => {
     const sandbox = createSandboxContext({ stat: async () => null });
     const client = createClient();
