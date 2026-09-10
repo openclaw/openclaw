@@ -159,7 +159,8 @@ describe("native Gateway protocol levels", () => {
       expectedNodeLevels,
     );
 
-    const androidPath = "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt";
+    const androidPath =
+      "apps/android/gateway-client/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt";
     const android = await readRepoFile(androidPath);
     assertLevelsMatch(
       androidPath,
@@ -248,7 +249,8 @@ describe("native Gateway protocol levels", () => {
       "operator connects must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
     );
 
-    const androidPath = "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt";
+    const androidPath =
+      "apps/android/gateway-client/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt";
     const android = await readRepoFile(androidPath);
     assertPattern(
       android,

@@ -7,6 +7,7 @@ import type {
   PluginsInspectResult,
 } from "../lib/plugins/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -581,15 +582,21 @@ suite.define(() => {
         await openWorkboard(page, suite.server.baseUrl);
 
         const toggle = page.locator("wa-switch").filter({ hasText: "Enable or disable Workboard" });
+        const connectCount = (await gateway.getRequests("connect")).length;
         await toggle.click();
         await gateway.waitForRequest("plugins.setEnabled");
+        await gateway.waitForRequest("connect", { after: connectCount });
+        await waitForControlUiGatewayReady(page);
+        await waitForControlUiRoute(page, {
+          pathname: "/settings/plugins/workboard",
+          routeId: "plugin-settings",
+        });
         await page.getByRole("status").filter({ hasText: "Disabled Workboard." }).waitFor();
-        expect(
-          await page
-            .locator(".plugins-row-message")
-            .filter({ hasText: "Disabled Workboard." })
-            .count(),
-        ).toBe(1);
+        await expect
+          .poll(() =>
+            page.locator(".plugins-row-message").filter({ hasText: "Disabled Workboard." }).count(),
+          )
+          .toBe(1);
 
         await page.getByRole("tab", { name: "Configuration", exact: true }).click();
         const workspace = page.getByLabel("Workspace label", { exact: true });

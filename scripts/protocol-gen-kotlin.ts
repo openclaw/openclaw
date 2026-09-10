@@ -32,7 +32,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const gatewayOutputPath = path.join(
   repoRoot,
-  "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt",
+  "apps/android/gateway-client/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt",
 );
 const constantsOutputPath = path.join(
   repoRoot,

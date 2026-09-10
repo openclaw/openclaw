@@ -441,9 +441,23 @@ describe("native app i18n inventory", () => {
               site.path.startsWith("apps/android/app/src/main/") ||
               site.path.startsWith("apps/android/app/src/play/") ||
               site.path.startsWith("apps/android/app/src/thirdParty/") ||
+              site.path.startsWith("apps/android/gateway-client/src/main/") ||
               site.path === "apps/android/wear/src/main/res/values/strings.xml",
           ),
         ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.surface === "android" &&
+          entry.source === "Connecting…" &&
+          hasSite(
+            entry,
+            (site) =>
+              site.path ===
+              "apps/android/gateway-client/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+          ),
+      ),
     ).toBe(true);
     expect(
       entries.some(

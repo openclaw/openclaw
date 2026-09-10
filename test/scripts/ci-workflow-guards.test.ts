@@ -4864,6 +4864,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       row: Record<string, unknown>,
       context: Parameters<typeof evaluateWorkflowExpression>[1],
       failTask = "",
+      options: { gatewayClient?: boolean } = {},
     ) {
       const step: WorkflowStep = expectDefined(
         readCiWorkflow().jobs.android.steps.find(
@@ -4872,6 +4873,10 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         "Android task runner",
       );
       const root = tempDirs.make("openclaw-android-tier-");
+      if (options.gatewayClient) {
+        mkdirSync(path.join(root, "gateway-client"));
+        writeFileSync(path.join(root, "gateway-client/build.gradle.kts"), "");
+      }
       const callsPath = path.join(root, "gradle-calls.jsonl");
       const clockPath = path.join(root, "clock-reads.jsonl");
       writeExecutable(path.join(root, "date"), [
@@ -4940,6 +4945,33 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         expect(metadata[0]).toEqual([`-PopenclawBuildTimestamp=${result.clockReads[0]}`]);
       },
     );
+
+    it("keeps Gateway client unit and lint tasks on the shared Android build instant", () => {
+      const result = runAndroidTask(
+        { task: "test-play", lint: true },
+        { eventName: "pull_request", repository: "openclaw/openclaw", runAttempt: 1 },
+        "",
+        { gatewayClient: true },
+      );
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      expect(result.calls.map((call) => call.filter((arg) => arg.startsWith(":")))).toEqual([
+        [
+          ":app:testPlayDebugUnitTest",
+          ":gateway-client:testDebugUnitTest",
+          ":wear-shared:testDebugUnitTest",
+        ],
+        [":app:lintPlayDebug", ":gateway-client:lintDebug", ":wear-shared:lintDebug"],
+      ]);
+      expect(result.clockReads).toHaveLength(1);
+      expect(
+        result.calls.map((call) =>
+          call.filter((arg) => arg.startsWith("-PopenclawBuildTimestamp=")),
+        ),
+      ).toEqual([
+        [`-PopenclawBuildTimestamp=${result.clockReads[0]}`],
+        [`-PopenclawBuildTimestamp=${result.clockReads[0]}`],
+      ]);
+    });
 
     it.each([
       { eventName: "pull_request", releaseGate: false, full: false, legacy: false },

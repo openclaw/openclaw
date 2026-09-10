@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.SecurePrefs
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -247,7 +246,7 @@ class GatewaySocketPublicationTest {
     return GatewaySession(
       scope = CoroutineScope(job + StandardTestDispatcher(scheduler)),
       identityStore = testDeviceIdentityStore(app),
-      deviceAuthStore = DeviceAuthStore(SecurePrefs(app, app.getSharedPreferences("factory-retirement", 0))),
+      deviceAuthStore = DeviceAuthStore(TestGatewayCredentialStore(app.getSharedPreferences("factory-retirement", 0))),
       onConnected = { onConnected() },
       onDisconnected = onDisconnected,
       onEvent = { _, _ -> },
@@ -294,7 +293,7 @@ class GatewaySocketPublicationTest {
       val preparingHandshake = AtomicBoolean()
       val statuses = ConcurrentLinkedQueue<String>()
       val methods = ConcurrentLinkedQueue<String>()
-      val store = DeviceAuthStore(SecurePrefs(app, app.getSharedPreferences("socket-publication", 0)))
+      val store = DeviceAuthStore(TestGatewayCredentialStore(app.getSharedPreferences("socket-publication", 0)))
       val auth =
         object : DeviceAuthTokenStore by store {
           override fun loadEntry(

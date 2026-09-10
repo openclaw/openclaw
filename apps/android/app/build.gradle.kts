@@ -321,6 +321,7 @@ dependencies {
   implementation(composeBom)
   androidTestImplementation(composeBom)
 
+  implementation(project(":gateway-client"))
   implementation(project(":wear-shared"))
   implementation(libs.play.services.wearable)
 
@@ -357,7 +358,6 @@ dependencies {
   implementation(libs.media3.exoplayer)
   implementation(libs.media3.session)
   implementation(libs.media3.ui)
-  implementation(libs.bcprov)
   implementation(libs.coil.compose)
   implementation(libs.coil.svg)
   implementation(libs.commonmark)
@@ -383,6 +383,7 @@ dependencies {
   testImplementation(libs.kotest.assertions.core)
   testImplementation(libs.mockwebserver)
   testImplementation(libs.robolectric)
+  testImplementation(libs.bcprov)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testRuntimeOnly(libs.junit.vintage.engine)
 

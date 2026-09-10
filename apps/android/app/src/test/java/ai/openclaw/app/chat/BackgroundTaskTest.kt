@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.AndroidScreenshotFixture
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import ai.openclaw.app.ui.chat.backgroundTasksEmptyStateVisible
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -66,7 +67,7 @@ class BackgroundTaskTest {
         requestGateway = request,
         captureRequestLease = {
           captures++
-          GatewaySession.RequestLease("gateway-test", isCurrentImpl = { current }) { method, params, _, enqueue ->
+          syntheticGatewayRequestLease("gateway-test", isCurrentImpl = { current }) { method, params, _, enqueue ->
             enqueue {}
             request(method, params)
           }

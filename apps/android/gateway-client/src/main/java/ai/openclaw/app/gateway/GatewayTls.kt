@@ -95,7 +95,7 @@ internal const val GATEWAY_TLS_PROBE_HANDSHAKE_TIMEOUT_MS = 10_000
 private const val GATEWAY_TLS_FALLBACK_TIMEOUT_FLOOR_MS = 250
 
 /** Bounds the caller's wait without accumulating workers when native DNS ignores cancellation. */
-internal class GatewayTlsProbeRunner(
+class GatewayTlsProbeRunner(
   private val scope: CoroutineScope,
   private val probe: suspend (String, Int) -> GatewayTlsProbeResult,
   private val timeoutMs: Long =
@@ -168,10 +168,10 @@ internal fun splitGatewayTlsFallbackProbeTimeouts(
 }
 
 /** Public-DNS candidates may use Android's CA store and HTTPS hostname validation. */
-internal fun isGatewayTlsSystemTrustCandidate(rawHost: String): Boolean = normalizedGatewayTlsDnsHost(rawHost) != null
+fun isGatewayTlsSystemTrustCandidate(rawHost: String): Boolean = normalizedGatewayTlsDnsHost(rawHost) != null
 
 /** Resolves probe evidence and any stored pin into one exhaustive trust decision. */
-internal fun decideGatewayTlsTrust(
+fun decideGatewayTlsTrust(
   storedFingerprint: String?,
   systemTrustCandidate: Boolean,
   probeResult: GatewayTlsProbeResult,

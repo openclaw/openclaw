@@ -65,12 +65,12 @@ The lifecycle owners are `completeSuccessfulGatewayAuthHandoff` in
 
 ## Android durable handoff
 
-[`GatewaySession.kt`](app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt)
+[`GatewaySession.kt`](gateway-client/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt)
 selects fresh bootstrap before a stored device token. The wire regression is
 `connect_prefersFreshBootstrapTokenOverStoredDeviceToken` in
 [`GatewaySessionInvokeTest.kt`](app/src/test/java/ai/openclaw/app/gateway/GatewaySessionInvokeTest.kt).
 
-[`DeviceAuthStore.kt`](app/src/main/java/ai/openclaw/app/gateway/DeviceAuthStore.kt)
+[`DeviceAuthStore.kt`](gateway-client/src/main/java/ai/openclaw/app/gateway/DeviceAuthStore.kt)
 commits each role token and its metadata together and returns the actual durable
 write result. The session records the final write result for each role in this
 hello; receipt alone and preexisting tokens do not establish fresh handoff.
@@ -90,7 +90,7 @@ Missing roles or failed writes retain bootstrap in saved credentials and in the
 session intent; the current socket can remain connected, but a later rejected
 bootstrap requires setup repair.
 
-[`GatewayBootstrapHandoff.kt`](app/src/main/java/ai/openclaw/app/gateway/GatewayBootstrapHandoff.kt)
+[`GatewayBootstrapHandoff.kt`](gateway-client/src/main/java/ai/openclaw/app/gateway/GatewayBootstrapHandoff.kt)
 owns retirement authority for one connection intent. Every new runtime intent
 invalidates that authority before socket cleanup. A preference revision also
 fences every setup save/reset, including replacement with identical token bytes.

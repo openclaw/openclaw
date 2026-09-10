@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewaySessionRouting
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -88,7 +89,7 @@ class ChatControllerProgressCardTest {
             requestGateway = { method, _ -> emptyChatGatewayResponse(method) },
             captureRequestLease = { capturedScope ->
               val connection = physicalConnection
-              GatewaySession.RequestLease(
+              syntheticGatewayRequestLease(
                 endpointStableId = requireNotNull(capturedScope).gatewayId,
                 isCurrentImpl = { physicalConnection == connection },
               ) { method, params, _, withEnqueue ->
