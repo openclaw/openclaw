@@ -51,12 +51,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     // admission treats as direct route into a team-scoped session without the team/channel gate.
     const access = await resolveMSTeamsSenderAccess({ cfg, activity });
     const { isDirectMessage, channelGate } = access;
-    const hasConflictingDirectScope =
-      isDirectMessage &&
-      (activity.conversation?.isGroup === true ||
-        Boolean(activity.channelData?.team?.id?.trim()) ||
-        Boolean(activity.channelData?.channel?.id?.trim()));
-    if (hasConflictingDirectScope) {
+    if (access.hasConflictingConversationScope) {
       // Bot Framework marks group and channel conversations as non-personal. Fail closed when
       // their scope metadata contradicts a personal conversation instead of choosing a session.
       log.info("dropping reaction (conflicting conversation scope)", { conversationId });

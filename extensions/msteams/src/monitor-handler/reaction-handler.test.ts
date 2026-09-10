@@ -1,5 +1,11 @@
 // Msteams tests cover reaction handler plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "openclaw/plugin-sdk/system-event-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { setMSTeamsRuntime } from "../runtime.js";
@@ -26,6 +32,18 @@ function buildMockRuntime(overrides?: Partial<PluginRuntime>): PluginRuntime {
     },
     ...overrides,
   } as unknown as PluginRuntime;
+}
+
+function buildProductionBoundaryRuntime(): PluginRuntime {
+  const runtime = buildMockRuntime();
+  return {
+    ...runtime,
+    channel: {
+      ...runtime.channel,
+      routing: { ...runtime.channel.routing, resolveAgentRoute },
+    },
+    system: { ...runtime.system, enqueueSystemEvent },
+  };
 }
 
 function buildDeps(cfg: OpenClawConfig, _runtime?: PluginRuntime): MSTeamsMessageHandlerDeps {
@@ -102,6 +120,10 @@ async function invokeReactionEvent(
 }
 
 describe("createMSTeamsReactionHandler", () => {
+  afterEach(() => {
+    resetSystemEventsForTest();
+  });
+
   describe("emoji mapping", () => {
     it("maps Teams reaction types to unicode emoji in event label", async () => {
       const mockRuntime = buildMockRuntime();
@@ -351,7 +373,7 @@ describe("createMSTeamsReactionHandler", () => {
         channelData: { channel: { id: "19:excluded-channel@thread.tacv2" } },
       },
     ])("drops a personal reaction with contradictory $scopeMarker", async (activityScope) => {
-      const { handler, enqueue, resolveAgentRoute } = createRouteHarness();
+      const { handler, enqueue, resolveAgentRoute: resolveRouteMock } = createRouteHarness();
       await invokeReactionEvent(
         handler,
         {
@@ -364,8 +386,55 @@ describe("createMSTeamsReactionHandler", () => {
         "added",
       );
 
-      expect(resolveAgentRoute).not.toHaveBeenCalled();
+      expect(resolveRouteMock).not.toHaveBeenCalled();
       expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it("enforces reaction admission at the production route and session-event queue", async () => {
+      const runtime = buildProductionBoundaryRuntime();
+      setMSTeamsRuntime(runtime);
+      const handler = createMSTeamsReactionHandler(buildDeps(routeCfg, runtime));
+      const allowedConversation = {
+        id: "19:trusted-channel@thread.tacv2",
+        conversationType: "channel",
+      };
+      const allowedRoute = resolveAgentRoute({
+        cfg: routeCfg,
+        channel: "msteams",
+        peer: { kind: "channel", id: allowedConversation.id },
+        teamId: "trustedTeam",
+      });
+
+      await invokeReactionEvent(handler, reactionFrom(allowedConversation, "trustedTeam"), "added");
+
+      expect(peekSystemEventEntries(allowedRoute.sessionKey)).toEqual([
+        expect.objectContaining({
+          text: "Teams reaction 👍 added by Allowed Sender on message target-message",
+          contextKey:
+            "msteams:reaction:19:trusted-channel@thread.tacv2:target-message:allowed-aad:like:added",
+        }),
+      ]);
+
+      resetSystemEventsForTest();
+      const forbiddenDirectRoute = resolveAgentRoute({
+        cfg: routeCfg,
+        channel: "msteams",
+        peer: { kind: "direct", id: "allowed-aad" },
+      });
+      await invokeReactionEvent(
+        handler,
+        reactionFrom(
+          {
+            id: "19:excluded-channel@thread.tacv2",
+            conversationType: "personal",
+            isGroup: true,
+          },
+          "excludedTeam",
+        ),
+        "added",
+      );
+
+      expect(peekSystemEventEntries(forbiddenDirectRoute.sessionKey)).toEqual([]);
     });
   });
 
