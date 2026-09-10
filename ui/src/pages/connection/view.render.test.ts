@@ -4,6 +4,7 @@ import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
+import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import { renderConnection } from "./view.ts";
 
 type ConnectionProps = Parameters<typeof renderConnection>[0];
@@ -277,6 +278,41 @@ describe("connection view rendering", () => {
       expect(container.textContent).not.toContain("/Users/operator/.openclaw");
     }
   });
+
+  it.each([
+    {
+      gatewayIsolation: "enabled" as const,
+      expectedState: "Enabled",
+      expectedCommand: "clawctl gateway-isolation disable",
+    },
+    {
+      gatewayIsolation: "disabled" as const,
+      expectedState: "Disabled",
+      expectedCommand: "clawctl gateway-isolation enable",
+    },
+  ])(
+    "shows the reported $gatewayIsolation Gateway isolation posture",
+    ({ gatewayIsolation, expectedState, expectedCommand }) => {
+      const container = document.createElement("div");
+      render(
+        renderConnection(
+          createConnectionProps({
+            systemInfo: { ...deviceSystemInfo, gatewayIsolation },
+          }),
+        ),
+        container,
+      );
+
+      const isolationHeading = Array.from(
+        container.querySelectorAll<HTMLElement>(".settings-section__heading"),
+      ).find((heading) => heading.textContent?.trim() === "Gateway isolation");
+      const isolationSection = isolationHeading?.closest(".settings-section");
+      expect(isolationSection).not.toBeNull();
+      expect(isolationSection?.textContent).toContain("Reported Gateway isolation");
+      expect(isolationSection?.textContent).toContain(expectedState);
+      expect(isolationSection?.textContent).toContain(expectedCommand);
+    },
+  );
 
   it("escalates host meter tones and hides the section when the RPC is unavailable", async () => {
     const container = document.createElement("div");

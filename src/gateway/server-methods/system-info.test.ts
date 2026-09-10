@@ -44,7 +44,10 @@ describe("system.info", () => {
     vi.spyOn(os, "platform").mockReturnValue("darwin");
     mocks.runCommandWithTimeout.mockReset().mockImplementation(mountedVolumeOutput);
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   it("returns a schema-valid host resource snapshot", async () => {
     const respond = vi.fn();
@@ -125,6 +128,48 @@ describe("system.info", () => {
           ? []
           : [{ path: payload.diskPath, totalBytes: 2048, availableBytes: 1024 }],
       );
+    },
+  );
+
+  it.each(["enabled", "disabled"] as const)(
+    "reports the strict host isolation posture %s",
+    async (gatewayIsolation) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_ISOLATION", gatewayIsolation);
+      vi.resetModules();
+      const { systemHandlers: freshSystemHandlers } = await import("./system.js");
+      const respond = vi.fn();
+
+      await expectDefined(
+        freshSystemHandlers["system.info"],
+        "system.info handler",
+      )({
+        params: {},
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+      } as unknown as GatewayRequestHandlerOptions);
+
+      expect(respond.mock.calls[0]?.[1]).toHaveProperty("gatewayIsolation", gatewayIsolation);
+    },
+  );
+
+  it.each([undefined, "", "ENABLED", "unknown"])(
+    "omits an absent, empty, or invalid host isolation posture %s",
+    async (gatewayIsolation) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_ISOLATION", gatewayIsolation);
+      vi.resetModules();
+      const { systemHandlers: freshSystemHandlers } = await import("./system.js");
+      const respond = vi.fn();
+
+      await expectDefined(
+        freshSystemHandlers["system.info"],
+        "system.info handler",
+      )({
+        params: {},
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+      } as unknown as GatewayRequestHandlerOptions);
+
+      expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("gatewayIsolation");
     },
   );
 });

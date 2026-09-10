@@ -38,6 +38,12 @@ const enSettings = {
       hideSecret: "Hide secret",
       toggleSecretVisibility: "Toggle secret visibility",
     },
+    gatewayIsolation: {
+      title: "Gateway isolation",
+      reportedState: "Reported Gateway isolation",
+      changeWithCli: "Change with CLI",
+      instruction: "Run from the signed-in Gateway user session.",
+    },
   },
   cloudWorkersPage: {
     snapshots: {

@@ -1,8 +1,10 @@
 import { html, nothing } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
+  renderSettingsRow,
   renderSettingsSection,
   renderSettingsStatus,
+  renderSettingsValue,
   type SettingsSectionProps,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -62,14 +64,14 @@ function renderSystemStat(stat: SystemStat) {
   return html`
     <div class="config-host__stat" title=${stat.path ?? stat.title ?? ""}>
       <div class="config-host__stat-label">
-        ${stat.label}${
-          stat.path ? html` <span class="config-host__stat-path">${stat.path}</span>` : nothing
-        }
+        ${stat.label}${stat.path
+          ? html` <span class="config-host__stat-path">${stat.path}</span>`
+          : nothing}
       </div>
       <div class="config-host__stat-value">
-        ${stat.value}${
-          stat.unit ? html` <span class="config-host__stat-unit">${stat.unit}</span>` : nothing
-        }
+        ${stat.value}${stat.unit
+          ? html` <span class="config-host__stat-unit">${stat.unit}</span>`
+          : nothing}
       </div>
       ${stat.usedFraction == null ? nothing : renderSystemMeter(label, stat.usedFraction)}
       ${stat.detail ? html`<div class="config-host__stat-detail">${stat.detail}</div>` : nothing}
@@ -157,6 +159,29 @@ function buildSystemStatsPlaceholder(): SystemStat[] {
   ];
 }
 
+function renderGatewayIsolationSection(info: SystemInfoResult | null | undefined) {
+  const gatewayIsolation = info?.gatewayIsolation;
+  if (!gatewayIsolation) {
+    return nothing;
+  }
+  const enabled = gatewayIsolation === "enabled";
+  const command = `clawctl gateway-isolation ${enabled ? "disable" : "enable"}`;
+  return renderSettingsSection({ title: t("connection.gatewayIsolation.title") }, [
+    renderSettingsRow({
+      title: t("connection.gatewayIsolation.reportedState"),
+      control: renderSettingsStatus({
+        kind: enabled ? "ok" : "warn",
+        label: t(enabled ? "common.enabled" : "common.disabled"),
+      }),
+    }),
+    renderSettingsRow({
+      title: t("connection.gatewayIsolation.changeWithCli"),
+      description: t("connection.gatewayIsolation.instruction"),
+      control: renderSettingsValue(command, { mono: true }),
+    }),
+  ]);
+}
+
 /** Gateway host section with the stable settings-search scroll target id. */
 export function renderSystemSection(props: SystemSectionProps) {
   if (props.systemInfoUnavailable) {
@@ -195,14 +220,12 @@ export function renderSystemSection(props: SystemSectionProps) {
                 ${info ? `${info.osLabel} · ${info.arch}` : placeholder}
               </div>
               <div class="config-host__meta">
-                ${
-                  info
-                    ? t("quickSettings.system.runtime", {
-                        version: info.nodeVersion,
-                        pid: String(info.pid),
-                      })
-                    : placeholder
-                }
+                ${info
+                  ? t("quickSettings.system.runtime", {
+                      version: info.nodeVersion,
+                      pid: String(info.pid),
+                    })
+                  : placeholder}
               </div>
               ${address ? html`<code class="config-host__address">${address}</code>` : nothing}
             </div>
@@ -211,5 +234,6 @@ export function renderSystemSection(props: SystemSectionProps) {
         `,
       )}
     </div>
+    ${renderGatewayIsolationSection(info)}
   `;
 }
