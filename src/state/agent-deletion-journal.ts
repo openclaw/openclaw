@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
@@ -10,7 +9,7 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveAgentCreationClaimAgentId } from "./agent-creation-claim.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import { deleteAgentProvenanceForAgent, ensureAgentProvenanceSchema } from "./agent-provenance.js";
 import type {
@@ -70,45 +69,6 @@ function assertAgentDeletionIdentityClaimAllowed(
       `OpenClaw agent database is unavailable while agent ${normalizeAgentId(deletedAgentId)} is deleted.`,
     );
   }
-}
-
-type AgentCreationClaimScope = {
-  agentId: string;
-  statePath: string;
-};
-
-// A completed deletion record keeps fencing the dead identity until the creation lifecycle
-// claims it. Creation is that claimant, so while it stages state for the identity it is
-// recreating it may open that identity's own databases beneath a completed record. The scope
-// never covers incomplete deletions, other identities, or callers outside creation.
-const creationClaim = resolveGlobalSingleton(
-  Symbol.for("openclaw.agentCreationClaim"),
-  () => new AsyncLocalStorage<AgentCreationClaimScope>(),
-);
-
-/** Runs creation-owned staging that may write the recreated identity's databases. */
-export async function runWithAgentCreationClaim<T>(
-  target: { agentId: string; env?: NodeJS.ProcessEnv },
-  run: () => Promise<T>,
-): Promise<T> {
-  return await creationClaim.run(
-    {
-      agentId: normalizeAgentId(target.agentId),
-      statePath: path.resolve(resolveOpenClawStateSqlitePath(target.env ?? process.env)),
-    },
-    run,
-  );
-}
-
-function resolveAgentCreationClaimAgentId(
-  claimAgentId: string,
-  statePath: string,
-): string | undefined {
-  const scope = creationClaim.getStore();
-  if (!scope || scope.agentId !== claimAgentId || scope.statePath !== path.resolve(statePath)) {
-    return undefined;
-  }
-  return scope.agentId;
 }
 
 export type AgentDeletionJournalEntry = {
@@ -266,6 +226,7 @@ export function assertAgentDeletionPathFence(
       cleanupCompleted: row.cleanup_completed === 1,
     })),
   );
+  // Creation may open the identity it is recreating beneath that identity's completed record.
   const creationAgentId = snapshot.fenceAgentId
     ? undefined
     : resolveAgentCreationClaimAgentId(snapshot.claimAgentId, state.path);

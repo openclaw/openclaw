@@ -20,10 +20,8 @@ import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
-import {
-  readAgentDeletionJournal,
-  runWithAgentCreationClaim,
-} from "../state/agent-deletion-journal.js";
+import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
+import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";

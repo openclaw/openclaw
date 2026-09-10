@@ -47,9 +47,12 @@ vi.mock("./agent-lifecycle-registry.js", () => ({
   claimCompletedAgentDeletion: mocks.claimCompletedAgentDeletion,
 }));
 
+vi.mock("../state/agent-creation-claim.js", () => ({
+  runWithAgentCreationClaim: async <T>(_target: unknown, run: () => Promise<T>) => await run(),
+}));
+
 vi.mock("../state/agent-deletion-journal.js", () => ({
   readAgentDeletionJournal: mocks.readAgentDeletionJournal,
-  runWithAgentCreationClaim: async <T>(_target: unknown, run: () => Promise<T>) => await run(),
 }));
 
 vi.mock("../state/agent-provenance.js", () => ({

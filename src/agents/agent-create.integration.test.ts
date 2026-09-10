@@ -21,7 +21,10 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
+import {
+  persistProviderAuthProfileBatch,
+  stageProviderAuthProfileBatch,
+} from "../plugins/provider-auth-persistence.js";
 import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
@@ -31,6 +34,7 @@ import { readAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  listOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import {
@@ -288,6 +292,20 @@ it.each(["commit", "rollback"] as const)(
     const readProfiles = () =>
       ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false }).profiles;
     let staged = false;
+    // An ordinary writer outside the creation lifecycle, through the same wizard path.
+    const writeOutsideCreation = () =>
+      persistProviderAuthProfileBatch({
+        profiles: [
+          {
+            profileId: "openai:after",
+            credential: { type: "api_key", provider: "openai", key: "sk-test-after" },
+          },
+        ],
+        config: {},
+        agentDir,
+      });
+    const openWorkDatabases = () =>
+      listOpenClawAgentDatabasesForTest().filter((database) => database.agentId === "work");
     try {
       const creation = createAgent({
         name: "work",
@@ -323,6 +341,10 @@ it.each(["commit", "rollback"] as const)(
           type: "api_key",
           provider: "openai",
         });
+        // Creation owned its handles only until publication; ordinary writers reopen freely.
+        expect(openWorkDatabases()).toEqual([]);
+        await writeOutsideCreation();
+        expect(readProfiles()["openai:after"]).toMatchObject({ type: "api_key" });
       } else {
         const error = await creation.then(
           () => undefined,
@@ -333,6 +355,12 @@ it.each(["commit", "rollback"] as const)(
         expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
         expect(readAgentDeletionJournal("work")).toMatchObject({ cleanupCompleted: true });
         expect(readProfiles()["openai:default"]).toBeUndefined();
+        // The retained tombstone must fence the same process: no warm handle survives
+        // the failed creation, and a cold open is refused until creation claims the record.
+        await expect(writeOutsideCreation()).rejects.toThrow("agent work is deleted");
+        expect(openWorkDatabases()).toEqual([]);
+        expect(readProfiles()["openai:after"]).toBeUndefined();
+        expect(readAgentDeletionJournal("work")).toMatchObject({ cleanupCompleted: true });
       }
     } finally {
       closeOpenClawAgentDatabasesForTest();
