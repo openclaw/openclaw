@@ -277,6 +277,8 @@ describe("production lint suppressions", () => {
         "src/utils/run-with-concurrency.ts|typescript/prefer-promise-reject-errors|1",
         // oxlint misreads CanvasRenderingContext2D.fill(path) as Array.fill.
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
+        // Capture before spying and invoke with each actual server receiver.
+        "ui/src/e2e/desktop-resize-real.test-support.ts|typescript/unbound-method|1",
       ]),
     );
   });

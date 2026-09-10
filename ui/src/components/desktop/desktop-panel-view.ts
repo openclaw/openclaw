@@ -85,7 +85,7 @@ export function renderDesktopPanelContent(options: {
   `;
 }
 
-export function renderDesktopPanelHeader(options: {
+function renderDesktopPanelHeader(options: {
   dock: "bottom" | "right";
   fullscreenControl: TemplateResult;
   onClose: () => void;
