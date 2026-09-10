@@ -234,9 +234,7 @@ suite.define(() => {
           sessionKey,
         );
         expect(await gateway.getRequests("chat.startup")).toHaveLength(initialStartups + 1);
-        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(
-          reference === "named" ? 1 : 0,
-        );
+        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
         await captureHistoryIssuanceProof(page, `canonical-${reference}-history`);
       } finally {
         await suite.closeBrowserContext(context);

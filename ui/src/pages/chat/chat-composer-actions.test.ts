@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
   findComposerButton as button,
@@ -41,6 +42,7 @@ describe("renderChatComposer controls", () => {
   function renderActiveDictationActions(overrides: {
     finishActive: ReturnType<typeof vi.fn>;
     onSend?: ChatRunControlsProps["onSend"];
+    submitDisabledReason?: string;
   }) {
     const container = document.createElement("div");
     const cancelActive = vi.fn();
@@ -65,6 +67,7 @@ describe("renderChatComposer controls", () => {
         sending: false,
         dictation,
         onSend,
+        submitDisabledReason: overrides.submitDisabledReason,
       }),
       container,
     );
@@ -108,6 +111,24 @@ describe("renderChatComposer controls", () => {
     expect(order).toEqual(["commit", "send"]);
     expect(cancelActive).not.toHaveBeenCalled();
     expect(handleClick).not.toHaveBeenCalled();
+  });
+
+  it("does not begin dictation submission while initial history is loading", () => {
+    const finishActive = vi.fn().mockResolvedValue(true);
+    const { container, onSend } = renderActiveDictationActions({
+      finishActive,
+      submitDisabledReason: t("chat.thread.loading"),
+    });
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+    send?.click();
+    expect(finishActive).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(send?.disabled).toBe(true);
+    expect(send?.getAttribute("aria-label")).toBe(t("chat.thread.loading"));
+
+    button(container, t("chat.composer.dictationStopAndKeep")).click();
+    expect(finishActive).toHaveBeenCalledOnce();
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("keeps Stop and Send visually stable while dictation finalizes", () => {
@@ -265,6 +286,32 @@ describe("renderChatComposer controls", () => {
         ?.disabled,
     ).toBe(true);
   });
+
+  it.each([true, false])(
+    "holds Talk during initial history while preserving draft input (hold-to-record=%s)",
+    async (composerHoldToRecord) => {
+      const request = vi.fn().mockResolvedValue({
+        realtime: { ready: true },
+        transcription: { ready: true },
+      });
+      const onToggleRealtimeTalk = vi.fn();
+      const { container } = renderComposer({
+        composerHoldToRecord,
+        gatewayClient: { request } as unknown as GatewayBrowserClient,
+        onToggleRealtimeTalk,
+        submitDisabledReason: t("chat.thread.loading"),
+      });
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      const microphone = button(container, t("chat.composer.startVoiceInput"));
+      const talk = button(container, t("chat.composer.realtimeTalkCapability"));
+      microphone.click();
+      talk.click();
+      expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+      expect(talk.disabled).toBe(true);
+      expect(microphone.disabled).toBe(!composerHoldToRecord);
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    },
+  );
 
   it("queues ordinary drafts offline but disables live voice", () => {
     const onSend = vi.fn();

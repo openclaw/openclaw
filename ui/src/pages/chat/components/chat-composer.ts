@@ -81,7 +81,7 @@ function resolveChatSlashCommandArgOptions(
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
-  state.slashCommandDispatchConnected = props.connected;
+  state.slashCommandDispatchConnected = props.connected && !props.submitDisabledReason;
   const canCompose = props.canSend;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
@@ -303,6 +303,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   // slash commands are live controls and must not execute against stale state.
   const canSubmitDraft = (draft: string) =>
     canCompose &&
+    !props.submitDisabledReason &&
     !(getMentions().length > 0 && (mentionsUnsupported || draft.trimStart().startsWith("/"))) &&
     !goalComposer.pending &&
     state.dictation?.locksComposer !== true &&
@@ -480,6 +481,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   const devicePicker = state.microphonePicker;
   devicePicker.syncCatalog(props.gatewayClient ?? null, props.connected);
   const startRealtimeTalk = () => {
+    if (props.submitDisabledReason) {
+      return;
+    }
     if (devicePicker.realtimeStatus !== "ready") {
       devicePicker.handleOpen();
       return;
@@ -627,6 +631,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const runControlsProps: ChatRunControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(visibleDraft),
+    submitDisabledReason: props.submitDisabledReason,
     connected: props.connected,
     draft: visibleDraft,
     hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),

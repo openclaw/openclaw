@@ -14,6 +14,9 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   preparePaneStagedAttachments,
   restorePaneStagedAttachments,
@@ -281,11 +284,107 @@ describe("chat pane retained presentation lifecycle", () => {
     pane.presented = false;
     pane.presented = true;
     Object.defineProperty(pane, "active", { configurable: true, value: true });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(state.handleSendChat).toHaveBeenCalledOnce());
 
     expect(state.handleChatDraftChange).toHaveBeenCalledWith("continue from the catalog", []);
     expect(state.handleSendChat).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    "ready",
+    "draft edit",
+    "session change",
+    "reconnect",
+    "hide and return",
+    "history failure",
+  ] as const)(
+    "retains catalog continuation intent through initial history: %s",
+    async (outcome) => {
+      vi.stubGlobal("localStorage", createStorageMock());
+      const history = createDeferred<ChatHistoryResult>();
+      const request = vi.fn((method: string) => (method === "chat.startup" ? history.promise : {}));
+      const client = createGatewayBrowserClientFixture({ request });
+      const { pane } = createTestChatPane({ client });
+      const state = createPageState(
+        pane.context,
+        { invalidate: vi.fn(), afterCommit: () => () => {} },
+        document.createElement("div"),
+      );
+      pane.state = state;
+      pane.paneId = "catalog-continuation";
+      pane.sessionKey = "agent:main:continued";
+      state.sessionKey = pane.sessionKey;
+      state.client = client;
+      state.connected = true;
+      state.connectionEpoch = 4;
+      state.handleChatDraftChange = vi.fn((draft) => {
+        state.chatMessage = draft;
+      });
+      state.handleSendChat = vi.fn().mockResolvedValue(undefined);
+      const loaded = loadChatHistory(state, { startup: true, deferBranches: true });
+      expect(getChatHistoryLoadState(state).phase).toBe("in-flight");
+      preparePaneSessionHandoff(pane.context, pane.paneId, pane.sessionKey, {
+        attachments: [],
+        draft: "continue from the catalog",
+        send: true,
+      });
+      pane.presented = false;
+      pane.presented = true;
+      Object.defineProperty(pane, "active", { configurable: true, value: true });
+      await Promise.resolve();
+      expect(state.handleSendChat).not.toHaveBeenCalled();
+      expect(state.chatMessage).toBe("continue from the catalog");
+
+      if (outcome === "draft edit") {
+        state.handleChatDraftChange("keep my revised draft");
+      } else if (outcome === "session change") {
+        state.sessionKey = "agent:main:different";
+      } else if (outcome === "reconnect") {
+        state.connectionEpoch += 1;
+      } else if (outcome === "hide and return") {
+        pane.presented = false;
+        pane.presented = true;
+      }
+      if (outcome === "history failure") {
+        history.reject(new Error("Catalog transcript unavailable"));
+      } else {
+        history.resolve({
+          sessionId: "continued-session",
+          sessionInfo: {
+            key: pane.sessionKey,
+            sessionId: "continued-session",
+            kind: "direct",
+            updatedAt: 1,
+          },
+          messages: [{ role: "assistant", content: "Adopted catalog transcript" }],
+        });
+      }
+      await loaded;
+      await Promise.resolve();
+
+      if (outcome === "ready") {
+        expect(getChatHistoryLoadState(state).phase).toBe("committed");
+        expect(state.currentSessionId).toBe("continued-session");
+        expect(state.handleSendChat).toHaveBeenCalledOnce();
+        pane.presented = false;
+        pane.presented = true;
+        await Promise.resolve();
+        expect(state.handleSendChat).toHaveBeenCalledOnce();
+      } else {
+        expect(state.handleSendChat).not.toHaveBeenCalled();
+        expect(state.chatMessage).toBe(
+          outcome === "draft edit" ? "keep my revised draft" : "continue from the catalog",
+        );
+        if (outcome === "history failure") {
+          expect(getChatHistoryLoadState(state)).toMatchObject({
+            phase: "failed",
+            message: "Catalog transcript unavailable",
+          });
+        }
+      }
+      expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
+    },
+  );
 
   it("schedules renders when an actual retained pane is hidden and reactivated", () => {
     const { pane } = createTestChatPane({

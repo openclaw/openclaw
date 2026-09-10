@@ -19,6 +19,7 @@ import {
   requireChatSessionAction,
   shouldQueueLocalSlashCommand,
 } from "./chat-commands.ts";
+import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   admitQueuedMessageForSession,
@@ -151,6 +152,9 @@ export async function handleSendChat(
   opts?: ChatSendSubmitOptions,
   submissionAction?: Event,
 ) {
+  if (isInitialChatHistoryUnavailable(host)) {
+    return undefined;
+  }
   const previousDraft = host.chatMessage;
   const previousMentions = host.chatMentions?.map((mention) => ({ ...mention }));
   const intent = opts?.intent;
@@ -746,9 +750,5 @@ function prependReplyQuote(
   if (!text.includes("\n")) {
     return `> **${label}:** ${text}\n\n${message}`;
   }
-  const quoted = text
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
-  return `> **${label}:**\n${quoted}\n\n${message}`;
+  return `> **${label}:**\n> ${text.replaceAll("\n", "\n> ")}\n\n${message}`;
 }
