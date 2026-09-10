@@ -127,6 +127,7 @@ export function createReplyState(): TelegramReplyStateSlice {
     reasoningStepState: createTelegramReasoningStepState(),
     bufferedFinalSettlement: undefined as TelegramBufferedFinalSettlement | undefined,
     sentBlockMediaUrls: new Set<string>(),
+    sentBlockMediaTexts: new Set<string>(),
     splitReasoningOnNextStream: false,
   };
 }
@@ -213,6 +214,10 @@ function trackBlockMedia(
     for (const url of payload.mediaUrls) {
       turn.sentBlockMediaUrls.add(url);
     }
+    const trimmedText = payload.text?.trim();
+    if (trimmedText) {
+      turn.sentBlockMediaTexts.add(trimmedText);
+    }
   }
 }
 
@@ -230,7 +235,11 @@ export async function deliverReply(
   }
   const deduped =
     info.kind === "final"
-      ? deduplicateBlockSentMedia(normalizedPayload, turn.sentBlockMediaUrls)
+      ? deduplicateBlockSentMedia(
+          normalizedPayload,
+          turn.sentBlockMediaUrls,
+          turn.sentBlockMediaTexts,
+        )
       : normalizedPayload;
   if (!deduped) {
     return await settleTerminalNoVisibleDelivery(turn, info);
