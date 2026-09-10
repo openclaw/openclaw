@@ -175,6 +175,31 @@ describe("triage external recovery handoff", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Run without safe mode:"));
   });
 
+  it("redacts a rejected Claude capability probe and prints the manual handoff", async () => {
+    mocks.resolveExecutablePath.mockImplementation((binary: string) =>
+      binary === "claude" ? "/usr/local/bin/claude" : undefined,
+    );
+    mocks.runUtf8CommandWithTimeout.mockRejectedValue(
+      new Error(`missing interpreter; Authorization: Bearer ${secret}`),
+    );
+    const runtime = createTriageRuntime();
+
+    await withOpenClawTestState({ layout: "split" }, async () => {
+      await withTriageTerminal(true, async () => {
+        await expect(triageCommand(runtime, { noExport: true })).rejects.toMatchObject({ code: 1 });
+      });
+    });
+
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to check Claude safe-mode support: missing interpreter"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Run manually:"));
+    expect(JSON.stringify([runtime.error.mock.calls, runtime.log.mock.calls])).not.toContain(
+      secret,
+    );
+  });
+
   it("reports a missing explicit agent without falling back to an available agent", async () => {
     mocks.resolveExecutablePath.mockImplementation((agent: string) =>
       agent === "claude" ? "/usr/local/bin/claude" : undefined,

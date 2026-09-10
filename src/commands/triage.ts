@@ -464,11 +464,20 @@ export async function triageCommand(
     }
     if (handoff.agent === "claude" && !automatic) {
       const { claudeAdvertisesSafeMode } = await import("./triage-claude.js");
-      const supportsSafeMode = await claudeAdvertisesSafeMode({
-        argv: [handoff.program.command, ...handoff.program.leadingArgv],
-        env: targetEnv,
-        ...agentOptions,
-      });
+      let supportsSafeMode: boolean;
+      try {
+        supportsSafeMode = await claudeAdvertisesSafeMode({
+          argv: [handoff.program.command, ...handoff.program.leadingArgv],
+          env: targetEnv,
+          ...agentOptions,
+        });
+      } catch (error) {
+        runtime.error(
+          `Failed to check Claude safe-mode support: ${triageCollectionError(error, redaction)}`,
+        );
+        runtime.log(`Run manually: ${suggestedCommands[0]}`);
+        exitCliAfterOutput(runtime, 1);
+      }
       if (!isCurrent()) {
         return;
       }
