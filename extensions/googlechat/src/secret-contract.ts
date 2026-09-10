@@ -1,5 +1,5 @@
 // Secret-target discovery must not load provider setup or resolution runtimes.
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   createChannelSecretTargetRegistryEntries,
   getChannelSurface,
@@ -103,7 +103,24 @@ export function collectRuntimeConfigAssignments(params: {
     : !surface.hasExplicitAccounts
       ? ["default"]
       : surface.accounts
-          .filter(({ account, enabled }) => enabled && !hasOwnProperty(account, "serviceAccount"))
+          .filter(({ account, enabled, accountId }) => {
+            if (!enabled) {
+              return false;
+            }
+            // Mirror the resolver's atomic credential override for named
+            // accounts (isolateAccountCredentials): an account that sets either
+            // credential form drops the inherited root credential, so secret
+            // discovery must not hand it the root SecretRef. The default
+            // account keeps resolving root credentials and stays an owner.
+            if (
+              accountId !== DEFAULT_ACCOUNT_ID &&
+              (hasOwnProperty(account, "serviceAccount") ||
+                hasOwnProperty(account, "serviceAccountFile"))
+            ) {
+              return false;
+            }
+            return !hasOwnProperty(account, "serviceAccount");
+          })
           .map(({ accountId }) => accountId);
   collectGoogleChatAccountAssignment({
     target: googleChat,
