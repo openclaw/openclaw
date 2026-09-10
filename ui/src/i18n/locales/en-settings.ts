@@ -40,7 +40,7 @@ const enSettings = {
     },
     gatewayIsolation: {
       title: "Gateway Isolation",
-      reportedState: "Reported Gateway isolation",
+      reportedState: "Reported Gateway Isolation",
       changeWithCli: "Change with CLI",
       instruction: "Run from your signed-in Windows user session.",
     },

@@ -316,7 +316,7 @@ describe("connection view rendering", () => {
         ).find((heading) => heading.textContent?.trim() === "Gateway Isolation");
         const isolationSection = isolationHeading?.closest(".settings-section");
         expect(isolationSection).not.toBeNull();
-        expect(isolationSection?.textContent).toContain("Reported Gateway isolation");
+        expect(isolationSection?.textContent).toContain("Reported Gateway Isolation");
         expect(isolationSection?.textContent).toContain(expectedState);
         expect(isolationSection?.textContent).toContain(
           "Run from your signed-in Windows user session.",
