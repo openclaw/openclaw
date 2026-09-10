@@ -87,7 +87,7 @@ export class AsyncWorkScope {
   ): Promise<T> {
     let scopes = selectScopes();
     while (scopes.some((scope) => scope.pending.size > 0)) {
-      await Promise.allSettled(scopes.flatMap((scope) => [...scope.pending]));
+      await Promise.allSettled(scopes.flatMap((scope) => Array.from(scope.pending)));
       scopes = selectScopes();
     }
     return run();
