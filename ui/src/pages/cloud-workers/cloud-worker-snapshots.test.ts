@@ -3,14 +3,19 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { showToast } from "../../lib/toast.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { snapshotListFixture } from "./cloud-worker-snapshots.test-support.ts";
 import "./cloud-workers-page.ts";
+
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
+vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 function button(container: Element, label: string) {
   return expectDefined(
@@ -22,26 +27,64 @@ function button(container: Element, label: string) {
 }
 
 beforeEach(async () => {
+  vi.clearAllMocks();
+  vi.mocked(showConfirmDialog).mockResolvedValue(true);
   await i18n.setLocale("en");
 });
 afterEach(() => {
   document.body.replaceChildren();
 });
 
-function mountPage(methods: string[]) {
-  const request = vi.fn(async (method: string) => {
+function mountPage(
+  methods: string[],
+  options: {
+    result?: ReturnType<typeof snapshotListFixture>;
+    config?: Record<string, unknown>;
+    failMutation?: boolean;
+  } = {},
+) {
+  let result = options.result ?? snapshotListFixture();
+  let config = options.config ?? {};
+  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
     if (method === "config.get") {
       return {
-        config: {},
-        sourceConfig: {},
-        raw: "{}",
+        config,
+        sourceConfig: config,
+        raw: JSON.stringify(config),
         hash: "snapshot-config",
         valid: true,
         issues: [],
       };
     }
     if (method === "crabbox.images.list") {
-      return snapshotListFixture();
+      return result;
+    }
+    if (method === "config.patch") {
+      config = { ...config, ...JSON.parse(String(params?.raw)) };
+      return { ok: true, config, hash: "snapshot-config-updated" };
+    }
+    if (
+      ["crabbox.images.pin", "crabbox.images.delete", "crabbox.images.rollback"].includes(method)
+    ) {
+      if (options.failMutation) {
+        throw new Error("Provider is unavailable");
+      }
+      if (method === "crabbox.images.delete") {
+        result = {
+          ...result,
+          images: result.images.filter((image) => image.checkpointId !== params?.checkpointId),
+        };
+        return { status: "deleted" };
+      }
+      result = {
+        ...result,
+        images: result.images.map((image) =>
+          image.checkpointId === params?.checkpointId
+            ? { ...image, pinned: params?.pinned ? { atMs: 1234 } : undefined }
+            : image,
+        ),
+      };
+      return result.images.find((image) => image.checkpointId === params?.checkpointId);
     }
     throw new Error(`Unexpected request ${method}`);
   });
@@ -183,6 +226,230 @@ describe("Cloud worker snapshots", () => {
         expect(
           fixture.request.mock.calls.filter(([method]) => method === "crabbox.images.list"),
         ).toHaveLength(2),
+      );
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("gates each mutation independently and explains deletion protection", async () => {
+    const result = snapshotListFixture();
+    result.images = result.images.map((image) => ({
+      ...image,
+      checkpointId: image.checkpointId ?? image.profileKey,
+    }));
+    result.images.push({
+      ...expectDefined(result.images[1], "Retiring image"),
+      profileKey: "pinned",
+      projectLabel: "pinned",
+      retirement: undefined,
+      held: false,
+      pinned: { atMs: 1234 },
+      previous: { checkpointId: "previous-pinned", createdAtMs: 1234 },
+    });
+    const fixture = mountPage(["crabbox.images.list", "crabbox.images.delete"], { result });
+    try {
+      await waitForFast(() =>
+        expect(fixture.page.textContent).toContain("No cloud worker profiles"),
+      );
+      button(fixture.page, "Snapshots").click();
+      await waitForFast(() => expect(fixture.page.textContent).toContain("github.com/acme/app"));
+      const deletes = [...fixture.page.querySelectorAll<HTMLButtonElement>("button")].filter(
+        (entry) => entry.textContent?.trim() === "Delete",
+      );
+      expect(deletes.map((entry) => [entry.disabled, entry.title])).toEqual([
+        [true, "Outstanding allocations still hold this snapshot."],
+        [true, "Wait for the active capture to finish before deleting this snapshot."],
+        [false, ""],
+        [true, "Unpin this snapshot before deleting it."],
+        [true, "Wait for the active capture to finish before deleting this snapshot."],
+      ]);
+      expect(
+        [...fixture.page.querySelectorAll("button")].some((entry) =>
+          ["Pin", "Unpin", "Roll back"].includes(entry.textContent?.trim() ?? ""),
+        ),
+      ).toBe(false);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("pins immediately, reloads the row, and confirms deletion after unpinning", async () => {
+    const result = snapshotListFixture();
+    result.images = [
+      { ...expectDefined(result.images[0], "Project image"), held: false, retirement: undefined },
+    ];
+    const fixture = mountPage(
+      ["crabbox.images.list", "crabbox.images.pin", "crabbox.images.delete"],
+      { result },
+    );
+    try {
+      await waitForFast(() =>
+        expect(fixture.page.textContent).toContain("No cloud worker profiles"),
+      );
+      button(fixture.page, "Snapshots").click();
+      await waitForFast(() => expect(fixture.page.textContent).toContain("github.com/acme/app"));
+      button(fixture.page, "Pin").click();
+      await waitForFast(() =>
+        expect(fixture.request).toHaveBeenCalledWith("crabbox.images.pin", {
+          checkpointId: "image-app",
+          pinned: true,
+        }),
+      );
+      await waitForFast(() => expect(button(fixture.page, "Unpin").disabled).toBe(false));
+      expect(showConfirmDialog).not.toHaveBeenCalled();
+      expect(button(fixture.page, "Delete").disabled).toBe(true);
+      button(fixture.page, "Unpin").click();
+      await waitForFast(() => expect(button(fixture.page, "Delete").disabled).toBe(false));
+      button(fixture.page, "Delete").click();
+      await waitForFast(() =>
+        expect(fixture.request).toHaveBeenCalledWith("crabbox.images.delete", {
+          checkpointId: "image-app",
+        }),
+      );
+      expect(showConfirmDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Delete snapshot", danger: true }),
+      );
+      await waitForFast(() =>
+        expect(fixture.page.textContent).not.toContain("github.com/acme/app"),
+      );
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("shows pin failures in a toast and keeps the image unchanged", async () => {
+    const result = snapshotListFixture();
+    result.images = [
+      { ...expectDefined(result.images[0], "Project image"), held: false, retirement: undefined },
+    ];
+    const fixture = mountPage(["crabbox.images.list", "crabbox.images.pin"], {
+      result,
+      failMutation: true,
+    });
+    try {
+      await waitForFast(() =>
+        expect(fixture.page.textContent).toContain("No cloud worker profiles"),
+      );
+      button(fixture.page, "Snapshots").click();
+      await waitForFast(() => expect(fixture.page.textContent).toContain("github.com/acme/app"));
+      button(fixture.page, "Pin").click();
+      await waitForFast(() =>
+        expect(showToast).toHaveBeenCalledWith({ message: "Provider is unavailable" }),
+      );
+      expect(fixture.page.textContent).toContain("github.com/acme/app");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("confirms rollback using the previous checkpoint and permits unpinning it", async () => {
+    const result = snapshotListFixture();
+    result.images = [
+      {
+        ...expectDefined(result.images[0], "Project image"),
+        held: false,
+        retirement: undefined,
+        previous: { checkpointId: "image-previous", createdAtMs: 1234, pinned: { atMs: 1234 } },
+      },
+    ];
+    const fixture = mountPage(
+      ["crabbox.images.list", "crabbox.images.rollback", "crabbox.images.pin"],
+      { result },
+    );
+    try {
+      await waitForFast(() =>
+        expect(fixture.page.textContent).toContain("No cloud worker profiles"),
+      );
+      button(fixture.page, "Snapshots").click();
+      await waitForFast(() => expect(fixture.page.textContent).toContain("image-previous"));
+      button(fixture.page, "Unpin").click();
+      await waitForFast(() =>
+        expect(fixture.request).toHaveBeenCalledWith("crabbox.images.pin", {
+          checkpointId: "image-previous",
+          pinned: false,
+        }),
+      );
+      await waitForFast(() => expect(button(fixture.page, "Roll back").disabled).toBe(false));
+      button(fixture.page, "Roll back").click();
+      await waitForFast(() =>
+        expect(fixture.request).toHaveBeenCalledWith("crabbox.images.rollback", {
+          checkpointId: "image-previous",
+        }),
+      );
+      expect(showConfirmDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Roll back snapshot", details: "image-previous" }),
+      );
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("validates retention minima and patches only the plugin-owned policy", async () => {
+    const fixture = mountPage(["crabbox.images.list", "config.patch"]);
+    try {
+      await waitForFast(() =>
+        expect(fixture.page.textContent).toContain("No cloud worker profiles"),
+      );
+      button(fixture.page, "Snapshots").click();
+      await waitForFast(() => expect(fixture.page.textContent).toContain("Retention policy"));
+      const set = (label: string, value: string) => {
+        const input = expectDefined(
+          fixture.page.querySelector<HTMLInputElement | HTMLSelectElement>(
+            `[aria-label="${label}"]`,
+          ),
+          label,
+        );
+        input.value = value;
+        input.dispatchEvent(
+          new Event(input instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }),
+        );
+      };
+      const save = () => button(fixture.page, "Save retention policy").click();
+      expect(
+        fixture.page.querySelector<HTMLInputElement>('[aria-label="Refresh after"]')?.value,
+      ).toBe("24h");
+      expect(
+        fixture.page.querySelector<HTMLInputElement>('[aria-label="Retain unused"]')?.value,
+      ).toBe("14d");
+      set("Refresh after", "59m");
+      save();
+      await waitForFast(() =>
+        expect(fixture.page.textContent).toContain("Enter a duration of at least 1h"),
+      );
+      set("Refresh after", "90m");
+      set("Retain unused", "23h");
+      save();
+      await waitForFast(() =>
+        expect(fixture.page.textContent).toContain("Enter a duration of at least 1d"),
+      );
+      expect(fixture.request).not.toHaveBeenCalledWith("config.patch", expect.anything());
+      set("Retain unused", "2d");
+      set("Previous generations", "1");
+      save();
+      await waitForFast(() =>
+        expect(fixture.request).toHaveBeenCalledWith(
+          "config.patch",
+          expect.objectContaining({ raw: expect.any(String) }),
+        ),
+      );
+      const params = expectDefined(
+        fixture.request.mock.calls.find(([method]) => method === "config.patch")?.[1],
+        "Config patch",
+      );
+      expect(JSON.parse(String(params.raw))).toEqual({
+        plugins: {
+          entries: {
+            crabbox: {
+              config: { warmImages: { refreshAfter: "90m", retainUnused: "2d", keepPrevious: 1 } },
+            },
+          },
+        },
+      });
+      await waitForFast(() =>
+        expect(fixture.page.textContent).toContain(
+          "Retention policy saved. Restart the Gateway to apply it.",
+        ),
       );
     } finally {
       fixture.dispose();

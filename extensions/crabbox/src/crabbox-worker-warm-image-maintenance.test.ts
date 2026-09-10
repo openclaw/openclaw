@@ -156,7 +156,7 @@ describe("Crabbox idle image maintenance", () => {
     expect(store.lookup("expired")).toBeUndefined();
   });
 
-  it.each(["dispose", "authority"] as const)(
+  it.each(["dispose", "authority", "operator delete"] as const)(
     "fences %s during deletion and retains its obligation until an active retry",
     async (boundary) => {
       const started = createDeferred<AbortSignal>();
@@ -172,14 +172,17 @@ describe("Crabbox idle image maintenance", () => {
       const store = openWarmImageStore();
       store.register("expired", expiredImage("chk_expired"));
       let current = true;
-      const maintenance = provider.maintain!({
-        ...mixedContext(),
-        assertCurrent() {
-          if (!current) {
-            throw new Error("maintenance authority closed");
-          }
-        },
-      });
+      const maintenance =
+        boundary === "operator delete"
+          ? provider.images.delete("chk_expired", mixedContext().profiles)
+          : provider.maintain!({
+              ...mixedContext(),
+              assertCurrent() {
+                if (!current) {
+                  throw new Error("maintenance authority closed");
+                }
+              },
+            });
       const rejected = expect(maintenance).rejects.toThrow();
       let stopping: Promise<void> | undefined;
       let stopped = false;
@@ -190,7 +193,7 @@ describe("Crabbox idle image maintenance", () => {
           provisionWarmProfile(provider, PROFILE, "during-maintenance"),
         ).resolves.toMatchObject({ node: { deviceId: "device-1" } });
         current = false;
-        if (boundary === "dispose") {
+        if (boundary !== "authority") {
           stopping = provider.dispose().then(() => {
             stopped = true;
           });
@@ -213,9 +216,12 @@ describe("Crabbox idle image maintenance", () => {
       const replacement = createWarmProvider(undefined, stateDir);
       await replacement.provider.maintain!(context());
       expect(store.lookup("expired")).toBeUndefined();
-      if (boundary === "dispose") {
+      if (boundary !== "authority") {
         expect(stopped).toBe(true);
         expect(() => provider.maintain!(context())).toThrow();
+        expect(() => provider.images.pin("chk_expired", true)).toThrow();
+        expect(() => provider.images.rollback("chk_expired")).toThrow();
+        await expect(provider.images.delete("chk_expired", context().profiles)).rejects.toThrow();
       }
     },
   );

@@ -25,7 +25,7 @@ Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud 
 
 ## What each page covers
 
-- [Cloud worker warm images](/gateway/cloud-workers/warm-images) — capture boundaries, image reuse and refresh, retention limits, and recovering a paused capture or legacy warm-image state.
+- [Cloud worker warm images](/gateway/cloud-workers/warm-images) — capture boundaries, image reuse and refresh, snapshot pinning, deletion and rollback, retention policy, and recovering a paused capture or legacy warm-image state.
 - [Per-project default profiles](/gateway/cloud-workers/per-project-default-profiles) — `cloudWorkers.projectProfiles`, and how a fixed Crabbox lease ID makes an interrupted provision replayable.
 - [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation) — the idempotent `settings.setup` contract, the Gateway-prepared runtime archive, and building a complete custom node package.
 - [Verify a cloud worker profile](/gateway/cloud-workers/verify-the-profile) — config validation, the Gateway restart, Codex command enablement, and the end-to-end check before you rely on a profile.

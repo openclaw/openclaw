@@ -68,4 +68,68 @@ suite.define(() => {
       await context.close();
     }
   });
+
+  it("pins a snapshot, unpins it, and confirms provider deletion with exact checkpoint payloads", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const initial = snapshotListFixture();
+    const image = initial.images.find((entry) => entry.checkpointId === "image-app");
+    if (!image) {
+      throw new Error("Expected project image fixture");
+    }
+    const unpinned = { ...image, held: false, retirement: undefined };
+    const pinned = { ...unpinned, pinned: { atMs: 1234 } };
+    const listed = { ...initial, images: [unpinned] };
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["crabbox.images.list", "crabbox.images.pin", "crabbox.images.delete"],
+      methodResponses: {
+        "crabbox.images.list": listed,
+        "crabbox.images.pin": pinned,
+        "crabbox.images.delete": { status: "deleted" },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.getByRole("button", { name: "Snapshots", exact: true }).click();
+      const row = page.locator(".settings-row").filter({ hasText: "github.com/acme/app" });
+      await row.waitFor();
+      await gateway.setMethodResponse("crabbox.images.list", { ...listed, images: [pinned] });
+      await row.getByRole("button", { name: "Pin", exact: true }).click();
+      expect((await gateway.waitForRequest("crabbox.images.pin")).params).toEqual({
+        checkpointId: "image-app",
+        pinned: true,
+      });
+      await row.getByText("Pinned", { exact: true }).waitFor();
+      expect(await row.getByRole("button", { name: "Delete", exact: true }).isDisabled()).toBe(
+        true,
+      );
+      expect(
+        await row.getByRole("button", { name: "Delete", exact: true }).getAttribute("title"),
+      ).toBe("Unpin this snapshot before deleting it.");
+      await gateway.setMethodResponse("crabbox.images.list", listed);
+      await gateway.setMethodResponse("crabbox.images.pin", unpinned);
+      await row.getByRole("button", { name: "Unpin", exact: true }).click();
+      await expect.poll(() => gateway.getRequests("crabbox.images.pin")).toHaveLength(2);
+      expect((await gateway.getRequests("crabbox.images.pin"))[1]?.params).toEqual({
+        checkpointId: "image-app",
+        pinned: false,
+      });
+      await expect
+        .poll(() => row.getByRole("button", { name: "Delete", exact: true }).isEnabled())
+        .toBe(true);
+      await row.getByRole("button", { name: "Delete", exact: true }).click();
+      const dialog = await waitForConfirmModal(page);
+      expect(await gateway.getRequests("crabbox.images.delete")).toHaveLength(0);
+      await dialog.getByText("image-app", { exact: true }).waitFor();
+      await gateway.setMethodResponse("crabbox.images.list", { ...listed, images: [] });
+      await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+      expect((await gateway.waitForRequest("crabbox.images.delete")).params).toEqual({
+        checkpointId: "image-app",
+      });
+      await expect.poll(() => row.count()).toBe(0);
+      await expect.poll(() => gateway.getRequests("crabbox.images.list")).toHaveLength(4);
+    } finally {
+      await context.close();
+    }
+  });
 });

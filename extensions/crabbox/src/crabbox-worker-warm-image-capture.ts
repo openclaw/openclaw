@@ -17,10 +17,12 @@ import {
   type createCheckpointCommands,
   type parseCheckpointAvailability,
 } from "./crabbox-worker-warm-image-checkpoint.js";
+import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import {
   clearCrabboxWarmImageCapture,
   crabboxWarmImageRecoveryHint,
+  sameCrabboxWarmImageGeneration,
   withoutCrabboxWarmImageOperation,
   type openCrabboxWarmImageStore,
   type WarmProfileRecord,
@@ -30,9 +32,8 @@ type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 type LeaseContext = CheckpointContext & { id: string; provider: string };
 type WarmImageStore = ReturnType<typeof openCrabboxWarmImageStore>;
 
-const WARM_IMAGE_REFRESH_MS = 24 * 60 * 60 * 1_000;
-
 export function createCrabboxWarmImageCapture(dependencies: {
+  policy: CrabboxWarmImagePolicy;
   openStore: () => WarmImageStore;
   lookupLease: WarmImageStore["lookupLease"];
   assertCurrent: (context: LeaseContext) => void;
@@ -103,6 +104,13 @@ export function createCrabboxWarmImageCapture(dependencies: {
         if (existing.operation) {
           return;
         }
+        if (existing.image?.pinned && existing.previous?.pinned) {
+          warnOnce(
+            "capture paused",
+            "The current and previous snapshots are pinned; unpin one before publishing another generation.",
+          );
+          return;
+        }
         if (existing.image) {
           const runtimeMatches = isDeepStrictEqual(
             existing.image.runtimeIdentity,
@@ -116,7 +124,13 @@ export function createCrabboxWarmImageCapture(dependencies: {
               existing.image.preparationKey !== owner.preparationKey ||
               existing.image.cacheKey !== owner.cacheKey) &&
             (owner.choice.kind !== "checkpoint" ||
-              owner.choice.checkpointId !== existing.image.checkpointId)
+              owner.choice.checkpointId !== existing.image.checkpointId) &&
+            // A pinned incompatible base remains owned, but does not prevent a newly
+            // admitted cold preparation from publishing a compatible successor.
+            !(
+              owner.choice.kind === "cold" &&
+              sameCrabboxWarmImageGeneration(owner.publicationBase, existing.image)
+            )
           ) {
             return;
           }
@@ -126,7 +140,11 @@ export function createCrabboxWarmImageCapture(dependencies: {
             context.forkedCheckpointId === existing.image.checkpointId
               ? "available"
               : await verifyImage(context, existing.image.checkpointId);
-          if (state === "missing" && !held(existing, existing.image.checkpointId)) {
+          if (
+            state === "missing" &&
+            !existing.image.pinned &&
+            !held(existing, existing.image.checkpointId)
+          ) {
             await deleteImage(context, key, existing);
             existing = openStore().lookup(key)!;
             if (existing.image || existing.operation) {
@@ -134,7 +152,8 @@ export function createCrabboxWarmImageCapture(dependencies: {
             }
           } else if (
             state !== "missing" &&
-            Date.now() - existing.image.createdAtMs < WARM_IMAGE_REFRESH_MS &&
+            (existing.image.pinned ||
+              Date.now() - existing.image.createdAtMs < dependencies.policy.refreshAfterMs) &&
             runtimeMatches &&
             existing.image.preparationKey === owner.preparationKey &&
             existing.image.cacheKey === owner.cacheKey &&
@@ -233,6 +252,20 @@ export function createCrabboxWarmImageCapture(dependencies: {
             return undefined;
           }
           const next = withoutCrabboxWarmImageOperation(current);
+          // Pin mutations cannot race capture. Retain at most one previous image;
+          // the displaced unpinned generation becomes durable deletion debt.
+          const predecessor = current.image;
+          let retiredCheckpointId: string | undefined;
+          if (predecessor && predecessor.checkpointId !== created.checkpointId) {
+            if (current.previous?.pinned) {
+              retiredCheckpointId = predecessor.checkpointId;
+            } else if (predecessor.pinned || dependencies.policy.keepPrevious === 1) {
+              next.previous = predecessor;
+              retiredCheckpointId = current.previous?.checkpointId;
+            } else {
+              retiredCheckpointId = predecessor.checkpointId;
+            }
+          }
           const allocation = current.allocations[context.id];
           // A late capture still owns its image; it must not recreate a released lease.
           if (
@@ -265,11 +298,11 @@ export function createCrabboxWarmImageCapture(dependencies: {
               runtimeIdentity: structuredClone(owner.runtimeIdentity),
               ...(owner.baseCommit ? { baseCommit: owner.baseCommit } : {}),
             },
-            ...(current.image && current.image.checkpointId !== created.checkpointId
+            ...(retiredCheckpointId
               ? {
                   operation: {
                     type: "retire" as const,
-                    checkpointId: current.image.checkpointId,
+                    checkpointId: retiredCheckpointId,
                   },
                 }
               : {}),

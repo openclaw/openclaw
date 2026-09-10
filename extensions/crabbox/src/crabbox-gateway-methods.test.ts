@@ -6,8 +6,15 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
-import { listCrabboxImages, recoverCrabboxImage } from "./crabbox-gateway-methods.js";
 import {
+  listCrabboxImages,
+  mutateCrabboxImage,
+  recoverCrabboxImage,
+} from "./crabbox-gateway-methods.js";
+import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
+import {
+  CrabboxWarmImageRequestError,
+  listCrabboxWarmImages,
   listCrabboxLegacyWarmLeases,
   openCrabboxWarmImageStore,
   type WarmAllocationRecord,
@@ -87,17 +94,141 @@ function createApi() {
   return api;
 }
 
+function createActions() {
+  openCrabboxWarmImageStore().register("profile", record());
+  const image = listCrabboxWarmImages()[0]!;
+  return {
+    pin: vi.fn<CrabboxSnapshotActions["pin"]>(() => image),
+    rollback: vi.fn<CrabboxSnapshotActions["rollback"]>(() => image),
+    delete: vi.fn<CrabboxSnapshotActions["delete"]>(async () => ({ status: "deleted" })),
+  };
+}
+
+describe("Crabbox snapshot mutations", () => {
+  it.each(["pin", "delete", "rollback"] as const)(
+    "rejects malformed %s requests before calling the owner",
+    async (action) => {
+      const actions = createActions();
+      const valid =
+        action === "pin"
+          ? { checkpointId: "chk_fixture", pinned: true }
+          : { checkpointId: "chk_fixture" };
+      for (const params of [
+        undefined,
+        [],
+        {},
+        { ...valid, checkpointId: 1 },
+        { ...valid, checkpointId: " " },
+        { ...valid, extra: true },
+        ...(action === "pin"
+          ? [{ checkpointId: "chk_fixture" }, { checkpointId: "chk_fixture", pinned: "true" }]
+          : [{ ...valid, pinned: true }]),
+      ]) {
+        const respond = vi.fn();
+        await mutateCrabboxImage(createApi(), actions, action, { params, respond });
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          expect.any(Object),
+          expect.objectContaining({ code: "INVALID_REQUEST" }),
+        );
+      }
+      expect(actions[action]).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([true, false])(
+    "passes pin=%s to its owner and returns the updated summary",
+    async (pinned) => {
+      const actions = createActions();
+      const respond = vi.fn();
+      await mutateCrabboxImage(createApi(), actions, "pin", {
+        params: { checkpointId: "chk_fixture", pinned },
+        respond,
+      });
+      expect(actions.pin).toHaveBeenCalledWith("chk_fixture", pinned);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ checkpointId: "chk_fixture" }),
+      );
+    },
+  );
+
+  it("passes a previous checkpoint to rollback and returns the owner's summary", async () => {
+    const actions = createActions();
+    const respond = vi.fn();
+    await mutateCrabboxImage(createApi(), actions, "rollback", {
+      params: { checkpointId: "chk_previous" },
+      respond,
+    });
+    expect(actions.rollback).toHaveBeenCalledWith("chk_previous");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ checkpointId: "chk_fixture" }),
+    );
+  });
+
+  it.each(["deleted", "retiring"] as const)(
+    "uses current Crabbox profiles for deletion and returns %s",
+    async (status) => {
+      const actions = createActions();
+      actions.delete.mockResolvedValue({ status });
+      const api = createApi();
+      api.config.cloudWorkers = {
+        profiles: {
+          synthetic: { provider: "crabbox", settings: SETTINGS },
+          other: { provider: "other", settings: {} },
+        },
+      };
+      const respond = vi.fn();
+      await mutateCrabboxImage(api, actions, "delete", {
+        params: { checkpointId: "chk_fixture" },
+        respond,
+      });
+      expect(actions.delete).toHaveBeenCalledWith("chk_fixture", [SETTINGS]);
+      expect(respond).toHaveBeenCalledWith(true, { status });
+    },
+  );
+
+  it.each(["pin", "delete", "rollback"] as const)(
+    "maps %s owner refusals separately from storage failures",
+    async (action) => {
+      const actions = createActions();
+      for (const [error, code] of [
+        [new CrabboxWarmImageRequestError("Unknown checkpoint"), "INVALID_REQUEST"],
+        [new Error("Store unavailable"), "UNAVAILABLE"],
+      ] as const) {
+        actions[action].mockImplementation(() => {
+          throw error;
+        });
+        const respond = vi.fn();
+        await mutateCrabboxImage(createApi(), actions, action, {
+          params: { checkpointId: "chk_fixture", ...(action === "pin" ? { pinned: false } : {}) },
+          respond,
+        });
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          { error: error.message },
+          expect.objectContaining({ code, message: error.message }),
+        );
+      }
+    },
+  );
+});
+
 describe("Crabbox snapshots Gateway methods", () => {
-  it("registers both plugin methods with admin scope", () => {
+  it("registers all snapshot methods with admin scope", () => {
     const registerGatewayMethod = vi.fn();
     plugin.register(createTestPluginApi({ registerGatewayMethod }));
     expect(registerGatewayMethod.mock.calls).toEqual([
       ["crabbox.images.list", expect.any(Function), { scope: "operator.admin" }],
       ["crabbox.images.recover", expect.any(Function), { scope: "operator.admin" }],
+      ["crabbox.images.pin", expect.any(Function), { scope: "operator.admin" }],
+      ["crabbox.images.delete", expect.any(Function), { scope: "operator.admin" }],
+      ["crabbox.images.rollback", expect.any(Function), { scope: "operator.admin" }],
     ]);
   });
 
-  it("lists display facts and older records without mutating ownership, with bounded allocations", () => {
+  it("bounds list and mutation summaries without losing held status or changing ownership", async () => {
     const current = record();
     Object.assign(current, {
       profileId: "linux",
@@ -165,6 +296,24 @@ describe("Crabbox snapshots Gateway methods", () => {
       ),
     ).toHaveLength(20);
     expect(store.lookup("current")).toEqual(current);
+    const image = listCrabboxWarmImages().find((entry) => entry.profileKey === "current")!;
+    const actions: CrabboxSnapshotActions = {
+      pin: () => image,
+      rollback: () => image,
+      delete: async () => ({ status: "deleted" }),
+    };
+    for (const action of ["pin", "rollback"] as const) {
+      const mutationResponse = vi.fn();
+      await mutateCrabboxImage(createApi(), actions, action, {
+        params: { checkpointId: "chk_fixture", ...(action === "pin" ? { pinned: true } : {}) },
+        respond: mutationResponse,
+      });
+      expect(mutationResponse).toHaveBeenCalledWith(
+        true,
+        payload.images.find((entry: { profileKey: string }) => entry.profileKey === "current"),
+      );
+    }
+    expect(Object.keys(image.allocations)).toHaveLength(21);
   });
 
   it("uses current configured defaults without reading setup environment or including other providers", () => {

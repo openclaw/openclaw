@@ -5,6 +5,7 @@ import {
   resolveCrabboxProvisionProfile,
   resolveCrabboxWarmImageProfileKey,
 } from "./crabbox-worker-profile.js";
+import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
 import {
   listCrabboxWarmImages,
   type WarmProfileRecord,
@@ -22,17 +23,26 @@ import {
   tempDirs,
 } from "./crabbox-worker-warm-image.test-support.js";
 
-function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
+function fixture(
+  failCreate = false,
+  onCommand?: (argv: string[]) => ReturnType<typeof commandResult> | void,
+  policy?: CrabboxWarmImagePolicy,
+) {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-allocation-"));
   const calls: string[][] = [];
   let captures = 0;
+  const warn = vi.fn();
   const manager = () =>
     createCrabboxWarmImageManager({
-      warn: vi.fn(),
+      warn,
+      policy,
       runArgs: ({ id }) => ["run", "--id", id, "--script-stdin"],
       runCommand: async (argv) => {
         calls.push(argv);
-        onCommand?.(argv);
+        const override = onCommand?.(argv);
+        if (override) {
+          return override;
+        }
         if (failCreate && argv[2] === "create") {
           return commandResult({ code: null, killed: true, termination: "timeout" });
         }
@@ -77,10 +87,220 @@ function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
     ...(projectKey ? { projectKey } : {}),
     timeoutMs: () => 60_000,
   });
-  return { manager, context, calls };
+  const projectContext = (id: string, cacheKey = "b".repeat(64)) => ({
+    ...context(id, "project-a"),
+    preparation: {
+      key: "a".repeat(64),
+      cacheKey,
+      purpose: "reserve" as const,
+      demandAtMs: Date.now(),
+    },
+  });
+  return { manager, context, projectContext, calls, warn };
 }
 
 describe("Crabbox durable allocation admission", () => {
+  it("forks an aged pinned checkpoint without refreshing until the operator unpins it", async () => {
+    const { manager, context, calls } = fixture();
+    const owner = manager();
+    const source = context("cbx_source");
+    await owner.allocate(source);
+    owner.markEnrolled(source.id);
+    await owner.capture(source);
+    await owner.release(source);
+    const pinnedAtMs = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(pinnedAtMs);
+    expect(owner.pin(CHECKPOINT_ID, true)).toMatchObject({ pinned: { atMs: pinnedAtMs } });
+    clock.mockReturnValue(pinnedAtMs + 2 * 86_400_000);
+    const next = context("cbx_next");
+    expect(await owner.allocate(next)).toEqual({ kind: "checkpoint", checkpointId: CHECKPOINT_ID });
+    owner.markEnrolled(next.id);
+    calls.length = 0;
+    expect(await owner.capture(next)).toBe(false);
+    expect(calls.some((argv) => argv[2] === "create" || argv[2] === "delete")).toBe(false);
+    expect(owner.pin(CHECKPOINT_ID, false).pinned).toBeUndefined();
+    expect(await owner.capture(next)).toBe(true);
+    expect(openWarmImageStore().entries()[0]?.value.image?.checkpointId).toBe(`${CHECKPOINT_ID}_2`);
+    await owner.release(next);
+    expect(calls.filter((argv) => argv[2] === "delete").map((argv) => argv[3])).toEqual([
+      CHECKPOINT_ID,
+    ]);
+  });
+
+  it("uses the configured refresh interval instead of the default age", async () => {
+    const { manager, context, calls } = fixture(false, undefined, {
+      refreshAfterMs: 3_600_000,
+      retainUnusedMs: 14 * 86_400_000,
+      keepPrevious: 0,
+    });
+    const owner = manager();
+    const source = context("cbx_source");
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    await owner.allocate(source);
+    owner.markEnrolled(source.id);
+    await owner.capture(source);
+    await owner.release(source);
+    const next = context("cbx_next");
+    await owner.allocate(next);
+    owner.markEnrolled(next.id);
+    calls.length = 0;
+    clock.mockReturnValue(now + 3_600_000 - 1);
+    expect(await owner.capture(next)).toBe(false);
+    clock.mockReturnValue(now + 3_600_000);
+    expect(await owner.capture(next)).toBe(true);
+    expect(calls.filter((argv) => argv[2] === "create")).toHaveLength(1);
+  });
+
+  it.each(["available", "missing"] as const)(
+    "starts an incompatible preparation cold and retains its %s pinned predecessor with keepPrevious disabled",
+    async (providerState) => {
+      const { manager, projectContext, calls } = fixture(false, (argv) => {
+        if (argv[2] === "inspect") {
+          return commandResult({
+            stdout: JSON.stringify({
+              localState: "metadata_available",
+              providerState,
+              nextAction: providerState === "missing" ? "delete_local" : "fork_or_delete",
+            }),
+          });
+        }
+        return undefined;
+      });
+      const owner = manager();
+      const source = projectContext("cbx_source");
+      await owner.allocate(source);
+      owner.markPrepared(source.id, "a".repeat(40));
+      await owner.capture(source);
+      await owner.release(source);
+      owner.pin(CHECKPOINT_ID, true);
+      const predecessor = structuredClone(openWarmImageStore().entries()[0]!.value.image);
+      const next = {
+        ...projectContext("cbx_next", "c".repeat(64)),
+        nodeRuntimeIdentity: { ...NODE_RUNTIME_IDENTITY, nodeBootstrapSha256: "d".repeat(64) },
+      };
+      calls.length = 0;
+      expect(await owner.allocate(next)).toEqual({ kind: "cold" });
+      expect(calls.some((argv) => argv[1] === "warmup")).toBe(true);
+      expect(calls.some((argv) => argv[2] === "fork")).toBe(false);
+      owner.markPrepared(next.id, "e".repeat(40));
+      expect(await owner.capture(next)).toBe(true);
+      expect(calls.some((argv) => argv[2] === "inspect" && argv[3] === CHECKPOINT_ID)).toBe(true);
+      await owner.release(next);
+      await owner.maintain({ binaries: ["crabbox"] });
+      expect(openWarmImageStore().entries()[0]?.value).toMatchObject({
+        image: {
+          checkpointId: `${CHECKPOINT_ID}_2`,
+          cacheKey: next.preparation.cacheKey,
+          runtimeIdentity: next.nodeRuntimeIdentity,
+        },
+        previous: predecessor,
+      });
+      expect(calls.some((argv) => argv[2] === "delete")).toBe(false);
+    },
+  );
+
+  it("does not let an older cold admission overwrite a newly pinned generation", async () => {
+    const { manager, projectContext, calls } = fixture(false, undefined, {
+      refreshAfterMs: 86_400_000,
+      retainUnusedMs: 14 * 86_400_000,
+      keepPrevious: 1,
+    });
+    const owner = manager();
+    const source = projectContext("cbx_source");
+    await owner.allocate(source);
+    owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    await owner.release(source);
+    owner.pin(CHECKPOINT_ID, true);
+    const older = projectContext("cbx_older", "c".repeat(64));
+    const newer = projectContext("cbx_newer", "d".repeat(64));
+    expect(await owner.allocate(older)).toEqual({ kind: "cold" });
+    expect(await owner.allocate(newer)).toEqual({ kind: "cold" });
+    owner.markPrepared(older.id, "b".repeat(40));
+    owner.markPrepared(newer.id, "c".repeat(40));
+    expect(await owner.capture(newer)).toBe(true);
+    await owner.release(newer);
+    owner.pin(CHECKPOINT_ID, false);
+    owner.pin(`${CHECKPOINT_ID}_2`, true);
+    const published = structuredClone(openWarmImageStore().entries()[0]!.value.image);
+    calls.length = 0;
+    expect(await owner.capture(older)).toBe(false);
+    expect(calls.some((argv) => argv[2] === "create")).toBe(false);
+    expect(openWarmImageStore().entries()[0]?.value.image).toEqual(published);
+  });
+
+  it("preserves two pinned generations and warns once instead of publishing a third", async () => {
+    const { manager, projectContext, calls, warn } = fixture();
+    const owner = manager();
+    const source = projectContext("cbx_source");
+    await owner.allocate(source);
+    owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    await owner.release(source);
+    owner.pin(CHECKPOINT_ID, true);
+    const next = projectContext("cbx_next", "c".repeat(64));
+    await owner.allocate(next);
+    owner.markPrepared(next.id, "b".repeat(40));
+    await owner.capture(next);
+    await owner.release(next);
+    owner.pin(`${CHECKPOINT_ID}_2`, true);
+    const third = projectContext("cbx_third", "d".repeat(64));
+    await owner.allocate(third);
+    owner.markPrepared(third.id, "c".repeat(40));
+    const record = structuredClone(openWarmImageStore().entries()[0]!.value);
+    calls.length = 0;
+    expect(await owner.capture(third)).toBe(false);
+    expect(await owner.capture(third)).toBe(false);
+    expect(calls.some((argv) => argv[2] === "create" || argv[2] === "delete")).toBe(false);
+    expect(openWarmImageStore().entries()[0]?.value).toEqual(record);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/current and previous.*pinned/i));
+  });
+
+  it("keeps one predecessor and retires the older previous only after its borrower releases", async () => {
+    const { manager, context, calls } = fixture(false, undefined, {
+      refreshAfterMs: 86_400_000,
+      retainUnusedMs: 14 * 86_400_000,
+      keepPrevious: 1,
+    });
+    const owner = manager();
+    const source = context("cbx_source");
+    await owner.allocate(source);
+    owner.markEnrolled(source.id);
+    await owner.capture(source);
+    await owner.release(source);
+    const borrower = context("cbx_borrower");
+    await owner.allocate(borrower);
+    for (const [index, digest] of ["b", "c"].entries()) {
+      const next = {
+        ...context(`cbx_next_${index}`),
+        nodeRuntimeIdentity: { ...NODE_RUNTIME_IDENTITY, nodeBootstrapSha256: digest.repeat(64) },
+      };
+      await owner.allocate(next);
+      owner.markEnrolled(next.id);
+      expect(await owner.capture(next)).toBe(true);
+      await owner.release(next);
+      expect(openWarmImageStore().entries()[0]?.value.previous?.checkpointId).toBe(
+        index === 0 ? CHECKPOINT_ID : `${CHECKPOINT_ID}_2`,
+      );
+    }
+    expect(openWarmImageStore().entries()).toHaveLength(1);
+    expect(openWarmImageStore().entries()[0]?.value).toMatchObject({
+      image: { checkpointId: `${CHECKPOINT_ID}_3` },
+      operation: { type: "retire", checkpointId: CHECKPOINT_ID },
+    });
+    expect(calls.some((argv) => argv[2] === "delete")).toBe(false);
+    await owner.release(borrower);
+    expect(calls.filter((argv) => argv[2] === "delete").map((argv) => argv[3])).toEqual([
+      CHECKPOINT_ID,
+    ]);
+    expect(openWarmImageStore().entries()[0]?.value.operation).toBeUndefined();
+    expect(openWarmImageStore().entries()[0]?.value.previous?.checkpointId).toBe(
+      `${CHECKPOINT_ID}_2`,
+    );
+  });
+
   it("carries configured profile and project labels through provisioning to inspection", async () => {
     const { options, observe } = createProjectOptions([]);
     const { provider } = createWarmProvider(observe);

@@ -23,6 +23,14 @@ Node-backed providers return an authenticated node device id for either `worker-
 
 In **Settings → Cloud workers**, the profile editor's **Advanced** group edits warm images, setup environment names, ready workers, and suspend-after duration. The page also exposes the shared **Prepared pool** cap. Clearing optional values restores their defaults; selecting **Auto** for warm images restores automatic selection. These changes require a Gateway restart.
 
+Snapshot retention is plugin-wide, separate from profile settings. Configure
+`plugins.entries.crabbox.config.warmImages.refreshAfter` (default `24h`, minimum
+`1h`), `retainUnused` (default `14d`, minimum `1d`), and `keepPrevious` (`0` or `1`,
+default `0`) in the **Snapshots → Retention policy** card or config. Durations
+accept whole minutes, hours, or days. Changes require a Gateway restart. See
+[Retention policy](/gateway/cloud-workers/warm-images#retention-policy) for the
+complete syntax, pinned exemptions, and previous-generation behavior.
+
 The bundled `crabbox` provider provisions a disposable machine through the local Crabbox CLI, enrolls it as an ephemeral outbound node, and returns the same node transport for OpenClaw `worker-turn` or Codex `remote-exec`. One configured profile can therefore be selected by both harnesses; the selected session runtime determines its execution semantics. The inner `settings.provider` selects the Crabbox backend; it is separate from the outer OpenClaw provider id.
 
 ```json5

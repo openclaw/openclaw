@@ -16,8 +16,10 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { showToast } from "../../lib/toast.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import "./cloud-worker-snapshot-policy.ts";
 
 registerSettingsEnglish();
 
@@ -35,6 +37,14 @@ type SnapshotImage = {
   lastDemandAtMs?: number | null;
   baseCommit?: string;
   runtimeIdentity?: { nodeBootstrapSha256: string };
+  pinned?: { atMs: number };
+  previous?: {
+    checkpointId: string;
+    createdAtMs: number;
+    baseCommit?: string;
+    runtimeIdentity?: { nodeBootstrapSha256: string };
+    pinned?: { atMs: number };
+  };
   held: boolean;
   allocationCount: number;
   retirement?: { checkpointId: string };
@@ -64,6 +74,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
 
   @state() private result: SnapshotsResult | null = null;
   @state() private loading = false;
+  @state() private mutating: string | null = null;
   @state() private recovering: string | null = null;
   @state() private error: string | null = null;
   @state() private notice: string | null = null;
@@ -75,6 +86,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       this.result = null;
       this.loading = false;
       this.recovering = null;
+      this.mutating = null;
       this.error = null;
       this.notice = null;
       this.confirmation?.abort();
@@ -117,6 +129,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       !selector ||
       image.capture?.phase !== "uncertain" ||
       this.recovering ||
+      this.mutating ||
       !this.canCall("crabbox.images.recover")
     ) {
       return;
@@ -164,6 +177,112 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
     }
   }
 
+  private deleteReason(image: SnapshotImage) {
+    return image.pinned
+      ? t("cloudWorkersPage.snapshots.deletePinned")
+      : image.held
+        ? t("cloudWorkersPage.snapshots.deleteHeld")
+        : image.capture
+          ? t("cloudWorkersPage.snapshots.deleteCapturing")
+          : null;
+  }
+
+  private async mutateImage(
+    image: SnapshotImage,
+    action: "pin" | "delete" | "rollback",
+    previous = false,
+  ) {
+    const scope = this.gateway.capture();
+    const checkpoint = previous ? image.previous : image;
+    const checkpointId = checkpoint?.checkpointId;
+    const method = `crabbox.images.${action}`;
+    if (
+      !scope ||
+      !checkpoint ||
+      !checkpointId ||
+      this.mutating ||
+      this.recovering ||
+      this.loading ||
+      !this.canCall(method)
+    ) {
+      return;
+    }
+    if (
+      (action === "delete" && this.deleteReason(image)) ||
+      (action !== "delete" && (image.capture || image.retirement))
+    ) {
+      return;
+    }
+    this.mutating = checkpointId;
+    try {
+      if (action !== "pin") {
+        const confirmation = new AbortController();
+        this.confirmation = confirmation;
+        const confirmed = await showConfirmDialog({
+          title: t(`cloudWorkersPage.snapshots.${action}Title`),
+          message: t(`cloudWorkersPage.snapshots.${action}Message`),
+          details: checkpointId,
+          confirmLabel: t(`cloudWorkersPage.snapshots.${action}`),
+          danger: action === "delete",
+          signal: confirmation.signal,
+        });
+        if (this.confirmation === confirmation) {
+          this.confirmation = null;
+        }
+        if (!confirmed) {
+          return;
+        }
+      }
+      if (!this.gateway.isCurrent(scope) || !this.canCall(method)) {
+        return;
+      }
+      let notice: string | null = null;
+      if (action === "delete") {
+        const result = await scope.client.request<{ status: "deleted" | "retiring" }>(method, {
+          checkpointId,
+        });
+        if (result.status === "retiring") {
+          notice = t("cloudWorkersPage.snapshots.deletionRetiring");
+        }
+      } else {
+        await scope.client.request<SnapshotImage>(method, {
+          checkpointId,
+          ...(action === "pin" ? { pinned: !checkpoint.pinned } : {}),
+        });
+      }
+      if (this.gateway.isCurrent(scope)) {
+        this.notice = notice;
+        await this.load();
+      }
+    } catch (error) {
+      if (this.gateway.isCurrent(scope)) {
+        showToast({ message: formatUiError(error) });
+      }
+    } finally {
+      if (this.gateway.isCurrent(scope)) {
+        this.mutating = null;
+      }
+    }
+  }
+
+  private renderPin(image: SnapshotImage, previous = false) {
+    const checkpoint = previous ? image.previous : image;
+    if (!checkpoint?.checkpointId || !this.canCall("crabbox.images.pin")) {
+      return nothing;
+    }
+    const reason =
+      image.capture || image.retirement ? t("cloudWorkersPage.snapshots.captureOrRetirement") : "";
+    return html`<button
+      class="btn btn--sm"
+      type="button"
+      title=${reason}
+      ?disabled=${Boolean(reason) || this.mutating !== null || this.recovering !== null || this.loading}
+      @click=${() => void this.mutateImage(image, "pin", previous)}
+    >
+      ${t(checkpoint.pinned ? "cloudWorkersPage.snapshots.unpin" : "cloudWorkersPage.snapshots.pin")}
+    </button>`;
+  }
+
   private renderImage(image: SnapshotImage, showMachineFacts: boolean) {
     const phase = image.capture?.phase;
     const retiringCurrentImage = Boolean(
@@ -204,6 +323,31 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       description: html`
         ${facts.filter(Boolean).join(" · ")}
         ${
+          image.previous
+            ? html`<div>
+                ${t("cloudWorkersPage.snapshots.previous")}:
+                <code>${image.previous.checkpointId}</code>
+                ${t("cloudWorkersPage.snapshots.created", { age: formatRelativeTimestamp(image.previous.createdAtMs) })}
+                ${image.previous.baseCommit ? t("cloudWorkersPage.snapshots.baseCommit", { commit: image.previous.baseCommit.slice(0, 8) }) : nothing}
+                ${image.previous.pinned ? renderSettingsStatus({ kind: "accent", label: t("cloudWorkersPage.snapshots.pinned") }) : nothing}
+                ${this.renderPin(image, true)}
+                ${
+                  this.canCall("crabbox.images.rollback")
+                    ? html`<button
+                        class="btn btn--sm"
+                        type="button"
+                        title=${image.capture || image.retirement ? t("cloudWorkersPage.snapshots.captureOrRetirement") : ""}
+                        ?disabled=${Boolean(image.capture || image.retirement) || this.mutating !== null || this.recovering !== null || this.loading}
+                        @click=${() => void this.mutateImage(image, "rollback", true)}
+                      >
+                        ${t("cloudWorkersPage.snapshots.rollback")}
+                      </button>`
+                    : nothing
+                }
+              </div>`
+            : nothing
+        }
+        ${
           image.retirement
             ? html`<br />${t("cloudWorkersPage.snapshots.retirementHint", {
                   checkpoint: image.retirement.checkpointId,
@@ -224,6 +368,21 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
                   : "muted",
           label: t(`cloudWorkersPage.snapshots.${imageState}`),
         })}
+        ${image.pinned ? renderSettingsStatus({ kind: "accent", label: t("cloudWorkersPage.snapshots.pinned") }) : nothing}
+        ${this.renderPin(image)}
+        ${
+          image.checkpointId && this.canCall("crabbox.images.delete")
+            ? html`<button
+                class="btn btn--sm danger"
+                type="button"
+                title=${this.deleteReason(image) ?? ""}
+                ?disabled=${Boolean(this.deleteReason(image)) || this.mutating !== null || this.recovering !== null || this.loading}
+                @click=${() => void this.mutateImage(image, "delete")}
+              >
+                ${t("cloudWorkersPage.snapshots.delete")}
+              </button>`
+            : nothing
+        }
         ${
           image.retirement
             ? renderSettingsStatus({
@@ -238,7 +397,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
                 <button
                   class="btn btn--sm"
                   type="button"
-                  ?disabled=${this.recovering !== null || this.loading}
+                  ?disabled=${this.recovering !== null || this.mutating !== null || this.loading}
                   @click=${() => void this.recover(image)}
                 >
                   ${t("cloudWorkersPage.snapshots.recover")}
@@ -357,7 +516,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
           control: html`<button
             class="btn btn--sm"
             type="button"
-            ?disabled=${this.loading || this.recovering !== null}
+            ?disabled=${this.loading || this.recovering !== null || this.mutating !== null}
             @click=${() => void this.load()}
           >
             ${t("cloudWorkersPage.snapshots.refresh")}
@@ -367,6 +526,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       ${this.error ? html`<div class="callout warning" role="alert">${this.error}</div>` : nothing}
       ${this.notice ? html`<div class="callout" role="status">${this.notice}</div>` : nothing}
       ${this.result ? this.renderImages(this.result) : this.loading ? renderSettingsEmpty(t("common.loading")) : nothing}
+      <openclaw-cloud-worker-snapshot-policy></openclaw-cloud-worker-snapshot-policy>
     `);
   }
 }

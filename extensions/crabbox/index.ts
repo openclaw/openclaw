@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { definePluginEntry, type OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./src/crabbox-worker-provider.js";
+import { resolveCrabboxWarmImagePolicy } from "./src/crabbox-worker-warm-image-policy.js";
 
 const workerWallpaperPath = fileURLToPath(
   new URL("./assets/openclaw-worker-wallpaper.png", import.meta.url),
@@ -47,7 +48,18 @@ export default definePluginEntry({
       openclawRoot: resolveOpenClawRoot(api.rootDir),
       wallpaperPath: workerWallpaperPath,
       warn: (message) => api.logger.warn(message),
+      warmImagePolicy: resolveCrabboxWarmImagePolicy(api.pluginConfig),
     });
+    for (const action of ["pin", "delete", "rollback"] as const) {
+      api.registerGatewayMethod(
+        `crabbox.images.${action}`,
+        async (request) => {
+          const { mutateCrabboxImage } = await import("./src/crabbox-gateway-methods.js");
+          await mutateCrabboxImage(api, provider.images, action, request);
+        },
+        { scope: "operator.admin" },
+      );
+    }
     api.registerWorkerProvider(provider);
     // Worker sidecars stop first; plugin services own generation-wide heartbeat cleanup.
     api.registerService({

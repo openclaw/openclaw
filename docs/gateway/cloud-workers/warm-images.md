@@ -26,13 +26,13 @@ Image reuse is keyed by the backend, setup command, sorted `setupEnv` variable n
 
 Before its first provider allocation command, OpenClaw records whether the lease starts cold or from a specific checkpoint, along with its resolved operating system and class. Retries and Gateway restart reuse that exact choice; a lost response cannot switch a cold allocation to a newly available image or select a different checkpoint. The record advances through preparation and enrollment, and a selected checkpoint remains protected from deletion until the provider confirms the lease has stopped. A failed fork reports an error instead of silently changing the recorded allocation. Runtime identity is also frozen for that allocation. Replay rejects a changed or missing identity rather than relabeling an existing worker; stop it before creating a new allocation. An older allocation cannot replace an image published from a different source generation merely because their runtime digests differ.
 
-Warm images work on `machine0` through Crabbox's `--strategy image`; other backends keep their native checkpoint strategy. OpenClaw uses Crabbox's verified fork-readiness result for backend-specific image states, including Machine0's `ACTIVE` state. Project images refresh during preparation when the requested commit or runtime changes, or the image is at least 24 hours old. Non-project images refresh at the next eligible worker stop when the runtime changes or after 24 hours. Runtime identity includes the node archive digest, execution mode, and the worker archive digest when that archive is included in the image. Images without recorded runtime identity are refreshed at the same capture boundary. An older image remains a useful setup base: the first session installs the current runtime, then captures it so subsequent sessions can reuse that installation.
+Warm images work on `machine0` through Crabbox's `--strategy image`; other backends keep their native checkpoint strategy. OpenClaw uses Crabbox's verified fork-readiness result for backend-specific image states, including Machine0's `ACTIVE` state. Unpinned project images refresh during preparation when the requested commit or runtime changes, or the image reaches `refreshAfter` (24 hours by default). Non-project images refresh at the next eligible worker stop when the runtime changes or after that interval. Runtime identity includes the node archive digest, execution mode, and the worker archive digest when that archive is included in the image. Images without recorded runtime identity are refreshed at the same capture boundary. An older compatible image remains a useful setup base: the first session installs the current runtime, then captures it so subsequent sessions can reuse that installation.
 
-The previous image remains recorded and usable throughout capture. OpenClaw atomically records the replacement and its predecessor's deletion obligation in the same profile record. It deletes the predecessor once no allocation still needs it. Failed deletion warns, survives Gateway restart and warm reuse, and retries during periodic maintenance, later capture maintenance, or warm-image-enabled worker teardown. Further refreshes for that profile wait for deletion to succeed; replacement forks and lease teardown continue.
+The current image remains recorded and usable throughout capture. By default, OpenClaw atomically records the replacement and its predecessor's deletion obligation in the same profile record, then deletes the predecessor once no allocation still needs it. With `keepPrevious: 1`, it retains the predecessor as **Previous** for rollback and retires the older previous generation first. A pinned predecessor is retained regardless of `keepPrevious`; an existing pinned previous generation is never deleted to make room. If both current and previous are pinned, OpenClaw skips replacement publication and warns once about the single-pinned-previous limit. Unpin one checkpoint to permit that replacement. Failed deletion warns, survives Gateway restart and warm reuse, and retries during periodic maintenance, later capture maintenance, or warm-image-enabled worker teardown. Further refreshes for that profile wait for deletion to succeed; replacement forks and lease teardown continue.
 
 Allocation choice does not retry retained deletions or wait for them, including deletions for other profiles. It can select a usable replacement while its predecessor awaits deletion. If the current image itself is retiring, a new allocation selects cold provisioning. Ordinary expiry and missing-image cleanup can still run during allocation; retained deletion retries share a one-minute maintenance budget during capture, teardown, or periodic maintenance.
 
-OpenClaw deletes unused, unpinned images after 14 days and reclaims the least recently used eligible image before admitting a 129th profile record. Provider deletion must succeed before its ownership record is removed. Pending captures, retirements, and outstanding allocations retain their slots; retirement also waits for allocations using that checkpoint to stop. If all 128 slots are retained, new warm-image allocations fail with cleanup guidance. Each profile record admits at most 256 outstanding allocations and owns at most its current image plus one capture or predecessor retirement. Capacity never evicts a retry choice or cleanup obligation.
+OpenClaw deletes unused, unpinned images after `retainUnused` (14 days by default) and reclaims the least recently used eligible image before admitting a 129th profile record. It retires eligible previous generations first when reclaiming capacity. Current and previous generations share one profile slot; deleting only a previous generation does not free that slot. Provider deletion must succeed before its ownership record is removed. Pins, pending captures, retirements, and outstanding allocations retain their slots; retirement also waits for allocations using that checkpoint to stop. If all 128 slots are retained, new warm-image allocations fail with cleanup guidance. Each profile record admits at most 256 outstanding allocations and owns its current image, an optional previous generation, and at most one capture or retirement operation. Capacity never evicts a retry choice or cleanup obligation.
 
 While Crabbox remains enabled with a configured worker profile, the Gateway's existing maintenance loop also checks unused images about once a minute, even when no workers remain. Cleanup runs independently of allocation, retries retained deletions, and does not extend an image's last-used time. Gateway shutdown and plugin reload cancel and drain an active cleanup command before its owner stops. Maintenance tries deletions through each distinct configured executable in a fixed order and releases a record only after a deletion succeeds or every executable reports the checkpoint absent. A deletion error keeps the record for a later retry. Automatic cleanup does not reactivate removed or disabled providers.
 
@@ -43,6 +43,51 @@ Scrubbing has a three-minute timeout. Checkpoint creation requests `--wait --wai
 A warm start provisions a fresh lease with fresh node enrollment. Cold allocations and snapshot forks use the same configured lease lifetime, idle timeout, desktop setting, and public networking without Tailscale. A warm start reuses machine-level caches, not a per-session snapshot or a suspended process.
 
 Project preparation checks for a verified completed checkout and pristine seed before building or uploading a Git pack. Reusing the same commit skips clone and setup. A changed commit refreshes the existing checkout with a thin Git transfer, removes obsolete eligible setup outputs, and reruns its admitted recipe while preserving compatible ignored caches and absolute paths. Tracked paths in the new commit take precedence over conflicting cache files or directories; unrelated ignored caches and the prepared `HOME` remain in place. If the Gateway has garbage-collected the previous commit after rewriting history, it transfers a full snapshot of the current commit while keeping the verified remote workspace and caches. Completion is invalidated before mutation, so interrupted setup cannot advertise readiness or silently rerun. Before enrollment, replay of an already allocated prepared worker conservatively captures its completed setup when it still owns the current source image. This can add one snapshot if an already-complete warm reuse was interrupted before enrollment; a published replacement and enrolled-session replay do not capture again. An enrolled provisioning retry only inspects the original completion witness; it never runs setup or captures a session. Already-bound session restart preserves user edits through the stored binding. Placements without a completed checkout retain the existing flow: copy the seed's Git objects into a fresh repository, recreate its Git metadata, and apply the current eligible file manifest. A matching seed skips both an origin fetch and a full Git pack download, including for private or unpublished commits. A missing seed uses the Gateway pack; an invalid prepared seed fails visibly. Workspaces without a prepared project keep the eligible origin/seed path. The Gateway builds transfer packs only on demand, and each transfer retains its original base commit even if local commits change later.
+
+### Retention policy
+
+Set the plugin-wide policy under `plugins.entries.crabbox.config.warmImages`, or
+use the **Retention policy** card in **Snapshots**. Changes take effect after a
+Gateway restart; they do not change worker lease lifetimes or the 128-profile
+capacity limit.
+
+| Key            | Default | Accepted values                                                   |
+| -------------- | ------- | ----------------------------------------------------------------- |
+| `refreshAfter` | `24h`   | Whole minutes, hours, or days (`m`, `h`, `d`), at least `1h`.     |
+| `retainUnused` | `14d`   | Whole minutes, hours, or days (`m`, `h`, `d`), at least `1d`.     |
+| `keepPrevious` | `0`     | `0` retires replaced images; `1` retains one previous generation. |
+
+Duration values accept one to eight digits followed by one unit, such as `90m`
+or `14d`; composite and fractional durations are invalid.
+
+```json5
+{
+  plugins: {
+    entries: {
+      crabbox: {
+        config: {
+          warmImages: {
+            refreshAfter: "24h",
+            retainUnused: "14d",
+            keepPrevious: 1,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Pinned checkpoints are exempt from age refresh, unused expiry, capacity eviction,
+and replacement retirement. For prepared project images, a pin keeps a checkpoint
+available, but a runtime or recipe change still starts new workers cold until a
+compatible capture publishes.
+Other allocation compatibility rules also remain unchanged. A newer capture for
+the same profile record moves a pinned current checkpoint to **Previous**, even
+with `keepPrevious: 0`; rollback can restore it. Unpinning restores ordinary
+policy at the next maintenance pass or capture boundary. Previous generations
+can expire when unused, and lowering `keepPrevious` to `0` permits their
+retirement unless pinned or still held by an allocation.
 
 ### Ready workers
 
@@ -115,11 +160,36 @@ operating system. Missing row details are omitted; unknown profile IDs appear
 under **Unlabeled profile**. Legacy allocations appear under
 **Needs migration** with Doctor recovery guidance.
 
-The Crabbox plugin advertises `crabbox.images.list` and `crabbox.images.recover`;
-both require `operator.admin`. If the listing method is not advertised, the view
+The Crabbox plugin advertises `crabbox.images.list`, `crabbox.images.recover`,
+`crabbox.images.pin`, `crabbox.images.delete`, and `crabbox.images.rollback`;
+all require `operator.admin`. Each action appears only when its method is
+advertised. If the listing method is not advertised, the view
 explains that the Crabbox worker provider must be enabled. Listing reads local
 state without contacting the provider and returns an allocation count plus at
 most 20 allocation entries per image.
+
+**Pin** and **Unpin** apply immediately and show a failure notification if the
+request is rejected. A **Pinned** badge marks protected checkpoints. A pin is an
+operator choice; **Held** means an outstanding allocation still needs the
+checkpoint. Pin changes are unavailable while the profile has a capture or
+retirement operation, so they cannot race provider side effects.
+
+**Delete** asks for confirmation and is disabled with a reason when the image is
+held, capturing, or pinned. OpenClaw retains the ownership record until provider
+deletion succeeds. A failed deletion leaves the image **Retiring** and retries
+during maintenance; it does not report the checkpoint as deleted.
+
+When a previous generation exists, its **Previous** line shows the checkpoint
+and creation time, with **Pin** or **Unpin** and **Roll back** actions. Confirming
+**Roll back** atomically restores that checkpoint as current. The demoted current
+image becomes previous when `keepPrevious: 1` or when it is pinned; otherwise it
+is retired after allocations release it. Rollback therefore still works after
+lowering `keepPrevious` to `0`, while the previous checkpoint remains recorded.
+A profile with an active capture or retirement cannot roll back.
+
+The **Retention policy** card at the bottom edits the three plugin-owned keys
+above through the normal configuration patch flow. Saving validates their
+durations and generation count; restart the Gateway to apply the policy.
 
 **Recover** is available only for uncertain captures. Its required checkbox
 acknowledges that the owning capture and worker have stopped and provider
@@ -130,6 +200,10 @@ delete provider artifacts. A stale capture alone does not permit recovery.
 
 New allocations record optional `profileId`, `backend`, `machineClass`, `os`, and
 `projectLabel` display facts, also included in `openclaw crabbox warm-images --json`.
+The JSON output also includes optional `pinned` metadata (`atMs`) and `previous`
+checkpoint details (`checkpointId`, `createdAtMs`, and recorded `baseCommit` and
+`runtimeIdentity`). Existing version-3 rows without these fields remain unpinned
+with no retained previous generation; no state migration is needed for them.
 `profileId` means the configured profile that most recently allocated from the
 image key; it is overwritten on each allocation and does not change image keys
 or reuse policy. Project labels use the normalized origin repository identity

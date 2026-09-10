@@ -11,7 +11,9 @@ import {
   parseCrabboxProfile,
   resolveCrabboxWarmImageProfile,
 } from "./crabbox-worker-profile.js";
+import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
 import {
+  CrabboxWarmImageRequestError,
   crabboxWarmImageRecoveryHint,
   isCrabboxWarmImageHeld,
   listCrabboxLegacyWarmLeases,
@@ -19,7 +21,47 @@ import {
   recoverCrabboxWarmImageCapture,
 } from "./crabbox-worker-warm-image-store.js";
 
-type Request = Pick<GatewayRequestHandlerOptions, "params" | "respond">;
+type Request = Pick<GatewayRequestHandlerOptions, "respond"> & { params?: unknown };
+
+export async function mutateCrabboxImage(
+  api: OpenClawPluginApi,
+  images: CrabboxSnapshotActions,
+  action: "pin" | "delete" | "rollback",
+  { params, respond }: Request,
+): Promise<void> {
+  const checkpointId = isRecord(params) ? normalizeOptionalString(params.checkpointId) : undefined;
+  if (
+    !checkpointId ||
+    !isRecord(params) ||
+    (action === "pin" && typeof params.pinned !== "boolean") ||
+    Object.keys(params).some(
+      (key) => key !== "checkpointId" && !(action === "pin" && key === "pinned"),
+    )
+  ) {
+    sendError(
+      respond,
+      new Error(
+        `crabbox.images.${action} requires checkpointId${action === "pin" ? " and pinned: boolean" : ""}.`,
+      ),
+      true,
+    );
+    return;
+  }
+  try {
+    if (action === "pin") {
+      respond(true, snapshotSummary(images.pin(checkpointId, params.pinned === true)));
+    } else if (action === "rollback") {
+      respond(true, snapshotSummary(images.rollback(checkpointId)));
+    } else {
+      const profiles = Object.values(api.runtime.config.current().cloudWorkers?.profiles ?? {})
+        .filter((profile) => profile.provider.trim().toLowerCase() === CRABBOX_WORKER_PROVIDER_ID)
+        .map((profile) => profile.settings ?? {});
+      respond(true, await images.delete(checkpointId, profiles));
+    }
+  } catch (error) {
+    sendError(respond, error, error instanceof CrabboxWarmImageRequestError);
+  }
+}
 
 function sendError(respond: Request["respond"], error: unknown, invalidRequest = false) {
   const payload = { error: formatErrorMessage(error) };
@@ -66,18 +108,19 @@ function profileStatus(settings: Readonly<Record<string, unknown>>) {
   }
 }
 
+function snapshotSummary(image: ReturnType<typeof listCrabboxWarmImages>[number]) {
+  const allocations = Object.entries(image.allocations).toSorted(([a], [b]) => a.localeCompare(b));
+  return {
+    ...image,
+    held: Boolean(image.checkpointId && isCrabboxWarmImageHeld(image, image.checkpointId)),
+    allocationCount: allocations.length,
+    allocations: Object.fromEntries(allocations.slice(0, 20)),
+  };
+}
+
 function snapshotStatus() {
   return {
-    images: listCrabboxWarmImages().map((image) => {
-      const allocations = Object.entries(image.allocations).toSorted(([a], [b]) =>
-        a.localeCompare(b),
-      );
-      return Object.assign(image, {
-        held: Boolean(image.checkpointId && isCrabboxWarmImageHeld(image, image.checkpointId)),
-        allocationCount: allocations.length,
-        allocations: Object.fromEntries(allocations.slice(0, 20)),
-      });
-    }),
+    images: listCrabboxWarmImages().map(snapshotSummary),
     legacyLeases: listCrabboxLegacyWarmLeases().map((lease) =>
       Object.assign(lease, { recoveryHint: crabboxWarmImageRecoveryHint(lease.selector) }),
     ),
