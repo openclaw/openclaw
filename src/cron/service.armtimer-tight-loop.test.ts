@@ -6,7 +6,7 @@ import { createCronServiceState } from "./service/state.js";
 import { ensureLoaded } from "./service/store.js";
 import { armTimer } from "./service/timer.js";
 import { onTimer } from "./service/timer.test-support.js";
-import { saveCronStore } from "./store.js";
+import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
@@ -341,6 +341,15 @@ describe("CronService - armTimer tight loop prevention", () => {
       expect(noopLogger.debug).toHaveBeenLastCalledWith(
         { jobCount: 1, enabledCount: 1, withNextRun: 0, delayMs: 60_000 },
         "cron: timer armed for maintenance recheck",
+      );
+
+      await onTimer(state);
+      const recovered = (await loadCronStore(store.storePath)).jobs[0];
+      expect(recovered?.enabled).toBe(true);
+      expect(recovered?.state.nextRunAtMs).toBeGreaterThan(now);
+      expect(noopLogger.debug).toHaveBeenLastCalledWith(
+        expect.objectContaining({ nextAt: recovered?.state.nextRunAtMs }),
+        "cron: timer armed",
       );
     } finally {
       timeoutSpy.mockRestore();
