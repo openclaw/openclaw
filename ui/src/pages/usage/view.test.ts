@@ -4,52 +4,11 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { buildAggregatesFromSessions } from "./metrics.ts";
 import { buildUsageFilterOptions } from "./query.ts";
+import { usageSession, zeroCost } from "./test-helpers/usage-fixtures.test-support.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 const noop = vi.fn();
-
-function usageSession(
-  key: string,
-  agentId: string,
-  provider: string,
-  totalsOverrides: Partial<UsageTotals> = {},
-): UsageSessionEntry {
-  const totals: UsageTotals = {
-    input: 100,
-    output: 20,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 120,
-    totalCost: 1,
-    inputCost: 0.8,
-    outputCost: 0.2,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-    ...totalsOverrides,
-  };
-  return {
-    key,
-    label: `${agentId} session`,
-    agentId,
-    modelProvider: provider,
-    model: `${provider}-model`,
-    updatedAt: Date.now(),
-    usage: {
-      ...totals,
-      messageCounts: {
-        total: 2,
-        user: 1,
-        assistant: 1,
-        toolCalls: 0,
-        toolResults: 0,
-        errors: 0,
-      },
-      modelUsage: [{ provider, model: `${provider}-model`, count: 1, totals }],
-    },
-  };
-}
 
 function insightCard(container: ParentNode, title: string): Element | undefined {
   return Array.from(container.querySelectorAll(".usage-insight-card")).find(
@@ -166,6 +125,136 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
     ...overrides,
   };
 }
+
+describe("Usage recorded cost availability", () => {
+  const normalHint = "Average cost per message when providers report costs.";
+  const missingHint = `${normalHint} Cost data is missing for some or all sessions in this range.`;
+  function summary(props: UsageProps) {
+    const before = structuredClone(props.data);
+    const container = document.createElement("div");
+    render(renderUsage(props), container);
+    const button = container.querySelector("#usage-summary-hint-average-cost");
+    const result = {
+      hint: button?.parentElement?.querySelector('[slot="content"]')?.textContent?.trim() ?? null,
+      value:
+        button
+          ?.closest(".usage-summary-card")
+          ?.querySelector(".usage-summary-value")
+          ?.textContent?.trim() ?? null,
+      empty: container.querySelector(".usage-empty-state") !== null,
+    };
+    expect(props.data).toEqual(before);
+    render(null, container);
+    return result;
+  }
+
+  it.each([
+    { label: "known zero", totalCost: 0, missingCostEntries: 0, hint: normalHint, value: "$0.00" },
+    {
+      label: "known positive",
+      totalCost: 0.2,
+      missingCostEntries: 0,
+      hint: normalHint,
+      value: "$0.10",
+    },
+    {
+      label: "unknown zero",
+      totalCost: 0,
+      missingCostEntries: 1,
+      hint: missingHint,
+      value: "$0.00",
+    },
+    {
+      label: "mixed positive",
+      totalCost: 0.2,
+      missingCostEntries: 1,
+      hint: missingHint,
+      value: "$0.10",
+    },
+  ])(
+    "renders the recorded cost hint for $label",
+    ({ totalCost, missingCostEntries, hint, value }) => {
+      const session = usageSession("agent:main:cost", "main", "fixture", {
+        ...zeroCost,
+        totalCost,
+        inputCost: totalCost,
+        missingCostEntries,
+      });
+      const base = createUsageProps();
+      const observed = summary({
+        ...base,
+        data: {
+          ...base.data,
+          sessions: [session],
+          totals: session.usage,
+          aggregates: buildAggregatesFromSessions([session]),
+        },
+      });
+      expect(observed.value).toBe(value);
+      expect(observed.empty).toBe(false);
+      expect(observed.hint, "USAGE_KNOWN_ZERO_HINT").toBe(hint);
+    },
+  );
+
+  it.each(["query", "session", "day"] as const)(
+    "restores the missing-cost hint after clearing the known-zero %s filter",
+    (scope) => {
+      const known = usageSession("agent:main:known", "main", "fixture", zeroCost);
+      const unknown = usageSession("agent:main:unknown", "main", "fixture", {
+        ...zeroCost,
+        missingCostEntries: 1,
+      });
+      known.label = "Known zero";
+      unknown.label = "Unpriced usage";
+      if (!known.usage || !unknown.usage) {
+        throw new Error("Expected complete usage fixtures");
+      }
+      const knownDay = { ...zeroCost, date: "2026-05-14", tokens: 1_700, cost: 0 };
+      const unknownDay = { ...knownDay, date: "2026-05-13", missingCostEntries: 1 };
+      known.usage.activityDates = [knownDay.date];
+      known.usage.dailyBreakdown = [knownDay];
+      unknown.usage.activityDates = [unknownDay.date];
+      unknown.usage.dailyBreakdown = [unknownDay];
+      const sessions = [known, unknown];
+      const base = createUsageProps();
+      const data = {
+        ...base.data,
+        sessions,
+        totals: {
+          ...zeroCost,
+          input: 2_000,
+          output: 1_000,
+          cacheRead: 400,
+          totalTokens: 3_400,
+          missingCostEntries: 1,
+        },
+        aggregates: buildAggregatesFromSessions(sessions),
+        costDaily: [unknownDay, knownDay],
+      };
+      const filtered: Partial<UsageProps["filters"]> =
+        scope === "query"
+          ? { query: 'label:"Known zero"', queryDraft: 'label:"Known zero"' }
+          : scope === "session"
+            ? { selectedSessions: [known.key] }
+            : { selectedDays: [knownDay.date] };
+      const observations = [{}, filtered, {}].map((filter) =>
+        summary({
+          ...base,
+          data,
+          filters: { ...base.filters, startDate: unknownDay.date, ...filter },
+        }),
+      );
+      expect(observations.map(({ value, empty }) => ({ value, empty }))).toEqual([
+        { value: "$0.00", empty: false },
+        { value: "$0.00", empty: false },
+        { value: "$0.00", empty: false },
+      ]);
+      expect(observations[0]?.hint).toBe(missingHint);
+      expect(observations[2]?.hint).toBe(missingHint);
+      expect(observations[1]?.hint, "USAGE_KNOWN_ZERO_FILTER").toBe(normalHint);
+    },
+  );
+});
 
 it.each([
   { query: "provider:openai" },
@@ -909,7 +998,11 @@ describe("renderUsage", () => {
       cacheRead: 0,
       cacheWrite: 0,
       missingCostEntries: 0,
-    };
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+    } satisfies UsageTotals;
     const container = document.createElement("div");
     render(
       renderUsage(
@@ -917,13 +1010,14 @@ describe("renderUsage", () => {
           data: {
             ...createUsageProps().data,
             // The gateway always returns a totals object, even with no usage.
-            totals: zeroTotals as UsageProps["data"]["totals"],
+            totals: zeroTotals,
           },
         }),
       ),
       container,
     );
     expect(container.querySelector(".usage-empty-state")).not.toBeNull();
+    expect(container.querySelector("#usage-summary-hint-average-cost")).toBeNull();
   });
 
   it("does not render the empty state under an error callout", () => {
