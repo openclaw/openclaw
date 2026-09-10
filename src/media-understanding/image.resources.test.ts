@@ -261,8 +261,7 @@ function acquireFixtureRuntime(fixture: ReturnType<typeof nativeImageFixture>, m
       skipCredentials: true,
       runtimePluginSelections: [{ provider: fixture.id, modelId }],
     },
-    undefined,
-    "static",
+    { catalogMode: "static" },
   );
 }
 

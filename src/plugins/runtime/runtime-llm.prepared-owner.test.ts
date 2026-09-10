@@ -430,11 +430,10 @@ it.each([
             vi
               .spyOn(preparedRuntimes, "acquireAgentRunPreparedModelRuntime")
               .mockImplementation((runtimeInput, options) =>
-                preparedRuntimes.acquireReadOnlyPreparedModelRuntime(
-                  runtimeInput,
-                  options?.abortSignal,
-                  options?.catalogMode ?? "static",
-                ),
+                preparedRuntimes.acquireReadOnlyPreparedModelRuntime(runtimeInput, {
+                  abortSignal: options?.abortSignal,
+                  catalogMode: options?.catalogMode ?? "static",
+                }),
               ),
           );
           Object.defineProperty(globalThis, setupKey, {
