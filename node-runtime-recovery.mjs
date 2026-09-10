@@ -1,6 +1,6 @@
 // Startup-only recovery; this module cannot depend on dist or installed packages.
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -180,9 +180,13 @@ export const runRespawnedChild = (command, args, env) => {
 };
 
 function readSmallFile(filename, encoding = "utf8") {
+  const resolved = resolveRecoveryPath(filename);
+  if (!resolved) {
+    return null;
+  }
   try {
-    const info = statSync(filename);
-    return info.isFile() && info.size <= 65_536 ? readFileSync(filename, encoding) : null;
+    const info = statSync(resolved);
+    return info.isFile() && info.size <= 65_536 ? readFileSync(resolved, encoding) : null;
   } catch {
     return null;
   }
@@ -307,26 +311,74 @@ function realNodePath(filename) {
   }
 }
 
-function isCwdNode(nodePath) {
-  const cwd = realNodePath(process.cwd()) ?? process.cwd();
+function isCwdPath(nodePath, cwd) {
   const relative = path.relative(cwd, nodePath);
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
+// Match daemon/paths.ts home expansion without resolving relative inputs against cwd.
+export function resolveRecoveryPath(
+  value,
+  homeDir,
+  { allowMissing = false, allowCwd = false } = {},
+) {
+  const expanded = value?.trim().replace(/^~(?=$|[\\/])/, () => homeDir ?? "~");
+  if (!expanded || !path.isAbsolute(expanded)) {
+    return null;
+  }
+  const paths = /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(expanded) ? path.win32 : path;
+  const absolute = paths.resolve(expanded);
+  const cwd = realNodePath(process.cwd()) ?? process.cwd();
+  if (!allowCwd && isCwdPath(absolute, cwd)) {
+    return null;
+  }
+  if (!allowCwd) {
+    // A final symlink can hide a workspace-owned intermediate directory.
+    for (let prefix = paths.dirname(absolute); ;) {
+      const real = realNodePath(prefix);
+      if (real && isCwdPath(real, cwd)) {
+        return null;
+      }
+      const parent = paths.dirname(prefix);
+      if (parent === prefix) {
+        break;
+      }
+      prefix = parent;
+    }
+  }
+  let existing = absolute;
+  const missing = [];
+  for (;;) {
+    const real = realNodePath(existing);
+    if (real) {
+      const resolved = paths.resolve(real, ...missing);
+      return path.isAbsolute(resolved) && (allowCwd || !isCwdPath(resolved, cwd)) ? resolved : null;
+    }
+    if (!allowMissing) {
+      return null;
+    }
+    // An existing dangling symlink or unreadable path is not a creatable suffix.
+    try {
+      lstatSync(existing);
+      return null;
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        return null;
+      }
+    }
+    const parent = paths.dirname(existing);
+    if (parent === existing) {
+      return null;
+    }
+    missing.unshift(paths.basename(existing));
+    existing = parent;
+  }
+}
+
 // Do not pass preload hooks, native-library overrides, or application secrets to probes.
 export function isUsableNode(nodePath, { allowCwd = false, env = process.env } = {}) {
-  if (!path.isAbsolute(nodePath)) {
-    return false;
-  }
-  const resolved = realNodePath(nodePath);
-  if (
-    !resolved ||
-    !path.isAbsolute(resolved) ||
-    !/^node(?:\.exe)?$/i.test(path.basename(resolved))
-  ) {
-    return false;
-  }
-  if (!allowCwd && (isCwdNode(nodePath) || isCwdNode(resolved))) {
+  const resolved = resolveRecoveryPath(nodePath, undefined, { allowCwd });
+  if (!resolved || !/^node(?:\.exe)?$/i.test(path.basename(resolved))) {
     return false;
   }
   const probeEnv = { NODE_NO_WARNINGS: "1" };
@@ -408,9 +460,12 @@ function managedServiceNode(homeDir, env) {
     index += consumed;
   }
   const suffix = profile && profile.toLowerCase() !== "default" ? profile : "";
-  const serviceHome = env.HOME?.trim() || env.USERPROFILE?.trim() || homeDir;
+  const serviceHome = homeDir;
   let command;
   if (process.platform === "darwin") {
+    if (!serviceHome) {
+      return null;
+    }
     const label = env.OPENCLAW_LAUNCHD_LABEL?.trim() || `ai.openclaw.${suffix || "gateway"}`;
     if (!/^[A-Za-z0-9._-]+$/.test(label)) {
       return null;
@@ -430,6 +485,9 @@ function managedServiceNode(homeDir, env) {
       recordedArgs[wrapperIndex + 1]?.endsWith(`${label}.env`);
     command = recordedArgs[generatedWrapper ? wrapperIndex + 2 : 0];
   } else if (process.platform === "linux") {
+    if (!serviceHome) {
+      return null;
+    }
     const name =
       env.OPENCLAW_SYSTEMD_UNIT?.trim() || `openclaw-gateway${suffix ? `-${suffix}` : ""}`;
     if (!/^[A-Za-z0-9._@-]+$/.test(name)) {
@@ -445,10 +503,15 @@ function managedServiceNode(homeDir, env) {
     if (/[/\\]|\.\./.test(scriptName)) {
       return null;
     }
-    const stateDir =
+    const stateDir = resolveRecoveryPath(
       env.OPENCLAW_STATE_DIR?.trim() ||
-      path.join(serviceHome, `.openclaw${suffix ? `-${suffix}` : ""}`);
-    const filename = env.OPENCLAW_TASK_SCRIPT?.trim() || path.join(stateDir, scriptName);
+        (serviceHome && path.join(serviceHome, `.openclaw${suffix ? `-${suffix}` : ""}`)),
+      serviceHome,
+    );
+    const filename = resolveRecoveryPath(
+      env.OPENCLAW_TASK_SCRIPT?.trim() || (stateDir && path.join(stateDir, scriptName)),
+      serviceHome,
+    );
     const text = readWindowsServiceScript(filename);
     command = text && windowsServiceNode(text);
   }
@@ -459,8 +522,12 @@ function managedServiceNode(homeDir, env) {
 }
 
 function directoryNames(directory) {
+  const resolved = resolveRecoveryPath(directory);
+  if (!resolved) {
+    return [];
+  }
   try {
-    return readdirSync(directory).toSorted().slice(0, 256);
+    return readdirSync(resolved).toSorted().slice(0, 256);
   } catch {
     return [];
   }
@@ -512,20 +579,22 @@ function* availableNodeCandidates(homeDir, env) {
       yield [path.join(directory, binary), "PATH"];
     }
   }
-  const managerHome = env.HOME?.trim() || env.USERPROFILE?.trim() || homeDir;
-  for (const root of new Set([env.NVM_DIR, path.join(managerHome, ".nvm")])) {
+  const managerHome = homeDir;
+  for (const candidate of new Set([env.NVM_DIR, managerHome && path.join(managerHome, ".nvm")])) {
+    const root = resolveRecoveryPath(candidate, managerHome);
     if (root) {
       yield [resolveNvmDefault(root), "nvm default"];
     }
   }
-  for (const root of new Set([
+  for (const candidate of new Set([
     env.FNM_DIR,
-    path.join(managerHome, ".fnm"),
-    path.join(managerHome, ".local", "share", "fnm"),
-    ...(process.platform === "darwin"
+    managerHome && path.join(managerHome, ".fnm"),
+    managerHome && path.join(managerHome, ".local", "share", "fnm"),
+    ...(process.platform === "darwin" && managerHome
       ? [path.join(managerHome, "Library", "Application Support", "fnm")]
       : []),
   ])) {
+    const root = resolveRecoveryPath(candidate, managerHome);
     if (root) {
       yield [
         path.join(
@@ -539,7 +608,11 @@ function* availableNodeCandidates(homeDir, env) {
       ];
     }
   }
-  for (const root of new Set([env.VOLTA_HOME, path.join(managerHome, ".volta")])) {
+  for (const candidate of new Set([
+    env.VOLTA_HOME,
+    managerHome && path.join(managerHome, ".volta"),
+  ])) {
+    const root = resolveRecoveryPath(candidate, managerHome);
     if (!root) {
       continue;
     }
@@ -590,28 +663,39 @@ export async function recoverNodeRuntime({
     return false;
   }
   // userInfo reads the account home without consulting the mutable process environment.
-  const osHome = env.HOME?.trim() || env.USERPROFILE?.trim() || os.userInfo().homedir;
-  const configuredHome = env.OPENCLAW_HOME?.trim() || osHome;
-  const recoveryHome =
-    homeDir ?? path.resolve(configuredHome.replace(/^~(?=$|[\\/])/, () => osHome));
+  const inheritedHome = env.HOME?.trim() || env.USERPROFILE?.trim();
+  let accountHome;
+  if (!inheritedHome || /^~(?=$|[\\/])/.test(inheritedHome)) {
+    try {
+      accountHome = os.userInfo().homedir;
+    } catch {
+      // Containers may have no account record; independent PATH discovery still works.
+    }
+  }
+  const osHome = resolveRecoveryPath(inheritedHome || accountHome, accountHome, {
+    allowMissing: true,
+  });
+  const recoveryHome = resolveRecoveryPath(
+    homeDir ?? (env.OPENCLAW_HOME?.trim() || osHome),
+    osHome,
+    { allowMissing: true },
+  );
   const { resolveUpdatedNodeRuntime } = await import("./node-runtime-update.mjs");
-  let nodePath = await resolveUpdatedNodeRuntime(recoveryHome, { allowInstall: false, env });
+  let nodePath = recoveryHome
+    ? await resolveUpdatedNodeRuntime(recoveryHome, { allowInstall: false, env })
+    : null;
   let reason = "cached OpenClaw runtime";
   const currentNode = realNodePath(process.execPath);
   if (!nodePath) {
     const seen = new Set([currentNode]);
-    for (const [candidate, source] of availableNodeCandidates(recoveryHome, env)) {
-      if (!candidate || !path.isAbsolute(candidate)) {
-        continue;
-      }
-      const realPath = realNodePath(candidate);
-      if (!realPath || !path.isAbsolute(realPath) || seen.has(realPath)) {
-        continue;
-      }
+    for (const [candidate, source] of availableNodeCandidates(osHome, env)) {
       // Only an explicitly named PATH directory may opt into cwd executables.
-      const allowCwd =
-        source === "PATH" && realNodePath(path.dirname(candidate)) === path.dirname(realPath);
-      if (!allowCwd && (isCwdNode(candidate) || isCwdNode(realPath))) {
+      const target = source === "PATH" ? realNodePath(candidate) : null;
+      const allowCwd = Boolean(
+        target && realNodePath(path.dirname(candidate)) === path.dirname(target),
+      );
+      const realPath = resolveRecoveryPath(candidate, undefined, { allowCwd });
+      if (!realPath || seen.has(realPath)) {
         continue;
       }
       seen.add(realPath);
@@ -622,7 +706,7 @@ export async function recoverNodeRuntime({
       }
     }
   }
-  if (!nodePath && allowInstall) {
+  if (!nodePath && allowInstall && recoveryHome) {
     nodePath = await resolveUpdatedNodeRuntime(recoveryHome, { env });
     reason = "private OpenClaw runtime";
   }

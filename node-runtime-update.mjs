@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { isUsableNode } from "./node-runtime-recovery.mjs";
+import { isUsableNode, resolveRecoveryPath } from "./node-runtime-recovery.mjs";
 
 function canInstallPrivateNode() {
   if (!["x64", "arm64"].includes(process.arch)) {
@@ -42,8 +42,17 @@ export async function resolveUpdatedNodeRuntime(
   if (env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1") {
     return null;
   }
-  const prefix = path.join(homeDir, ".openclaw", "tools", "cli-node");
-  const nodeRoot = path.join(prefix, "tools", "node");
+  const prefix = resolveRecoveryPath(
+    path.join(homeDir, ".openclaw", "tools", "cli-node"),
+    homeDir,
+    { allowMissing: true },
+  );
+  const nodeRoot =
+    prefix &&
+    resolveRecoveryPath(path.join(prefix, "tools", "node"), homeDir, { allowMissing: true });
+  if (!prefix || !nodeRoot) {
+    return null;
+  }
   const nodePath =
     process.platform === "win32"
       ? path.join(nodeRoot, "node.exe")

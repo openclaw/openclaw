@@ -211,7 +211,7 @@ describe("openclaw launcher", () => {
           const realpath = fs.realpathSync;
           fs.realpathSync = (filename, ...options) => {
             const file = String(filename);
-            if (path.basename(file) === "node" && file !== process.execPath && file !== ${JSON.stringify(nodePath)}) {
+            if (path.basename(file) === "node" && file !== process.execPath && file !== ${JSON.stringify(nodePath)} && !fs.statSync(file).isDirectory()) {
               throw Object.assign(new Error("runtime absent from fixture"), { code: "ENOENT" });
             }
             return realpath(filename, ...options);

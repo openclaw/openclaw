@@ -35,6 +35,11 @@ Runtime discovery uses the environment inherited when the CLI starts, before
 OpenClaw loads any `.env` file. Configure version-manager roots in your shell environment;
 workspace `.env` values cannot select a Node executable for recovery.
 
+Home-relative service and version-manager paths expand `~` against inherited
+`HOME` or `USERPROFILE`. Service paths use that home even when `OPENCLAW_HOME`
+selects a different private-runtime home. Bare relative paths and service or
+manager metadata inside the current working directory are rejected.
+
 Recovery ignores relative PATH entries and runtimes that resolve inside the
 current working directory, unless an absolute PATH entry explicitly names their
 directory. On Windows, the service reader honors recorded code pages and Unicode

@@ -5,6 +5,7 @@ import {
   type SpawnSyncReturns,
 } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -67,7 +68,7 @@ const windowsPath = {
   isAbsolute: path.win32.isAbsolute.bind(path.win32),
   basename: path.win32.basename.bind(path.win32),
   dirname: path.win32.dirname.bind(path.win32),
-  relative: path.win32.relative.bind(path.win32),
+  relative: (from: string, to: string) => path.win32.relative(from, to).replaceAll("\\", path.sep),
 };
 const exitSentinel = new Error("replacement exited");
 let child: ChildProcess;
@@ -159,6 +160,226 @@ async function expectRecoveryStarted(home: string) {
 }
 
 describe("runtime recovery discovery", () => {
+  it.each([
+    { name: "expands the Windows service state directory against home", source: "home" },
+    { name: "never reads competing cwd tilde service metadata", source: "competing" },
+    { name: "rejects a relative Windows service state directory", source: "relative" },
+    { name: "expands an explicit Windows task script against home", source: "home-script" },
+    { name: "rejects an explicit Windows task script under cwd", source: "cwd-script" },
+    { name: "rejects a Windows task script resolving under cwd", source: "symlink-script" },
+    { name: "rejects a task script through a cwd-owned parent", source: "parent-script" },
+  ])("$name", async ({ source }) => {
+    await withRecoveryHome(async (root) => {
+      const state = source === "relative" ? "state" : "~/x";
+      const home = path.join(root, "daemon $& home");
+      const cwd = path.join(root, "checkout");
+      await fs.mkdir(home);
+      await fs.mkdir(cwd);
+      const installedNode = await writeFixture(path.join(root, "installed", "node.exe"));
+      const workspaceNode = await writeFixture(path.join(root, "sibling", "node.exe"));
+      const homeScript = path.join(home, "x", "gateway.cmd");
+      const competingScript = path.join(cwd, state, "gateway.cmd");
+      const writeScript = async (filename: string, node: string) => {
+        await fs.mkdir(path.dirname(filename), { recursive: true });
+        await fs.writeFile(
+          filename,
+          encodeWindowsLauncherScript({
+            format: "cmd",
+            content: buildTaskScript({ programArguments: [node, "/fixture/entry.js", "gateway"] }),
+          }),
+        );
+      };
+      await writeScript(homeScript, installedNode);
+      if (source !== "home") {
+        await writeScript(competingScript, workspaceNode);
+      }
+      const scriptLink = path.join(root, "gateway.cmd");
+      const outsideScript = path.join(root, "outside-gateway.cmd");
+      const parentLink = path.join(root, "cwd-alias");
+      if (source === "symlink-script") {
+        await fs.symlink(competingScript, scriptLink);
+      } else if (source === "parent-script") {
+        await fs.rename(competingScript, outsideScript);
+        await fs.symlink(outsideScript, competingScript);
+        await fs.symlink(cwd, parentLink, "junction");
+      }
+      const scriptOverride =
+        source === "home-script"
+          ? "~/x/gateway.cmd"
+          : source === "cwd-script"
+            ? competingScript
+            : source === "symlink-script"
+              ? scriptLink
+              : source === "parent-script"
+                ? path.join(parentLink, state, "gateway.cmd")
+                : undefined;
+      const report = path.join(root, "discovery.json");
+      const driver = await writeFixture(
+        path.join(root, "discover.mjs"),
+        `
+        import childProcess from "node:child_process";
+        import { EventEmitter } from "node:events";
+        import fs from "node:fs";
+        import path from "node:path";
+        import { syncBuiltinESMExports } from "node:module";
+        Object.defineProperty(process, "platform", { value: "win32" });
+        Object.defineProperty(process.versions, "node", { value: "20.0.0" });
+        const result = { reads: [], probes: [] };
+        const readFileSync = fs.readFileSync;
+        fs.readFileSync = (filename, ...args) => {
+          result.reads.push(path.resolve(String(filename)));
+          return readFileSync(filename, ...args);
+        };
+        childProcess.spawnSync = (command) => {
+          result.probes.push(command);
+          return { status: [${JSON.stringify(installedNode)}, ${JSON.stringify(workspaceNode)}].includes(command) ? 0 : 1,
+            stdout: JSON.stringify({ version: "24.19.0", probe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }) };
+        };
+        childProcess.spawn = (command) => {
+          result.selected = command;
+          const child = new EventEmitter();
+          child.kill = () => true;
+          setImmediate(() => child.emit("exit", 23, null));
+          return child;
+        };
+        process.on("exit", () => fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify(result)));
+        syncBuiltinESMExports();
+        const { recoverNodeRuntime } = await import(${JSON.stringify(new URL("../../node-runtime-recovery.mjs", import.meta.url).href)});
+        await recoverNodeRuntime();
+      `,
+      );
+      const { spawnSync } =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const result = spawnSync(process.execPath, [driver, "doctor", "--fix", "--non-interactive"], {
+        cwd,
+        env: {
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          OPENCLAW_HOME: path.join(root, "private-home"),
+          OPENCLAW_STATE_DIR: state,
+          OPENCLAW_TASK_SCRIPT: scriptOverride,
+          OPENCLAW_TASK_SCRIPT_NAME: undefined,
+          PATH: "",
+          NVM_DIR: undefined,
+          FNM_DIR: undefined,
+          VOLTA_HOME: undefined,
+          NODE_OPTIONS: undefined,
+        },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      const observed = JSON.parse(await fs.readFile(report, "utf8"));
+      expect(observed.reads).not.toContain(competingScript);
+      expect(observed.reads).not.toContain(scriptLink);
+      expect(observed.reads).not.toContain(outsideScript);
+      expect(observed.probes).not.toContain(workspaceNode);
+      if (["home", "competing", "home-script"].includes(source)) {
+        expect(result.status, result.stderr).toBe(23);
+        expect(observed.reads).toContain(homeScript);
+        expect(observed.selected).toBe(installedNode);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(observed.selected).toBeUndefined();
+      }
+    });
+  });
+
+  it("never probes fnm through a cwd-owned parent directory", async () => {
+    await withRecoveryHome(async (home) => {
+      const cwd = path.join(home, "checkout");
+      const candidate = await writeFixture(path.join(home, "outside", "node"));
+      await fs.mkdir(path.join(cwd, "bin"), { recursive: true });
+      await fs.symlink(candidate, path.join(cwd, "bin", "node"));
+      const aliases = path.join(home, ".fnm", "aliases");
+      await fs.mkdir(aliases, { recursive: true });
+      await fs.symlink(cwd, path.join(aliases, "default"), "junction");
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+
+      expect(await recoverNodeRuntime({ homeDir: home })).toBe(false);
+      expect(mocks.probe.mock.calls.map(([file]) => file)).not.toContain(candidate);
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([true, false])("recovers without an OS account record (HOME=%s)", async (hasHome) => {
+    await withRecoveryHome(async (home) => {
+      const candidate = await writeFixture(path.join(home, "bin", "node"));
+      const account = vi.spyOn(os, "userInfo").mockImplementation(() => {
+        throw new Error("OS account record unavailable");
+      });
+      if (!hasHome) {
+        vi.stubEnv("HOME", undefined);
+        vi.stubEnv("USERPROFILE", undefined);
+      }
+      mocks.admissible.add(candidate);
+      await expect(
+        Promise.race([
+          recoverNodeRuntime({ homeDir: home }),
+          vi.waitFor(() => {
+            expect(mocks.spawn).toHaveBeenCalledOnce();
+          }),
+        ]),
+      ).resolves.toBeUndefined();
+      expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+      expect(account).toHaveBeenCalledTimes(hasHome ? 0 : 1);
+    });
+  });
+
+  it.each(["nvm", "fnm", "Volta"])("expands the %s manager root against home", async (manager) => {
+    await withRecoveryHome(async (home) => {
+      const root = path.join(home, "custom-manager");
+      let candidate: string;
+      if (manager === "nvm") {
+        candidate = await writeFixture(path.join(root, "versions/node/v24.19.0/bin/node"));
+        await writeFixture(path.join(root, "alias/default"), "24");
+        vi.stubEnv("NVM_DIR", "~/custom-manager");
+      } else if (manager === "fnm") {
+        candidate = await writeFixture(path.join(root, "aliases/default/bin/node"));
+        vi.stubEnv("FNM_DIR", "~/custom-manager");
+      } else {
+        candidate = await writeFixture(path.join(root, "tools/image/node/24.19.0/bin/node"));
+        await writeFixture(
+          path.join(root, "tools/user/platform.json"),
+          JSON.stringify({ node: { runtime: "24.19.0" } }),
+        );
+        vi.stubEnv("VOLTA_HOME", "~/custom-manager");
+      }
+      mocks.admissible.add(candidate);
+      await expectRecoveryStarted(home);
+      expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+    });
+  });
+
+  it.each(["HOME", "USERPROFILE", "OPENCLAW_HOME"])(
+    "expands inherited %s before private discovery",
+    async (key) => {
+      await withRecoveryHome(async (home) => {
+        const candidate = await writeFixture(
+          path.join(home, "custom-home/.openclaw/tools/cli-node/tools/node/bin/node"),
+        );
+        vi.spyOn(os, "userInfo").mockReturnValue({
+          homedir: home,
+          username: "fixture",
+          uid: 1000,
+          gid: 1000,
+          shell: null,
+        });
+        vi.stubEnv("OPENCLAW_HOME", undefined);
+        vi.stubEnv("USERPROFILE", undefined);
+        if (key === "USERPROFILE") {
+          vi.stubEnv("HOME", undefined);
+        }
+        vi.stubEnv(key, "~/custom-home");
+        mocks.admissible.add(candidate);
+
+        void recoverNodeRuntime();
+        await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledOnce());
+        expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+      });
+    },
+  );
+
   it("uses inherited PATH and probe settings after process env changes", async () => {
     await withRecoveryHome(async (home) => {
       const inheritedNode = await writeFixture(path.join(home, "inherited/bin/node"));
@@ -298,6 +519,28 @@ describe("runtime recovery discovery", () => {
 
       await expectRecoveryStarted(home);
 
+      expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+      expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("(PATH;"));
+    });
+  });
+
+  it("keeps PATH discovery after rejecting a service executable's cwd parent", async () => {
+    await withRecoveryHome(async (home) => {
+      const cwd = path.join(home, "checkout");
+      const candidate = await writeFixture(path.join(home, "outside", "node"));
+      await fs.mkdir(cwd);
+      await fs.symlink(candidate, path.join(cwd, "node"));
+      const alias = path.join(home, "service-alias");
+      await fs.symlink(cwd, alias, "junction");
+      await writeFixture(
+        path.join(home, ".config/systemd/user/openclaw-gateway.service"),
+        `[Service]\nExecStart="${path.join(alias, "node").replaceAll("\\", "\\\\")}" /fixture/entry.js gateway\n`,
+      );
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      vi.stubEnv("PATH", path.dirname(candidate));
+      mocks.admissible.add(candidate);
+
+      await expectRecoveryStarted(home);
       expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
       expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("(PATH;"));
     });

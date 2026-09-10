@@ -7,7 +7,6 @@ import { resolveUpdatedNodeRuntime } from "../../node-runtime-update.mjs";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
-  realpath: vi.fn<(value: string) => string>(),
   spawn:
     vi.fn<
       (
@@ -16,10 +15,6 @@ const mocks = vi.hoisted(() => ({
         options: SpawnSyncOptionsWithStringEncoding,
       ) => SpawnSyncReturns<string>
     >(),
-}));
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-  realpathSync: mocks.realpath,
 }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -41,12 +36,15 @@ it.each([
   vi.stubEnv("NODE_OPTIONS", undefined);
   const childProcess =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  await withTempDir("openclaw-node-recovery-", async (home) => {
+  await withTempDir("openclaw-node-recovery-", async (directory) => {
+    const home = await fs.realpath(directory);
     const nodeRoot = path.join(home, ".openclaw", "tools", "cli-node", "tools", "node");
     const candidate =
       process.platform === "win32"
         ? path.join(nodeRoot, "node.exe")
         : path.join(nodeRoot, "bin", "node");
+    await fs.mkdir(path.dirname(candidate), { recursive: true });
+    await fs.writeFile(candidate, "synthetic runtime; the probe uses the current Node");
     const preload = path.join(home, "binding.mjs");
     await fs.writeFile(
       preload,
@@ -70,12 +68,6 @@ it.each([
       }
     `,
     );
-    mocks.realpath.mockImplementation((value) => {
-      if (value === candidate) {
-        return value;
-      }
-      throw new Error("missing candidate");
-    });
     mocks.spawn.mockImplementation((_file, args, options) =>
       childProcess.spawnSync(
         process.execPath,

@@ -1,6 +1,11 @@
 export function consumeLauncherRootOptionToken(args: string[], index: number): number;
 export function isForegroundGmailRunInvocation(argv: string[]): boolean;
 export function isNativeHookRelayInvocation(argv: string[]): boolean;
+export function resolveRecoveryPath(
+  value: string | null | undefined,
+  homeDir?: string | null,
+  options?: { allowMissing?: boolean; allowCwd?: boolean },
+): string | null;
 export function isUsableNode(
   nodePath: string,
   options?: { allowCwd?: boolean; env?: NodeJS.ProcessEnv },

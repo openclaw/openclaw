@@ -62,7 +62,6 @@ const ensureSupportedRuntimeVersion = async () => {
   const canRunDiagnostics = canRunOpenClawNodeDiagnostics(process.versions.node, probe.available);
   const diagnosticExemption = unsupportedCommand === "diagnostic" && canRunDiagnostics;
   await recoverNodeRuntime({
-    homeDir: resolveLauncherHomeDir(),
     allowInstall: !diagnosticExemption,
   });
   if (!diagnosticExemption) {
