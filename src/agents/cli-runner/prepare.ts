@@ -136,6 +136,7 @@ import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildMediaTaskRuntimeContext } from "../runtime-facts-prompt.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import { resolveAgentSystemPromptSectionOverrideLayers } from "../system-prompt-config.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
@@ -924,6 +925,15 @@ async function prepareCliRunContextWithinReadFence(
     bindingExtraSystemPromptStatic !== undefined
       ? hashCliSessionText(bindingExtraSystemPromptStatic.trim() || undefined)
       : hashCliSessionText(extraSystemPrompt);
+  const systemPromptSectionOverrideLayers = resolveAgentSystemPromptSectionOverrideLayers({
+    config: runConfig,
+    agentId: sessionAgentId,
+  });
+  const sectionBoundExtraSystemPromptHash = systemPromptSectionOverrideLayers
+    ? hashCliSessionText(
+        JSON.stringify([baseExtraSystemPromptHash ?? null, systemPromptSectionOverrideLayers]),
+      )
+    : baseExtraSystemPromptHash;
   const requireExplicitMessageTarget =
     params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey);
   const hasCliSessionBindingFacts = bindingFacts !== undefined;
@@ -1412,12 +1422,12 @@ async function prepareCliRunContextWithinReadFence(
   const toolBoundExtraSystemPromptHash = params.cliToolAvailability
     ? hashCliSessionText(
         JSON.stringify([
-          baseExtraSystemPromptHash ?? null,
+          sectionBoundExtraSystemPromptHash ?? null,
           params.cliToolAvailability.native.toSorted(),
           params.cliToolAvailability.openClaw.toSorted(),
         ]),
       )
-    : baseExtraSystemPromptHash;
+    : sectionBoundExtraSystemPromptHash;
   // Bootstrap guidance and truncation notices change resumable system context.
   // Hash both so entering or leaving either state refreshes first-only CLI
   // system prompts.

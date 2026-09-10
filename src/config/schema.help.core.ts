@@ -293,6 +293,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Prompt-only sub-agent delegation strength. Defaults to "prefer" in each agent\'s main session and "suggest" elsewhere; "prefer" strongly instructs the agent to delegate non-trivial work via sessions_spawn.',
   "agents.entries.*.subagents.delegationMode":
     'Per-agent override for sub-agent delegation strength. Omit to use "prefer" in this agent\'s main session and "suggest" elsewhere; explicit "prefer" or "suggest" always wins.',
+  "agents.defaults.systemPrompt":
+    "Bounded operator overrides for selected non-security core system-prompt sections. Prompt guidance is advisory and does not replace tool policy, approvals, sandboxing, or allowlists.",
+  "agents.defaults.systemPrompt.sections":
+    'Default overrides for interaction_style, tool_call_style, and execution_bias. Modes are "replace", "prepend", "append", "disable", and "default"; content is literal and capped at 20,000 characters per section.',
+  "agents.entries.*.systemPrompt":
+    "Per-agent system-prompt section overrides layered after agents.defaults.systemPrompt.",
+  "agents.entries.*.systemPrompt.sections":
+    "Per-agent section overrides. Each operation sees the provider and default-layer result, so append/prepend can extend it without copying the full section.",
   "agents.entries.*.contextInjection":
     "Per-agent override for when workspace bootstrap files are injected into this agent's system prompt. Omit to inherit agents.defaults.contextInjection.",
   "agents.entries.*.cwd":

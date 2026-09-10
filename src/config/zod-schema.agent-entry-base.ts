@@ -1,6 +1,7 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { z } from "zod";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
+import { AgentSystemPromptConfigSchema } from "./zod-schema.agent-system-prompt.js";
 
 const AgentRuntimePolicySchema = z
   .object({
@@ -71,6 +72,7 @@ export const AgentEntryBaseSchema = z
     description: z.string().optional(),
     workspace: z.string().optional(),
     cwd: z.string().optional(),
+    systemPrompt: AgentSystemPromptConfigSchema,
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),

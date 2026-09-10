@@ -12,6 +12,12 @@ import type {
   TypingMode,
 } from "./types.base.js";
 import type { AgentDefaultsBaseSchema } from "./zod-schema.agent-defaults-base.js";
+export type {
+  AgentSystemPromptConfig,
+  AgentSystemPromptSectionId,
+  AgentSystemPromptSectionOverride,
+  AgentSystemPromptSectionOverrides,
+} from "./agent-system-prompt-sections.js";
 
 type SchemaAgentDefaultsConfig = z.input<typeof AgentDefaultsBaseSchema>;
 

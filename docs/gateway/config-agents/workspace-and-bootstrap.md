@@ -9,6 +9,57 @@ title: "Configuration — agent workspace and bootstrap"
 
 `agents.defaults.*` keys for filesystem scope, bootstrap context injection, the context budget map, inbound image handling, and the agent timezone.
 
+## `agents.defaults.systemPrompt.sections`
+
+Overrides selected non-security sections of OpenClaw's generated system prompt.
+The supported IDs are `interaction_style`, `tool_call_style`, and
+`execution_bias`. Each section accepts `replace`, `prepend`, `append`,
+`disable`, or `default`; modes other than `disable` and `default` require
+literal `content` of at most 20,000 characters.
+
+```json5
+{
+  agents: {
+    defaults: {
+      systemPrompt: {
+        sections: {
+          interaction_style: {
+            mode: "replace",
+            content: "## Interaction Style\nBe terse and factual.",
+          },
+        },
+      },
+    },
+    entries: {
+      support: {
+        systemPrompt: {
+          sections: {
+            interaction_style: {
+              mode: "append",
+              content: "Ask for the ticket number when one is not provided.",
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Resolution order is provider contribution, defaults, then the matching agent
+entry. Unset configuration leaves the generated prompt unchanged. Prompt text
+is advisory; use tool policy, approvals, sandboxing, and allowlists for hard
+enforcement. The core **Safety** section is not configurable here.
+Dynamic exec-approval guidance also remains core-owned when `tool_call_style`
+is replaced or disabled by operator config. A provider-only replacement keeps
+the existing whole-section contract when operator overrides are unset.
+
+These settings hot-reload with other agent configuration and apply when the
+next agent run builds its prompt. Existing embedded sessions therefore use the
+new sections on their next turn; in-flight runs are unchanged. Reusable CLI
+sessions use the normal prompt-drift behavior: compatible backends resume with
+the changed prompt, and incompatible backends start a fresh CLI session.
+
 ## `agents.defaults.workspace`
 
 Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `<state-dir>/workspace`. This is `~/.openclaw/workspace` for the default install and `~/.openclaw-<profile>/workspace` for a named profile. A custom `OPENCLAW_STATE_DIR` keeps the workspace under that state directory.

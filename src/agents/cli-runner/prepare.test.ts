@@ -3121,6 +3121,50 @@ describe("prepareCliRunContext", () => {
     expect(context.params.prompt).toContain("latest ask");
   });
 
+  it("detects section override changes as reusable CLI system-prompt drift", async () => {
+    const { dir } = fixture.session;
+    createCliBackendConfig({ systemPromptWhen: "first" });
+    const first = await fixture.prepare({
+      config: {
+        agents: {
+          defaults: {
+            systemPrompt: {
+              sections: {
+                execution_bias: { mode: "append", content: "Initial execution guidance." },
+              },
+            },
+          },
+        },
+      },
+    });
+    const second = await fixture.prepare({
+      config: {
+        agents: {
+          defaults: {
+            systemPrompt: {
+              sections: {
+                execution_bias: { mode: "append", content: "Updated execution guidance." },
+              },
+            },
+          },
+        },
+      },
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        extraSystemPromptHash: first.extraSystemPromptHash,
+        cwdHash: hashCliSessionText(dir),
+      },
+    });
+
+    expect(second.extraSystemPromptHash).not.toBe(first.extraSystemPromptHash);
+    expect(second.reusableCliSession).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session",
+      drift: { reasons: ["system-prompt"] },
+    });
+    expect(second.params.prompt).toContain("changed=system-prompt");
+  });
+
   it("invalidates content drift when the backend cannot receive a resumed system prompt", async () => {
     const { dir } = fixture.session;
     const context = await fixture.prepare({

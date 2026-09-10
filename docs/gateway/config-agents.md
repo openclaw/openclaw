@@ -45,6 +45,7 @@ link such as `/gateway/config-agents#agents.defaults.model` still resolves. Each
 entry points at the page that now holds the content.
 
 - <a id="agent-defaults" />[Agent defaults](/gateway/config-agents/workspace-and-bootstrap)
+- <a id="agents.defaults.systemprompt.sections" /><a id="agents-defaults-systemprompt-sections" />[`agents.defaults.systemPrompt.sections`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.systemprompt.sections)
 - <a id="agents.defaults.workspace" /><a id="agents-defaults-workspace" />[`agents.defaults.workspace`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.workspace)
 - <a id="agents.defaults.cwd" /><a id="agents-defaults-cwd" />[`agents.defaults.cwd`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.cwd)
 - <a id="agents.defaults.reporoot" /><a id="agents-defaults-reporoot" />[`agents.defaults.repoRoot`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.reporoot)

@@ -1,5 +1,6 @@
 // Covers agent default schema parsing and compatibility behavior.
 import { describe, expect, it } from "vitest";
+import { MAX_AGENT_SYSTEM_PROMPT_SECTION_CHARS } from "./agent-system-prompt-sections.js";
 import { validateConfigObject } from "./validation.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
@@ -27,6 +28,50 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it("accepts bounded system-prompt section overrides on defaults and entries", () => {
+    const systemPrompt = {
+      sections: {
+        interaction_style: { mode: "prepend" as const, content: "Be concise." },
+        tool_call_style: { mode: "disable" as const },
+        execution_bias: { mode: "default" as const },
+      },
+    };
+
+    expect(AgentDefaultsSchema.parse({ systemPrompt })?.systemPrompt).toEqual(systemPrompt);
+    expect(AgentEntrySchema.parse({ id: "ops", systemPrompt }).systemPrompt).toEqual(systemPrompt);
+  });
+
+  it("rejects unsupported, blank, and oversized system-prompt section overrides", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        systemPrompt: { sections: { safety: { mode: "disable" } } },
+      }),
+      "systemPrompt.sections",
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        systemPrompt: {
+          sections: { interaction_style: { mode: "replace", content: "   " } },
+        },
+      }),
+      "systemPrompt.sections.interaction_style.content",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        systemPrompt: {
+          sections: {
+            execution_bias: {
+              mode: "append",
+              content: "x".repeat(MAX_AGENT_SYSTEM_PROMPT_SECTION_CHARS + 1),
+            },
+          },
+        },
+      }),
+      "systemPrompt.sections.execution_bias.content",
+    );
+  });
+
   it("preserves separate run directories through config validation and list projection", () => {
     const result = validateConfigObject({
       agents: {

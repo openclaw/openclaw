@@ -3,11 +3,10 @@
  * Separates cache-stable prefixes, dynamic suffixes, and section overrides for
  * runtime prompt assembly.
  */
+import type { AgentSystemPromptSectionId } from "../config/agent-system-prompt-sections.js";
+
 /** Core system-prompt sections that providers may replace. */
-export type ProviderSystemPromptSectionId =
-  | "interaction_style"
-  | "tool_call_style"
-  | "execution_bias";
+export type ProviderSystemPromptSectionId = AgentSystemPromptSectionId;
 
 /** Provider guidance merged into the assembled agent system prompt. */
 export type ProviderSystemPromptContribution = {

@@ -30,7 +30,11 @@ import {
   hasNativeApprovalPromptRuntimeCapability,
   isKnownNativeApprovalPromptChannel,
 } from "../channels/plugins/native-approval-prompt.js";
-import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
+import type {
+  AgentSystemPromptSectionId,
+  AgentSystemPromptSectionOverrides,
+  SubagentDelegationMode,
+} from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
@@ -536,6 +540,57 @@ function buildOverridablePromptSection(params: {
   return params.fallback;
 }
 
+function buildLayeredPromptSection(params: {
+  id: AgentSystemPromptSectionId;
+  providerOverride?: string;
+  configLayers?: readonly AgentSystemPromptSectionOverrides[];
+  fallback: string[];
+}): string[] {
+  const layers = params.configLayers ?? [];
+  if (!layers.some((layer) => layer[params.id])) {
+    return buildOverridablePromptSection({
+      override: params.providerOverride,
+      fallback: params.fallback,
+    });
+  }
+
+  let content =
+    normalizeProviderPromptBlock(params.providerOverride) ??
+    normalizeProviderPromptBlock(params.fallback.join("\n"));
+  for (const layer of layers) {
+    const override = layer[params.id];
+    if (!override || override.mode === "default") {
+      continue;
+    }
+    if (override.mode === "disable") {
+      content = undefined;
+      continue;
+    }
+    const overrideContent = normalizeProviderPromptBlock(override.content);
+    if (!overrideContent) {
+      continue;
+    }
+    if (override.mode === "replace") {
+      content = overrideContent;
+    } else if (override.mode === "prepend") {
+      content = content ? `${overrideContent}\n${content}` : overrideContent;
+    } else {
+      content = content ? `${content}\n${overrideContent}` : overrideContent;
+    }
+  }
+  return content ? [content, ""] : [];
+}
+
+function hasConfiguredPromptSectionOverride(params: {
+  id: AgentSystemPromptSectionId;
+  configLayers?: readonly AgentSystemPromptSectionOverrides[];
+}): boolean {
+  return (params.configLayers ?? []).some((layer) => {
+    const override = layer[params.id];
+    return Boolean(override && override.mode !== "default");
+  });
+}
+
 function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
@@ -832,6 +887,8 @@ export function buildAgentSystemPrompt(params: {
   /** Prepared repository identities used to filter curated raw context fail-closed. */
   activeProjectKeys?: readonly string[];
   promptContribution?: ProviderSystemPromptContribution;
+  /** Ordered operator layers applied after provider section replacements. */
+  systemPromptSectionOverrideLayers?: readonly AgentSystemPromptSectionOverrides[];
 }) {
   const promptMode = params.promptMode ?? "full";
   const runtimeInfo = params.runtimeInfo;
@@ -1004,6 +1061,10 @@ export function buildAgentSystemPrompt(params: {
       ])
       .filter(([, value]) => Boolean(value)),
   ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
+  const hasConfiguredToolCallStyleOverride = hasConfiguredPromptSectionOverride({
+    id: "tool_call_style",
+    configLayers: params.systemPromptSectionOverrideLayers,
+  });
   const isMinimal = promptMode === "minimal";
   const includeToolGuidance =
     !isMinimal || availableTools.size > 0 || promptSurface === "cli_backend";
@@ -1158,6 +1219,7 @@ export function buildAgentSystemPrompt(params: {
     waitToolHints,
     nativeCommandGuidanceLines,
     providerSectionOverrides,
+    systemPromptSectionOverrideLayers: params.systemPromptSectionOverrideLayers,
     providerStablePrefix,
     reasoningHint,
     reasoningLevel,
@@ -1247,13 +1309,17 @@ export function buildAgentSystemPrompt(params: {
           ]
         : []),
       "",
-      ...buildOverridablePromptSection({
-        override: providerSectionOverrides.interaction_style,
+      ...buildLayeredPromptSection({
+        id: "interaction_style",
+        providerOverride: providerSectionOverrides.interaction_style,
+        configLayers: params.systemPromptSectionOverrideLayers,
         fallback: [],
       }),
       ...(includeToolGuidance
-        ? buildOverridablePromptSection({
-            override: providerSectionOverrides.tool_call_style,
+        ? buildLayeredPromptSection({
+            id: "tool_call_style",
+            providerOverride: providerSectionOverrides.tool_call_style,
+            configLayers: params.systemPromptSectionOverrideLayers,
             fallback: [
               "## Tool Call Style",
               "Routine low-risk: call silently.",
@@ -1266,8 +1332,10 @@ export function buildAgentSystemPrompt(params: {
             ],
           })
         : []),
-      ...buildOverridablePromptSection({
-        override: providerSectionOverrides.execution_bias,
+      ...buildLayeredPromptSection({
+        id: "execution_bias",
+        providerOverride: providerSectionOverrides.execution_bias,
+        configLayers: params.systemPromptSectionOverrideLayers,
         fallback: buildExecutionBiasSection({
           isMinimal,
         }),
@@ -1465,8 +1533,10 @@ export function buildAgentSystemPrompt(params: {
         ]
       : []),
     // Approval UI and owner identity vary by turn, so keep both below the stable prefix.
-    // A tool_call_style override owns the complete section and suppresses default guidance.
-    ...(providerSectionOverrides.tool_call_style || !hasExec
+    // Preserve the shipped provider-only replacement contract while keeping approval
+    // guidance core-owned whenever an operator explicitly customizes tool narration.
+    ...(!hasExec ||
+    (providerSectionOverrides.tool_call_style && !hasConfiguredToolCallStyleOverride)
       ? []
       : [
           buildExecApprovalPromptGuidance({

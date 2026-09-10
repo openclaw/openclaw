@@ -3,6 +3,7 @@ import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import { AgentModelMapSchema, AgentModelPolicySchema } from "./zod-schema.agent-entry-base.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
+import { AgentSystemPromptConfigSchema } from "./zod-schema.agent-system-prompt.js";
 
 const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
 
@@ -70,6 +71,7 @@ export const AgentDefaultsBaseSchema = z
     modelPolicy: AgentModelPolicySchema.optional(),
     workspace: z.string().optional(),
     cwd: z.string().optional(),
+    systemPrompt: AgentSystemPromptConfigSchema,
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),
