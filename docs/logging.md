@@ -284,6 +284,54 @@ OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
 
+### Lifecycle queue waits
+
+When process diagnostics are enabled, the `sessions/lifecycle` logger emits
+`session lifecycle queue waiting` once when a queue acquisition is still pending
+after one second. It identifies the `mutation` or `lifecycle` queue and samples
+its current holder at that instant. The holder can have changed since the
+waiter entered the queue. A delayed timer that runs after acquisition emits no
+holder sample.
+
+`operationId` and `holderOperationId` identify diagnostic operation instances
+within `diagnosticEpoch`, PID and thread. Operations use the fixed boundary
+labels `lifecycle`, `mutation` and `compaction`; they do not name arbitrary
+callers. Existing request traces appear in `operationTraceId`/`operationSpanId`
+and separate `holderTraceId`/`holderSpanId` fields when present. Missing trace
+fields remain unknown; no new trace or audit execution identity is created.
+
+`identityHash` is a salted digest of the already-normalized store/session
+identity. It correlates only inside the same JavaScript runtime isolate and
+diagnostic epoch. Raw session keys and paths are omitted. The digest is
+operational correlation, not anonymization or authorization evidence.
+
+`slow session lifecycle operation` records operations taking at least one
+second through their actual queued work's settlement. It separates
+`mutationQueueWaitMs`, `lifecycleQueueWaitMs`, `completionDelayMs` and
+`phaseDurationsMs.prepare`, `.run` and `.finalize`. The holder's current
+`holderPhase` can also identify activation, admission or release work. A
+`lifecycle` operation describes its queue attempt after the existing active-
+mutation idle wait; that prior idle wait is not measured here. Calls with no
+normalized identities have no queue and emit no queue-operation summary. A
+caller can cancel before all of its queued work unwinds; `signalAborted`
+reports the signal without claiming that the holder has released.
+
+The tracker preserves outer ownership across reentrant work and retires a
+holder only when its actual queue callback exits. Its state weakly follows
+existing queue objects; it does not create another execution queue. Per
+runtime isolate, it retains at most 128 holder descriptors and 32 one-shot
+wait timers, and emits at most 60 records per minute. The queue timing owner
+explicitly distinguishes reentry, so unobserved outer holders stay unknown at
+capacity or after enablement. `omittedObservations` on a later record reports
+suppressed observations; missing records never prove no wait.
+
+Elapsed intervals can include asynchronous waits and nested work, so phase
+and queue totals need not form a disjoint partition. A holder sample identifies
+who owns that queue at the sampled instant, not every predecessor responsible
+for the entire wait or which work consumed CPU. These are ordinary performance
+logs. They do not use or change [audit identity](/gateway/audit), decisions,
+retention, principal attribution or admission authority.
+
 ### Slow agent database opens
 
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
