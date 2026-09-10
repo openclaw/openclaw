@@ -489,7 +489,7 @@ function parseModelRefWithCompatAlias(
   } & ModelManifestNormalizationContext,
 ): ModelRef | null {
   const exactConfiguredProviderRef = resolveExactConfiguredProviderRef(params);
-  const exactDefaultProviderRef = hasSlashFormModelRef(params.raw)
+  const exactDefaultProviderRef = params.raw.includes("/")
     ? null
     : resolveExactConfiguredProviderRef({
         ...params,

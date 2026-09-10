@@ -535,12 +535,30 @@ export async function acquireSimpleCompletionModelForAgent(
     modelRef: params.modelRef,
     useUtilityModel: params.useUtilityModel,
   };
-  const tentativeRequest = resolveSimpleCompletionSelectionRequest(selectionParams);
+  return await acquireSimpleCompletionModelWithSelection(params, (manifestPlugins) =>
+    resolveSimpleCompletionSelectionRequest({ ...selectionParams, manifestPlugins }),
+  );
+}
+
+/** Captures metadata before the caller selects the model to materialize. */
+export async function acquireSimpleCompletionModelWithSelection(
+  params: Omit<
+    PrepareSimpleCompletionModelForAgentParams,
+    "agentId" | "modelRef" | "useUtilityModel" | "useAsyncModelResolution"
+  > & { agentId?: string },
+  resolveRequest: (manifestPlugins?: PluginMetadataSnapshot) => {
+    selection: Omit<AgentSimpleCompletionSelection, "agentDir">;
+    shorthandModelId?: string;
+  } | null,
+): Promise<AcquiredSimpleCompletionModelForAgent> {
+  const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+  const agentDir = params.agentDir?.trim() || resolveAgentDir(params.cfg, agentId);
+  const tentativeRequest = resolveRequest();
   if (!tentativeRequest) {
-    return { error: `No model configured for agent ${params.agentId}.` };
+    return { error: `No model configured for agent ${agentId}.` };
   }
   const tentativeSelection = tentativeRequest.selection;
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   const pluginIdScope = createAgentRuntimeMetadataPluginIdScope({
     config: params.cfg,
     workspaceDir,
@@ -548,7 +566,7 @@ export async function acquireSimpleCompletionModelForAgent(
       {
         provider: tentativeSelection.provider,
         modelId: tentativeSelection.modelId,
-        agentId: params.agentId,
+        agentId,
       },
     ],
     ...(tentativeRequest.shorthandModelId
@@ -562,14 +580,13 @@ export async function acquireSimpleCompletionModelForAgent(
     pluginIdScope,
     allowWorkspaceScopedCurrent: true,
   });
-  const resolveSelection = () =>
-    resolveSimpleCompletionSelectionForAgent({
-      ...selectionParams,
-      manifestPlugins: metadataSnapshot,
-    });
+  const resolveSelection = () => {
+    const request = resolveRequest(metadataSnapshot);
+    return request ? { ...request.selection, agentDir } : null;
+  };
   let selection = resolveSelection();
   if (!selection) {
-    return { error: `No model configured for agent ${params.agentId}.` };
+    return { error: `No model configured for agent ${agentId}.` };
   }
   const canonicalPluginIdScope = createAgentRuntimeMetadataPluginIdScope({
     config: params.cfg,
@@ -578,7 +595,7 @@ export async function acquireSimpleCompletionModelForAgent(
       {
         provider: selection.provider,
         modelId: selection.modelId,
-        agentId: params.agentId,
+        agentId,
       },
     ],
     ...(tentativeRequest.shorthandModelId &&
@@ -597,11 +614,11 @@ export async function acquireSimpleCompletionModelForAgent(
     });
     selection = resolveSelection();
     if (!selection) {
-      return { error: `No model configured for agent ${params.agentId}.` };
+      return { error: `No model configured for agent ${agentId}.` };
     }
   }
   const acquired = await acquirePreparedSimpleCompletionModel(
-    { ...params, agentDir: selection.agentDir, pluginMetadataSnapshot: metadataSnapshot },
+    { ...params, agentId, agentDir, pluginMetadataSnapshot: metadataSnapshot },
     [{ provider: selection.provider, modelId: selection.modelId }],
     (context) =>
       prepareSimpleCompletionModelCore(
