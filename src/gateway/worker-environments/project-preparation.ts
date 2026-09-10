@@ -78,6 +78,10 @@ export function createWorkerProjectPreparation(params: {
   };
   setupAuthorized?: boolean;
   revalidateRepositorySource?: (signal: AbortSignal) => Promise<void>;
+  prepareRepositoryGitPack?: (input: {
+    temporaryRoot: string;
+    signal: AbortSignal;
+  }) => Promise<string>;
   requireCurrent: () => void;
   signal?: AbortSignal;
 }): {
@@ -213,17 +217,21 @@ export function createWorkerProjectPreparation(params: {
     try {
       requireCurrent();
       let transfer: Pick<Parameters<typeof createProjectSeedScript>[0], "pack" | "repository">;
-      if ("source" in params.project) {
+      if ("source" in params.project && !params.prepareRepositoryGitPack) {
         // Public source fetches need no credential transfer or remote secret lifetime.
         transfer = { repository: { directory, url: params.project.source.url } };
       } else {
-        const pack = await prepareWorkerWorkspaceGitPack({
-          root: params.project.root,
-          baseCommit: params.project.baseCommit,
-          ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
-          temporaryRoot,
-          signal,
-        });
+        const repository = "source" in params.project ? params.project.source : undefined;
+        const pack =
+          "root" in params.project
+            ? await prepareWorkerWorkspaceGitPack({
+                root: params.project.root,
+                baseCommit: params.project.baseCommit,
+                ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
+                temporaryRoot,
+                signal,
+              })
+            : await params.prepareRepositoryGitPack!({ temporaryRoot, signal });
         requireCurrent();
         const bytes = (await fsp.stat(pack)).size;
         if (bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
@@ -241,7 +249,11 @@ export function createWorkerProjectPreparation(params: {
             directory,
             bytes,
             sha256: hash.digest("hex"),
-            ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
+            ...(repository
+              ? { repositoryUrl: repository.url }
+              : typeof retainedCommit === "string"
+                ? { retainedCommit }
+                : {}),
           },
         };
       }
@@ -269,7 +281,7 @@ export function createWorkerProjectPreparation(params: {
       if (!params.revalidateRepositorySource) {
         throw new Error("Repository project preparation has no current source authority");
       }
-      // Retained content does not prove that the repository is still public and accessible.
+      // Retained content does not establish current repository visibility or access.
       await params.revalidateRepositorySource(signal);
       requireCurrent();
     }
