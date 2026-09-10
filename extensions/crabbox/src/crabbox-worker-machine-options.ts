@@ -148,12 +148,10 @@ export function createCrabboxMachineOptionsResolver(
       const { parsed, catalog, disabledReason } = await resolveCatalog(profile);
       return (catalog?.operatingSystems ?? []).map((id) => {
         const label = CRABBOX_OS_LABELS[id];
-        return {
-          id,
-          label,
-          ...(id === parsed.target ? { default: true } : {}),
-          ...(id !== "linux" && disabledReason ? { disabledReason } : {}),
-        };
+        const system = id === parsed.target ? { id, label, default: true } : { id, label };
+        return id !== "linux" && disabledReason
+          ? Object.assign(system, { disabledReason })
+          : system;
       });
     },
   };
