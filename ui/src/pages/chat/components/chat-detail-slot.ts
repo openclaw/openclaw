@@ -40,6 +40,7 @@ export function renderChatDetailSlot(params: {
         : renderTaskDetailPanel({
             backgroundTasks: params.backgroundTasks,
             host,
+            loadFullAssistantMessage: params.chat.loadFullAssistantMessage,
             task: params.backgroundTasks.tasks?.find((task) => task.id === taskId) ?? undefined,
           }),
   };

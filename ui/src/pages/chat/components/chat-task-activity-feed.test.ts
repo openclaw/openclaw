@@ -1,6 +1,14 @@
 import { render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { createGatewayBrowserClientFixture } from "../chat-pane.test-support.ts";
+import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import { renderTaskActivityFeed } from "./chat-task-activity-feed.ts";
+import {
+  readTaskTranscript,
+  requestTaskFullMessage,
+  type TaskDetailHost,
+} from "./chat-task-detail-state.ts";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -24,6 +32,129 @@ function toolResult(toolCallId: string, isError = false) {
 }
 
 describe("task activity feed", () => {
+  const capped = {
+    role: "assistant",
+    content: "Capped preview",
+    __openclaw: { id: "m-1", truncated: true, reason: "display-cap" },
+  };
+  const target = { sessionKey: "agent:worker:subagent:child", agentId: "worker" };
+
+  async function mountRecovery(messages: unknown[], loader: SidebarFullMessageLoader) {
+    const host: TaskDetailHost = {
+      sessionKey: "agent:main:main",
+      connected: true,
+      hello: null,
+      client: createGatewayBrowserClientFixture({
+        request: vi.fn().mockResolvedValue({ messages }),
+      }),
+      requestUpdate: vi.fn(),
+    };
+    readTaskTranscript(host, { taskId: "task-1" });
+    await vi.waitFor(() => expect(host.taskDetailState?.load.status).toBe("loaded"));
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () =>
+      render(
+        renderTaskActivityFeed(messages, {
+          getState: (messageId) => host.taskDetailState?.fullMessages.get(messageId),
+          request: (messageId) => {
+            void requestTaskFullMessage(host, { loader, ...target, messageId });
+          },
+        }),
+        container,
+      );
+    rerender();
+    return { container, rerender, host };
+  }
+
+  it.each(["metadata", "messageId"])(
+    "recovers by %s identity once and replaces the preview without remounting",
+    async (identity) => {
+      const message =
+        identity === "metadata"
+          ? capped
+          : {
+              ...capped,
+              messageId: "m-1",
+              __openclaw: { truncated: true, reason: "display-cap" },
+            };
+      const full = createDeferred<Awaited<ReturnType<SidebarFullMessageLoader>>>();
+      const loader = vi.fn().mockReturnValue(full.promise);
+      const { container, rerender, host } = await mountRecovery([message], loader);
+      const entry = container.querySelector("[data-task-feed-entry]");
+      expect(container.textContent).toContain("Capped preview");
+      expect(container.querySelector(".chat-message-load-error")).toBeNull();
+      rerender();
+      expect(loader).toHaveBeenCalledExactlyOnceWith({ ...target, messageId: "m-1" });
+      full.resolve({
+        ok: true,
+        message: {
+          role: "assistant",
+          content: "<think>hidden reasoning</think>Full **answer** with the final result.",
+        },
+      });
+      await vi.waitFor(() =>
+        expect(host.taskDetailState?.fullMessages.get("m-1")?.status).toBe("loaded"),
+      );
+      rerender();
+      expect(container.querySelector("[data-task-feed-entry]")).toBe(entry);
+      expect(container.querySelector("strong")?.textContent).toBe("answer");
+      expect(container.textContent).toContain("with the final result.");
+      expect(container.textContent).not.toContain("Capped preview");
+      expect(container.textContent).not.toContain("hidden reasoning");
+      expect(loader).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("bounds automatic retries and lets Retry recover after exhaustion", async () => {
+    const loader = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ ok: false, unavailableReason: "not_found" })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({
+        ok: true,
+        message: { role: "assistant", content: "Recovered after retry." },
+      });
+    const { container, rerender, host } = await mountRecovery([capped], loader);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await vi.waitFor(() =>
+        expect(host.taskDetailState?.fullMessages.get("m-1")).toMatchObject({
+          status: "error",
+          revision: attempt * 2,
+        }),
+      );
+      expect(container.textContent).toContain("Capped preview");
+      expect(loader).toHaveBeenCalledTimes(attempt);
+      rerender();
+    }
+    rerender();
+    expect(loader).toHaveBeenCalledTimes(3);
+    expect(container.textContent).toContain("Could not load the full message.");
+    container.querySelector<HTMLButtonElement>(".chat-message-load-error__retry")!.click();
+    await vi.waitFor(() =>
+      expect(host.taskDetailState?.fullMessages.get("m-1")?.status).toBe("loaded"),
+    );
+    rerender();
+    expect(loader).toHaveBeenCalledTimes(4);
+    expect(container.textContent).toContain("Recovered after retry.");
+    expect(container.textContent).not.toContain("Capped preview");
+    expect(container.querySelector(".chat-message-load-error")).toBeNull();
+  });
+
+  it.each([
+    { ...capped, __openclaw: { id: "m-1" } },
+    { ...capped, openclawMessageToolMirror: true },
+    { ...capped, role: "user" },
+  ])(
+    "does not request recovery for ineligible messages: $role $openclawMessageToolMirror",
+    async (message) => {
+      const loader = vi.fn();
+      const { rerender } = await mountRecovery([message], loader);
+      rerender();
+      expect(loader).not.toHaveBeenCalled();
+    },
+  );
+
   it("renders user text plainly and assistant markdown with links and code", () => {
     const container = mount([
       { role: "user", content: "Please **inspect** [the renderer](https://example.com)." },

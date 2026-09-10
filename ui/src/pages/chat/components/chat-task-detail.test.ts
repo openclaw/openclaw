@@ -1,8 +1,10 @@
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { createGatewayBrowserClientFixture } from "../chat-pane.test-support.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import { deriveSubagentActivity } from "./chat-subagent-activity.ts";
 import type { TaskDetailHost } from "./chat-task-detail-state.ts";
 import { renderTaskDetailPanel } from "./chat-task-detail.ts";
@@ -46,6 +48,194 @@ beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 describe("task detail panel", () => {
+  it.each(["task", "connection"])(
+    "ignores a pending full reply after the %s changes",
+    async (change) => {
+      const task: TaskSummary = {
+        id: "first-task",
+        taskId: "first-task",
+        status: "completed",
+        runtime: "subagent",
+        agentId: "worker",
+        childSessionKey: "agent:worker:subagent:first",
+        title: "Child work",
+      };
+      const pending = createDeferred<Awaited<ReturnType<SidebarFullMessageLoader>>>();
+      const loader = vi
+        .fn()
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValue({
+          ok: true,
+          message: { role: "assistant", content: "Current complete reply." },
+        });
+      const host: TaskDetailHost = {
+        sessionKey: "agent:main:main",
+        connected: true,
+        hello: null,
+        connectionEpoch: 1,
+        client: createGatewayBrowserClientFixture({
+          request: vi.fn().mockResolvedValue({
+            messages: [
+              { role: "assistant", content: "Preview", __openclaw: { id: "m-1", truncated: true } },
+            ],
+          }),
+        }),
+      };
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = (selected: TaskSummary) =>
+        render(
+          renderTaskDetailPanel({
+            backgroundTasks: backgroundTasks(selected),
+            host,
+            task: selected,
+            loadFullAssistantMessage: loader,
+          }),
+          container,
+        );
+      rerender(task);
+      await vi.waitFor(() => expect(host.taskDetailState?.load.status).toBe("loaded"));
+      rerender(task);
+      expect(loader).toHaveBeenCalledTimes(1);
+      const oldState = host.taskDetailState!;
+      const next =
+        change === "task"
+          ? {
+              ...task,
+              id: "second-task",
+              taskId: "second-task",
+              childSessionKey: "agent:worker:subagent:second",
+            }
+          : task;
+      if (change === "connection") {
+        host.connectionEpoch = 2;
+      }
+      rerender(next);
+      expect(oldState.fullMessages.size).toBe(0);
+      await vi.waitFor(() => expect(host.taskDetailState?.load.status).toBe("loaded"));
+      rerender(next);
+      await vi.waitFor(() =>
+        expect(host.taskDetailState?.fullMessages.get("m-1")?.status).toBe("loaded"),
+      );
+      pending.resolve({
+        ok: true,
+        message: { role: "assistant", content: "Stale complete reply." },
+      });
+      await pending.promise;
+      rerender(next);
+      expect(container.textContent).toContain("Current complete reply.");
+      expect(container.textContent).not.toContain("Stale complete reply.");
+      expect(oldState.fullMessages.size).toBe(0);
+    },
+  );
+
+  it("keeps a capped task-only transcript preview when no child session exists", async () => {
+    const task: TaskSummary = {
+      id: "task-native",
+      taskId: "task-native",
+      status: "completed",
+      runtime: "subagent",
+      agentId: "main",
+      hasTranscript: true,
+      sessionKey: "agent:main:main",
+      title: "Native task",
+    };
+    const host: TaskDetailHost = {
+      sessionKey: "agent:main:main",
+      connected: true,
+      hello: null,
+      client: createGatewayBrowserClientFixture({
+        request: vi.fn().mockResolvedValue({
+          messages: [
+            {
+              role: "assistant",
+              content: "Runtime preview",
+              __openclaw: { id: "m-1", truncated: true },
+            },
+          ],
+        }),
+      }),
+    };
+    const loader = vi.fn();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () =>
+      render(
+        renderTaskDetailPanel({
+          backgroundTasks: backgroundTasks(task),
+          host,
+          task,
+          loadFullAssistantMessage: loader,
+        }),
+        container,
+      );
+    rerender();
+    await vi.waitFor(() => expect(host.taskDetailState?.load.status).toBe("loaded"));
+    rerender();
+    expect(container.textContent).toContain("Runtime preview");
+    expect(loader).not.toHaveBeenCalled();
+  });
+
+  it("recovers capped replies from the child session and clears them when switching tasks", async () => {
+    const task: TaskSummary = {
+      id: "task-capped",
+      taskId: "task-capped",
+      status: "completed",
+      runtime: "subagent",
+      agentId: "worker",
+      childSessionKey: "agent:worker:subagent:child",
+      sessionKey: "agent:main:main",
+      title: "Capped reply",
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: "Capped preview",
+          __openclaw: { id: "m-1", truncated: true, reason: "display-cap" },
+        },
+      ],
+    });
+    const loader = vi.fn().mockResolvedValue({
+      ok: true,
+      message: { role: "assistant", content: "The **complete** reply." },
+    });
+    const host: TaskDetailHost = {
+      sessionKey: "agent:main:main",
+      client: createGatewayBrowserClientFixture({ request }),
+      connected: true,
+      hello: null,
+      requestUpdate: vi.fn(),
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = (selected = task) =>
+      render(
+        renderTaskDetailPanel({
+          backgroundTasks: backgroundTasks(selected),
+          host,
+          task: selected,
+          loadFullAssistantMessage: loader,
+        }),
+        container,
+      );
+    rerender();
+    await vi.waitFor(() => expect(host.taskDetailState?.load.status).toBe("loaded"));
+    rerender();
+    expect(loader).toHaveBeenCalledExactlyOnceWith({
+      sessionKey: task.childSessionKey,
+      agentId: "worker",
+      messageId: "m-1",
+    });
+    await vi.waitFor(() =>
+      expect(host.taskDetailState?.fullMessages.get("m-1")?.status).toBe("loaded"),
+    );
+    rerender();
+    expect(container.querySelector("strong")?.textContent).toBe("complete");
+    expect(container.textContent).not.toContain("Capped preview");
+    const previous = host.taskDetailState!;
+    rerender({ ...task, id: "other-task", taskId: "other-task" });
+    expect(previous.fullMessages.size).toBe(0);
+    expect(host.taskDetailState?.fullMessages.size).toBe(0);
+  });
+
   it("uses the inspector for the pane's canonical session and identifies the runtime", () => {
     const task: TaskSummary = {
       id: "task-cli",

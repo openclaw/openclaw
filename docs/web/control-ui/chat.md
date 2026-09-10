@@ -324,6 +324,11 @@ Codex harness. Select a task to read its messages, thinking, and tool calls;
 select **Show earlier** to load older history. Task activity refreshes the view
 while the subagent runs. The generic fallback label is **Subagent**.
 
+For tasks with a child session, capped assistant replies load their complete text
+automatically. The preview stays visible while loading. If recovery fails three
+times, the panel keeps the preview and offers **Retry**. Task transcripts without
+a session address keep the text supplied by their runtime.
+
 The viewer reads history from the runtime that owns it. New native subagent
 tasks retain their original history source when later turns replace the parent's
 native thread. Changing the parent session or account can make that history

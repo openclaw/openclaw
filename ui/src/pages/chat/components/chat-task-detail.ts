@@ -23,10 +23,12 @@ import {
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
 import { renderChatHistoryBoundary } from "./chat-history-boundary.ts";
+import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import { renderTaskActivityFeed } from "./chat-task-activity-feed.ts";
 import {
   loadOlderTaskTranscript,
   readTaskTranscript,
+  requestTaskFullMessage,
   resetTaskDetail,
   retryTaskTranscript,
   type TaskDetailHost,
@@ -36,6 +38,7 @@ export function renderTaskDetailPanel(params: {
   backgroundTasks: BackgroundTasksProps;
   host: TaskDetailHost;
   task: TaskSummary | undefined;
+  loadFullAssistantMessage?: SidebarFullMessageLoader | null;
 }): TemplateResult {
   const { backgroundTasks, task } = params;
   if (!task) {
@@ -72,7 +75,12 @@ export function renderTaskDetailPanel(params: {
       )
     : currentTask.hasTranscript === true;
   const content = hasTranscript
-    ? renderTaskTranscript({ host: params.host, task: currentTask })
+    ? renderTaskTranscript({
+        host: params.host,
+        task: currentTask,
+        transcriptSessionKey,
+        loadFullAssistantMessage: params.loadFullAssistantMessage,
+      })
     : renderTaskFallback(currentTask, backgroundTasks, params.host);
   return html`
     <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
@@ -140,11 +148,34 @@ function renderTaskHeader(
   `;
 }
 
-function renderTaskTranscript(params: { host: TaskDetailHost; task: TaskSummary }): TemplateResult {
+function renderTaskTranscript(params: {
+  host: TaskDetailHost;
+  task: TaskSummary;
+  transcriptSessionKey?: string;
+  loadFullAssistantMessage?: SidebarFullMessageLoader | null;
+}): TemplateResult {
   const load = readTaskTranscript(params.host, {
     taskId: params.task.id,
   });
   const messages = load.status === "loaded" ? load.messages : [];
+  const { loadFullAssistantMessage: loader, transcriptSessionKey: sessionKey } = params;
+  const state = params.host.taskDetailState;
+  const recovery =
+    loader && sessionKey && state
+      ? {
+          getState: (messageId: string) => state.fullMessages.get(messageId),
+          request: (messageId: string) => {
+            if (params.host.taskDetailState === state) {
+              void requestTaskFullMessage(params.host, {
+                loader,
+                sessionKey,
+                agentId: params.task.agentId,
+                messageId,
+              });
+            }
+          },
+        }
+      : undefined;
   return html`<div
     class="sidebar-content chat-task-detail__content"
     ${ref(taskScrollRef(params.task.id, messages))}
@@ -168,7 +199,7 @@ function renderTaskTranscript(params: { host: TaskDetailHost; task: TaskSummary 
     }
     ${load.status === "loaded" && load.nextCursor ? renderChatHistoryBoundary({ hasMore: true, loading: load.loading, onShowEarlier: () => loadOlderTaskTranscript(params.host) }) : nothing}
     ${load.status === "loaded" && !messages.length && !load.nextCursor && !load.error ? html`<div class="chat-task-detail__state">${t("chat.backgroundTasks.transcriptEmpty")}</div>` : nothing}
-    ${renderTaskActivityFeed(messages)}
+    ${renderTaskActivityFeed(messages, recovery)}
   </div>`;
 }
 

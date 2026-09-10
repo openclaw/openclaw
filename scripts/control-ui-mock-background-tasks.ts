@@ -53,6 +53,12 @@ export function buildBackgroundTasksMock(baseTime: number) {
   const taskSessionKey = "agent:openclaw-mock:subagent:mock-task-1";
   const requesterSessionKey = "agent:main:main";
   const cliSessionKey = "agent:main:production-export";
+  const cappedMessageId = "mock-task-full-reply";
+  const fullMessage = historyMessage(
+    "assistant",
+    "The task event reaches the detail panel through its task ID. The child session supplies the transcript.\n\n**Full reply recovered:** the activity feed loads capped replies with the child session and task agent, while keeping the preview visible until the complete message arrives.",
+    baseTime + 40 * 60_000 + 17_000,
+  );
   const tasks: TaskSummary[] = [
     {
       id: "task-mock-queued",
@@ -109,6 +115,12 @@ export function buildBackgroundTasksMock(baseTime: number) {
   ];
   return {
     tasks,
+    fullMessage: {
+      sessionKey: taskSessionKey,
+      agentId: "openclaw-mock",
+      messageId: cappedMessageId,
+      message: fullMessage,
+    },
     sessions: [taskSessionKey].map((key) => ({ key })),
     sessionTranscripts: {
       [taskSessionKey]: {
@@ -191,11 +203,14 @@ export function buildBackgroundTasksMock(baseTime: number) {
             toolName: "edit",
             content: [{ type: "text", text: "Updated task panel layout." }],
           },
-          historyMessage(
-            "assistant",
-            "The task event reaches the detail panel through its task ID. The child session supplies the transcript.",
-            baseTime + 40 * 60_000 + 17_000,
-          ),
+          {
+            ...historyMessage(
+              "assistant",
+              "The task event reaches the detail panel through its task ID.\n...(truncated)...",
+              fullMessage.timestamp,
+            ),
+            __openclaw: { id: cappedMessageId, truncated: true, reason: "display-cap" },
+          },
           historyMessage(
             "assistant",
             "Checking the narrow panel layout and history paging before reporting the result.",
@@ -218,6 +233,17 @@ function installBackgroundTasksMock(seed: ReturnType<typeof buildBackgroundTasks
   }
   const tasks = new Map(seed.tasks.map((task) => [task.id, task]));
   const transcripts = new Map(Object.entries(seed.sessionTranscripts));
+  gateway.setRequestHandler("chat.message.get", ({ params: input, respond }) => {
+    const params = input as { sessionKey: string; agentId?: string; messageId: string };
+    const full = seed.fullMessage;
+    respond(
+      params.sessionKey === full.sessionKey &&
+        params.agentId === full.agentId &&
+        params.messageId === full.messageId
+        ? { ok: true, message: full.message }
+        : { ok: false, unavailableReason: "not_found" },
+    );
+  });
   gateway.setRequestHandler("tasks.list", ({ params: input, respond }) => {
     const params = (input ?? {}) as TasksListParams;
     const statuses = typeof params.status === "string" ? [params.status] : params.status;

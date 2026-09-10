@@ -34,6 +34,7 @@ import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderRewindButton } from "./chat-message-confirmation.ts";
 import {
+  FULL_MESSAGE_RETRY_REVISION_LIMIT,
   renderMessageActionButtons,
   renderReplyButton,
   prepareChatMessageRender,
@@ -108,10 +109,6 @@ type RenderMessageGroupOptions = Omit<
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
   };
-
-// Each automatic load attempt costs 2 revisions (loading, then error), so
-// this bounds auto-retries to 3 before the manual retry affordance takes over.
-const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
 
 function prepareGroupMessage(
   group: MessageGroup,

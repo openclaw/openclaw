@@ -26,12 +26,22 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
+import type { AssistantMessageExpansionState } from "../chat-thread.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
-import { renderMessageMarkdown } from "./chat-message-text.ts";
+import {
+  FULL_MESSAGE_RETRY_REVISION_LIMIT,
+  resolveCappedMessageId,
+} from "./chat-message-markdown.ts";
+import { renderMessageMarkdown, type AssistantMessageDisclosure } from "./chat-message-text.ts";
+
+type TaskMessageRecovery = {
+  getState: (messageId: string) => AssistantMessageExpansionState | undefined;
+  request: (messageId: string) => void;
+};
 
 type Entry = { key: string; timestamp: number | null } & (
   | { kind: "tools"; calls: ToolCard[] }
-  | { kind: "user" | "assistant" | "block"; text: string }
+  | { kind: "user" | "assistant" | "block"; text: string; cappedMessageId?: string }
 );
 
 // Collapsed rows show the first line; expanded rows keep the complete command
@@ -106,6 +116,7 @@ function entries(messages: unknown[]): Entry[] {
             key,
             timestamp,
             text,
+            cappedMessageId: resolveCappedMessageId(item.message, normalized.role),
           });
         }
       } else {
@@ -154,7 +165,31 @@ function renderToolLine(call: ToolCard, mode: "summary" | "full") {
   </div>`;
 }
 
-export function renderTaskActivityFeed(messages: unknown[]): TemplateResult {
+function messageDisclosure(
+  entry: Entry,
+  recovery?: TaskMessageRecovery,
+): AssistantMessageDisclosure | undefined {
+  const messageId = entry.kind === "assistant" ? entry.cappedMessageId : undefined;
+  if (!messageId || !recovery) {
+    return undefined;
+  }
+  const state = recovery.getState(messageId);
+  if (!state || (state.status === "error" && state.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)) {
+    recovery.request(messageId);
+  }
+  return {
+    expanded: state?.status === "loaded",
+    ...(state?.status === "loaded" ? { markdown: stripThinkingTags(state.markdown) } : {}),
+    ...(state?.status === "error" && state.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT
+      ? { onRetryFullMessage: () => recovery.request(messageId) }
+      : {}),
+  };
+}
+
+export function renderTaskActivityFeed(
+  messages: unknown[],
+  recovery?: TaskMessageRecovery,
+): TemplateResult {
   return html`<div class="chat-task-feed">
     ${repeat(
       entries(messages),
@@ -178,7 +213,11 @@ export function renderTaskActivityFeed(messages: unknown[]): TemplateResult {
                 ? renderMessageMarkdown(
                     entry.text,
                     entry.key,
-                    { role: "assistant", isStreaming: false },
+                    {
+                      role: "assistant",
+                      isStreaming: false,
+                      assistantMessageDisclosure: messageDisclosure(entry, recovery),
+                    },
                     {},
                   )
                 : html`<div class="chat-task-feed__${entry.kind}">${entry.text}</div>`
