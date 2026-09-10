@@ -88,14 +88,10 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
           : nothing
       }
       ${!params.stacked && params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
-      ${params.stacked && !params.checked ? (params.meter ?? nothing) : nothing}
-      ${
-        !params.stacked || params.checked
-          ? html`<span class="session-menu__check" aria-hidden="true"
-              >${params.checked ? icons.check : nothing}</span
-            >`
-          : nothing
-      }
+      ${params.stacked ? (params.meter ?? nothing) : nothing}
+      <span class="session-menu__check" aria-hidden="true"
+        >${params.checked ? icons.check : nothing}</span
+      >
     </button>
   `;
 }

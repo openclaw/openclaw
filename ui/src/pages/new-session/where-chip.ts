@@ -198,7 +198,7 @@ export function renderWhereChip(params: {
       : params.state.kind === "local"
         ? icons.home
         : params.state.kind === "auto-device"
-          ? icons.zap
+          ? icons.shuffle
           : environmentDeviceIcon(
               params.state.devices.find((device) => device.deviceId === params.deviceId),
             );
@@ -432,7 +432,7 @@ export function renderWhereChip(params: {
                     ?disabled=${busy || (!params.autoDevice && Boolean(params.state.autoDeviceDisabledReason))}
                     @click=${() => params.onToggleAutoDevice(!params.autoDevice)}
                   >
-                    <span class="session-menu__icon" aria-hidden="true">${icons.zap}</span>
+                    <span class="session-menu__icon" aria-hidden="true">${icons.shuffle}</span>
                     <span class="session-menu__text">
                       ${t("newSession.autoDeviceChoose")}
                       <span class="session-menu__description"

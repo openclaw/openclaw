@@ -771,6 +771,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-search {
+  margin-bottom: var(--space-2);
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -823,6 +824,12 @@ wa-popover.new-session-page__where-popover::part(body) {
   padding-block: 8px;
 }
 
+/* Reserve the selection column even when empty so labels and meters never move. */
+.new-session-page__environment-option > .session-menu__check {
+  flex: 0 0 20px;
+  width: 20px;
+}
+
 .new-session-page__environment-option[aria-pressed="true"] {
   background: var(--bg-hover);
 }
@@ -856,12 +863,21 @@ wa-popover.new-session-page__where-popover::part(body) {
 
 .new-session-page__environment-auto {
   flex: 0 0 auto;
-  margin-top: var(--space-2);
+  margin: var(--space-2) 12px 0;
   padding-top: var(--space-2);
   border-top: 1px solid var(--border);
 }
 
+.new-session-page__auto-device {
+  padding-inline: 0;
+}
+
 .new-session-page__auto-device .session-menu__icon {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
   color: var(--accent);
 }
 

@@ -270,16 +270,19 @@ describe("Where chip", () => {
     ).toBe("true");
   });
 
-  it("replaces the selected device's slot indicator with only its checkmark", () => {
+  it("keeps slot indicators and reserves the checkmark column when selecting a device", () => {
     const container = renderPicker(true, undefined, { deviceId: "runner" });
     const selected = container.querySelector('[data-value="device:runner"]');
     const unselected = container.querySelector('[data-value="device:alpha-device"]');
 
-    expect(selected?.querySelector('[role="img"]')).toBeNull();
+    expect(selected?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "1 of 2 slots busy",
+    );
     expect(selected?.querySelector(".session-menu__check svg")).not.toBeNull();
     expect(unselected?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
       "0 of 1 slots busy",
     );
+    expect(unselected?.querySelector(".session-menu__check")).not.toBeNull();
     expect(unselected?.querySelector(".session-menu__check svg")).toBeNull();
   });
 
