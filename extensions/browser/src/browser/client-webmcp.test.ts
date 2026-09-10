@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { resolveToolExecutionErrorKind } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { browserWebMcp } from "./client-webmcp.js";
@@ -19,6 +20,26 @@ afterEach(() => {
 });
 
 describe("WebMCP execution transport uncertainty", () => {
+  it.each([
+    ["name", { name: "TimeoutError" }, "timed_out"],
+    ["code", { code: "ETIMEDOUT" }, "timed_out"],
+    ["nested status", { reason: { status: "timed_out" } }, "timed_out"],
+    ["message only", {}, "failed"],
+  ] as const)("preserves %s classification through the client", async (_label, identity, kind) => {
+    dispatch.mockRejectedValueOnce(
+      new Error("transport wrapper", {
+        cause: Object.assign(new Error("timed out. Retry the browser tool once."), identity),
+      }),
+    );
+    const error: unknown = await browserWebMcp(undefined, "execute", request).catch(
+      (cause: unknown) => cause,
+    );
+    expect(resolveToolExecutionErrorKind(error)).toBe(kind);
+    expect(formatErrorMessage(error)).toContain("WebMCP execution outcome unknown");
+    expect(formatErrorMessage(error)).not.toMatch(/retry the browser tool/i);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["timeout", "cancel"])(
     "does not invite a retry after local dispatch %s",
     async (failure) => {

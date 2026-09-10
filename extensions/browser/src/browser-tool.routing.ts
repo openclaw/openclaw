@@ -157,9 +157,9 @@ export function resolveBrowserToolTimeoutMs({
   if (PERSISTENT_TAB_ACTIONS.has(action) && (usesPersistentPlaywright || isNodeProxy)) {
     return resolvedBrowser.actionTimeoutMs;
   }
-  // The WebMCP route budgets each Chrome MCP call on actionTimeoutMs. The outer client must
-  // outlast that budget so "outcome unknown" is reserved for lost responses rather than routine
-  // slow page tools, and so the client abort does not tear down the MCP session mid-execution.
+  // Allow one MCP action budget plus transport slack instead of the client's 5 s default.
+  // Sequential discovery and verification calls can still exhaust this total caller budget;
+  // execution timeout handling must preserve uncertainty even with the longer default.
   if (WEBMCP_ACTIONS.has(action)) {
     return resolvedBrowser.actionTimeoutMs + BROWSER_ACTION_TRANSPORT_SLACK_MS;
   }

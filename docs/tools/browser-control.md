@@ -72,9 +72,11 @@ the error's cause without that advice. Input validation performed locally before
 sending the request still reports its specific error. Discovery errors retain
 their diagnostic details.
 
-Unless `timeoutMs` is given, the agent tool waits `browser.actionTimeoutMs` plus
-5 s of transport slack for WebMCP actions, which outlasts the route's per-call
-Chrome MCP budget. The CLI uses the Gateway `--timeout` option (default 30000 ms).
+Unless `timeoutMs` is given, the agent tool waits 65 s for WebMCP actions: the
+internal 60 s Browser action budget plus 5 s of transport slack. This is a total
+caller budget; the route makes several sequential Chrome MCP calls, so their
+combined time can still exceed it. An execution timeout remains an unknown outcome.
+The CLI uses the Gateway `--timeout` option (default 30000 ms).
 
 ## Control API (optional)
 
