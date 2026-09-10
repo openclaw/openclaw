@@ -28,15 +28,11 @@ import { isValidAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
 import { isPersistentOpenClawAgentDatabasePath } from "./openclaw-agent-db-registry.js";
-import {
-  assertOpenClawAgentCurrentRuntimeSchema,
-  assertCanonicalAgentPersistenceVersion,
-  readExistingAgentSchemaMeta,
-} from "./openclaw-agent-db-schema-helpers.js";
+import { assertOpenClawAgentCurrentRuntimeSchema } from "./openclaw-agent-db-schema-helpers.js";
+import { preflightOpenClawAgentDatabaseTargets } from "./openclaw-database-preflight-agent-targets.js";
 import type {
   DeferredStateSchemaPublication,
   IncompatibleOpenClawDatabase,
-  IndeterminateOpenClawDatabase,
   OpenClawAgentSchemaPreflightResult,
   OpenClawDatabaseSchemaPreflight,
   OpenClawStateSchemaPreflightResult,
@@ -111,16 +107,6 @@ function describeDeferredStateSchemaPublication(
 type AgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
 type OpenClawDatabaseSchemaPreflightOperation = "doctor" | "gateway-restart" | "gateway-startup";
-
-type AgentDatabaseSchemaInspection = {
-  incompatible?: IncompatibleOpenClawDatabase;
-  indeterminate?: IndeterminateOpenClawDatabase;
-  pendingMigration?: Omit<IncompatibleOpenClawDatabase, "writerAppVersion">;
-};
-
-// Snapshot preparation can be disk-heavy; overlap one additional agent
-// without fanning out across every registered database.
-const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
 
 function formatDoctorIncompatibleDatabase(database: IncompatibleOpenClawDatabase): string {
   const agent = database.agentId ? ` for agent ${database.agentId}` : "";
@@ -656,153 +642,18 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       path: candidatePath,
     })),
   ];
-  const inspectedAgentPaths = new Set<string>();
-  const inspectedAgentTargets = new Set<string>();
-  const inspectAgent = async (
-    row: (typeof inspectionTargets)[number],
-  ): Promise<AgentDatabaseSchemaInspection | undefined> => {
-    const agentPath = row.path;
-    const presence = inspectCandidatePresence(agentPath);
-    if (presence.status === "absent") {
-      return undefined;
-    }
-    if (presence.status === "indeterminate") {
-      return { indeterminate: { kind: "agent", path: agentPath, reason: presence.reason } };
-    }
-    let agentDatabase: DatabaseSync | undefined;
-    let agentSnapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
-    try {
-      // Preserve SQLite's filesystem traversal through symlink/.. locators.
-      const realAgentPath = realpathSync.native(agentPath);
-      const inspectionKey = `${realAgentPath}\0${row.agentId ?? ""}`;
-      if (
-        inspectedAgentTargets.has(inspectionKey) ||
-        (row.agentId === undefined && inspectedAgentPaths.has(realAgentPath))
-      ) {
-        return undefined;
-      }
-      inspectedAgentPaths.add(realAgentPath);
-      inspectedAgentTargets.add(inspectionKey);
-      // Live agents keep committing during inspection. Online backup preserves
-      // database/WAL contents while allowing SQLite to update SHM read marks.
-      agentSnapshot = await prepareSqliteReadOnlyLocation(realAgentPath, {
-        signal: options.signal,
-      });
-      options.signal?.throwIfAborted();
-      agentDatabase = openNodeSqliteDatabase(agentSnapshot.location, {
-        readOnly: true,
-      });
-      agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-      const agentVersion = readSqliteUserVersion(agentDatabase);
-      const pendingMigration =
-        agentVersion < options.supportedVersions.agent
-          ? {
-              kind: "agent" as const,
-              path: agentPath,
-              ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
-              foundVersion: agentVersion,
-              supportedVersion: options.supportedVersions.agent,
-            }
-          : undefined;
-      if (agentVersion <= options.supportedVersions.agent) {
-        if (options.requireStartupMigrationReadiness) {
-          assertSqliteIntegrity(agentDatabase, agentPath);
-          assertCanonicalAgentPersistenceVersion(agentDatabase, agentPath, agentVersion);
-        }
-        const agentId =
-          row.agentId ??
-          (options.requireStartupMigrationReadiness
-            ? readExistingAgentSchemaMeta(agentDatabase)?.agentId
-            : undefined);
-        if (
-          options.verifyCurrentSchemaShape === true &&
-          agentId != null &&
-          (!options.requireStartupMigrationReadiness || agentVersion > 0)
-        ) {
-          assertOpenClawAgentDatabaseForMaintenance(agentDatabase, {
-            agentId,
-            pathname: agentPath,
-          });
-        }
-        return pendingMigration ? { pendingMigration } : undefined;
-      }
-      const writerAppVersion = readWriterAppVersion(agentDatabase);
-      return {
-        incompatible: {
-          kind: "agent",
-          path: agentPath,
-          ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
-          foundVersion: agentVersion,
-          supportedVersion: options.supportedVersions.agent,
-          ...(writerAppVersion ? { writerAppVersion } : {}),
-        },
-      };
-    } catch (error) {
-      if (options.signal?.aborted || options.requireStartupMigrationReadiness) {
-        throw error;
-      }
-      return {
-        indeterminate: {
-          kind: "agent",
-          path: agentPath,
-          reason: formatErrorMessage(error),
-        },
-      };
-    } finally {
-      try {
-        agentDatabase?.close();
-      } finally {
-        agentSnapshot?.cleanup();
-      }
-    }
-  };
-
-  const inspections: Array<AgentDatabaseSchemaInspection | undefined> = [];
-  const failures = new Map<number, unknown>();
-  let nextInspectionIndex = 0;
-  const worker = async (): Promise<void> => {
-    while (!options.signal?.aborted && failures.size === 0) {
-      const index = nextInspectionIndex;
-      nextInspectionIndex += 1;
-      const row = inspectionTargets[index];
-      if (!row) {
-        return;
-      }
-      try {
-        inspections[index] = await inspectAgent(row);
-      } catch (error) {
-        failures.set(index, error);
-        return;
-      }
-    }
-  };
-
-  // Cancellation and fatal inspection errors stop admission, but workers that
-  // already own a snapshot must finish their close and cleanup before preflight settles.
-  await Promise.all(
-    Array.from(
-      { length: Math.min(AGENT_DATABASE_PREFLIGHT_CONCURRENCY, inspectionTargets.length) },
-      () => worker(),
-    ),
-  );
-  for (let index = 0; index < inspectionTargets.length; index += 1) {
-    const failure = failures.get(index);
-    if (failure !== undefined) {
-      throw failure;
-    }
-  }
-  options.signal?.throwIfAborted();
-
-  for (const inspection of inspections) {
-    if (inspection?.pendingMigration) {
-      (result.pendingMigrations ??= []).push(inspection.pendingMigration);
-    }
-    if (inspection?.incompatible) {
-      result.incompatible.push(inspection.incompatible);
-    }
-    if (inspection?.indeterminate) {
-      result.indeterminate.push(inspection.indeterminate);
-    }
+  const agentResults = await preflightOpenClawAgentDatabaseTargets({
+    inspectionTargets,
+    inspectCandidatePresence,
+    requireStartupMigrationReadiness: options.requireStartupMigrationReadiness,
+    signal: options.signal,
+    supportedVersion: options.supportedVersions.agent,
+    verifyCurrentSchemaShape: options.verifyCurrentSchemaShape,
+  });
+  result.incompatible.push(...agentResults.incompatible);
+  result.indeterminate.push(...agentResults.indeterminate);
+  if (agentResults.pendingMigrations.length > 0) {
+    (result.pendingMigrations ??= []).push(...agentResults.pendingMigrations);
   }
   return result;
 }
