@@ -84,6 +84,9 @@ describe("Crabbox runtime preflight cleanup", () => {
       const runCommand = vi
         .spyOn(processRuntime, "runCommandWithTimeout")
         .mockImplementation(async (argv) => {
+          if (argv[1] === "--version") {
+            return commandResult({ stdout: "0.55.0" });
+          }
           expect(argv.slice(1)).toEqual(["config", "show", "--json"]);
           if (failure === "spawn") {
             throw new Error("synthetic executable could not start");
@@ -108,7 +111,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       });
       await restarted.reconcileOnce();
       expect(support.testState.store.get(failed.environmentId)).toEqual(failed);
-      expect(runCommand).toHaveBeenCalledTimes(failure === "setup-env" ? 0 : 1);
+      expect(runCommand).toHaveBeenCalledTimes(failure === "setup-env" ? 0 : 2);
     },
   );
 
@@ -228,6 +231,9 @@ describe("Crabbox runtime preflight cleanup", () => {
     let stops = 0;
     const calls: string[][] = [];
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "0.55.0" });
+      }
       calls.push(argv);
       if (argv[1] === "config") {
         return changed && "result" in scenario
