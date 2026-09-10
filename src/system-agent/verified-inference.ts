@@ -659,6 +659,22 @@ async function resolveCurrentAuthFingerprint(params: {
   return fingerprintResolvedProviderAuth(auth);
 }
 
+export function assertEmbeddedHarnessMatch(params: {
+  configuredHarnessId?: string;
+  reportedHarnessId?: string;
+}): void {
+  if (
+    params.reportedHarnessId &&
+    params.configuredHarnessId &&
+    params.configuredHarnessId !== "auto" &&
+    params.reportedHarnessId !== params.configuredHarnessId
+  ) {
+    throw new Error(
+      `The successful inference run used agent harness "${params.reportedHarnessId}" instead of "${params.configuredHarnessId}".`,
+    );
+  }
+}
+
 export async function createSystemAgentVerifiedInferenceBinding(params: {
   configuredRoute: SystemAgentConfiguredRoute;
   executionRoute: SystemAgentConfiguredRoute;
@@ -696,16 +712,7 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
     if ((!configuredHarnessId || configuredHarnessId === "auto") && !reportedHarnessId) {
       throw new Error("The successful inference run did not report its exact agent harness.");
     }
-    if (
-      reportedHarnessId &&
-      configuredHarnessId &&
-      configuredHarnessId !== "auto" &&
-      reportedHarnessId !== configuredHarnessId
-    ) {
-      throw new Error(
-        `The successful inference run used agent harness "${reportedHarnessId}" instead of "${configuredHarnessId}".`,
-      );
-    }
+    assertEmbeddedHarnessMatch({ configuredHarnessId, reportedHarnessId });
     successfulHarnessId = reportedHarnessId ?? configuredHarnessId;
   }
   const execution =

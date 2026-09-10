@@ -6778,6 +6778,96 @@ describe("verifySetupInference", () => {
       await removeOAuthTestTempRoot(stateDir);
     }
   });
+  it("surfaces the exact harness mismatch to bound verification", async () => {
+    const stateDir = await suiteTempRootTracker.make("case");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const profileId = "openai:default";
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai",
+      access: "test-access",
+      refresh: "test-refresh",
+      expires: Date.now() + 3_600_000,
+    };
+    const authFingerprint = fingerprintAuthProfileCredential({ profileId, credential });
+    if (!authFingerprint) {
+      throw new Error("missing external Codex auth fingerprint");
+    }
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+      plugins: { entries: { codex: { enabled: true } } },
+    } satisfies OpenClawConfig;
+    const externalStore = vi.fn(
+      (_agentDir?: string, options?: { externalCliProviderIds?: Iterable<string> }) => {
+        const exposeCodexProfile = Array.from(options?.externalCliProviderIds ?? []).includes(
+          "openai",
+        );
+        return {
+          version: 1,
+          profiles: exposeCodexProfile ? { [profileId]: credential } : {},
+          runtimeExternalProfileIds: exposeCodexProfile ? [profileId] : [],
+          runtimeExternalProfileIdsAuthoritative: true,
+        };
+      },
+    );
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+      params.onSuccessfulAuthBinding?.({
+        authProfileId: profileId,
+        agentHarnessId: "openclaw",
+        authFingerprint,
+        modelId: "gpt-5.6-sol",
+        modelApi: "openai-responses",
+      });
+      return {
+        meta: {
+          durationMs: 1,
+          finalAssistantVisibleText: "OK",
+          executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.6-sol" },
+        },
+      };
+    });
+    const readConfigFileSnapshot = vi.fn(async () => ({
+      exists: true,
+      valid: true,
+      config,
+      runtimeConfig: config,
+      sourceConfig: config,
+    }));
+    const validateAgentHarnessRuntimeArtifact = vi.fn(async () => true);
+    const createVerifiedInferenceBinding = vi.fn(
+      (params: Parameters<typeof createSystemAgentVerifiedInferenceBinding>[0]) =>
+        createSystemAgentVerifiedInferenceBinding({
+          ...params,
+          deps: { ...params.deps, validateAgentHarnessRuntimeArtifact },
+        }),
+    );
+    try {
+      const verification = await verifySetupInference({
+        bindSession: true,
+        deps: {
+          readConfigFileSnapshot: readConfigFileSnapshot as never,
+          loadAuthProfileStoreForRuntime: externalStore as never,
+          ensureAuthProfileStore: externalStore as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          createSystemAgentVerifiedInferenceBinding: createVerifiedInferenceBinding,
+        },
+      });
+      expect(verification).toMatchObject({ ok: false, status: "auth" });
+      if (verification.ok) {
+        throw new Error("expected the harness mismatch to fail bound verification");
+      }
+      expect(verification.error).toContain('used agent harness "openclaw" instead of "codex"');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("does not repeat an unbound verification after automatic profile selection", async () => {
     const config = {

@@ -15,6 +15,7 @@ import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js"
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import { parseRef } from "./setup-inference-plan-helpers.js";
 import {
+  assertEmbeddedHarnessMatch,
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceDeps,
@@ -91,6 +92,12 @@ export async function revalidateSetupInferenceOwner(params: {
   const successfulHarnessId =
     params.auth.agentHarnessId?.trim() ||
     (configuredHarnessId && configuredHarnessId !== "auto" ? configuredHarnessId : undefined);
+  if (params.route.runner === "embedded") {
+    assertEmbeddedHarnessMatch({
+      configuredHarnessId,
+      reportedHarnessId: params.auth.agentHarnessId?.trim() || undefined,
+    });
+  }
   const createBinding = () =>
     (
       params.deps.createSystemAgentVerifiedInferenceBinding ??
