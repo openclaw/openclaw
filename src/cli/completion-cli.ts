@@ -31,7 +31,7 @@ import { publishOutputFileAtomically } from "./output-file.runtime.js";
 import { getCoreCliCompletionGroups } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
 import { removeCommandGroupNames } from "./program/register-command-groups.js";
-import { getSubCliEntries, registerSubCliByNameCore } from "./program/register.subclis-core.js";
+import { getSubCliCompletionGroups } from "./program/register.subclis-core.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
   if (shell === "zsh") {
@@ -153,16 +153,13 @@ function writeCompletionRegistrationWarning(message: string): void {
 }
 
 async function registerSubcommandsForCompletion(program: Command): Promise<void> {
-  const entries = getSubCliEntries();
-  for (const entry of entries) {
-    if (entry.name === "completion") {
-      continue;
-    }
+  for (const { name, entry } of getSubCliCompletionGroups()) {
     try {
-      await registerSubCliByNameCore(program, entry.name, process.argv, { purpose: "completion" });
+      removeCommandGroupNames(program, entry);
+      await entry.register(program);
     } catch (error) {
       writeCompletionRegistrationWarning(
-        `skipping subcommand \`${entry.name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
+        `skipping subcommand \`${name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
