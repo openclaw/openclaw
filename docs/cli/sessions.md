@@ -309,6 +309,12 @@ sent through the Gateway so it shares the same session-store writer as runtime
 traffic. Use `--store <path>` for explicit offline repair of a SQLite database or
 legacy store selector.
 
+When the selected store's parent directory is named `agent`, transcript artifacts
+live in the sibling `sessions` directory. This also applies to custom paths:
+`/backup/agent/sessions.json` selects `/backup/agent/openclaw-agent.sqlite`, whose
+archives live in `/backup/sessions`. Cleanup measures and prunes that same artifact
+directory whether you select the legacy path or the SQLite file.
+
 Offline cleanup loads trusted, permitted harness plugins so their session-owned
 resources are reclaimed with the deleted rows, even if the agent now uses a
 different model. Explicitly disabled or untrusted plugins are not run. If their
