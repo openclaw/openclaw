@@ -118,7 +118,7 @@ function resolvePendingRuntime(params: {
 }
 
 function resolveSubmittedModelRef(params: {
-  data: ModelsProviderData;
+  data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
   parsed: DiscordModelPickerState;
   quickModels: string[];
   requireModelToken: boolean;
