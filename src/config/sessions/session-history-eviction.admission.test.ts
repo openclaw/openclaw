@@ -210,12 +210,16 @@ it.each([
       }
       observingAdmission = true;
       void own(
-        runExclusiveSqliteSessionWrite(options, async () => {
-          events.push("blocker-entered");
-          blockerEntered.resolve();
-          await releaseBlocker.promise;
-          events.push("blocker-released");
-        }),
+        runExclusiveSqliteSessionWrite(
+          options,
+          async () => {
+            events.push("blocker-entered");
+            blockerEntered.resolve();
+            await releaseBlocker.promise;
+            events.push("blocker-released");
+          },
+          "session.history.eviction-prepare",
+        ),
       );
       await blockerEntered.promise;
       preparationReady.resolve();
@@ -240,10 +244,14 @@ it.each([
     await preparationReady.promise;
     await yieldToEventLoop();
     const laterWriter = own(
-      runExclusiveSqliteSessionWrite(options, async () => {
-        laterWriterRan = true;
-        events.push("later-writer");
-      }),
+      runExclusiveSqliteSessionWrite(
+        options,
+        async () => {
+          laterWriterRan = true;
+          events.push("later-writer");
+        },
+        "session.history.eviction-prepare",
+      ),
     );
     expect(laterWriterRan).toBe(false);
     releaseBlocker.resolve();

@@ -166,6 +166,7 @@ describe("device worker placement dispatch", () => {
       "/gateway/workspace",
       undefined,
       undefined,
+      undefined,
     );
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
@@ -238,6 +239,7 @@ describe("device worker placement dispatch", () => {
       "/gateway/workspace",
       undefined,
       undefined,
+      undefined,
     );
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
       ?.value;
@@ -273,6 +275,7 @@ describe("device worker placement dispatch", () => {
       undefined,
       "remote-exec",
       "/gateway/workspace",
+      undefined,
       undefined,
       undefined,
     );

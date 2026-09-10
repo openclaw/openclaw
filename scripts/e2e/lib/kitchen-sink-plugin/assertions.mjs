@@ -333,6 +333,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     'channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes',
     'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
     "memory prompt supplement registration missing builder",
+    "MCP server connection resolver registration missing serverName or resolve",
     "model catalog provider registration missing provider",
     "session extension registration requires namespace and description",
     "session scheduler job registration requires unique id, sessionKey, and kind",

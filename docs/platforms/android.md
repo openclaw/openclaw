@@ -456,3 +456,4 @@ WhatsApp, WhatsApp Business, Telegram, Telegram X, Discord, and Signal notificat
 - [iOS app](/platforms/ios)
 - [Nodes](/nodes)
 - [Android node troubleshooting](/nodes/troubleshooting)
+- [Stable HTTPS URL](/gateway/stable-https-url) — give a loopback-only Gateway a stable, tailnet-only HTTPS URL with Tailscale Serve

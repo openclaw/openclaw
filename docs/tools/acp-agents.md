@@ -174,3 +174,4 @@ still resolves. Each entry points at the page that now holds the content.
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
 - [`openclaw acp` (bridge mode)](/cli/acp)
 - [Sub-agents](/tools/subagents)
+- [Steer](/tools/steer) — redirect a running agent mid-task

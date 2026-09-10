@@ -27,6 +27,7 @@ import type {
   AgentHarnessIsolatedCompletionParamsV2,
   AgentHarnessIsolatedCompletionResult,
 } from "./harness/types.js";
+import { runWithIsolatedCompletionResources } from "./isolated-completion-work.js";
 import { ensureAuthProfileStore } from "./model-auth.js";
 import {
   isCliRuntimeAliasForProvider,
@@ -34,6 +35,7 @@ import {
 } from "./model-runtime-aliases.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  type PreparedModelRuntimeLease,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import {
@@ -398,6 +400,16 @@ async function prepareHostAuthorization(params: {
 export async function runIsolatedCompletion(
   params: RunIsolatedCompletionParams,
 ): Promise<IsolatedCompletionResult> {
+  return await runWithIsolatedCompletionResources((acceptLease, captureWorkContext) =>
+    runIsolatedCompletionOwned(params, acceptLease, captureWorkContext),
+  );
+}
+
+async function runIsolatedCompletionOwned(
+  params: RunIsolatedCompletionParams,
+  acceptLease: (lease: PreparedModelRuntimeLease) => void,
+  captureWorkContext: () => void,
+): Promise<IsolatedCompletionResult> {
   // Snapshot caller choices and validators before admission yields; callbacks expire on close.
   const input = {
     ...params,
@@ -447,9 +459,11 @@ export async function runIsolatedCompletion(
       ],
     },
   );
+  acceptLease(lease);
   try {
     assertCurrent();
     const run = async (): Promise<IsolatedCompletionResult> => {
+      captureWorkContext();
       // A new admission owns config and directories; the caller keeps its explicit route and profile.
       const context = {
         config: lease.snapshot.config,
@@ -724,6 +738,5 @@ export async function runIsolatedCompletion(
     return result;
   } finally {
     closed = true;
-    lease.release();
   }
 }

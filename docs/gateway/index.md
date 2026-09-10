@@ -69,7 +69,7 @@ Gateway config reload watches the active config file path (resolved from profile
 - One always-on process for routing, control plane, and channel connections.
 - Single multiplexed port for:
   - WebSocket control/RPC
-  - HTTP APIs (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
+  - HTTP APIs (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, [`/tools/invoke`](/gateway/tools-invoke-http-api))
   - Plugin HTTP routes, such as optional `/api/v1/admin/rpc`
   - Control UI and hooks
 - Default bind mode: `loopback`. Inside a detected container environment the effective default is `auto` (resolves to `0.0.0.0` for port-forwarding), unless Tailscale serve/funnel is active, which always forces `loopback`.
@@ -402,3 +402,4 @@ For full diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooti
 - [Authentication](/gateway/authentication)
 - [Remote access](/gateway/remote)
 - [Secrets management](/gateway/secrets)
+- [CLI backends](/gateway/cli-backends) — running an external CLI agent as a Gateway backend

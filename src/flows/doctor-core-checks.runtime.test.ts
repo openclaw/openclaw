@@ -5,6 +5,7 @@ import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/
 import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
+import { collectNodeRuntimeFindings } from "../commands/node-runtime-diagnostics.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -101,7 +102,6 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 const {
   collectGatewayDaemonFindings,
   collectGatewayHealthFindings,
-  collectNodeRuntimeFindings,
   collectProviderCatalogProjectionFindings,
   collectRuntimeToolSchemaFindings,
 } = await import("./doctor-core-checks.runtime.js");
@@ -958,7 +958,7 @@ describe("doctor gateway runtime checks", () => {
     },
   ])(
     "reports current Node $version probe outcome as $severity",
-    ({ version, text, severity, message }) => {
+    async ({ version, text, severity, message }) => {
       mocks.detectRuntime.mockReturnValue({
         kind: "node",
         version,
@@ -969,12 +969,13 @@ describe("doctor gateway runtime checks", () => {
         sqliteProbe: { available: true, version: "3.53.4", text, blob: true, json: true },
       });
 
-      expect(collectNodeRuntimeFindings()).toEqual([
+      expect(await collectNodeRuntimeFindings({ OPENCLAW_PROFILE: "diagnostic-fixture" })).toEqual([
         expect.objectContaining({
           checkId: "core/doctor/node-runtime",
           severity,
           message: expect.stringContaining(message),
           target: "/opt/runtime/bin/node",
+          ...(severity === "error" ? { fixHint: expect.stringContaining("nvm install 26") } : {}),
         }),
       ]);
     },
@@ -1017,6 +1018,7 @@ describe("doctor gateway runtime checks", () => {
           severity,
           message,
           target: "/opt/runtime/bin/node",
+          ...(severity === "warning" ? { fixHint: expect.stringContaining("nvm install 26") } : {}),
         }),
       ]);
     },

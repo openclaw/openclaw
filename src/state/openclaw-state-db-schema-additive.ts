@@ -215,6 +215,20 @@ export function ensureWorkerEnvironmentNodeEnrollmentSchema(database: DatabaseSy
   ensureColumn(database, "worker_environments", "node_device_id TEXT");
 }
 
+/** Register fixed build ownership on the dedicated node's current transaction. */
+export function ensureNodeWorkerPreparedWorkspaceSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS node_worker_prepared_workspaces (",
+  );
+  const marker = "\n) STRICT;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("Node prepared workspace schema marker is missing.");
+  }
+  // Registration can still roll back; never cache a nested transaction's DDL.
+  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical first-use DDL; workspace rows use Kysely.
+}
+
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
   if (typeof recordJson !== "string") {
     return null;

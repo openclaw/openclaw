@@ -1126,9 +1126,9 @@ const nodeRuntimeCheck: HealthCheck = {
   description:
     "Node SQLite capabilities and version support are represented as structured findings.",
   source: "doctor",
-  async detect() {
-    const runtime = await loadDoctorCoreChecksRuntimeModule();
-    return runtime.collectNodeRuntimeFindings();
+  async detect(ctx) {
+    const { collectNodeRuntimeFindings } = await import("../commands/node-runtime-diagnostics.js");
+    return collectNodeRuntimeFindings(ctx.env);
   },
 };
 

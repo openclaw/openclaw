@@ -696,7 +696,9 @@ function ensureAgentSchema(
       }
     });
   } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+    if (db.isOpen) {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
   }
 }
 
@@ -739,8 +741,7 @@ export function migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(
   options: OpenClawAgentDatabaseOptions,
 ): void {
   const targetVersion = AGENT_MEDIA_SCHEMA_VERSION - 1;
-  const userVersion = readSqliteUserVersion(db);
-  if (userVersion > targetVersion) {
+  if (readSqliteUserVersion(db) > targetVersion) {
     return;
   }
   const agentId = normalizeAgentId(options.agentId);

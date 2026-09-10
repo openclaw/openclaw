@@ -408,3 +408,4 @@ Diff rendering engine powered by [Diffs](https://diffs.com).
 - [Browser](/tools/browser)
 - [Plugins](/tools/plugin)
 - [Tools overview](/tools)
+- [`apply_patch`](/tools/apply-patch) — the tool that produces these edits

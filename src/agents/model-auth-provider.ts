@@ -87,6 +87,8 @@ export function resolveScopedAuthProfileStore(params: {
   preferredProfile?: string;
 }): AuthProfileStore {
   return ensureAuthProfileStore(params.agentDir, {
+    migrationProvider: params.provider,
+    config: params.cfg,
     profileId: params.profileId,
     externalCli: externalCliDiscoveryForProviderAuth(params),
   });
@@ -97,9 +99,9 @@ function assertProviderAuthReady(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): void {
-  // Pending credential files own this agent's auth route until Doctor commits
+  // Pending credential files own their providers' auth routes until Doctor commits
   // and archives them; do not fall through to env/config credentials.
-  assertAuthProfileMigrationReady(params.agentDir);
+  assertAuthProfileMigrationReady(params.agentDir, undefined, params.provider, params.cfg);
   // A failed explicit ref owns the provider. Stop before profile/env discovery so requests cannot
   // silently switch credentials while this configured owner is cold.
   assertRuntimeProviderSecretOwnerAvailable({ cfg: params.cfg, provider: params.provider });

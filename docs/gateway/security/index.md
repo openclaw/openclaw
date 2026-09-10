@@ -48,8 +48,14 @@ Harden a deployment:
 Expose and operate:
 
 - [Gateway exposure runbook](/gateway/security/exposure-runbook) - Pre-flight and rollback checklist before exposing the Gateway beyond loopback.
+- [Trusted proxy auth](/gateway/trusted-proxy-auth) - Running the Gateway behind a reverse proxy that supplies the operator identity.
 - [Rate limiting](/gateway/security/rate-limiting) - Every Gateway rate limit: lockouts, throttles, caps, and cooldowns.
 - [Operator incident response](/gateway/security/operator-incident-response) - Contain, rotate, audit, and collect evidence after a suspected compromise.
+
+Run it from the CLI:
+
+- [`openclaw security`](/cli/security) - Run the audit, read findings, and apply the supported auto-fixes.
+- [`openclaw policy`](/cli/policy) - Inspect and test the tool policy the guidance above configures.
 
 ## Where each section moved
 

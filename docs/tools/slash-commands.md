@@ -631,6 +631,9 @@ See [BTW side questions](/tools/btw) for the full behavior.
   <Card title="Steer" href="/tools/steer" icon="compass">
     Guide the agent mid-run with `/steer`.
   </Card>
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="sliders">
+    Settings that change how slash commands are resolved and gated.
+  </Card>
   <Card title="OpenProse migration" href="/prose" icon="pen-nib">
     Where the removed `/prose` command went.
   </Card>

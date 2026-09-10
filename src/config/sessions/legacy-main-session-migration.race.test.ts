@@ -174,6 +174,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
               entered.resolve();
               await resume.promise;
             },
+            "session-migration.legacy-main-in-place",
           );
           await entered.promise;
           race.queued = (pathname) => {

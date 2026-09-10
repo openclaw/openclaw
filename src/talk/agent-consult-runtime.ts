@@ -92,12 +92,14 @@ export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(params: {
 
   remember(params.sessionKey, params.agentId, params.storePath);
   const requesterSessionKey = params.spawnedBy?.trim();
-  if (requesterSessionKey) {
-    const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId ?? params.agentId;
-    remember(requesterSessionKey, requesterAgentId);
+  const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
+  const targetAgentId = parseAgentSessionKey(params.sessionKey)?.agentId ?? params.agentId;
+  if (requesterSessionKey && (!requesterAgentId || requesterAgentId === targetAgentId)) {
+    const requesterAgent = requesterAgentId ?? params.agentId;
+    remember(requesterSessionKey, requesterAgent);
     const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
     if (baseSessionKey && baseSessionKey !== requesterSessionKey) {
-      remember(baseSessionKey, requesterAgentId);
+      remember(baseSessionKey, requesterAgent);
     }
   }
 

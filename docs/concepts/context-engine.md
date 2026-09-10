@@ -86,6 +86,11 @@ Every time OpenClaw runs a model prompt, the context engine participates at four
 
 Engines can also implement an optional `maintain()` method for transcript maintenance (safe rewrites via `runtimeContext.rewriteTranscriptEntries()`) after bootstrap, a successful turn, or compaction. Set `info.turnMaintenanceMode: "background"` to run it as deferred work instead of blocking the reply.
 
+When queued budget compaction accepts background maintenance, it keeps the prepared
+runtime alive through maintenance, coalesced reruns, and engine disposal. Acceptance
+does not mean cleanup has finished. Return asynchronous work from engine methods
+and `dispose()` so the host can join it before releasing their resources.
+
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
 ### Subagent lifecycle (optional)

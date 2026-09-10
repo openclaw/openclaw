@@ -158,9 +158,13 @@ it.each(["delete", "artifact cleanup"] as const)(
     ).toBe(true);
     let followingWriterEntered = false;
     const following = own(
-      runExclusiveSqliteSessionWrite(f.databaseOptions, async () => {
-        followingWriterEntered = true;
-      }),
+      runExclusiveSqliteSessionWrite(
+        f.databaseOptions,
+        async () => {
+          followingWriterEntered = true;
+        },
+        "session.transcript.batch",
+      ),
     );
     await yieldToEventLoop();
     expect(followingWriterEntered).toBe(false);
@@ -232,10 +236,14 @@ it("retains the selected state owner while cold deletion waits in the FIFO", asy
   const releaseBlocker = createDeferred();
   releases.push(() => releaseBlocker.resolve());
   const blocker = own(
-    runExclusiveSqliteSessionWrite(f.databaseOptions, async () => {
-      blockerEntered.resolve();
-      await releaseBlocker.promise;
-    }),
+    runExclusiveSqliteSessionWrite(
+      f.databaseOptions,
+      async () => {
+        blockerEntered.resolve();
+        await releaseBlocker.promise;
+      },
+      "session.transcript.batch",
+    ),
   );
   await blockerEntered.promise;
   const admission = observeColdAdmission(f.databaseOptions.path);

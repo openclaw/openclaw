@@ -614,3 +614,4 @@ See [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) for detail
 - [Presence](/concepts/presence) — agent presence and availability
 - [Session](/concepts/session) — session isolation and routing
 - [Sub-agents](/tools/subagents) — spawning background agent runs
+- [`openclaw agents`](/cli/agents) — create and inspect agents from the CLI

@@ -243,6 +243,7 @@ async function fixture(kind: "shared" | "canonical-nonshared" | "custom-nonshare
         sessionKey: "",
       }),
       async () => {},
+      "session.history.eviction-prepare",
     ),
   );
   await retain(

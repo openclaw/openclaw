@@ -10,7 +10,6 @@ import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-n
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isIncognitoOpenClawAgentDatabase,
-  openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -44,7 +43,11 @@ import {
   addRetainedWindowSessionReferences,
   collectSessionStateIdsForEntry,
 } from "./session-accessor.sqlite-references.js";
-import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import {
+  cloneSessionEntry,
+  getSessionKysely,
+  withSqliteSessionDatabase,
+} from "./session-accessor.sqlite-scope.js";
 import {
   parseSessionEntryJson as parseSessionEntryRow,
   sessionEntryMetadataJson,
@@ -89,10 +92,7 @@ export function shouldRemoveSessionEntry(
   ) {
     return false;
   }
-  if (removal.expectedUpdatedAt !== undefined && entry.updatedAt !== removal.expectedUpdatedAt) {
-    return false;
-  }
-  return true;
+  return removal.expectedUpdatedAt === undefined || entry.updatedAt === removal.expectedUpdatedAt;
 }
 
 function sessionKeySegmentStartsWith(sessionKey: string, prefix: string): boolean {
@@ -353,157 +353,158 @@ export async function projectSessionEntryLifecycleMutation(
     upserts: readonly SessionEntryLifecycleUpsert[];
   },
 ): Promise<ProjectedLifecycleMutation> {
-  // openclaw-agent-db.ts cache rule: keep handles within synchronous sections.
-  const removalDatabase = openOpenClawAgentDatabase(databaseOptions);
-  const store = readSessionEntryStore(removalDatabase, {
-    allowCanonicalRepair: params.allowCanonicalRepair === true,
-    sessionKeys: [
-      ...params.removals.map((removal) =>
-        removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
-      ),
-      ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
-    ],
-  });
-  const removedKeysToArchive = new Set<string>();
-  const changedSessionKeys = new Set<string>();
-  const projectedRemovals: ProjectedLifecycleMutation["removals"] = [];
-  for (const removal of params.removals) {
-    const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
-    let entry = removal.exactStoredKey || sessionKey ? store[sessionKey] : undefined;
-    if (removal.expectedRawEntryJson !== undefined) {
-      const currentRawEntryJson = readExactSessionEntryJson(removalDatabase, sessionKey);
-      if (currentRawEntryJson !== removal.expectedRawEntryJson) {
-        throw new Error(
-          `SQLite session entry changed before raw lifecycle removal for ${sessionKey}`,
-        );
+  return withSqliteSessionDatabase(databaseOptions, async (removalDatabase) => {
+    const store = readSessionEntryStore(removalDatabase, {
+      allowCanonicalRepair: params.allowCanonicalRepair === true,
+      sessionKeys: [
+        ...params.removals.map((removal) =>
+          removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
+        ),
+        ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
+      ],
+    });
+    const removedKeysToArchive = new Set<string>();
+    const changedSessionKeys = new Set<string>();
+    const projectedRemovals: ProjectedLifecycleMutation["removals"] = [];
+    for (const removal of params.removals) {
+      const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
+      let entry = removal.exactStoredKey || sessionKey ? store[sessionKey] : undefined;
+      if (removal.expectedRawEntryJson !== undefined) {
+        const currentRawEntryJson = readExactSessionEntryJson(removalDatabase, sessionKey);
+        if (currentRawEntryJson !== removal.expectedRawEntryJson) {
+          throw new Error(
+            `SQLite session entry changed before raw lifecycle removal for ${sessionKey}`,
+          );
+        }
+        entry = removal.expectedEntry ? cloneSessionEntry(removal.expectedEntry) : undefined;
       }
-      entry = removal.expectedEntry ? cloneSessionEntry(removal.expectedEntry) : undefined;
-    }
-    if (!shouldRemoveSessionEntry(entry, removal)) {
-      continue;
-    }
-    if (removal.expectedTranscriptSnapshot) {
-      const sessionId = entry.sessionId;
-      if (
-        !sessionId ||
-        !sqliteSessionStateDeleteSnapshotsEqual(
-          readSessionStateDeleteSnapshot(removalDatabase.db, sessionId),
-          removal.expectedTranscriptSnapshot,
-        )
-      ) {
-        // Classification happens before the lifecycle writer lane. A stale fact
-        // must become a no-op so newly live state is never archived and deleted.
+      if (!shouldRemoveSessionEntry(entry, removal)) {
         continue;
       }
+      if (removal.expectedTranscriptSnapshot) {
+        const sessionId = entry.sessionId;
+        if (
+          !sessionId ||
+          !sqliteSessionStateDeleteSnapshotsEqual(
+            readSessionStateDeleteSnapshot(removalDatabase.db, sessionId),
+            removal.expectedTranscriptSnapshot,
+          )
+        ) {
+          // Classification happens before the lifecycle writer lane. A stale fact
+          // must become a no-op so newly live state is never archived and deleted.
+          continue;
+        }
+      }
+      projectedRemovals.push({
+        // Capture each archive decision before an async builder can change its input.
+        archiveTranscript: removal.archiveRemovedTranscript === true,
+        expectedEntry: cloneSessionEntry(entry),
+        removal,
+        sessionKey,
+      });
+      if (removal.archiveRemovedTranscript === true) {
+        removedKeysToArchive.add(sessionKey);
+      }
+      changedSessionKeys.add(sessionKey);
+      delete store[sessionKey];
     }
-    projectedRemovals.push({
-      // Capture each archive decision before an async builder can change its input.
-      archiveTranscript: removal.archiveRemovedTranscript === true,
-      expectedEntry: cloneSessionEntry(entry),
-      removal,
-      sessionKey,
-    });
-    if (removal.archiveRemovedTranscript === true) {
-      removedKeysToArchive.add(sessionKey);
+    const upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"] = [];
+    for (const upsert of params.upserts) {
+      const sessionKey = upsert.sessionKey.trim();
+      if (!sessionKey) {
+        continue;
+      }
+      if (
+        upsert.requiresRemovalSessionKey &&
+        !projectedRemovals.some(
+          (removal) => removal.sessionKey === upsert.requiresRemovalSessionKey?.trim(),
+        )
+      ) {
+        continue;
+      }
+      const expectedEntry = store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined;
+      if (upsert.resetBoundary && !expectedEntry) {
+        throw new Error(
+          `Cannot append reset boundary without an existing session row: ${sessionKey}`,
+        );
+      }
+      const entry =
+        upsert.buildEntry === undefined
+          ? upsert.entry
+          : await upsert.buildEntry({
+              currentEntry: expectedEntry ? cloneSessionEntry(expectedEntry) : undefined,
+              sessionKey,
+            });
+      if (!entry) {
+        continue;
+      }
+      const cloned = cloneSessionEntry(entry);
+      store[sessionKey] = cloned;
+      changedSessionKeys.add(sessionKey);
+      upsertedEntries.push({
+        expectedEntry,
+        sessionKey,
+        entry: cloned,
+        ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
+        ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
+      });
     }
-    changedSessionKeys.add(sessionKey);
-    delete store[sessionKey];
-  }
-  const upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"] = [];
-  for (const upsert of params.upserts) {
-    const sessionKey = upsert.sessionKey.trim();
-    if (!sessionKey) {
-      continue;
+    if (projectedRemovals.length === 0) {
+      return { deletePlans: [], removals: projectedRemovals, upsertedEntries };
     }
-    if (
-      upsert.requiresRemovalSessionKey &&
-      !projectedRemovals.some(
-        (removal) => removal.sessionKey === upsert.requiresRemovalSessionKey?.trim(),
-      )
-    ) {
-      continue;
-    }
-    const expectedEntry = store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined;
-    if (upsert.resetBoundary && !expectedEntry) {
-      throw new Error(
-        `Cannot append reset boundary without an existing session row: ${sessionKey}`,
+    // Builders can close the original handle; admit the reference snapshot again.
+    return withSqliteSessionDatabase(databaseOptions, (database) => {
+      const referencedSessionIds = collectProjectedReferencedSessionIds({
+        database,
+        excludedSessionKeys: changedSessionKeys,
+        projectedStore: store,
+      });
+      const deletePlans = projectedRemovals.flatMap(({ archiveTranscript, expectedEntry: entry }) =>
+        planSessionStateAfterEntryRemoval({
+          archiveDirectory: params.archiveDirectory,
+          archiveTranscript,
+          database,
+          entry,
+          reason: "deleted",
+          referencedSessionIds,
+        }),
       );
-    }
-    const entry =
-      upsert.buildEntry === undefined
-        ? upsert.entry
-        : await upsert.buildEntry({
-            currentEntry: expectedEntry ? cloneSessionEntry(expectedEntry) : undefined,
-            sessionKey,
-          });
-    if (!entry) {
-      continue;
-    }
-    const cloned = cloneSessionEntry(entry);
-    store[sessionKey] = cloned;
-    changedSessionKeys.add(sessionKey);
-    upsertedEntries.push({
-      expectedEntry,
-      sessionKey,
-      entry: cloned,
-      ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
-      ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
+      const observedSnapshotsBySessionId = new Map(
+        projectedRemovals.flatMap(({ expectedEntry, removal }) =>
+          expectedEntry.sessionId && removal.expectedTranscriptSnapshot
+            ? [[expectedEntry.sessionId, removal.expectedTranscriptSnapshot] as const]
+            : [],
+        ),
+      );
+      for (const plan of deletePlans) {
+        const observedSnapshot = observedSnapshotsBySessionId.get(plan.sessionId);
+        if (observedSnapshot) {
+          // Keep the delete plan bound to classification, even if another process
+          // changes the transcript after the initial projection comparison.
+          plan.snapshot = observedSnapshot;
+        }
+      }
+      const plannedIds = new Set(deletePlans.map((plan) => plan.sessionId));
+      for (const sessionId of readSessionGenerationIdsForKeys(database, removedKeysToArchive)) {
+        if (plannedIds.has(sessionId)) {
+          continue;
+        }
+        const plan = planSessionStateDeleteIfUnreferenced({
+          archiveDirectory: params.archiveDirectory,
+          archiveTranscript: true,
+          database,
+          reason: "deleted",
+          referencedSessionIds,
+          sessionId,
+        });
+        if (plan) {
+          deletePlans.push(plan);
+          plannedIds.add(sessionId);
+        }
+      }
+      return { deletePlans, removals: projectedRemovals, upsertedEntries };
     });
-  }
-  if (projectedRemovals.length === 0) {
-    return { deletePlans: [], removals: projectedRemovals, upsertedEntries };
-  }
-  // openclaw-agent-db.ts cache rule: LRU eviction may close idle handles during buildEntry awaits.
-  const database = openOpenClawAgentDatabase(databaseOptions);
-  const referencedSessionIds = collectProjectedReferencedSessionIds({
-    database,
-    excludedSessionKeys: changedSessionKeys,
-    projectedStore: store,
   });
-  const deletePlans = projectedRemovals.flatMap(({ archiveTranscript, expectedEntry: entry }) =>
-    planSessionStateAfterEntryRemoval({
-      archiveDirectory: params.archiveDirectory,
-      archiveTranscript,
-      database,
-      entry,
-      reason: "deleted",
-      referencedSessionIds,
-    }),
-  );
-  const observedSnapshotsBySessionId = new Map(
-    projectedRemovals.flatMap(({ expectedEntry, removal }) =>
-      expectedEntry.sessionId && removal.expectedTranscriptSnapshot
-        ? [[expectedEntry.sessionId, removal.expectedTranscriptSnapshot] as const]
-        : [],
-    ),
-  );
-  for (const plan of deletePlans) {
-    const observedSnapshot = observedSnapshotsBySessionId.get(plan.sessionId);
-    if (observedSnapshot) {
-      // Keep the delete plan bound to classification, even if another process
-      // changes the transcript after the initial projection comparison.
-      plan.snapshot = observedSnapshot;
-    }
-  }
-  const plannedIds = new Set(deletePlans.map((plan) => plan.sessionId));
-  for (const sessionId of readSessionGenerationIdsForKeys(database, removedKeysToArchive)) {
-    if (plannedIds.has(sessionId)) {
-      continue;
-    }
-    const plan = planSessionStateDeleteIfUnreferenced({
-      archiveDirectory: params.archiveDirectory,
-      archiveTranscript: true,
-      database,
-      reason: "deleted",
-      referencedSessionIds,
-      sessionId,
-    });
-    if (plan) {
-      deletePlans.push(plan);
-      plannedIds.add(sessionId);
-    }
-  }
-  return { deletePlans, removals: projectedRemovals, upsertedEntries };
 }
 
 // Projected deletes must preserve raw session_nodes.current_session_id references for
@@ -723,12 +724,10 @@ export function deletePlannedLifecycleArtifactEntries(
   entries: readonly SessionEntryRemovalPlan[],
 ): number {
   assertPlannedLifecycleArtifactEntriesUnchanged(database, entries);
-  let removedEntries = 0;
   for (const planned of entries) {
     deleteSessionEntryRows(database, planned.sessionKey);
-    removedEntries += 1;
   }
-  return removedEntries;
+  return entries.length;
 }
 
 export function assertPlannedLifecycleArtifactEntriesUnchanged(

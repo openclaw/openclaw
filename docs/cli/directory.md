@@ -106,6 +106,8 @@ openclaw directory groups list --channel zalouser --query "work"
 openclaw directory groups members --channel zalouser --group-id <id>
 ```
 
+`groups members` requires a non-blank `--group-id`; empty or whitespace-only IDs fail before plugin setup or lookup.
+
 ## Related
 
 - [CLI reference](/cli)
