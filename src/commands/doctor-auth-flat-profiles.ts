@@ -1060,6 +1060,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const rawStore = parseAuthProfileMigrationSource(
         receiptByPath.get(path.resolve(candidate.authPath)),
       );
+      const importedAliasProfileIds = new Set(
+        isRecord(rawStore) && isRecord(rawStore.profiles) ? Object.keys(rawStore.profiles) : [],
+      );
       const rawState = parseAuthProfileMigrationSource(
         receiptByPath.get(path.resolve(candidate.statePath)),
       );
@@ -1148,6 +1151,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const legacyAsStore: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
       if (legacyStore) {
         applyLegacyAuthStore(legacyAsStore, legacyStore);
+        Object.keys(legacyAsStore.profiles).forEach((id) => importedAliasProfileIds.add(id));
         canonicalizeLegacyAuthStore(legacyAsStore, null, openAIProfileIdMap);
       }
       for (const imported of [legacyAsStore, canonicalStore, configCanonicalStore]) {
@@ -1183,83 +1187,94 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         );
         try {
           assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
-          verifiedStore = runAuthProfileWriteTransaction(
-            transactionAgentDir,
-            (database, owner) => {
-              const authoritative = loadAuthProfileMigrationTargetStore(
-                candidate.agentDir,
-                loadMigratedStore,
-                database,
-              );
-              // This store includes the separately persisted auth_profile_state row,
-              // so state-only concurrent changes abort before either table is written.
-              if (!isDeepStrictEqual(authoritative, existing)) {
-                throw new Error("canonical auth profile store changed during legacy migration");
-              }
-              saveAuthProfileStoreWithPreparedOwner(
-                next,
-                candidate.agentDir,
-                {
-                  filterExternalAuthProfiles: false,
-                  // Imported state may reference external profiles absent from this store.
-                  preserveStateProfileIds: stateProfileIds,
-                  syncExternalCli: false,
-                },
-                database,
-                owner,
-              );
-              const loaded = loadMigratedStore(candidate.agentDir, { database });
-              const persistedStores = {
-                isMainStore:
-                  resolveMigrationTargetDatabasePath(candidate.agentDir, env) ===
-                  resolveSharedAuthStorePath(env),
-                localStore: loaded,
-                mainStore:
-                  resolveMigrationTargetDatabasePath(candidate.agentDir, env) ===
-                  resolveSharedAuthStorePath(env)
-                    ? loaded
-                    : loadPersistedSharedAuthProfileStore(env),
-              };
-              // A non-main store drops an OAuth credential the main store already
-              // owns at the same or newer expiry. That dedup is intentional, so
-              // verifying it as missing would abort a migration that lost nothing
-              // and leave the legacy JSON in place, which blocks gateway startup.
-              const dedupedToMainProfileIds = new Set(
-                [...importedProfileIds].filter((profileId) => {
-                  const credential = next.profiles[profileId];
-                  return (
-                    credential !== undefined &&
-                    !loaded?.profiles[profileId] &&
-                    isInheritedMainOAuthCredentialFromStores({
-                      profileId,
-                      credential,
-                      persistedStores,
-                    })
-                  );
-                }),
-              );
-              const verifiableProfileIds = new Set(
-                [...importedProfileIds].filter(
-                  (profileId) => !dedupedToMainProfileIds.has(profileId),
-                ),
-              );
-              const verificationFailure = formatMissingAuthProfileSqliteVerification({
-                expected: next,
-                importedProfileIds: verifiableProfileIds,
-                loaded,
-              });
-              const mismatchedCredential = [...verifiableProfileIds].some((profileId) => {
-                if (existingProfileIds.has(profileId)) {
-                  return false;
+          const aliasReceiptSha256 = recordAuthAliasMigration({
+            profileIdMap: openAIProfileIdMap,
+            stores: [{ databasePath: targetDatabasePath, store: existing, migratedStore: next }],
+            importedProfileIds: importedAliasProfileIds,
+            sources: sourceReceipts
+              .filter((receipt) => receipt.sourcePath !== path.resolve(candidate.statePath))
+              .map((receipt) => ({ path: receipt.sourcePath, sha256: receipt.sourceSha256 })),
+            env,
+          });
+          verifiedStore = runWithAuthAliasMigrationReceipt(aliasReceiptSha256, env, () =>
+            runAuthProfileWriteTransaction(
+              transactionAgentDir,
+              (database, owner) => {
+                const authoritative = loadAuthProfileMigrationTargetStore(
+                  candidate.agentDir,
+                  loadMigratedStore,
+                  database,
+                );
+                // This store includes the separately persisted auth_profile_state row,
+                // so state-only concurrent changes abort before either table is written.
+                if (!isDeepStrictEqual(authoritative, existing)) {
+                  throw new Error("canonical auth profile store changed during legacy migration");
                 }
-                return !isDeepStrictEqual(loaded?.profiles[profileId], next.profiles[profileId]);
-              });
-              if (verificationFailure || mismatchedCredential || !loaded) {
-                throw new AuthProfileMigrationVerificationError(verificationFailure);
-              }
-              return loaded;
-            },
-            { env },
+                saveAuthProfileStoreWithPreparedOwner(
+                  next,
+                  candidate.agentDir,
+                  {
+                    filterExternalAuthProfiles: false,
+                    // Imported state may reference external profiles absent from this store.
+                    preserveStateProfileIds: stateProfileIds,
+                    syncExternalCli: false,
+                  },
+                  database,
+                  owner,
+                );
+                const loaded = loadMigratedStore(candidate.agentDir, { database });
+                const persistedStores = {
+                  isMainStore:
+                    resolveMigrationTargetDatabasePath(candidate.agentDir, env) ===
+                    resolveSharedAuthStorePath(env),
+                  localStore: loaded,
+                  mainStore:
+                    resolveMigrationTargetDatabasePath(candidate.agentDir, env) ===
+                    resolveSharedAuthStorePath(env)
+                      ? loaded
+                      : loadPersistedSharedAuthProfileStore(env),
+                };
+                // A non-main store drops an OAuth credential the main store already
+                // owns at the same or newer expiry. That dedup is intentional, so
+                // verifying it as missing would abort a migration that lost nothing
+                // and leave the legacy JSON in place, which blocks gateway startup.
+                const dedupedToMainProfileIds = new Set(
+                  [...importedProfileIds].filter((profileId) => {
+                    const credential = next.profiles[profileId];
+                    return (
+                      credential !== undefined &&
+                      !loaded?.profiles[profileId] &&
+                      isInheritedMainOAuthCredentialFromStores({
+                        profileId,
+                        credential,
+                        persistedStores,
+                      })
+                    );
+                  }),
+                );
+                const verifiableProfileIds = new Set(
+                  [...importedProfileIds].filter(
+                    (profileId) => !dedupedToMainProfileIds.has(profileId),
+                  ),
+                );
+                const verificationFailure = formatMissingAuthProfileSqliteVerification({
+                  expected: next,
+                  importedProfileIds: verifiableProfileIds,
+                  loaded,
+                });
+                const mismatchedCredential = [...verifiableProfileIds].some((profileId) => {
+                  if (existingProfileIds.has(profileId)) {
+                    return false;
+                  }
+                  return !isDeepStrictEqual(loaded?.profiles[profileId], next.profiles[profileId]);
+                });
+                if (verificationFailure || mismatchedCredential || !loaded) {
+                  throw new AuthProfileMigrationVerificationError(verificationFailure);
+                }
+                return loaded;
+              },
+              { env },
+            ),
           );
         } catch (error) {
           if (!(error instanceof AuthProfileMigrationVerificationError)) {
@@ -2237,6 +2252,14 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
       : inspectPersistedSharedAuthProfileStateRaw(env);
     if (inspection.status === "unreadable" || state.status === "unreadable") {
       return profileIdMap;
+    }
+    if (inspection.status === "missing") {
+      sqliteStores.push({
+        databasePath: candidate.agentDir
+          ? resolveAuthProfileDatabasePath(candidate.agentDir)
+          : resolveSharedAuthStorePath(env),
+        store: null,
+      });
     }
     if (inspection.status === "readable") {
       sqliteStores.push({

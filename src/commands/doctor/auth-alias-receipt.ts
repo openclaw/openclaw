@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import {
@@ -19,11 +21,12 @@ const receiptSchema = z.object({
         .array(
           z.object({
             databasePath: z.string(),
-            beforeSha256: z.string(),
+            beforeSha256: z.string().nullable(),
             afterSha256: z.string(),
           }),
         )
         .min(1),
+      sources: z.array(z.object({ path: z.string(), sha256: z.string() })).optional(),
     }),
   ),
 });
@@ -40,7 +43,20 @@ export function recordAuthAliasMigration(params: {
   profileIdMap: ReadonlyMap<string, string>;
   stores: readonly (AuthAliasStoreSnapshot & { migratedStore: unknown })[];
   env: NodeJS.ProcessEnv;
+  importedProfileIds?: ReadonlySet<string>;
+  sources?: readonly { path: string; sha256: string }[];
 }): string | undefined {
+  const previousReceipt = readLegacyMigrationReceipt(SOURCE_KEY, params.env);
+  if (previousReceipt && params.importedProfileIds) {
+    const previous = receiptSchema.parse(JSON.parse(previousReceipt.reportJson));
+    for (const { from } of previous.mappings) {
+      if (params.importedProfileIds.has(from) && !params.profileIdMap.has(from)) {
+        throw new Error(
+          `Recorded auth account ${from} could not be verified; its import source was preserved.`,
+        );
+      }
+    }
+  }
   const mappings: AliasReceipt["mappings"] = [];
   for (const [from, to] of params.profileIdMap) {
     if (from === to) {
@@ -49,12 +65,38 @@ export function recordAuthAliasMigration(params: {
     const credentials = params.stores.flatMap(({ databasePath, store, migratedStore }) => {
       const before = profiles(store)[from];
       const after = profiles(migratedStore)[to];
-      return before !== undefined && after !== undefined
-        ? [{ databasePath, beforeSha256: digest(before), afterSha256: digest(after) }]
-        : [];
+      if (
+        after === undefined ||
+        (before === undefined && !(params.importedProfileIds?.has(from) && params.sources?.length))
+      ) {
+        return [];
+      }
+      if (
+        params.importedProfileIds?.has(from) &&
+        before !== undefined &&
+        (!isRecord(before) ||
+          !isRecord(after) ||
+          digest({ ...before, provider: after.provider }) !== digest(after))
+      ) {
+        throw new Error(
+          `Legacy auth input conflicts with the existing account ${from}; its source was preserved.`,
+        );
+      }
+      return [
+        {
+          databasePath,
+          beforeSha256: before === undefined ? null : digest(before),
+          afterSha256: digest(after),
+        },
+      ];
     });
     if (credentials.length > 0) {
-      mappings.push({ from, to, credentials });
+      mappings.push({
+        from,
+        to,
+        credentials,
+        ...(params.sources?.length ? { sources: [...params.sources] } : {}),
+      });
     }
   }
   if (mappings.length === 0) {
@@ -137,7 +179,25 @@ export function recoverAuthAliasMigration(params: {
           (before !== undefined &&
             after === undefined &&
             digest(before) === expected.beforeSha256) ||
-          (before === undefined && after !== undefined && digest(after) === expected.afterSha256)
+          (before === undefined && after !== undefined && digest(after) === expected.afterSha256) ||
+          (before === undefined &&
+            after === undefined &&
+            expected.beforeSha256 === null &&
+            mapping.sources !== undefined &&
+            mapping.sources.length > 0 &&
+            mapping.sources.every((source) => {
+              try {
+                return (
+                  createHash("sha256").update(fs.readFileSync(source.path)).digest("hex") ===
+                  source.sha256
+                );
+              } catch (error) {
+                if (isRecord(error) && error.code === "ENOENT") {
+                  return false;
+                }
+                throw error;
+              }
+            }))
         );
       }) &&
       [...stores].every(
@@ -157,10 +217,7 @@ export function recoverAuthAliasMigration(params: {
       for (const to of targets) {
         recovered.set(from, to);
       }
-    } else if (
-      targets?.size ||
-      ![...stores.values()].some((entries) => entries[from] !== undefined)
-    ) {
+    } else {
       blocked.add(from);
     }
   }
