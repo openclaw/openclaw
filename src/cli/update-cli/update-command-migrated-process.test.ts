@@ -1,14 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { MigratedUpdateFinalizationInput } from "../cli/update-cli/update-command-migrated-types.js";
-import { asResolvedSourceConfig, asRuntimeConfig } from "../config/materialize.js";
-import { runUtf8CommandWithTimeout } from "../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeOpenClawStateDatabaseForTest);
