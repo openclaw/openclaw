@@ -7,6 +7,7 @@ import {
   enforceEmbeddingMaxInputTokens,
   hasNonTextEmbeddingParts,
   isEmbeddingBatchUnavailableError,
+  resolveEmbeddingMaxInputsPerRequest,
   type EmbeddingInput,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -395,7 +396,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     const missingChunks = missing.map((m) => m.chunk);
-    const batches = buildMemoryEmbeddingBatches(missingChunks, EMBEDDING_BATCH_MAX_TOKENS);
+    const batches = buildMemoryEmbeddingBatches(
+      missingChunks,
+      EMBEDDING_BATCH_MAX_TOKENS,
+      resolveEmbeddingMaxInputsPerRequest(generation.provider),
+    );
     let cursor = 0;
     for (const batch of batches) {
       const inputs = buildTextEmbeddingInputs(batch);
