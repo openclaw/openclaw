@@ -378,7 +378,14 @@ export function collapseCompletedTurnWork(
     while (segmentStart > 0 && isTurnOutputGroup(turn[segmentStart - 1]!)) {
       segmentStart -= 1;
     }
-    while (segmentEnd + 1 < turn.length && isTurnOutputGroup(turn[segmentEnd + 1]!)) {
+    // Independent reply-less runs retain their own activity rollup, rather than
+    // becoming work for an earlier answer merely because no user spoke between them.
+    const replyRunIds = runIdsWithVisibleReplies(turn);
+    while (segmentEnd + 1 < turn.length) {
+      const next = turn[segmentEnd + 1]!;
+      if (!isTurnOutputGroup(next) || (next.runId && !replyRunIds.has(next.runId))) {
+        break;
+      }
       segmentEnd += 1;
     }
     const groups: MessageGroup[] = [];

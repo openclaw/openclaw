@@ -320,6 +320,92 @@ describe("explicit answer visibility across continuations", () => {
     },
   );
 
+  it.each(["same-run", "independent-run", "unscoped"])(
+    "keeps %s trailing activity with its presentation owner",
+    (ownership) => {
+      const messages = [
+        { role: "user", content: "Watch the queue", timestamp: 1 },
+        {
+          role: "assistant",
+          phase: "commentary",
+          content: "Checking",
+          timestamp: 2,
+          runId: "reply",
+        },
+        {
+          role: "assistant",
+          phase: "final_answer",
+          content: "Watching",
+          timestamp: 3,
+          runId: "reply",
+        },
+        ...[1, 2].flatMap((index) => {
+          const runId =
+            ownership === "unscoped"
+              ? undefined
+              : ownership === "same-run"
+                ? "reply"
+                : `wake-${index}`;
+          return [
+            {
+              role: "assistant",
+              content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: {} }],
+              timestamp: 4 * index,
+              runId,
+            },
+            {
+              role: "toolResult",
+              toolCallId: `call-${index}`,
+              toolName: "read",
+              content: "ok",
+              timestamp: 4 * index + 1,
+              runId,
+            },
+          ];
+        }),
+      ];
+      for (const history of [messages, structuredClone(messages)]) {
+        const items = coalesceActivityRuns(
+          collapseCompletedTurnWork(
+            groupMessages(
+              history.map((message, index) => ({
+                kind: "message",
+                key: `message:${index}`,
+                message,
+              })),
+            ),
+            {
+              sessionKey: "agent:main:dashboard:answers",
+              runWorking: false,
+            },
+          ),
+        );
+        expect(items.map((item) => item.kind)).toEqual(
+          ownership === "independent-run"
+            ? ["group", "work-group", "group", "activity-run"]
+            : ["group", "work-group", "group"],
+        );
+        const work = items.filter((item) => item.kind === "work-group");
+        expect(
+          work.flatMap((item) =>
+            item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
+          ),
+        ).toEqual(
+          ownership === "independent-run" ? [messages[1]] : [messages[1], ...messages.slice(3)],
+        );
+        if (ownership === "independent-run") {
+          expect(work[0]?.durationMs).toBe(2);
+        }
+        const activity = items.filter((item) => item.kind === "activity-run");
+        expect(
+          activity.flatMap((item) =>
+            item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
+          ),
+        ).toEqual(ownership === "independent-run" ? messages.slice(3) : []);
+      }
+    },
+  );
+
   it("collects activity on both sides of answers without crossing the next user", () => {
     const messages = [
       { role: "user", content: "First question", timestamp: 1 },
