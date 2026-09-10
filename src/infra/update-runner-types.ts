@@ -23,6 +23,8 @@ export type UpdateStepResult = {
   killed?: boolean;
   termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
   advisory?: UpdateStepAdvisory;
+  /** Complete owner-classified warnings when one step reports several outcomes. */
+  warnings?: string[];
 };
 
 export type UpdateRunResult = {

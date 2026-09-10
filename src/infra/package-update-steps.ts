@@ -300,6 +300,7 @@ export function markPackagePostInstallDoctorAdvisory<
   result: UpdatePostInstallDoctorResult | null,
 ): T & {
   advisory?: UpdateStepResult["advisory"];
+  warnings?: UpdateStepResult["warnings"];
 } {
   if (
     !result ||
@@ -313,6 +314,13 @@ export function markPackagePostInstallDoctorAdvisory<
   ) {
     return step;
   }
+  const repairGuidance = "Run openclaw doctor --fix to finish deferred repairs.";
+  const deferredWarnings =
+    result.status === "advisory"
+      ? normalizeUpdatePostInstallDoctorWarnings(result.advisory.details).map(
+          (detail) => `${detail}\n${repairGuidance}`,
+        )
+      : [];
   const advisoryTail = [
     step.stderrTail,
     ...(result.status === "advisory" ? result.advisory.details : []),
@@ -323,19 +331,19 @@ export function markPackagePostInstallDoctorAdvisory<
     .join("\n");
   return {
     ...step,
+    warnings: [
+      ...new Set([
+        ...normalizeUpdatePostInstallDoctorWarnings(result.warnings ?? []),
+        ...deferredWarnings,
+      ]),
+    ].slice(0, 32),
     advisory: {
       ...PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
-      details: normalizeUpdatePostInstallDoctorWarnings([
-        ...new Set([
-          ...(result.warnings ?? []),
-          ...(result.status === "advisory" ? result.advisory.details : []),
-        ]),
-      ]).map((detail) => `Run openclaw doctor --fix to finish deferred repairs. ${detail}`),
       message: [
         ...(result.warnings ?? []),
         ...(result.status === "advisory" ? result.advisory.details : []),
         PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
-        "Run openclaw doctor --fix to finish deferred repairs.",
+        repairGuidance,
       ].join("\n"),
     },
     stderrTail: trimLogTail(advisoryTail) ?? step.stderrTail,

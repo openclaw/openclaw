@@ -34,6 +34,8 @@ it.each([0, 86])("persists and surfaces successful Doctor warnings (exit %s)", (
   const env = { OPENCLAW_STATE_DIR: dirs.make("update-warning-ledger-") };
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
   const message = "Skipped derived cache cleanup: permission denied. Run openclaw doctor --fix.";
+  const otherWarning =
+    "Skipped legacy cache cleanup: read-only directory. Run openclaw doctor --fix.";
   const result = completeUpdateCommandRun(
     {
       status: "ok",
@@ -47,6 +49,7 @@ it.each([0, 86])("persists and surfaces successful Doctor warnings (exit %s)", (
           durationMs: 1,
           exitCode,
           advisory: { kind: "package-post-install-doctor", message },
+          warnings: [message, otherWarning],
         },
       ],
     },
@@ -62,9 +65,15 @@ it.each([0, 86])("persists and surfaces successful Doctor warnings (exit %s)", (
         status: "completed",
         detail: message,
       }),
+      expect.objectContaining({
+        step: "warning:openclaw doctor:2",
+        status: "completed",
+        detail: otherWarning,
+      }),
     ]),
   });
   expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(message);
+  expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(otherWarning);
 });
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();

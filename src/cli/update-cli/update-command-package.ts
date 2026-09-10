@@ -151,6 +151,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     killed: completedDoctorStep.killed,
     termination: completedDoctorStep.termination,
     advisory: completedDoctorStep.advisory,
+    warnings: completedDoctorStep.warnings,
   });
   return completedDoctorStep;
 }

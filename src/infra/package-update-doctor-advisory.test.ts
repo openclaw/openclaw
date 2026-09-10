@@ -23,6 +23,14 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
         result,
       );
       expect(step.advisory?.message).toContain(warning);
+      expect(step).toMatchObject({
+        warnings: [
+          warning,
+          ...(exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
+            ? ["deferred plugin repair\nRun openclaw doctor --fix to finish deferred repairs."]
+            : []),
+        ],
+      });
     },
   );
   it("marks only explicit post-install doctor advisory exits", () => {
@@ -40,8 +48,10 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
     expect(step.advisory).toEqual({
       kind: "package-post-install-doctor",
       message: expect.stringContaining("recoverable update-time repair warning"),
-      details: [
-        "Run openclaw doctor --fix to finish deferred repairs. deferred configured plugin repair",
+    });
+    expect(step).toMatchObject({
+      warnings: [
+        "deferred configured plugin repair\nRun openclaw doctor --fix to finish deferred repairs.",
       ],
     });
     expect(step.stderrTail).toContain("doctor deferred repair");
@@ -65,6 +75,9 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
     expect(step.stderrTail).toHaveLength(8_001);
     expect(step.stderrTail).toMatch(/^…/u);
     expect(step.stderrTail).toContain("recoverable update-time repair warning");
+    expect(step.warnings).toEqual([
+      `${`deferred configured plugin repair ${"x".repeat(10_000)}`.slice(0, 500)}\nRun openclaw doctor --fix to finish deferred repairs.`,
+    ]);
   });
 
   it("does not mark unknown nonzero doctor exits as advisory", () => {

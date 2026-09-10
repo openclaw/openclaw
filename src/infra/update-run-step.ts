@@ -3,14 +3,14 @@ import type { UpdateStepResult } from "./update-runner-types.js";
 
 type ResultStep = Pick<
   UpdateStepResult,
-  "name" | "exitCode" | "advisory" | "termination" | "stdoutTail" | "stderrTail"
+  "name" | "exitCode" | "advisory" | "warnings" | "termination" | "stdoutTail" | "stderrTail"
 >;
 
 /** Warning rows preserve producer-classified advisories in the existing diagnostic ledger. */
 export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] {
   const warnings = step.advisory
-    ? step.advisory.kind === "package-post-install-doctor" && step.advisory.details?.length
-      ? step.advisory.details
+    ? step.warnings?.length
+      ? step.warnings
       : [step.advisory.message]
     : [];
   return [
