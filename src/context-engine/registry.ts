@@ -648,12 +648,15 @@ export async function resolveLogicalTurnContextEngines(
       agentDir: options?.agentDir,
       workspaceDir: options?.workspaceDir,
     };
-    const entries = getContextEngines();
+    const registry = requireActivePluginRegistry();
+    const entries = registry.contextEngines;
     const fallbackEntry = entries.get(defaultEngineId);
     const configuredEntry = entries.get(configuredEngineId);
     const sources = retainLogicalTurnContextEngineSources(
+      registry,
       fallbackEntry,
       configuredEngineId === defaultEngineId ? undefined : configuredEntry,
+      abandon,
     );
     const sourceResources = new Map<ContextEngine, ContextEngineFactoryResources[]>();
     let fallback: ResolvedContextEngineRef;

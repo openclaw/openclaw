@@ -91,6 +91,13 @@ runtime alive through maintenance, coalesced reruns, and engine disposal. Accept
 does not mean cleanup has finished. Return asynchronous work from engine methods
 and `dispose()` so the host can join it before releasing their resources.
 
+A logical turn also retains its managed supplying registry through engine disposal.
+When that registry copied a runtime engine from another inspection, its recorded
+donor dependency can keep the engine usable after the donor inspection retires.
+Retiring the supplying registry still refuses new logical turns; existing engine
+work keeps its physical resources until cleanup finishes. Raw registrations keep
+their caller-owned lifetime.
+
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
 ### Subagent lifecycle (optional)

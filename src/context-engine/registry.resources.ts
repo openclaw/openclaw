@@ -15,7 +15,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ContextEngine } from "./types.js";
 
-// Adoption copies entries by identity; the copied view's primary source is not their owner.
+// Adoption preserves entry identity and the original registration source.
 const registrationSources = resolveGlobalSingleton(
   Symbol.for("openclaw.contextEngineRegistrationSources"),
   () => new WeakMap<ContextEngineRegistration, PluginRegistryInspectionResources>(),
@@ -42,7 +42,7 @@ export class ContextEngineFactoryResources {
     this.cleanupContext(() => this.cleanupWork.beginClose(this.parentSignal?.reason));
   };
 
-  constructor(private readonly claim: { release: () => Promise<void> }) {
+  constructor(private readonly claims: readonly { release: () => Promise<void> }[]) {
     this.parentSignal?.addEventListener("abort", this.abort, { once: true });
     if (this.parentSignal?.aborted) {
       this.abort();
@@ -61,17 +61,44 @@ export class ContextEngineFactoryResources {
     }
   }
 
-  release(): Promise<void> {
+  async release(): Promise<void> {
     this.parentSignal?.removeEventListener("abort", this.abort);
-    return this.claim.release();
+    let failure: { error: unknown } | undefined;
+    // An uncovered donor stays held while primary cleanup finishes, even if that cleanup fails.
+    for (const claim of this.claims) {
+      try {
+        await claim.release();
+      } catch (error) {
+        failure ??= { error };
+      }
+    }
+    if (failure) {
+      throw failure.error;
+    }
   }
 }
 
 function retainContextEngineFactorySource(
   registration: ContextEngineRegistration | undefined,
+  primary: PluginRegistryInspectionResources | undefined,
+  abandon: ContextEngineFactoryFailureCleanup,
 ): ContextEngineFactoryResources | undefined {
-  const claim = registration && registrationSources.get(registration)?.retain();
-  return claim ? new ContextEngineFactoryResources(claim) : undefined;
+  const claims: Array<{ release: () => Promise<void> }> = [];
+  try {
+    if (primary) {
+      claims.push(primary.retain());
+    }
+    const source = registration && registrationSources.get(registration);
+    if (source && !primary?.coversSource(source)) {
+      claims.push(source.retain());
+    }
+    return claims.length > 0 ? new ContextEngineFactoryResources(claims) : undefined;
+  } catch (error) {
+    if (claims.length > 0) {
+      abandon(new ContextEngineFactoryResources(claims));
+    }
+    throw error;
+  }
 }
 
 /** One instance may come from both factories; every source stays held through shared cleanup. */
@@ -160,18 +187,21 @@ export async function runContextEngineFactoryResolution<T>(
 }
 
 export function retainLogicalTurnContextEngineSources(
+  registry: PluginRegistry,
   fallback: ContextEngineRegistration | undefined,
   configured: ContextEngineRegistration | undefined,
+  abandon: ContextEngineFactoryFailureCleanup,
 ): {
   fallback: ContextEngineFactoryResources | undefined;
   configured?: ContextEngineFactoryResources;
   configuredFailure?: { error: unknown };
 } {
-  const fallbackSource = retainContextEngineFactorySource(fallback);
+  const primary = getPluginRegistryInspectionResources(registry);
+  const fallbackSource = retainContextEngineFactorySource(fallback, primary, abandon);
   try {
     const configuredSource =
       configured?.lifecycle === "runtime"
-        ? retainContextEngineFactorySource(configured)
+        ? retainContextEngineFactorySource(configured, primary, abandon)
         : undefined;
     return { fallback: fallbackSource, configured: configuredSource };
   } catch (error) {

@@ -27,6 +27,7 @@ export class PluginRegistryInspectionResources {
   readonly #source = new PluginRegistrationResourceSource();
   readonly #claim = this.#source.acquireClaim("inspection");
   readonly #registries = new Set<PluginRegistry>();
+  readonly #dependencies = new WeakSet<PluginRegistryInspectionResources>();
   #release?: Promise<void>;
 
   /** Attach views of this source; independently borrowed donors keep their own owner. */
@@ -61,7 +62,13 @@ export class PluginRegistryInspectionResources {
     }
     if (dependency !== this) {
       this.#source.retainDependency(() => dependency.retain());
+      this.#dependencies.add(dependency);
     }
+  }
+
+  /** Recorded coverage survives retirement; retain() still checks this inspection's lifetime. */
+  coversSource(source: PluginRegistryInspectionResources): boolean {
+    return source === this || this.#dependencies.has(source);
   }
 
   /** Retains physical resources without extending this inspection's authority. */
