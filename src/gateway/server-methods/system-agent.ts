@@ -334,7 +334,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      await runExclusiveSystemAgentSetupActivation(async () => {
+      const result = await runExclusiveSystemAgentSetupActivation(async () => {
         const runtime = {
           ...defaultRuntime,
           // Setup runs inside the gateway process; a failing sub-step must reject
@@ -343,7 +343,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             throw new Error(`setup step exited with code ${String(code)}`);
           },
         };
-        const result = await activateGatewaySetupInference({
+        return await activateGatewaySetupInference({
           kind: params.kind,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
@@ -356,8 +356,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           surface: "gateway",
           runtime,
         });
-        respond(true, result, undefined);
       });
+      respond(true, result, undefined);
     } catch (error) {
       if (!(error instanceof SetupAdmissionBusyError)) {
         throw error;

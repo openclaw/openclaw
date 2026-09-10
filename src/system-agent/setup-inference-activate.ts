@@ -408,10 +408,11 @@ async function activateCandidate(
           ...(staged.authProfileId ? { authProfileId: staged.authProfileId } : {}),
         });
   const buildCandidate = (base: OpenClawConfig) => {
-    const patched =
-      isRecord(providerPatch) && Object.keys(providerPatch).length === 0
-        ? base
-        : (applyMergePatch(base, providerPatch) as OpenClawConfig);
+    let patched = base;
+    if (!isRecord(providerPatch) || Object.keys(providerPatch).length > 0) {
+      // SAFETY: The patch is derived from typed configs and preserves their config shape.
+      patched = applyMergePatch(base, providerPatch) as OpenClawConfig;
+    }
     const selected = selectModel(patched);
     return staged.pendingPluginInstalls
       ? { ...selected, plugins: { ...selected.plugins, installs: staged.pendingPluginInstalls } }

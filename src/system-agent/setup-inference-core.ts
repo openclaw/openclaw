@@ -425,11 +425,9 @@ const SETUP_STATUS_BY_FAILOVER_REASON = {
 } satisfies Record<FailoverReason, SetupInferenceFailureStatus>;
 
 export function mapFailoverReasonToSetupStatus(
-  reason?: string | null,
+  reason?: FailoverReason | null,
 ): SetupInferenceFailureStatus {
-  return reason
-    ? (SETUP_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
-    : "unknown";
+  return reason ? SETUP_STATUS_BY_FAILOVER_REASON[reason] : "unknown";
 }
 
 export function validateSetupInferenceOwnerEvidence(params: {

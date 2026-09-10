@@ -254,8 +254,14 @@ function openAiAuthProfile(apiKey: string) {
 }
 
 function expectSavedSetupCredential(config: OpenClawConfig, agentDir: string, key: string): string {
-  const primary = expectDefined(resolveAgentModelPrimaryValue(config.agents?.defaults?.model));
-  const profileId = expectDefined(splitTrailingAuthProfile(primary).profile);
+  const primary = expectDefined(
+    resolveAgentModelPrimaryValue(config.agents?.defaults?.model),
+    "selected model",
+  );
+  const profileId = expectDefined(
+    splitTrailingAuthProfile(primary).profile,
+    "selected credential profile",
+  );
   expect(profileId).toMatch(/^openai:setup-/);
   expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toEqual(
     openAiAuthProfile(key).credential,
@@ -3263,7 +3269,7 @@ describe("runSetupWizard", () => {
       ) as Parameters<VerifySetupInferenceConfig>[0];
       expectSavedSetupCredential(retryVerification.config, agentDir, "test-retry-valid-key");
       expectSavedSetupCredential(
-        expectDefined(persistedWizardConfigs().at(-1)),
+        expectDefined(persistedWizardConfigs().at(-1), "persisted wizard config"),
         agentDir,
         "test-retry-valid-key",
       );
@@ -3323,11 +3329,14 @@ describe("runSetupWizard", () => {
         "test-kept-retry-key",
       );
       expectSavedSetupCredential(
-        expectDefined(persistedWizardConfigs().at(-1)),
+        expectDefined(persistedWizardConfigs().at(-1), "persisted wizard config"),
         agentDir,
         "test-kept-retry-key",
       );
-      const priorVerification = expectDefined(verifySetupInferenceConfig.mock.calls[1]?.[0]);
+      const priorVerification = expectDefined(
+        verifySetupInferenceConfig.mock.calls[1]?.[0],
+        "prior verification",
+      );
       expect(
         expectSavedSetupCredential(priorVerification.config, agentDir, "test-kept-retry-key"),
       ).toBe(selected);

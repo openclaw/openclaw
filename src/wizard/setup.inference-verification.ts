@@ -89,6 +89,7 @@ export async function offerLiveModelVerification(params: {
           `${modelRef}@${saved.profile.profileId}`,
         );
         candidate.authProfiles = [];
+        // SAFETY: Canonical roster migration preserves this typed config; this view is not persisted.
         config = migratePersistedImplicitMainRoster(candidate.config).config as OpenClawConfig;
       }
       result = await withConsoleSubsystemsSuppressed(() =>

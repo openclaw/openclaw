@@ -90,8 +90,14 @@ describe("offerLiveModelVerification", () => {
     };
     const attemptedProfiles: string[] = [];
     mocks.verify.mockImplementation(async ({ config: tested }: { config: OpenClawConfig }) => {
-      const primary = expectDefined(resolveAgentModelPrimaryValue(tested.agents?.defaults?.model));
-      const profileId = expectDefined(splitTrailingAuthProfile(primary).profile);
+      const primary = expectDefined(
+        resolveAgentModelPrimaryValue(tested.agents?.defaults?.model),
+        "selected model",
+      );
+      const profileId = expectDefined(
+        splitTrailingAuthProfile(primary).profile,
+        "selected credential profile",
+      );
       attemptedProfiles.push(profileId);
       const store = readAuthProfileStoreForTest(agentDir);
       expect(profileId).toMatch(/^openai:setup-/);
