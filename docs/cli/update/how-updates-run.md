@@ -195,6 +195,11 @@ that change the target of the global package link. The helper retains the
 original installation identity for recovery; a child running from a different
 installation is still rejected.
 
+Updates from stable 2026.9.2 and 2026.9.3 retain support for their service handoff
+records, which predate the recorded Linux service-manager UID. The candidate
+still revalidates service ownership, profile, unit, and protected launcher data.
+When the handoff records a manager UID, a different UID blocks service mutation.
+
 The Gateway core auto-updater requires a managed service restart path. It hands
 the CLI update to a detached helper before activation. A foreground
 Gateway keeps update hints but leaves installation and activation to the
