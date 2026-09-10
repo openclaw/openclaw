@@ -620,7 +620,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   return queueEmbeddedAgentMessageAsync(sessionId, text, options);
 }
 
-/** Answers pending input without making ordinary messages bypass local queue policy. */
+/** TUI preflight requires V2 ownership; failure leaves ordinary input to local queue policy. */
 export async function claimPendingEmbeddedAgentQuestionAnswer(
   sessionId: string,
   text: string,
