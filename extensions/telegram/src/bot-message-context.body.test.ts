@@ -1,6 +1,7 @@
 // Telegram tests cover bot message context.body plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
+import { removeTelegramGroupHistoryEntry } from "./group-history-window.js";
 
 const {
   resolveStickerVisionSupportRuntimeMock,
@@ -392,6 +393,50 @@ describe("resolveTelegramInboundBody", () => {
       expect(result).toBeNull();
     },
   );
+
+  it.each([
+    {
+      name: "a non-primary buffered message",
+      sourceMessageId: "2",
+      overrides: {
+        options: {
+          bufferedMessages: [groupMessage({ message_id: 1 }), groupMessage({ message_id: 2 })],
+        },
+      },
+    },
+    {
+      name: "a non-primary album member",
+      sourceMessageId: "3",
+      overrides: {
+        allMedia: [
+          media("/tmp/album-1.jpg", "image", { sourceMessageId: "1" }),
+          media("/tmp/album-3.jpg", "image", { sourceMessageId: "3" }),
+        ],
+      },
+    },
+  ])("removes mention-skipped group history by $name", async ({ sourceMessageId, overrides }) => {
+    const groupHistories = new Map();
+    const logger = createLogger();
+
+    const result = await resolveGroup({
+      logger,
+      patterns: BOT_PATTERN,
+      message: { message_id: 1, text: "ambient private detail" },
+      overrides: { groupHistories, historyLimit: 5, ...overrides } as Partial<BodyParams>,
+    });
+    const historyKey = [...groupHistories.keys()][0];
+
+    expect(result).toBeNull();
+    expect([...groupHistories.values()].flat()).toHaveLength(1);
+    expect(
+      removeTelegramGroupHistoryEntry({
+        historyMap: groupHistories,
+        historyKey,
+        messageId: sourceMessageId,
+      }),
+    ).toBe(true);
+    expect(groupHistories.size).toBe(0);
+  });
 
   privateBodyTest(
     "renders Telegram text entities before building the agent body",

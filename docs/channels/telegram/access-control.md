@@ -177,6 +177,14 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Group history context is always on and bounded by `historyLimit`. Set `channels.telegram.historyLimit: 0` to disable the group history window. `openclaw doctor --fix` removes the retired `includeGroupHistoryContext` key.
 
+    Mention and activation settings are chat-wide controls for whether a message
+    triggers the bot; they do not provide a per-message context boundary. Prefix
+    a one-off human-only aside with `/ignore`, for example `/ignore dinner at
+    7?`, to keep that update out of reply history, media processing, prompt
+    context, and agent dispatch. `/ignore` is available when native Telegram
+    commands are enabled. An authorized `/ignore <message>` intentionally sends
+    no bot reply; bare `/ignore` replies with usage help.
+
     Getting the group chat ID: forward a group message to `@userinfobot` / `@getidsbot`, read `chat.id` from `openclaw logs --follow`, inspect Bot API `getUpdates`, or (once the group is allowed) run `/whoami@<bot_username>`.
 
   </Tab>

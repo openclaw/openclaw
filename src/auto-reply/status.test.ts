@@ -28,7 +28,13 @@ const buildStatusMessage: typeof BuildStatusMessage = (args) =>
 
 const { listPluginCommands } = vi.hoisted(() => ({
   listPluginCommands: vi.fn(
-    (): Array<{ name: string; description: string; pluginId: string }> => [],
+    (_options?: {
+      channel?: string;
+    }): Array<{
+      name: string;
+      description: string;
+      pluginId: string;
+    }> => [],
   ),
 }));
 
@@ -2473,6 +2479,124 @@ describe("buildHelpMessage", () => {
 });
 
 describe("buildCommandsMessagePaginated", () => {
+  it.each([
+    ["telegram", true],
+    ["discord", false],
+    ["slack", false],
+  ] as const)("scopes native-only commands on %s", (surface, expected) => {
+    const cfg = {
+      commands: { config: false, debug: false, native: true },
+    } as unknown as OpenClawConfig;
+    const firstPage = buildCommandsMessagePaginated(cfg, undefined, {
+      surface,
+      page: 1,
+      forcePaginatedList: true,
+    });
+    const text = Array.from(
+      { length: firstPage.totalPages },
+      (_, index) =>
+        buildCommandsMessagePaginated(cfg, undefined, {
+          surface,
+          page: index + 1,
+          forcePaginatedList: true,
+        }).text,
+    ).join("\n");
+
+    expect(text.includes("/ignore - Keep one Telegram message out of the bot context.")).toBe(
+      expected,
+    );
+  });
+
+  it.each([
+    ["provider", { channels: { telegram: { commands: { native: false } } } }],
+    ["inherited", { commands: { native: false } }],
+  ] as const)(
+    "hides native-only commands when Telegram native commands are %s disabled",
+    (_mode, cfg) => {
+      const firstPage = buildCommandsMessagePaginated(cfg as OpenClawConfig, undefined, {
+        surface: "telegram",
+        page: 1,
+        forcePaginatedList: true,
+      });
+      const text = Array.from(
+        { length: firstPage.totalPages },
+        (_, index) =>
+          buildCommandsMessagePaginated(cfg as OpenClawConfig, undefined, {
+            surface: "telegram",
+            page: index + 1,
+            forcePaginatedList: true,
+          }).text,
+      ).join("\n");
+
+      expect(text).not.toContain("/ignore - Keep one Telegram message out of the bot context.");
+    },
+  );
+
+  it.each([
+    { root: true, account: false, expected: false },
+    { root: false, account: true, expected: true },
+  ])(
+    "uses the Telegram account native override ($root -> $account)",
+    ({ root, account, expected }) => {
+      const cfg = {
+        channels: {
+          telegram: {
+            commands: { native: root },
+            accounts: { work: { commands: { native: account } } },
+          },
+        },
+      } as OpenClawConfig;
+      const options = {
+        surface: "telegram",
+        accountId: "work",
+        page: 1,
+        forcePaginatedList: true,
+      };
+      const firstPage = buildCommandsMessagePaginated(cfg, undefined, options);
+      const text = Array.from(
+        { length: firstPage.totalPages },
+        (_, index) =>
+          buildCommandsMessagePaginated(cfg, undefined, { ...options, page: index + 1 }).text,
+      ).join("\n");
+
+      expect(text.includes("/ignore - Keep one Telegram message out of the bot context.")).toBe(
+        expected,
+      );
+    },
+  );
+
+  it.each([
+    ["root", { customCommands: [{ command: "ignore", description: "Custom ignore" }] }],
+    [
+      "account",
+      {
+        accounts: {
+          work: { customCommands: [{ command: "/IGNORE", description: "Custom ignore" }] },
+        },
+      },
+    ],
+  ] as const)(
+    "hides native /ignore semantics behind a Telegram %s custom shadow",
+    (_mode, telegram) => {
+      const cfg = { channels: { telegram } } as unknown as OpenClawConfig;
+      const options = {
+        surface: "telegram",
+        accountId: "work",
+        page: 1,
+        forcePaginatedList: true,
+      };
+      const firstPage = buildCommandsMessagePaginated(cfg, undefined, options);
+      const text = Array.from(
+        { length: firstPage.totalPages },
+        (_, index) =>
+          buildCommandsMessagePaginated(cfg, undefined, { ...options, page: index + 1 }).text,
+      ).join("\n");
+
+      expect(text).not.toContain("/ignore - Keep one Telegram message out of the bot context.");
+      expect(text).toContain("/commands - List all slash commands.");
+    },
+  );
+
   it("formats telegram output with pages", () => {
     const result = buildCommandsMessagePaginated(
       {
@@ -2514,6 +2638,55 @@ describe("buildCommandsMessagePaginated", () => {
     }
     expect(pluginPage.text).toContain("Plugins");
     expect(pluginPage.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+  });
+
+  it("hides built-in /ignore semantics when a Telegram plugin owns /ignore", () => {
+    listPluginCommands.mockImplementation(() => [
+      {
+        name: "ignore",
+        description: "Plugin-owned ignore",
+        pluginId: "demo-plugin",
+      },
+    ]);
+    const options = {
+      surface: "telegram",
+      page: 1,
+      forcePaginatedList: true,
+    } as const;
+    const firstPage = buildCommandsMessagePaginated(undefined, undefined, options);
+    const text = Array.from(
+      { length: firstPage.totalPages },
+      (_, index) =>
+        buildCommandsMessagePaginated(undefined, undefined, {
+          ...options,
+          page: index + 1,
+        }).text,
+    ).join("\n");
+
+    expect(text).not.toContain("/ignore - Keep one Telegram message out of the bot context.");
+    expect(text).toContain("/ignore (demo-plugin) - Plugin-owned ignore");
+  });
+
+  it("keeps built-in /ignore semantics when only another channel owns /ignore", () => {
+    listPluginCommands.mockImplementation((options) =>
+      options?.channel === "telegram"
+        ? []
+        : [
+            {
+              name: "ignore",
+              description: "Discord-only ignore",
+              pluginId: "demo-plugin",
+            },
+          ],
+    );
+    const result = buildCommandsMessagePaginated(undefined, undefined, {
+      surface: "telegram",
+      forcePaginatedList: false,
+    });
+
+    expect(listPluginCommands).toHaveBeenCalledWith({ channel: "telegram" });
+    expect(result.text).toContain("/ignore - Keep one Telegram message out of the bot context.");
+    expect(result.text).not.toContain("Discord-only ignore");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -14,6 +14,10 @@ import {
   type PluginCommandExecutionParams,
 } from "./plugin-command-execution.js";
 import { matchRegisteredPluginCommand } from "./plugin-command-matcher.js";
+import {
+  pluginCommandSupportsChannel,
+  projectPluginCommandNativeMetadata,
+} from "./plugin-command-metadata.js";
 import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
 import { requireActivePluginRegistry } from "./runtime.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
@@ -70,16 +74,21 @@ export async function executePluginCommand(
 }
 
 /** List registered plugin commands for help and command discovery. */
-export function listPluginCommands(): Array<{
+export function listPluginCommands(options: { channel?: string } = {}): Array<{
   name: string;
   description: string;
   pluginId: string;
   acceptsArgs: boolean;
 }> {
-  return listRegisteredPluginCommands(requireActivePluginRegistry()).map((command) => ({
-    name: command.name,
-    description: command.description,
-    pluginId: command.pluginId,
-    acceptsArgs: command.acceptsArgs ?? false,
-  }));
+  return listRegisteredPluginCommands(requireActivePluginRegistry())
+    .filter((command) => pluginCommandSupportsChannel(command, options.channel))
+    .map((command) => {
+      const metadata = projectPluginCommandNativeMetadata(command, options.channel);
+      return {
+        name: metadata.name,
+        description: metadata.description,
+        pluginId: command.pluginId,
+        acceptsArgs: metadata.acceptsArgs,
+      };
+    });
 }

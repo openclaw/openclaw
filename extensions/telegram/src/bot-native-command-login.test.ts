@@ -91,7 +91,7 @@ function registerLoginCommand(params: {
     const result = await botHarness.bot.api.sendMessage(100, text, {});
     return { messageId: String(result.message_id), chatId: "100" };
   });
-  const nativeCommandCallbackDispatcher = withPluginRuntimeRegistryScope(
+  const { nativeCommandCallbackDispatcher } = withPluginRuntimeRegistryScope(
     createEmptyPluginRegistry(),
     () =>
       registerTelegramNativeCommands({

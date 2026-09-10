@@ -201,6 +201,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       }
       recordTelegramMessageProcessingResult(result);
     };
+    const deferInitialFeedback =
+      turnContext.shouldSkipBeforeDispatch !== undefined ||
+      turnContext.dispatchAdmission !== undefined;
     const context = await buildTelegramMessageContext({
       primaryCtx,
       allMedia,
@@ -209,6 +212,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       promptContext,
       storeAllowFrom,
       options,
+      deferInitialFeedback,
       bot,
       cfg: turnCfg,
       account,
@@ -230,13 +234,17 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
     });
     if (!context) {
+      const skippedBeforeDispatch = await turnContext.shouldSkipBeforeDispatch?.();
       if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
         logVerbose(
           `telegram ingress: chatId=${primaryCtx.message.chat.id} dropped after ${Date.now() - ingressReceivedAtMs}ms` +
             (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
         );
       }
-      const result: TelegramMessageProcessingResult = { kind: "skipped" };
+      const result: TelegramMessageProcessingResult =
+        skippedBeforeDispatch && turnContext.deferCancelledBeforeDispatchSettlement
+          ? { kind: "skipped", reason: "cancelled-before-dispatch" }
+          : { kind: "skipped" };
       recordCurrentUpdateProcessingResult(result);
       return result;
     }
@@ -246,14 +254,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           ` preDispatchMs=${Date.now() - ingressContextStartMs}` +
           (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
-    }
-    if (
-      context.ctxPayload.InboundEventKind !== "room_event" &&
-      context.initialTypingCueSent !== true
-    ) {
-      void context.sendTyping().catch((err: unknown) => {
-        logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
-      });
     }
     telegramInboundLog.info(
       formatTelegramInboundLogLine({
@@ -266,8 +266,48 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         mediaType: allMedia[0]?.contentType ?? allMedia[0]?.kind,
       }),
     );
+    // Context construction can yield after the outer media/prompt check. Revalidate at the
+    // actual dispatch boundary so an edited /ignore cannot race the final context await.
+    if (await turnContext.shouldSkipBeforeDispatch?.()) {
+      const result: TelegramMessageProcessingResult =
+        turnContext.deferCancelledBeforeDispatchSettlement
+          ? { kind: "skipped", reason: "cancelled-before-dispatch" }
+          : { kind: "skipped" };
+      recordCurrentUpdateProcessingResult(result);
+      return result;
+    }
     const spooledReplay =
       options?.spooledReplay === true || isTelegramSpooledReplayUpdate(primaryCtx.update);
+    if (!spooledReplay && turnContext.dispatchAdmission?.tryAdmit() === false) {
+      const result: TelegramMessageProcessingResult =
+        turnContext.deferCancelledBeforeDispatchSettlement
+          ? { kind: "skipped", reason: "cancelled-before-dispatch" }
+          : { kind: "skipped" };
+      recordCurrentUpdateProcessingResult(result);
+      return result;
+    }
+    let fallbackInitialFeedbackStarted = context.initialTypingCueSent === true;
+    const startInitialFeedback = () => {
+      if (context.startInitialFeedback) {
+        context.startInitialFeedback();
+        return;
+      }
+      if (fallbackInitialFeedbackStarted || context.ctxPayload.InboundEventKind === "room_event") {
+        return;
+      }
+      fallbackInitialFeedbackStarted = true;
+      void context.sendTyping().catch((err: unknown) => {
+        logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
+      });
+    };
+    if (!spooledReplay) {
+      await turnContext.dispatchAdmission?.onAdmitted?.();
+    }
+    // A durable buffered owner starts feedback only after core admission. Classic polling owns
+    // the admission synchronously above; direct spooled updates retain their existing cue.
+    if (!spooledReplay || !deferInitialFeedback) {
+      startInitialFeedback();
+    }
     if (!spooledReplay) {
       await turnContext.onDispatchStart?.();
     }
@@ -401,12 +441,38 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       };
       const run = async () => {
         const drainLifecycle = getTelegramSpooledReplayLifecycle();
+        let adoptionEffectsComplete = false;
+        let adoptionEffectsInFlight: Promise<void> | undefined;
+        const completeAdoptionEffects = async () => {
+          if (adoptionEffectsComplete) {
+            return;
+          }
+          if (adoptionEffectsInFlight) {
+            return await adoptionEffectsInFlight;
+          }
+          const effects = (async () => {
+            await drainLifecycle?.onAdopted();
+            await turnContext.dispatchAdmission?.onAdmitted?.();
+            startInitialFeedback();
+            adoptionEffectsComplete = true;
+          })();
+          adoptionEffectsInFlight = effects;
+          try {
+            await effects;
+          } finally {
+            if (!adoptionEffectsComplete && adoptionEffectsInFlight === effects) {
+              adoptionEffectsInFlight = undefined;
+            }
+          }
+        };
         // Participant always owns an AbortSignal on the spooled-replay path;
         // merge optional drain/context signals without widening to undefined.
         const turnAbortSignal: AbortSignal = (() => {
-          const extras = [turnContext.spooledReplayAbortSignal, drainLifecycle?.abortSignal].filter(
-            (signal): signal is AbortSignal => signal !== undefined,
-          );
+          const extras = [
+            turnContext.spooledReplayAbortSignal,
+            turnContext.dispatchAdmission?.abortSignal,
+            drainLifecycle?.abortSignal,
+          ].filter((signal): signal is AbortSignal => signal !== undefined);
           if (extras.length === 0) {
             return participant.abortSignal;
           }
@@ -418,7 +484,11 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
             abortSignal: turnAbortSignal,
             onAdopted: async () => {
               if (adopted) {
+                await completeAdoptionEffects();
                 return;
+              }
+              if (turnAbortSignal.aborted || turnContext.dispatchAdmission?.tryAdmit() === false) {
+                throw turnAbortSignal.reason ?? new Error("telegram dispatch admission cancelled");
               }
               adoptionAttempted = true;
               const adoptedResult = await settle({ kind: "completed" }, "adopted");
@@ -431,7 +501,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
                   ? adoptedResult.error
                   : new Error("telegram spooled turn adoption was not completed");
               }
-              await drainLifecycle?.onAdopted();
+              await completeAdoptionEffects();
             },
             onDeferred: () => {
               deferred = true;
@@ -457,13 +527,21 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         if (turnAbortSignal.aborted) {
           const abortResult: TelegramMessageProcessingResult =
             turnAbortSignal.reason === "skipped"
-              ? { kind: "skipped" }
+              ? turnContext.deferCancelledBeforeDispatchSettlement
+                ? { kind: "skipped", reason: "cancelled-before-dispatch" }
+                : { kind: "skipped" }
               : {
                   kind: "failed-retryable",
                   error:
                     turnAbortSignal.reason ??
                     new Error("telegram spooled replay owner cancelled before adoption"),
                 };
+          if (
+            abortResult.kind === "skipped" &&
+            abortResult.reason === "cancelled-before-dispatch"
+          ) {
+            return abortResult;
+          }
           return await settle(abortResult, "terminal");
         }
         if (adoptionAttempted && !deferred && result.kind === "completed") {
@@ -479,11 +557,14 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           while (!turnAbortSignal.aborted) {
             retryAttempt += 1;
             try {
-              const completed =
-                (await turnContext.completeSpooledReplayAfterIrrevocableAdoption?.(retryError)) ??
-                ({ kind: "completed" } satisfies TelegramMessageProcessingResult);
+              const completed = adopted
+                ? ({ kind: "completed" } satisfies TelegramMessageProcessingResult)
+                : ((await turnContext.completeSpooledReplayAfterIrrevocableAdoption?.(
+                    retryError,
+                  )) ?? ({ kind: "completed" } satisfies TelegramMessageProcessingResult));
               if (completed.kind === "completed") {
                 adopted = true;
+                await completeAdoptionEffects();
                 settledResult = completed;
                 participant.settle(completed);
                 return completed;
@@ -510,7 +591,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           if (turnAbortSignal.aborted && !participant.abortSignal.aborted) {
             const abortResult: TelegramMessageProcessingResult =
               turnAbortSignal.reason === "skipped"
-                ? { kind: "skipped" }
+                ? turnContext.deferCancelledBeforeDispatchSettlement
+                  ? { kind: "skipped", reason: "cancelled-before-dispatch" }
+                  : { kind: "skipped" }
                 : {
                     kind: "failed-retryable",
                     error:
@@ -528,7 +611,14 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       };
       // The participant is the ingress ownership boundary. Direct and buffered
       // callers both return when it is durably adopted or terminally rejected.
-      void run();
+      const dispatchTask = run();
+      if (turnContext.deferCancelledBeforeDispatchSettlement) {
+        // Buffered owners need the direct pre-adoption cancellation result so they can retry
+        // after denied authorization. Once adoption succeeds, the participant wins this race
+        // and releases the buffer lane while the agent turn continues under its own lifecycle.
+        return await Promise.race([participant.task, dispatchTask]);
+      }
+      void dispatchTask;
       return await participant.task;
     }
 

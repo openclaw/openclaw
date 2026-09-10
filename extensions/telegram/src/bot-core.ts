@@ -68,6 +68,7 @@ import { resolveTelegramTransport } from "./fetch.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import {
   buildTelegramSelfSenderName,
+  removeTelegramGroupHistoryEntry,
   recordTelegramGroupHistoryEntry,
 } from "./group-history-window.js";
 import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
@@ -408,24 +409,25 @@ export function createTelegramBotCore(
     telegramDeps,
   });
 
-  const nativeCommandCallbackDispatcher = registerTelegramNativeCommands({
-    bot,
-    cfg,
-    runtime,
-    accountId: account.accountId,
-    telegramCfg,
-    mediaMaxBytes,
-    nativeEnabled,
-    nativeSkillsEnabled,
-    resolveGroupPolicy,
-    resolveTelegramGroupConfig,
-    shouldSkipUpdate,
-    opts: runtimeOpts,
-    telegramDeps: {
-      ...telegramDeps,
-      sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
-    },
-  });
+  const { nativeCommandCallbackDispatcher, pluginNativeCommandNames } =
+    registerTelegramNativeCommands({
+      bot,
+      cfg,
+      runtime,
+      accountId: account.accountId,
+      telegramCfg,
+      mediaMaxBytes,
+      nativeEnabled,
+      nativeSkillsEnabled,
+      resolveGroupPolicy,
+      resolveTelegramGroupConfig,
+      shouldSkipUpdate,
+      opts: runtimeOpts,
+      telegramDeps: {
+        ...telegramDeps,
+        sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
+      },
+    });
 
   registerTelegramHandlers({
     cfg,
@@ -442,6 +444,12 @@ export function createTelegramBotCore(
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
+    removeMessageFromGroupHistory: (msg, threadSpec) =>
+      removeTelegramGroupHistoryEntry({
+        historyMap: groupHistories,
+        historyKey: buildTelegramGroupPeerId(msg.chat.id, threadSpec),
+        messageId: String(msg.message_id),
+      }),
     processMessage: async ({
       ctx,
       allMedia,
@@ -465,6 +473,7 @@ export function createTelegramBotCore(
     logger,
     telegramDeps,
     nativeCommandCallbackDispatcher,
+    pluginNativeCommandNames,
   });
 
   const originalStop = bot.stop.bind(bot);

@@ -61,6 +61,7 @@ import {
   isTelegramChatWindowPromptContext,
   mergeTelegramGroupHistoryPromptContext,
   recordTelegramGroupHistoryEntry,
+  resolveTelegramGroupHistorySourceMessageIds,
   retainTelegramGroupHistoryPromptContext,
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
@@ -876,6 +877,10 @@ export async function buildTelegramInboundContextPayload(params: {
         timestamp: msg.date ? msg.date * 1000 : undefined,
         messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
       },
+      sourceMessageIds: resolveTelegramGroupHistorySourceMessageIds({
+        bufferedMessages: options?.bufferedMessages,
+        media: allMedia,
+      }),
     });
   }
 

@@ -118,6 +118,13 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
   <Accordion title="Native commands and custom commands">
     Telegram's command menu is registered at startup with `setMyCommands`. `commands.native: "auto"` enables native commands for Telegram.
 
+    `/ignore <message>` marks one authorized update as human-only and drops it
+    before it reaches agent context, without sending a bot reply. Bare `/ignore`
+    returns usage help. This is context control, not message deletion: the
+    original Telegram message remains visible in the chat. A direct reply to the
+    ignored message can include it for that turn, but OpenClaw does not retain the
+    ignored text in later reply history.
+
     Add custom command menu entries:
 
 ```json5
@@ -133,7 +140,7 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
 }
 ```
 
-    Rules: names are normalized (strip leading `/`, lowercase); valid pattern `a-z`, `0-9`, `_`, length 1-32; custom commands cannot override native commands; conflicts/duplicates are skipped and logged.
+    Rules: names are normalized (strip leading `/`, lowercase); valid pattern `a-z`, `0-9`, `_`, length 1-32; custom commands cannot override native commands; conflicts/duplicates are skipped and logged. `/ignore` is the deliberate exception: a configured custom command or registered plugin-native command named `ignore` owns that command for its Telegram account, replaces the built-in menu entry, and disables native human-only context control for that account.
 
     When Telegram menu limits require trimming, configured custom commands come first unless omitted per-skill entries are replaced by a leading `/skill` fallback.
 
