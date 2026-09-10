@@ -34,7 +34,12 @@ export async function resolveBackupConfigCapture({
 }: ReadConfigFileSnapshotForWriteResult): Promise<BackupConfigCapture> {
   const hasIncludes =
     containsConfigIncludeDirective(snapshot.parsed) || Boolean(snapshot.includedPaths?.length);
-  if ((hasIncludes && !snapshot.valid) || (snapshot.exists && snapshot.raw === null)) {
+  // The reader attaches provenance only after resolving the whole include graph,
+  // even when later schema validation fails. Keep that recovery path available.
+  if (
+    (hasIncludes && snapshot.includeProvenance === undefined) ||
+    (snapshot.exists && snapshot.raw === null)
+  ) {
     throw captureError(snapshot.path, "include graph could not be resolved");
   }
   const hashes = writeOptions.includeFileHashesForWrite ?? {};
@@ -124,6 +129,7 @@ export async function resolveBackupConfigCapture({
         current.snapshot.valid !== snapshot.valid ||
         !isDeepStrictEqual(current.snapshot.sourceConfig, snapshot.sourceConfig) ||
         !isDeepStrictEqual(current.snapshot.includedPaths, snapshot.includedPaths) ||
+        !isDeepStrictEqual(current.snapshot.includeProvenance, snapshot.includeProvenance) ||
         !isDeepStrictEqual(current.writeOptions.includeFileHashesForWrite ?? {}, hashes) ||
         !isDeepStrictEqual(current.writeOptions.includeFileTargetsForWrite ?? {}, targets)
       ) {

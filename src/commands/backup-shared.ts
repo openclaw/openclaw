@@ -599,18 +599,18 @@ export async function resolveBackupPlanFromDisk(
       `Config invalid at ${shortenHomePath(discoverySnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,
     );
   }
-  const cleanupPlan = buildCleanupPlan({
-    // Discovery uses the validated compatibility view; the archive still reads configPath bytes.
-    cfg: discoverySnapshot.config,
-    stateDir,
-    configPath,
-    oauthDir,
-  });
   const unresolvedOwnership = discoverySnapshot.exists && !discoverySnapshot.valid;
+  const discoveredWorkspaceDirs = unresolvedOwnership
+    ? []
+    : buildCleanupPlan({
+        cfg: discoverySnapshot.config,
+        stateDir,
+        configPath,
+        oauthDir,
+      }).workspaceDirs;
   const agentRoots = unresolvedOwnership
     ? []
     : await resolveBackupAgentRoots(discoverySnapshot.config);
-  const discoveredWorkspaceDirs = cleanupPlan.workspaceDirs;
   // Effective agent workspaces can omit their shared base. Exclude it only here
   // so full backups and destructive cleanup retain their existing selection.
   if (!includeWorkspace && discoverySnapshot.valid) {

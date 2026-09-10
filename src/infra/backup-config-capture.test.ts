@@ -64,22 +64,34 @@ async function restore(state: OpenClawTestState, output: string, includeWorkspac
 
 describe("full backup config include capture", () => {
   it.each([
-    { name: "external config", layout: "split", rootLink: false },
-    { name: "in-state config", layout: "state-only", rootLink: false },
-    { name: "root link", layout: "state-only", rootLink: true },
+    { name: "external config", layout: "split", rootLink: false, invalid: false },
+    { name: "in-state config", layout: "state-only", rootLink: false, invalid: false },
+    { name: "root link", layout: "state-only", rootLink: true, invalid: false },
+    { name: "schema-invalid config", layout: "split", rootLink: false, invalid: true },
   ] as const)(
     "restores a raw nested graph through $name without the original includes",
-    async ({ layout, rootLink }) => {
+    async ({ layout, rootLink, invalid }) => {
       await withOpenClawTestState({ layout }, async (state) => {
         vi.stubEnv("BACKUP_INCLUDE_PLACEHOLDER", "must-not-be-expanded");
         const graph = await configGraph(state);
+        if (invalid) {
+          const raw = graph.files
+            .get(state.configPath)!
+            .replace('ownership: "explicit"', "defaults: { workspace: 42 }");
+          graph.files.set(state.configPath, raw);
+          await fs.writeFile(state.configPath, raw);
+        }
         if (rootLink) {
           const authoredRoot = state.path("authored-config.json5");
           await fs.rename(state.configPath, authoredRoot);
           await fs.symlink(authoredRoot, state.configPath);
         }
         await fs.writeFile(state.statePath("ordinary.txt"), "ordinary");
-        const { archive, restoredPath } = await restore(state, state.path("backup.tar.gz"));
+        const { archive, restoredPath } = await restore(
+          state,
+          state.path("backup.tar.gz"),
+          !invalid,
+        );
         const entries: string[] = [];
         await tar.t({
           file: archive.archivePath,
@@ -104,7 +116,12 @@ describe("full backup config include capture", () => {
           configPath: restoredPath(state.configPath),
           observe: false,
         }).readConfigFileSnapshot();
-        expect(snapshot.valid).toBe(true);
+        expect(snapshot.valid).toBe(!invalid);
+        expect(snapshot.includeProvenance).toBeDefined();
+        expect(snapshot.issues.map((issue) => issue.path)).toEqual(
+          invalid ? ["agents.defaults.workspace"] : [],
+        );
+        expect(archive.skipped.some(({ reason }) => reason === "unresolved")).toBe(invalid);
         expect(snapshot.config.gateway?.mode).toBe("local");
       });
     },
