@@ -1,9 +1,76 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "./errors.js";
+import type { createPackageIntegrityReader } from "./package-update-integrity.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 
 export const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
+
+export type PackageUpdateShim = {
+  source: string;
+  destination: string;
+  backup: string | null;
+  fingerprint?: string;
+};
+
+/** Capture launchers before package mutation, retaining partial capture for cleanup. */
+export async function capturePackageUpdateShims(params: {
+  packageName: string;
+  stageBinDir: string;
+  layout: { binDir: string; globalRoot: string };
+  skipLaunchers: boolean;
+  reader?: ReturnType<typeof createPackageIntegrityReader>;
+  shims: PackageUpdateShim[];
+  onBackupDirectory: (root: string) => void;
+}): Promise<void> {
+  const { reader, shims, layout } = params;
+  await fs.mkdir(layout.globalRoot, { recursive: true });
+  const shimNames = new Set([params.packageName, "openclaw"]);
+  const entries = params.skipLaunchers
+    ? []
+    : (
+        await (reader ? reader.entries(params.stageBinDir) : fs.readdir(params.stageBinDir)).catch(
+          (error: unknown) => {
+            if (hasErrnoCode(error, "ENOENT")) {
+              return [];
+            }
+            throw error;
+          },
+        )
+      )
+        .filter((entry) => shimNames.has(entry) || shimNames.has(path.parse(entry).name))
+        .toSorted();
+  if (entries.length === 0) {
+    return;
+  }
+  const backupDir = await fs.mkdtemp(path.join(layout.globalRoot, ".openclaw.shim-backup-"));
+  // Register before any awaited capture can fail, so the swap still owns cleanup.
+  params.onBackupDirectory(backupDir);
+  await fs.mkdir(layout.binDir, { recursive: true });
+  // Relative npm shims can dangle after moving their package. Capture every
+  // original now; failed backup copies have not touched a live entry.
+  for (const entry of entries) {
+    const destination = path.join(layout.binDir, entry);
+    const backup = (await (reader
+      ? reader.exists(destination)
+      : packagePathEntryExists(destination)))
+      ? path.join(backupDir, entry)
+      : null;
+    const fingerprint = backup && reader ? await reader.launcher(destination) : undefined;
+    if (backup) {
+      await copyPackagePathEntry(destination, backup);
+      if (reader && (await reader.launcher(backup)) !== fingerprint) {
+        throw new Error(`Package rollback launcher backup changed: ${destination}`);
+      }
+    }
+    shims.push({
+      source: path.join(params.stageBinDir, entry),
+      destination,
+      backup,
+      fingerprint,
+    });
+  }
+}
 
 export async function packagePathEntryExists(targetPath: string): Promise<boolean> {
   try {

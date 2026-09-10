@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   collectPackageDistInventory,
   readPackageDistInventoryIfPresent,
 } from "./package-dist-inventory.js";
 import {
   activateStagedNpmPackageRoot,
+  capturePackageUpdateShims,
+  type PackageUpdateShim,
   discardPackageUpdateBackup,
   copyPackagePathEntry as copyPathEntry,
   PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
@@ -128,12 +130,7 @@ export async function swapStagedPackageInstall(params: {
   let packageBackedUp = false;
   let displacedCandidateRoot: string | undefined;
   const baseline = createPackageIntegrityReader(params.timeoutMs);
-  const shims: Array<{
-    source: string;
-    destination: string;
-    backup: string | null;
-    fingerprint?: string;
-  }> = [];
+  const shims: PackageUpdateShim[] = [];
   const rollback: Array<(assertCurrent: () => void) => Promise<void>> = [];
   let packageRollbackVerified = false;
   let retained = false;
@@ -299,54 +296,15 @@ export async function swapStagedPackageInstall(params: {
         (await collectPackageDistInventory(params.installTarget.packageRoot!));
     }
     packageRollbackVerified = hadPackage && previousVersion !== null;
-    await fs.mkdir(targetLayout.globalRoot, { recursive: true });
-    const shimNames = new Set([params.packageName, "openclaw"]);
-    const shimEntries =
-      params.installTarget.directNodeModulesRoot === true
-        ? []
-        : (
-            await (
-              native
-                ? fs.readdir(params.stage.layout.binDir)
-                : baseline.entries(params.stage.layout.binDir)
-            ).catch((error: unknown) => {
-              if (hasErrnoCode(error, "ENOENT")) {
-                return [];
-              }
-              throw error;
-            })
-          )
-            .filter((entry) => shimNames.has(entry) || shimNames.has(path.parse(entry).name))
-            .toSorted();
-    if (shimEntries.length > 0) {
-      shimBackupDir = await fs.mkdtemp(
-        path.join(targetLayout.globalRoot, ".openclaw.shim-backup-"),
-      );
-      await fs.mkdir(targetLayout.binDir, { recursive: true });
-      // Capture every original before moving its package; relative npm shims can
-      // become dangling during the swap, and failed backup copies touch no live entry.
-      for (const entry of shimEntries) {
-        const destination = path.join(targetLayout.binDir, entry);
-        const backup = (await (native
-          ? pathEntryExists(destination)
-          : baseline.exists(destination)))
-          ? path.join(shimBackupDir, entry)
-          : null;
-        const fingerprint = backup && !native ? await baseline.launcher(destination) : undefined;
-        if (backup) {
-          await copyPathEntry(destination, backup);
-          if (!native && (await baseline.launcher(backup)) !== fingerprint) {
-            throw new Error(`Package rollback launcher backup changed: ${destination}`);
-          }
-        }
-        shims.push({
-          source: path.join(params.stage.layout.binDir, entry),
-          destination,
-          backup,
-          fingerprint,
-        });
-      }
-    }
+    await capturePackageUpdateShims({
+      packageName: params.packageName,
+      stageBinDir: params.stage.layout.binDir,
+      layout: targetLayout,
+      skipLaunchers: params.installTarget.directNodeModulesRoot === true,
+      reader: native ? undefined : baseline,
+      shims,
+      onBackupDirectory: (root) => (shimBackupDir = root),
+    });
     if (params.recovery && previousRoot?.kind === "link") {
       throw new Error("Durable package recovery requires a real package directory");
     }
