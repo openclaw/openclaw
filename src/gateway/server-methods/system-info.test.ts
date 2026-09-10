@@ -41,6 +41,7 @@ describe("system.info", () => {
   beforeEach(() => {
     sampleTime += 10_001;
     vi.spyOn(Date, "now").mockReturnValue(sampleTime);
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     vi.spyOn(os, "platform").mockReturnValue("darwin");
     mocks.runCommandWithTimeout.mockReset().mockImplementation(mountedVolumeOutput);
   });
@@ -48,6 +49,7 @@ describe("system.info", () => {
 
   it("returns a schema-valid host resource snapshot", async () => {
     const respond = vi.fn();
+    const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(4096);
 
     const request = {
       params: {},
@@ -76,6 +78,8 @@ describe("system.info", () => {
     }
     expect(payload.cpuCount).toBeGreaterThanOrEqual(1);
     expect(payload.memoryTotalBytes).toBeGreaterThan(0);
+    expect(payload.memoryFreeBytes).toBe(4096);
+    expect(availableMemory).toHaveBeenCalled();
     expect(payload.processInstanceId).toBe(getGatewayProcessInstanceId());
     expect(payload.uptimeMs).toBeGreaterThanOrEqual(0);
     expect(payload.defaultAgentUtilityModel).toEqual({ status: "unavailable" });
@@ -84,6 +88,35 @@ describe("system.info", () => {
       { path: "/Volumes/Data", totalBytes: 2_048_000, availableBytes: 1_536_000 },
     ]);
   });
+
+  it.each(["linux", "win32"] as const)(
+    "keeps host-wide memory readings on %s",
+    async (platform) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      vi.spyOn(os, "platform").mockReturnValue(platform);
+      const freeMemory = vi.spyOn(os, "freemem").mockReturnValue(8192);
+      const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(4096);
+
+      const respond = vi.fn();
+      await expectDefined(
+        systemHandlers["system.info"],
+        "system.info handler",
+      )({
+        params: {},
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+      } as unknown as GatewayRequestHandlerOptions);
+
+      const [ok, payload] = respond.mock.calls[0] ?? [];
+      expect(ok).toBe(true);
+      if (!validateSystemInfoResult(payload)) {
+        throw new Error("system.info returned an invalid payload");
+      }
+      expect(payload.memoryFreeBytes).toBe(8192);
+      expect(freeMemory).toHaveBeenCalled();
+      expect(availableMemory).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["throw", "mount-exit", "df-exit", "empty"])(
     "preserves the state-directory snapshot only when discovery is unavailable (%s)",

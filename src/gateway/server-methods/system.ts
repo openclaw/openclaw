@@ -32,6 +32,7 @@ import {
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
+import { readHostFreeMemoryBytes } from "../../infra/host-memory.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { readSystemDisks } from "../../infra/system-disks.js";
@@ -101,7 +102,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     ...(cpuModel ? { cpuModel } : {}),
     ...(loadAverage.some((value) => value !== 0) ? { loadAverage } : {}),
     memoryTotalBytes: os.totalmem(),
-    memoryFreeBytes: os.freemem(),
+    memoryFreeBytes: readHostFreeMemoryBytes(),
     // Keep the existing state-volume reading when native discovery is unavailable;
     // an empty successful discovery intentionally stays empty.
     disks:
