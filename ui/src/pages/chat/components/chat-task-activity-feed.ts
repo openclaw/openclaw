@@ -145,10 +145,12 @@ function toolIcon(call: ToolCard) {
 }
 
 function renderToolLine(call: ToolCard, mode: "summary" | "full") {
+  // The text sits in an inline element so template whitespace stays outside
+  // the `pre-wrap` region of expanded rows.
   return html`<div
     class="chat-task-feed__tool-line ${mode === "full" ? "chat-task-feed__tool-line--full" : ""} ${isToolCardError(call) ? "chat-task-feed__error" : ""}"
   >
-    ${toolLine(call, mode)}
+    <code>${toolLine(call, mode)}</code>
   </div>`;
 }
 

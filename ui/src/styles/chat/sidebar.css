@@ -1139,9 +1139,17 @@ openclaw-chat-sidebar-region,
   font-family: var(--mono);
 }
 
+.chat-task-feed__tool-line code {
+  font: inherit;
+}
+
 .chat-task-feed__tool-line--full {
   overflow: visible;
   text-overflow: clip;
+  white-space: normal;
+}
+
+.chat-task-feed__tool-line--full code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
