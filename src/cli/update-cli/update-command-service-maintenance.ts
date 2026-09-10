@@ -27,6 +27,7 @@ import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
+import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
   assertGatewayServiceManagementAllowedForUpdate,
@@ -43,6 +44,7 @@ import {
   type WindowsTaskAutoStartRecovery,
 } from "./update-command-windows-task.js";
 
+export type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 export { UpdateCommandAbort } from "./update-command-windows-task.js";
 
 const GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE =
@@ -59,25 +61,6 @@ function serviceInspectionBlockMessage(state: GatewayServiceState): string {
     ? GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE
     : `Scheduled Task probe timed out after ${timeoutMs} ms (ETIMEDOUT). ${GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE}`;
 }
-
-export type PreManagedServiceStop = {
-  stoppedAtMs?: number;
-  stopped: boolean;
-  inspected: boolean;
-  runtimeInspected: boolean;
-  running: boolean;
-  offline?: boolean;
-  serviceMutationAllowed?: boolean;
-  serviceMutationSkipMessage?: string;
-  serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
-  blockMessage?: string;
-  serviceEnv?: NodeJS.ProcessEnv;
-  serviceDefinitionEnv?: NodeJS.ProcessEnv;
-  serviceNodeRunner?: string;
-  /** Original account observed from the pinned native user-manager connection. */
-  serviceManagerUid?: number;
-  windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
-};
 
 export function resolvePreparedGatewayUpdatePolicy(
   stopState: PreManagedServiceStop | undefined,

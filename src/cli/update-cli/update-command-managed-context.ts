@@ -6,11 +6,11 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { UpdatePreMutationError } from "./shared.js";
+import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
   resolveOwnedManagedUpdateEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
-import type { PreManagedServiceStop } from "./update-command-service.js";
 
 export type OwnedManagedUpdateContext = {
   env: NodeJS.ProcessEnv;

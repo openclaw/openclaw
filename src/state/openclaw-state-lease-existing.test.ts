@@ -17,6 +17,7 @@ import {
   openOpenClawAgentDatabase,
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -188,7 +189,7 @@ it("keeps the maintenance lease live across an explicitly owned migration", asyn
   }
   await run;
   expect(beforeMigration).toEqual({ user_version: 15 });
-  expect(inspect(f.pathname).version).toEqual({ user_version: 16 });
+  expect(inspect(f.pathname).version).toEqual({ user_version: OPENCLAW_STATE_SCHEMA_VERSION });
   expect(inspect(f.pathname).leases).toEqual([]);
 });
 
@@ -415,7 +416,7 @@ it("mutates under the real nested file owner before read-only capture and durabl
                 ({ db }) => db.prepare("PRAGMA user_version").get(),
                 { path: f.pathname },
               ),
-            ).toEqual({ user_version: 16 });
+            ).toEqual({ user_version: OPENCLAW_STATE_SCHEMA_VERSION });
             expect(() => write("capture.write")).toThrow(/state-handles/);
             return "sealed-output";
           },

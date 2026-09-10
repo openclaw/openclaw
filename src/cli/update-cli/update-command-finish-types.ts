@@ -6,7 +6,7 @@ import type { readControlPlaneUpdateSentinelMeta } from "../../infra/update-cont
 import type { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import type { UpdateRestartParams } from "./update-command-restart-context.js";
+import type { UpdateRestartParams } from "./update-command-service-context-types.js";
 import type { UpdateServiceLoadBoundary } from "./update-command-service-load.js";
 export type FinishUpdateParams = UpdateRestartParams & {
   coreAlreadyCurrent?: boolean;
