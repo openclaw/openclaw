@@ -37,6 +37,9 @@ Skip it to enable or change `x_search` later in config.
 
 ## Sign in or get an API key
 
+The `xai` plugin that provides Grok web search ships with OpenClaw, so there is
+no `openclaw plugins install` step. Start at the credential you already have.
+
 <Steps>
   <Step title="Use xAI OAuth">
     If you already signed in with xAI during onboarding or model auth, choose

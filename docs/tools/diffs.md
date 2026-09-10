@@ -22,6 +22,7 @@ The [Control UI](/web/control-ui) already highlights inline tool diffs and sessi
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install clawhub:@openclaw/diffs
+    openclaw gateway restart
     ```
 
     `diffs` and its language pack ship as separate packages rather than with

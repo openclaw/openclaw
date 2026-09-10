@@ -9,7 +9,7 @@ read_when:
 title: "Goal"
 ---
 
-# Goal
+<a id="goal" />
 
 A **goal** is one durable objective attached to the current OpenClaw session.
 It gives the agent and the operator a shared target for long-running work,
