@@ -129,7 +129,9 @@ work that was actually refused:
   the session selected, and a turn that was not refused never reaches the weaker
   tier.
 - After an attempt, that session is damped for `cooloffMs`, so a burst of
-  refusals does not each pay for its own retry.
+  refusals does not each pay for its own retry. A successful escalation clears
+  that damper, so a later refusal in the same session still escalates.
+- The retry does not mirror the prompt into the transcript a second time.
 - Escalation never changes the session's stored model selection, and all of this
   state is process-local rather than persisted.
 
@@ -142,7 +144,10 @@ evidence and reports an `unavailable` notice rather than a silent block.
 Because entitlement belongs to the authenticated workspace and the target model
 rather than to any one conversation, an unauthorized target is remembered once
 for every session under that workspace and cannot be displaced by session churn.
-A separate workspace that is entitled keeps escalating normally.
+A separate workspace that is entitled keeps escalating normally. Only one probe
+runs at a time for a given workspace and target, so sibling sessions refused at
+the same moment do not each pay the reconnect ladder before the first result
+lands.
 
 ## Parallel chats and thread ownership
 

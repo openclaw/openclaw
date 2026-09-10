@@ -297,12 +297,14 @@ export function createCodexAppServerAgentHarness(
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       const {
+        clearCodexCyberSessionSuppression,
         isCodexCyberEscalationAnswered,
         isCodexCyberEscalationReplaySafe,
         isCodexCyberRefusalResult,
         isCodexDaybreakUnavailableResult,
         planCodexCyberEscalation,
         recordCodexCyberEscalation,
+        reserveCodexCyberProbe,
         resolveCodexCyberFailoverConfig,
       } = await import("./src/app-server/cyber-failover.js");
       const { emitCodexCyberNotice } = await import("./src/app-server/cyber-failover-notice.js");
@@ -310,14 +312,19 @@ export function createCodexAppServerAgentHarness(
       // The attempt resolves its turn model from runtimeModelId, so escalation
       // reroutes one turn without touching the session's stored selection.
       const attemptModel = readCodexRuntimeModelId(params.model, params.modelId);
-      const runAttemptOnModel = (model: string) =>
-        runCodexAppServerAttempt(params, {
-          bindingStore: options.bindingStore,
-          pluginConfig,
-          runtime: sessionRuntime,
-          runtimeModelId: model,
-          nativeHookRelay: { enabled: true },
-        });
+      const runAttemptOnModel = (model: string, isRetry = false) =>
+        runCodexAppServerAttempt(
+          // The refused attempt already mirrored this prompt; a retry must not
+          // write a second copy of it into the transcript.
+          isRetry ? { ...params, suppressNextUserMessagePersistence: true } : params,
+          {
+            bindingStore: options.bindingStore,
+            pluginConfig,
+            runtime: sessionRuntime,
+            runtimeModelId: model,
+            nativeHookRelay: { enabled: true },
+          },
+        );
 
       const cyberFailover = resolveCodexCyberFailoverConfig(pluginConfig);
       // Authorization is per authenticated workspace, so every lookup and record
@@ -351,7 +358,16 @@ export function createCodexAppServerAgentHarness(
         workspace: cyberWorkspace,
         cooloffMs: cyberFailover.cooloffMs,
       });
-      const escalated = await runAttemptOnModel(plan.model);
+      const releaseProbe = reserveCodexCyberProbe({
+        model: plan.model,
+        workspace: cyberWorkspace,
+      });
+      let escalated: Awaited<ReturnType<typeof runCodexAppServerAttempt>>;
+      try {
+        escalated = await runAttemptOnModel(plan.model, /*isRetry*/ true);
+      } finally {
+        releaseProbe();
+      }
       // Catalog presence never proves entitlement, so the retry itself is the
       // only evidence. An unauthorized target must not be attempted again inside
       // the window: each try costs the transport's full reconnect ladder.
@@ -369,6 +385,12 @@ export function createCodexAppServerAgentHarness(
       // Daybreak also refused keeps the projector's own block, and any other
       // failure surfaces through its normal terminal error.
       const answered = !unavailable && isCodexCyberEscalationAnswered(escalated);
+      // The damper exists to stop a target that is not working from being retried.
+      // Once Daybreak has answered, later refusals in this session deserve the
+      // same escalation rather than a bare refusal for the rest of the window.
+      if (answered) {
+        clearCodexCyberSessionSuppression(params.sessionKey);
+      }
       if (answered || unavailable) {
         await emitCodexCyberNotice(params, {
           state: answered ? "escalated" : "unavailable",

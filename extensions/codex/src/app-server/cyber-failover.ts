@@ -67,6 +67,11 @@ const MAX_ESCALATION_WINDOWS = 256;
 // churn — which is what makes the expensive 401/403 reconnect ladder genuinely
 // unrepeatable inside its cooloff.
 const unavailableTargets = new Map<string, number>();
+const MAX_UNAVAILABLE_TARGETS = 256;
+// One probe per workspace and target at a time. Without this, sibling sessions
+// refused at the same moment would each pay the 401/403 reconnect ladder before
+// the first result records the target as unavailable.
+const inFlightProbes = new Set<string>();
 
 /** Identifies the authenticated workspace an authorization result belongs to. */
 export type CodexCyberWorkspace = {
@@ -120,6 +125,25 @@ function isSessionSuppressed(sessionKey: string | undefined, now: number): boole
   return true;
 }
 
+/** Marks a workspace/target probe in flight; the returned handle releases it. */
+export function reserveCodexCyberProbe(params: {
+  model: string;
+  workspace?: CodexCyberWorkspace;
+}): () => void {
+  const key = targetKey(params.model, params.workspace);
+  inFlightProbes.add(key);
+  return () => {
+    inFlightProbes.delete(key);
+  };
+}
+
+/** Clears a session's damper so a proven-good target stays reachable. */
+export function clearCodexCyberSessionSuppression(sessionKey: string | undefined): void {
+  if (sessionKey) {
+    escalationWindows.delete(sessionKey);
+  }
+}
+
 export function recordCodexCyberEscalation(params: {
   sessionKey: string | undefined;
   outcome: CodexCyberEscalationOutcome;
@@ -133,6 +157,20 @@ export function recordCodexCyberEscalation(params: {
   }
   const now = params.now ?? Date.now();
   if (params.outcome === "unavailable") {
+    // Expired keys are otherwise only dropped when that exact workspace and
+    // target is queried again, so short-lived agent or profile ids would linger.
+    for (const [key, expiresAt] of unavailableTargets) {
+      if (expiresAt <= now) {
+        unavailableTargets.delete(key);
+      }
+    }
+    while (unavailableTargets.size >= MAX_UNAVAILABLE_TARGETS) {
+      const oldest = unavailableTargets.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      unavailableTargets.delete(oldest.value);
+    }
     unavailableTargets.set(targetKey(params.model, params.workspace), now + params.cooloffMs);
     return;
   }
@@ -210,8 +248,12 @@ export function planCodexCyberEscalation(params: {
   }
   const now = params.now ?? Date.now();
   // An unauthorized target is an account-level fact: no session may retry it and
-  // pay the transport's full reconnect ladder again.
-  if (isTargetUnavailable(config.model, params.workspace, now)) {
+  // pay the transport's full reconnect ladder again. A probe already in flight
+  // for this workspace counts the same way until it reports back.
+  if (
+    isTargetUnavailable(config.model, params.workspace, now) ||
+    inFlightProbes.has(targetKey(config.model, params.workspace))
+  ) {
     return { kind: "skip", reason: "target_unavailable" };
   }
   // One attempt per session per cooloff: a refused turn is retried once, and a

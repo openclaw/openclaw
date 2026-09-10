@@ -8,7 +8,9 @@ import {
   isCodexCyberRefusalResult,
   isCodexDaybreakUnavailableResult,
   planCodexCyberEscalation,
+  clearCodexCyberSessionSuppression,
   recordCodexCyberEscalation,
+  reserveCodexCyberProbe,
   resolveCodexCyberFailoverConfig,
   type CodexCyberFailoverConfig,
 } from "./cyber-failover.js";
@@ -232,6 +234,63 @@ describe("escalation outcome", () => {
         currentAttemptAssistant: { role: "assistant", stopReason: "error" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("concurrency and damper release", () => {
+  it("lets a proven target escalate again once the damper is cleared", () => {
+    const SESSION = nextSession();
+    const now = 1_000;
+    recordCodexCyberEscalation({
+      sessionKey: SESSION,
+      outcome: "suppressed",
+      model: DAYBREAK,
+      cooloffMs: 600_000,
+      now,
+    });
+    expect(
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: SESSION,
+        currentModel: PRIMARY,
+        replaySafe: true,
+        now: now + 1,
+      }),
+    ).toEqual({ kind: "skip", reason: "cooling_off" });
+    clearCodexCyberSessionSuppression(SESSION);
+    expect(
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: SESSION,
+        currentModel: PRIMARY,
+        replaySafe: true,
+        now: now + 2,
+      }),
+    ).toEqual({ kind: "escalate", model: DAYBREAK });
+  });
+
+  it("holds sibling sessions while one probe is in flight", () => {
+    const workspace = { agentId: "agent-p", authProfileId: "profile-p" };
+    const release = reserveCodexCyberProbe({ model: DAYBREAK, workspace });
+    expect(
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: nextSession(),
+        currentModel: PRIMARY,
+        replaySafe: true,
+        workspace,
+      }),
+    ).toEqual({ kind: "skip", reason: "target_unavailable" });
+    release();
+    expect(
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: nextSession(),
+        currentModel: PRIMARY,
+        replaySafe: true,
+        workspace,
+      }),
+    ).toEqual({ kind: "escalate", model: DAYBREAK });
   });
 });
 
