@@ -252,7 +252,11 @@ function renderTaskNow(task: TaskSummary) {
     : nothing;
 }
 
-const taskScroll = new WeakMap<Element, { taskId: string; first: unknown; frame: number }>();
+type TaskScrollCorrection = { kind: "bottom" } | { kind: "prepend"; top: number; height: number };
+const taskScroll = new WeakMap<
+  Element,
+  { taskId: string; first: unknown; frame: number; pending: TaskScrollCorrection | undefined }
+>();
 function taskScrollRef(taskId: string, messages: unknown[]) {
   return (element: Element | undefined) => {
     if (!(element instanceof HTMLElement)) {
@@ -264,19 +268,30 @@ function taskScrollRef(taskId: string, messages: unknown[]) {
     const initial = previous?.taskId !== taskId || previous.first === undefined;
     const prepend = !initial && messages.indexOf(previous.first) > 0;
     const pinned = height - top - element.clientHeight <= 24;
+    // A correction scheduled by an earlier render keeps its measurements: a
+    // second render before the frame runs would otherwise see the prepended
+    // head as current and drop the offset that keeps the reader in place.
+    const pending: TaskScrollCorrection | undefined = prepend
+      ? { kind: "prepend", top, height }
+      : initial
+        ? { kind: "bottom" }
+        : (previous?.pending ?? (pinned ? { kind: "bottom" } : undefined));
     if (previous) {
       cancelAnimationFrame(previous.frame);
     }
     const frame = requestAnimationFrame(() => {
-      if (!element.isConnected) {
+      const state = taskScroll.get(element);
+      if (state) {
+        state.pending = undefined;
+      }
+      if (!element.isConnected || !pending) {
         return;
       }
-      if (prepend) {
-        element.scrollTop = top + element.scrollHeight - height;
-      } else if (initial || pinned) {
-        element.scrollTop = element.scrollHeight;
-      }
+      element.scrollTop =
+        pending.kind === "prepend"
+          ? pending.top + element.scrollHeight - pending.height
+          : element.scrollHeight;
     });
-    taskScroll.set(element, { taskId, first: messages[0], frame });
+    taskScroll.set(element, { taskId, first: messages[0], frame, pending });
   };
 }

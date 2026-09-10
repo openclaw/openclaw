@@ -240,6 +240,9 @@ describe.runIf(browserMode)("chat sidebar layout", () => {
       panel.querySelector<HTMLButtonElement>(".chat-history-boundary__action")!.click();
       await expect.poll(() => panel.textContent?.includes("Earlier 0:")).toBe(true);
       await panel.updateComplete;
+      // A second render before the frame must keep the pending offset correction.
+      panel.requestUpdate();
+      await panel.updateComplete;
       await new Promise(requestAnimationFrame);
       const retainedAnchor = [
         ...panel.querySelectorAll<HTMLElement>(".chat-task-feed__entry"),
