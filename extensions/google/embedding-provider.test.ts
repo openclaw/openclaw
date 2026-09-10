@@ -1,6 +1,7 @@
 // Google tests cover embedding provider plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
   const actual =
@@ -501,8 +502,8 @@ describe("Gemini embedding provider", () => {
   it.each(["original normalization", "cloned body read"] as const)(
     "releases both Google error response branches when cancelled during %s",
     async (phase) => {
-      const readStarted = createDeferred();
-      const cancellationReleased = createDeferred();
+      const readStarted = createDeferred<void>();
+      const cancellationReleased = createDeferred<void>();
       const bodyControllerReady = createDeferred<ReadableStreamDefaultController<Uint8Array>>();
       const cancel = vi.fn(async () => await cancellationReleased.promise);
       const clones: Response[] = [];
@@ -570,7 +571,7 @@ describe("Gemini embedding provider", () => {
         controller.abort(reason);
 
         await expect(
-          withTestTimeout(result, 1_000, "Google body abort did not settle"),
+          withTimeout(result, 1_000, { message: "Google body abort did not settle" }),
         ).resolves.toBe(reason);
         expect(cancel).toHaveBeenCalledOnce();
         expect(response.body?.locked).toBe(false);
@@ -589,7 +590,7 @@ describe("Gemini embedding provider", () => {
             }
           }),
         );
-        await withTestTimeout(result, 1_000, "Google body cleanup did not settle");
+        await withTimeout(result, 1_000, { message: "Google body cleanup did not settle" });
       }
     },
   );

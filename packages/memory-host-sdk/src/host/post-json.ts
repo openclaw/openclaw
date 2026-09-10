@@ -1,4 +1,4 @@
-import type { SsrFPolicy } from "./openclaw-runtime-network.js";
+import { createProviderHttpError, type SsrFPolicy } from "./openclaw-runtime-network.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 import { readResponseJsonWithLimit } from "./response-snippet.js";
 
@@ -28,9 +28,6 @@ export async function postJson<T>(params: {
     },
     onResponse: async (res) => {
       if (!res.ok) {
-        // Keep provider normalization off the memory host's eager import closure.
-        const { createProviderHttpError } =
-          await import("../../../../src/agents/provider-http-errors.js");
         throw await createProviderHttpError(res, params.errorPrefix, {
           requestHeaders: params.headers,
           signal: params.signal,
