@@ -270,28 +270,21 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           },
         });
       }
-      const provisionOptions =
-        machineClass ||
-        os ||
-        executionMode ||
-        enrollmentOperation ||
-        projectOperation ||
-        cancellation
+      const provisionOptions = {
+        profileId: record.profileId,
+        ...(machineClass ? { machineClass } : {}),
+        ...(os ? { os } : {}),
+        ...(executionMode ? { executionMode } : {}),
+        ...(enrollmentOperation
           ? {
-              ...(machineClass ? { machineClass } : {}),
-              ...(os ? { os } : {}),
-              ...(executionMode ? { executionMode } : {}),
-              ...(enrollmentOperation
-                ? {
-                    beginNodeEnrollment: enrollmentOperation.begin,
-                    prepareNodeRuntime: enrollmentOperation.prepareRuntime,
-                    nodeRuntimeIdentity,
-                  }
-                : {}),
-              ...(cancellation ? { signal: cancellation.signal } : {}),
-              ...(projectOperation ? { project: projectOperation.project } : {}),
+              beginNodeEnrollment: enrollmentOperation.begin,
+              prepareNodeRuntime: enrollmentOperation.prepareRuntime,
+              nodeRuntimeIdentity,
             }
-          : undefined;
+          : {}),
+        ...(cancellation ? { signal: cancellation.signal } : {}),
+        ...(projectOperation ? { project: projectOperation.project } : {}),
+      };
       cancellation?.assertActive();
       const provision = async () => {
         const assertCurrent = () => {

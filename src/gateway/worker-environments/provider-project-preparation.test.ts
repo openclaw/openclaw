@@ -403,6 +403,12 @@ describe("worker provider project preparation ownership", () => {
     "persists and replays project identity with a legacy provider hook (machineClass=%s)",
     async (machineClass) => {
       const git = await repository("project");
+      await requireGit(git.root, [
+        "remote",
+        "add",
+        "origin",
+        "git@example.invalid:Team/Project.git",
+      ]);
       const projects: ProjectPreparation[] = [];
       const operationIds: string[] = [];
       const provision: WorkerProvider["provision"] = async (_profile, operationId, options) => {
@@ -416,11 +422,17 @@ describe("worker provider project preparation ownership", () => {
           state: "provisioning",
           leaseId: null,
           profileSnapshot: {
-            project: { key: project.key, root: git.root, baseCommit: git.baseCommit },
+            project: {
+              key: project.key,
+              root: git.root,
+              baseCommit: git.baseCommit,
+              label: "example.invalid/team/project",
+            },
           },
         });
         expect(project.key).toMatch(/^[a-f0-9]{64}$/u);
         expect(project.baseCommit).toBe(git.baseCommit);
+        expect(project.label).toBe("example.invalid/team/project");
         expect(() => project.assertCurrent()).not.toThrow();
         if (projects.length === 1) {
           throw new Error("provider response was lost after allocation");
@@ -436,6 +448,12 @@ describe("worker provider project preparation ownership", () => {
       expect(projects[0]?.signal.aborted).toBe(true);
       await fs.writeFile(path.join(git.root, "input.txt"), "newer project HEAD\n");
       await requireGit(git.root, ["commit", "--quiet", "-am", "advance"]);
+      await requireGit(git.root, [
+        "remote",
+        "set-url",
+        "origin",
+        "git@example.invalid:Other/Project.git",
+      ]);
       expect(await requireGit(git.root, ["rev-parse", "HEAD"])).not.toBe(git.baseCommit);
       await support.reopenWorkerEnvironmentStore();
 
@@ -447,6 +465,7 @@ describe("worker provider project preparation ownership", () => {
       expect(operationIds[1]).toBe(operationIds[0]);
       expect(projects[1]?.key).toBe(projects[0]?.key);
       expect(projects[1]?.baseCommit).toBe(git.baseCommit);
+      expect(projects[1]?.label).toBe(projects[0]?.label);
       expect(projects[1]).not.toBe(projects[0]);
       expect(projects[1]?.signal.aborted).toBe(true);
     },
