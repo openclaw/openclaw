@@ -221,6 +221,42 @@ describe("shared API-key editing and removal", () => {
     },
   );
 
+  it.each([
+    {
+      profileId: "sample:external",
+      config: {
+        models: {
+          providers: { sample: { ...connection, apiKey: "sample:external" } },
+        },
+      },
+    },
+    {
+      profileId: "sample:manual",
+      config: {
+        models: {
+          providers: { sample: connection },
+        },
+      },
+    },
+  ])("preserves reference-backed profile $profileId during replacement", async (fixture) => {
+    const credential: AuthProfileCredential = {
+      type: "api_key",
+      provider: "sample",
+      keyRef: { source: "env", provider: "default", id: "SAMPLE_API_KEY" },
+      copyToAgents: false,
+    };
+    await upsertAuthProfileWithLockOrThrow({
+      profileId: fixture.profileId,
+      credential,
+    });
+    writeConfig(fixture.config);
+
+    await expect(save()).rejects.toThrow("uses an external secret reference");
+
+    expect(loadPersistedAuthProfileStore()?.profiles[fixture.profileId]).toEqual(credential);
+    expect((await readConfig()).models).toEqual(fixture.config.models);
+  });
+
   it("reports saved key material separately from failed config application and redacts it", async () => {
     vi.spyOn(configWriter, "updateConfig").mockRejectedValueOnce(new Error("config write failed"));
     await expect(save("ordinary-fixture\r\n-key-8304")).rejects.toThrow(
@@ -359,6 +395,58 @@ describe("shared API-key editing and removal", () => {
     expect((await readConfig()).models?.providers?.sample?.apiKey).toBe("sample:new");
   });
 
+  it.each([
+    { name: "API-key-only", selection: { apiKeyProvider: "sample" } },
+    { name: "full-provider", selection: { provider: "sample" } },
+  ])(
+    "restores config after a concurrent same-profile replacement rejects $name removal",
+    async ({ selection }) => {
+      const profileId = "sample:race";
+      await upsertAuthProfileWithLockOrThrow({
+        agentDir: agentDir("writer"),
+        profileId,
+        credential: { type: "api_key", provider: "sample", key: "old-key" },
+      });
+      writeConfig({
+        auth: {
+          profiles: { [profileId]: { provider: "sample", mode: "api_key" } },
+          order: { sample: [profileId] },
+        },
+        models: { providers: { sample: { ...connection, apiKey: profileId } } },
+      });
+      const config = await readConfig();
+      const updateConfig = configWriter.updateConfig;
+      vi.spyOn(configWriter, "updateConfig").mockImplementationOnce(async (mutator) => {
+        await upsertAuthProfileWithLockOrThrow({
+          agentDir: agentDir("writer"),
+          profileId,
+          credential: { type: "api_key", provider: "sample", key: "replacement-key" },
+        });
+        return updateConfig(mutator);
+      });
+
+      await expect(
+        removeModelAuthCredentials({
+          cfg: config,
+          agentDir: agentDir("writer"),
+          profileIds: [profileId],
+          ...selection,
+        }),
+      ).rejects.toThrow("could not be removed");
+
+      expect(loadPersistedAuthProfileStore(agentDir("writer"))?.profiles[profileId]).toMatchObject({
+        key: "replacement-key",
+      });
+      const restored = await readConfig();
+      expect(restored.auth?.profiles?.[profileId]).toEqual({
+        provider: "sample",
+        mode: "api_key",
+      });
+      expect(restored.auth?.order?.sample).toEqual([profileId]);
+      expect(restored.models?.providers?.sample?.apiKey).toBe(profileId);
+    },
+  );
+
   it("does not use a stale runtime key snapshot to authorize removal of a durable token", async () => {
     const profileId = "sample:stale";
     const replacement: AuthProfileCredential = {
@@ -396,6 +484,40 @@ describe("shared API-key editing and removal", () => {
     );
     expect((await readConfig()).models?.providers?.sample?.apiKey).toBe(profileId);
   });
+
+  it.each(["sample:backup", undefined])(
+    "preserves a newer provider binding of %s after key entry",
+    async (apiKey) => {
+      for (const profileId of ["sample:original", "sample:backup"]) {
+        await upsertAuthProfileWithLockOrThrow({
+          profileId,
+          credential: { type: "api_key", provider: "sample", key: profileId },
+        });
+      }
+      writeConfig({
+        models: { providers: { sample: { ...connection, apiKey: "sample:original" } } },
+      });
+      const config = await readConfig();
+      const updated = { ...connection, apiKey };
+      writeConfig({ models: { providers: { sample: updated } } });
+
+      await expect(
+        saveModelProviderApiKey({
+          config,
+          provider: "sample",
+          apiKey: "replacement-key",
+          agentDir: agentDir("writer"),
+        }),
+      ).rejects.toThrow("API key saved, but provider settings could not be applied");
+      expect((await readConfig()).models?.providers?.sample).toEqual(updated);
+      expect(loadPersistedAuthProfileStore()?.profiles["sample:original"]).toMatchObject({
+        key: "replacement-key",
+      });
+      expect(loadPersistedAuthProfileStore()?.profiles["sample:backup"]).toMatchObject({
+        key: "sample:backup",
+      });
+    },
+  );
 
   it.each(["oauth", "token", "api-key"] as const)(
     "keeps the active %s connection when saving an explicit backup profile",

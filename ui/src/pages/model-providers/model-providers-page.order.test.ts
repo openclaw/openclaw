@@ -35,7 +35,7 @@ describe("ModelProvidersPage profile actions", () => {
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.config).toEqual({}));
     const original = request.getMockImplementation()!;
-    request.mockImplementation(async (method, params) =>
+    request.mockImplementation(async (method) =>
       method === "models.authLogout"
         ? {
             provider: "openai",
@@ -43,7 +43,7 @@ describe("ModelProvidersPage profile actions", () => {
             abortedRunIds: [],
             warning: "Restart the Gateway to apply removal.",
           }
-        : original(method, params),
+        : original(method),
     );
     await page.profileActions.logout("openai", { provider: "openai", profileIds: ["openai:one"] });
     await waitForFast(() =>

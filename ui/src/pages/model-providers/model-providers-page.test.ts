@@ -479,7 +479,7 @@ describe("ModelProvidersPage agent scope", () => {
           : "Authentication refresh failed. Provider refresh failed.",
     });
     await page.updateComplete;
-    expect(page.textContent).toContain(page.messages.openai.warning);
+    expect(page.textContent).toContain(page.messages.openai?.warning);
   });
 
   it("removes stored API keys through the rendered action and retains its warning", async () => {

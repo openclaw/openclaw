@@ -1,6 +1,6 @@
 // Covers `models auth logout`: store removal, config-reference cleanup, and refusals.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
     async (params: {
       profileIds: readonly string[];
       beforeRemove?: (profileIds: readonly string[]) => Promise<void>;
+      onIncomplete?: (
+        survivingProfiles: ReadonlyMap<string, AuthProfileCredential>,
+      ) => Promise<void>;
     }) => {
       await params.beforeRemove?.(params.profileIds);
       return true;
@@ -59,14 +62,14 @@ vi.mock("../../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => ({ confirm: mocks.confirm }),
 }));
 
-const { modelsAuthLogoutCommand } = await import("./auth-logout.js");
+const { modelsAuthLogoutCommand, removeModelAuthCredentials } = await import("./auth-logout.js");
 
 function createRuntime(): RuntimeEnv & { logs: string[] } {
   const logs: string[] = [];
   return {
     logs,
-    log: (message: string) => {
-      logs.push(message);
+    log: (...args: unknown[]) => {
+      logs.push(args.map((value) => String(value)).join(" "));
     },
     error: () => {},
     exit: () => {},
@@ -146,6 +149,7 @@ describe("models auth logout", () => {
       cfg: {},
       profileIds: ["openai:manual"],
       beforeRemove: expect.any(Function),
+      onIncomplete: expect.any(Function),
     });
     expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("poe", "logout", runtime);
     expect(runtime.logs).toContain("Removed auth profile: openai:manual (openai/oauth)");
@@ -272,6 +276,207 @@ describe("models auth logout", () => {
     await expect(
       modelsAuthLogoutCommand({ profileId: "openai:manual", yes: true }, createRuntime()),
     ).rejects.toThrow("Saved credentials could not be removed");
+  });
+
+  it.each([
+    { name: "returns incomplete", failure: new Error("incomplete"), throws: false },
+    { name: "throws", failure: new Error("store write failed"), throws: true },
+  ])("restores surviving config when store removal $name", async ({ failure, throws }) => {
+    const profileId = "openai:manual";
+    const credential: AuthProfileCredential = {
+      type: "api_key",
+      provider: "openai",
+      key: "synthetic-key",
+    };
+    let liveConfig: OpenClawConfig = {
+      auth: {
+        profiles: { [profileId]: { provider: "openai", mode: "api_key" } },
+        order: { openai: [profileId] },
+      },
+      models: {
+        providers: {
+          openai: { baseUrl: "https://example.test/v1", models: [], apiKey: profileId },
+        },
+      },
+    };
+    mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: { [profileId]: credential },
+    });
+    mocks.updateConfig.mockImplementation(
+      async (mutator: (current: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>) => {
+        liveConfig = await mutator(liveConfig);
+        return liveConfig;
+      },
+    );
+    mocks.removeAuthProfilesAcrossOwnerStores.mockImplementationOnce(async (params) => {
+      await params.beforeRemove?.(params.profileIds);
+      await params.onIncomplete?.(new Map([[profileId, credential]]));
+      if (throws) {
+        throw failure;
+      }
+      return false;
+    });
+
+    await expect(
+      removeModelAuthCredentials({
+        cfg: liveConfig,
+        agentDir: "/tmp/agent-main",
+        profileIds: [profileId],
+      }),
+    ).rejects.toThrow(throws ? "store write failed" : "could not be removed");
+
+    expect(liveConfig.auth?.profiles?.[profileId]).toEqual({
+      provider: "openai",
+      mode: "api_key",
+    });
+    expect(liveConfig.auth?.order?.openai).toEqual([profileId]);
+    expect(liveConfig.models?.providers?.openai?.apiKey).toBe(profileId);
+  });
+
+  it("restores only surviving references after partial multi-store removal", async () => {
+    const removedId = "openai:removed";
+    const survivorId = "openai:survivor";
+    const survivor: AuthProfileCredential = {
+      type: "api_key",
+      provider: "openai",
+      key: "synthetic-survivor",
+    };
+    let liveConfig: OpenClawConfig = {
+      auth: {
+        profiles: {
+          [removedId]: { provider: "openai", mode: "api_key" },
+          [survivorId]: { provider: "openai", mode: "api_key" },
+        },
+        order: { openai: [removedId, survivorId] },
+      },
+      models: {
+        providers: {
+          openai: { baseUrl: "https://example.test/v1", models: [], apiKey: survivorId },
+        },
+      },
+    };
+    mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: { [survivorId]: survivor },
+    });
+    mocks.updateConfig.mockImplementation(
+      async (mutator: (current: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>) => {
+        liveConfig = await mutator(liveConfig);
+        return liveConfig;
+      },
+    );
+    mocks.removeAuthProfilesAcrossOwnerStores
+      .mockReset()
+      .mockImplementationOnce(async (params) => {
+        await params.beforeRemove?.(params.profileIds);
+        await params.onIncomplete?.(new Map([[survivorId, survivor]]));
+        return false;
+      })
+      .mockImplementationOnce(async (params) => {
+        await params.beforeRemove?.(params.profileIds);
+        return true;
+      });
+
+    await expect(
+      removeModelAuthCredentials({
+        cfg: liveConfig,
+        agentDir: "/tmp/agent-main",
+        profileIds: [removedId, survivorId],
+      }),
+    ).rejects.toThrow("could not be removed");
+
+    expect(liveConfig.auth?.profiles).toEqual({
+      [survivorId]: { provider: "openai", mode: "api_key" },
+    });
+    expect(liveConfig.auth?.order?.openai).toEqual([survivorId]);
+    expect(liveConfig.models?.providers?.openai?.apiKey).toBe(survivorId);
+
+    await removeModelAuthCredentials({
+      cfg: liveConfig,
+      agentDir: "/tmp/agent-main",
+      profileIds: [survivorId],
+    });
+    expect(liveConfig.auth?.profiles).toEqual({});
+    expect(liveConfig.auth?.order).toBeUndefined();
+    expect(liveConfig.models?.providers?.openai?.apiKey).toBeUndefined();
+  });
+
+  it("preserves an untargeted token binding through failed API-key removal and retry", async () => {
+    const keyId = "openai:key";
+    const tokenId = "openai:token";
+    const key: AuthProfileCredential = {
+      type: "api_key",
+      provider: "openai",
+      key: "synthetic-key",
+    };
+    const token: AuthProfileCredential = {
+      type: "token",
+      provider: "openai",
+      token: "synthetic-token",
+    };
+    let liveConfig: OpenClawConfig = {
+      auth: {
+        profiles: {
+          [keyId]: { provider: "openai", mode: "api_key" },
+          [tokenId]: { provider: "openai", mode: "token" },
+        },
+        order: { openai: [keyId, tokenId] },
+      },
+      models: {
+        providers: {
+          openai: { baseUrl: "https://example.test/v1", models: [], apiKey: tokenId },
+        },
+      },
+    };
+    mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: { [keyId]: key, [tokenId]: token },
+    });
+    mocks.updateConfig.mockImplementation(
+      async (mutator: (current: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>) => {
+        liveConfig = await mutator(liveConfig);
+        return liveConfig;
+      },
+    );
+    mocks.removeAuthProfilesAcrossOwnerStores
+      .mockReset()
+      .mockImplementationOnce(async (params) => {
+        await params.beforeRemove?.([keyId]);
+        await params.onIncomplete?.(new Map([[keyId, key]]));
+        return false;
+      })
+      .mockImplementationOnce(async (params) => {
+        await params.beforeRemove?.([keyId]);
+        return true;
+      });
+
+    await expect(
+      removeModelAuthCredentials({
+        cfg: liveConfig,
+        agentDir: "/tmp/agent-main",
+        profileIds: [keyId],
+        apiKeyProvider: "openai",
+      }),
+    ).rejects.toThrow("could not be removed");
+    expect(liveConfig.auth?.profiles).toEqual({
+      [keyId]: { provider: "openai", mode: "api_key" },
+      [tokenId]: { provider: "openai", mode: "token" },
+    });
+    expect(liveConfig.auth?.order?.openai).toEqual([keyId, tokenId]);
+    expect(liveConfig.models?.providers?.openai?.apiKey).toBe(tokenId);
+
+    await removeModelAuthCredentials({
+      cfg: liveConfig,
+      agentDir: "/tmp/agent-main",
+      profileIds: [keyId],
+      apiKeyProvider: "openai",
+    });
+    expect(liveConfig.auth?.profiles).toEqual({
+      [tokenId]: { provider: "openai", mode: "token" },
+    });
+    expect(liveConfig.auth?.order?.openai).toEqual([tokenId]);
+    expect(liveConfig.models?.providers?.openai?.apiKey).toBe(tokenId);
   });
 
   it("keeps the profile when an interactive confirmation is declined", async () => {

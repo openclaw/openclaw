@@ -18,6 +18,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { createCatalogDiscoveryController } from "./catalog-discovery.ts";
 import {
+  modelProviderApiKeySuccess,
   modelProviderErrorMessage,
   runModelProviderApiKeyMutation,
   runModelProviderConfigMutation,
@@ -440,23 +441,20 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     }
     const clientEpoch = this.gateway.epoch;
     const agentEpoch = this.agentEpoch;
-    const draft = this.keyDraft;
+    const isCurrent = () =>
+      this.gateway.isCurrent({ client, epoch: clientEpoch }) && this.agentEpoch === agentEpoch;
     this.clearProbe(provider);
     const result = await runModelProviderApiKeyMutation(
       {
         runtimeConfig: this.context.runtimeConfig,
         agentEpoch,
-        isCurrentClient: () => this.gateway.isCurrent({ client, epoch: clientEpoch }),
-        isCurrentAgent: () => this.agentEpoch === agentEpoch,
+        isCurrentClient: isCurrent,
+        isCurrentAgent: isCurrent,
         canMutate: () => this.canMutate(),
         refreshProviders: async () => {
           const previous = this.data;
           await this.refresh({ force: false });
-          if (
-            this.gateway.isCurrent({ client, epoch: clientEpoch }) &&
-            this.agentEpoch === agentEpoch &&
-            this.data?.error
-          ) {
+          if (isCurrent() && this.data?.error) {
             const warning = this.data.error;
             this.data = previous;
             return warning;
@@ -476,21 +474,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         agentId: this.selectedAgentId,
         provider: configKey,
         apiKey,
-        success: t(
-          action === "add"
-            ? "modelProviders.add.saved"
-            : apiKey === null
-              ? "modelProviders.apiKey.removed"
-              : "modelProviders.apiKey.saved",
-          { provider },
-        ),
+        success: modelProviderApiKeySuccess(action, apiKey, provider),
       },
     );
-    if (
-      !result.ok ||
-      !this.gateway.isCurrent({ client, epoch: clientEpoch }) ||
-      this.agentEpoch !== agentEpoch
-    ) {
+    if (!result.ok || !isCurrent()) {
       return;
     }
     if (action === "add") {
@@ -501,7 +488,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         }
         this.addProviderKey = "";
       }
-    } else if (this.keyEditorProvider === provider && this.keyDraft === draft) {
+    } else if (this.keyEditorProvider === provider && this.keyDraft.trim() === apiKey) {
       this.closeKeyEditor();
     }
   }

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   findNormalizedProviderKey,
   normalizeProviderId,
@@ -14,7 +15,10 @@ import {
 import { resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { resolveProviderEntryApiKeyProfileReference } from "../../agents/model-auth-provider-config.js";
+import {
+  resolveProviderConfigSecretInput,
+  resolveProviderEntryApiKeyProfileReference,
+} from "../../agents/model-auth-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -49,6 +53,11 @@ export async function saveModelProviderApiKey(params: {
   }
   const config = params.config ?? (await loadValidConfigSnapshotOrThrow()).runtimeConfig;
   const validateCurrentCredential = (existing: AuthProfileCredential | undefined) => {
+    if (existing?.type === "api_key" && existing.keyRef) {
+      throw new Error(
+        "This API-key profile uses an external secret reference. Remove that saved sign-in before storing an inline key.",
+      );
+    }
     if (
       existing &&
       (existing.type !== "api_key" || normalizeProviderId(existing.provider) !== provider)
@@ -68,7 +77,13 @@ export async function saveModelProviderApiKey(params: {
     }
     return id;
   };
+  const configuredBinding = (cfg: OpenClawConfig, providerId: string) => {
+    const { providerConfig, ref } = resolveProviderConfigSecretInput(cfg, providerId);
+    return ref ?? providerConfig?.apiKey;
+  };
   const connectionId = params.profileId ? undefined : configuredKey(config);
+  const connectionBinding =
+    connectionId === undefined ? undefined : configuredBinding(config, connectionId);
   const store = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir);
   const replacementId = !connectionId
     ? resolveAuthProfileOrder({ cfg: config, store, provider }).find((id) => {
@@ -130,9 +145,13 @@ export async function saveModelProviderApiKey(params: {
   });
   await updateConfig((current) => {
     const id = params.profileId ? undefined : configuredKey(current);
-    if (id && agentDir !== undefined) {
+    if (
+      !params.profileId &&
+      (id !== connectionId ||
+        (id !== undefined && !isDeepStrictEqual(configuredBinding(current, id), connectionBinding)))
+    ) {
       throw new Error(
-        "The provider connection changed during the key update. Reopen the connection and save the key again.",
+        "The provider connection changed during the key update. Reopen the connection and save the key again",
       );
     }
     validateSharedBinding();

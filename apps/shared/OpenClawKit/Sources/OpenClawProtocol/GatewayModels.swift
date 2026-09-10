@@ -8350,21 +8350,25 @@ public struct ModelChoice: Codable, Sendable {
 public struct ModelsAuthLogoutParams: Codable, Sendable {
     public let provider: String
     public let profileids: [String]?
+    public let credentialtype: String?
     public let agentid: String?
 
     public init(
         provider: String,
         profileids: [String]? = nil,
+        credentialtype: String? = nil,
         agentid: String? = nil)
     {
         self.provider = provider
         self.profileids = profileids
+        self.credentialtype = credentialtype
         self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case provider
         case profileids = "profileIds"
+        case credentialtype = "credentialType"
         case agentid = "agentId"
     }
 }

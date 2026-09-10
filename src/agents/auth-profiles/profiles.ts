@@ -316,6 +316,25 @@ type AuthProfileRemovalResult =
   | { kind: "contention" }
   | { kind: "updated"; stores: AuthProfileStore[] };
 
+function readSurvivingRemovalProfiles(
+  targets: readonly AuthProfileRemovalTarget[],
+): ReadonlyMap<string, AuthProfileCredential> {
+  const surviving = new Map<string, AuthProfileCredential>();
+  for (const target of targets) {
+    const store = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
+      allowKeychainPrompt: false,
+      inheritedAuthDir: target.agentDir,
+    });
+    for (const profileId of target.profileIds) {
+      const credential = store.profiles[profileId];
+      if (credential) {
+        surviving.set(profileId, credential);
+      }
+    }
+  }
+  return surviving;
+}
+
 async function removeAuthProfileTargetsWithLocks(
   targets: readonly AuthProfileRemovalTarget[],
   cfg: OpenClawConfig,
@@ -388,6 +407,7 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
   agentDir?: string;
   profileIds: readonly string[];
   beforeRemove?: (profileIds: readonly string[]) => Promise<void>;
+  onIncomplete?: (survivingProfiles: ReadonlyMap<string, AuthProfileCredential>) => Promise<void>;
 }): Promise<boolean> {
   const profileIds = new Set(params.profileIds);
   if ([...profileIds].some(isUserModelAuthProfileId)) {
@@ -417,12 +437,21 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       }),
     );
     // Config cleanup must not make a later credential generation eligible for this removal.
-    await params.beforeRemove?.([...new Set(targets.flatMap((target) => [...target.profileIds]))]);
-    const result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
+    let result: AuthProfileRemovalResult;
+    try {
+      await params.beforeRemove?.([
+        ...new Set(targets.flatMap((target) => [...target.profileIds])),
+      ]);
+      result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
+    } catch (error) {
+      await params.onIncomplete?.(readSurvivingRemovalProfiles(targets));
+      throw error;
+    }
     if (result.kind === "updated") {
       return true;
     }
     if (result.kind === "contention" || params.beforeRemove) {
+      await params.onIncomplete?.(readSurvivingRemovalProfiles(targets));
       return false;
     }
   }
