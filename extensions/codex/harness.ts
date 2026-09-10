@@ -337,7 +337,8 @@ export function createCodexAppServerAgentHarness(
       if (stickyModel && isCodexDaybreakUnavailableResult(result)) {
         recordCodexCyberEscalation({
           sessionKey: params.sessionKey,
-          outcome: "suppressed",
+          outcome: "unavailable",
+          model: stickyModel,
           cooloffMs: cyberFailover.cooloffMs,
         });
         await emitCodexCyberNotice(params, {
@@ -367,6 +368,7 @@ export function createCodexAppServerAgentHarness(
       recordCodexCyberEscalation({
         sessionKey: params.sessionKey,
         outcome: "suppressed",
+        model: plan.model,
         cooloffMs: cyberFailover.cooloffMs,
       });
       const escalated = await runAttemptOnModel(plan.model);
@@ -376,10 +378,14 @@ export function createCodexAppServerAgentHarness(
       const unavailable = isCodexDaybreakUnavailableResult(escalated);
       // Only a real Daybreak reply earns sticky routing. A second refusal, a
       // transport failure, or a cancellation all leave the session suppressed.
-      const answered = !unavailable && isCodexCyberEscalationAnswered(escalated);
+      const answered =
+        !unavailable &&
+        !isCodexCyberRefusalResult(escalated) &&
+        isCodexCyberEscalationAnswered(escalated);
       recordCodexCyberEscalation({
         sessionKey: params.sessionKey,
-        outcome: answered ? "answered" : "suppressed",
+        outcome: unavailable ? "unavailable" : answered ? "answered" : "suppressed",
+        model: plan.model,
         cooloffMs: cyberFailover.cooloffMs,
       });
       // Announce only the two outcomes this owner can state truthfully. A turn

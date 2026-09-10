@@ -122,19 +122,29 @@ work that was actually refused:
 - At most one escalated attempt per turn. A second refusal under Daybreak keeps
   the block and stops.
 - A turn already running on the configured Daybreak model is never escalated.
+- A turn that already acted is never retried. Escalation requires the attempt's
+  own replay-safe verdict, so a turn refused after it sent a message, added a
+  cron entry, spawned a session, or generated media keeps its refusal.
 - After an attempt, the session enters a `cooloffMs` window. If Daybreak
   answered, turns in that window start there directly so related work does not
-  spend another refusal round-trip. If Daybreak was unauthorized, the window
-  instead suppresses further attempts. The window expires back to the selected
+  spend another refusal round-trip. Any other outcome suppresses further
+  attempts for that session instead. The window expires back to the selected
   model in both cases.
-- Escalation never changes the session's stored model selection, and the window
-  is process-local rather than persisted.
+- Escalation never changes the session's stored model selection, and all of this
+  state is process-local rather than persisted.
 
 Authorization stays server-owned. `model/list` advertises Daybreak to every
 client, so catalog presence does not prove entitlement: an unentitled workspace
-still receives `401`/`403` on use. OpenClaw therefore treats the retry itself as
-the only evidence, reports an `unavailable` notice rather than a silent block,
-and does not retry that target again inside the window.
+still receives `401`/`403` on use, and each such attempt costs the transport's
+full reconnect ladder. OpenClaw therefore treats the retry itself as the only
+evidence and reports an `unavailable` notice rather than a silent block.
+
+Because entitlement belongs to the workspace and the target model rather than to
+any one conversation, an unauthorized target is remembered once for every
+session and cannot be displaced by session churn. Entitlement can also lapse
+after a window opens, so a turn already routed to Daybreak that comes back
+unauthorized closes the window, reports it, and is retried on the model the
+session actually selected.
 
 ## Parallel chats and thread ownership
 

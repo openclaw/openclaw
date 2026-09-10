@@ -44,25 +44,51 @@ export function resolveCodexCyberFailoverConfig(pluginConfig: unknown): CodexCyb
 }
 
 /**
- * How the window that follows an escalation should route.
- * `answered` means Daybreak produced a reply, so related follow-up work goes
- * straight there. `suppressed` covers a target the workspace cannot use and a
- * target that refused the work anyway: neither is worth another attempt, and
- * neither justifies sending ordinary turns to the weaker model.
+ * How an escalation attempt should shape later routing.
+ * `answered` means Daybreak produced a reply, so related follow-up work in that
+ * session goes straight there. `unavailable` means the workspace cannot use the
+ * target at all. `suppressed` covers a target that refused the work anyway, or
+ * any other failed attempt: not worth retrying, and no reason to send ordinary
+ * turns to the weaker model.
  */
-export type CodexCyberEscalationOutcome = "answered" | "suppressed";
+export type CodexCyberEscalationOutcome = "answered" | "unavailable" | "suppressed";
 
 type CyberEscalationRecord = {
-  outcome: CodexCyberEscalationOutcome;
+  outcome: Exclude<CodexCyberEscalationOutcome, "unavailable">;
   expiresAt: number;
 };
 
-// Session-scoped and deliberately in memory: the window is minutes long, so it
-// must not outlive the process or enter the session store.
+// Session-scoped routing state, deliberately in memory: the window is minutes
+// long, so it must not outlive the process or enter the session store. Entries
+// expire on read, so writes also sweep to keep the map bounded.
 const escalationWindows = new Map<string, CyberEscalationRecord>();
-// Entries expire on read, so a session that never returns would otherwise linger
-// for the life of the Gateway. Sweep on write to keep the map bounded.
 const MAX_ESCALATION_WINDOWS = 256;
+
+// Authorization is a property of the workspace and the target model, not of any
+// one session, so an unauthorized target is remembered once for all of them.
+// Keyed by target model, this is bounded by the number of configured targets and
+// can never be evicted by session churn — which is what makes the expensive
+// 401/403 reconnect ladder genuinely unrepeatable inside its cooloff.
+const unavailableTargets = new Map<string, number>();
+
+function normalizeModelKey(model: string): string {
+  const trimmed = model.trim().toLowerCase();
+  const slashIndex = trimmed.lastIndexOf("/");
+  return slashIndex >= 0 ? trimmed.slice(slashIndex + 1) : trimmed;
+}
+
+function isTargetUnavailable(model: string, now: number): boolean {
+  const key = normalizeModelKey(model);
+  const expiresAt = unavailableTargets.get(key);
+  if (expiresAt === undefined) {
+    return false;
+  }
+  if (expiresAt <= now) {
+    unavailableTargets.delete(key);
+    return false;
+  }
+  return true;
+}
 
 function readWindow(
   sessionKey: string | undefined,
@@ -85,33 +111,30 @@ function readWindow(
 export function recordCodexCyberEscalation(params: {
   sessionKey: string | undefined;
   outcome: CodexCyberEscalationOutcome;
+  model: string;
   cooloffMs: number;
   now?: number;
 }): void {
-  if (!params.sessionKey || params.cooloffMs <= 0) {
+  if (params.cooloffMs <= 0) {
     return;
   }
   const now = params.now ?? Date.now();
+  if (params.outcome === "unavailable") {
+    unavailableTargets.set(normalizeModelKey(params.model), now + params.cooloffMs);
+    return;
+  }
+  if (!params.sessionKey) {
+    return;
+  }
   if (escalationWindows.size >= MAX_ESCALATION_WINDOWS) {
     for (const [sessionKey, record] of escalationWindows) {
       if (record.expiresAt <= now) {
         escalationWindows.delete(sessionKey);
       }
     }
-    // Shed answered windows first: losing one costs only a routing optimization,
-    // while losing a suppressed window lets an unauthorized target be retried
-    // inside its cooloff.
-    for (const [sessionKey, record] of escalationWindows) {
-      if (escalationWindows.size < MAX_ESCALATION_WINDOWS) {
-        break;
-      }
-      if (record.outcome === "answered") {
-        escalationWindows.delete(sessionKey);
-      }
-    }
-    // The cap is hard, so a map full of live suppressed windows still has to
-    // yield one. Drop the soonest to expire: it protects the least remaining
-    // time, which keeps this map bounded against unbounded distinct session keys.
+    // These records only tune routing for one session; the account-level
+    // authorization fact lives in unavailableTargets and is never evicted. So a
+    // full map can shed its soonest-to-expire entry to stay hard-bounded.
     while (escalationWindows.size >= MAX_ESCALATION_WINDOWS) {
       let soonestKey: string | undefined;
       let soonestExpiry = Number.POSITIVE_INFINITY;
@@ -133,15 +156,10 @@ export function recordCodexCyberEscalation(params: {
   });
 }
 
+// Host refs may be provider-qualified (`openai/gpt-...`); compare the model id.
 function sameModel(left: string | undefined, right: string): boolean {
-  const normalized = left?.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  // Host refs may be provider-qualified (`openai/gpt-...`); compare the model id.
-  const slashIndex = normalized.lastIndexOf("/");
-  const modelId = slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized;
-  return modelId === right.trim().toLowerCase();
+  const trimmed = left?.trim();
+  return trimmed ? normalizeModelKey(trimmed) === normalizeModelKey(right) : false;
 }
 
 /**
@@ -158,8 +176,9 @@ export function resolveCodexCyberStickyModel(params: {
   if (params.config.mode !== "auto") {
     return undefined;
   }
-  const record = readWindow(params.sessionKey, params.now ?? Date.now());
-  if (record?.outcome !== "answered") {
+  const now = params.now ?? Date.now();
+  const record = readWindow(params.sessionKey, now);
+  if (record?.outcome !== "answered" || isTargetUnavailable(params.config.model, now)) {
     return undefined;
   }
   return sameModel(params.currentModel, params.config.model) ? undefined : params.config.model;
@@ -169,7 +188,13 @@ export type CodexCyberEscalationPlan =
   | { kind: "escalate"; model: string }
   | {
       kind: "skip";
-      reason: "disabled" | "already_daybreak" | "cooling_off" | "no_target" | "not_replay_safe";
+      reason:
+        | "disabled"
+        | "already_daybreak"
+        | "cooling_off"
+        | "no_target"
+        | "not_replay_safe"
+        | "target_unavailable";
     };
 
 /** Decides whether a refused turn may be retried on Daybreak. */
@@ -194,10 +219,15 @@ export function planCodexCyberEscalation(params: {
   if (sameModel(params.currentModel, config.model)) {
     return { kind: "skip", reason: "already_daybreak" };
   }
-  // A window from either outcome blocks a fresh attempt: an answered one has
-  // already pre-routed this turn, and a suppressed one must not retry a target
-  // that answers 401/403 behind five transport reconnects.
-  if (readWindow(params.sessionKey, params.now ?? Date.now())) {
+  const now = params.now ?? Date.now();
+  // An unauthorized target is an account-level fact: no session may retry it and
+  // pay the transport's full reconnect ladder again.
+  if (isTargetUnavailable(config.model, now)) {
+    return { kind: "skip", reason: "target_unavailable" };
+  }
+  // Either session outcome blocks a fresh attempt: an answered one has already
+  // pre-routed this turn, and a suppressed one is not worth repeating.
+  if (readWindow(params.sessionKey, now)) {
     return { kind: "skip", reason: "cooling_off" };
   }
   return { kind: "escalate", model: config.model };
@@ -251,10 +281,9 @@ function hasCyberRefusalDiagnostic(message: CyberRefusalMessage | undefined): bo
  * refusals carry their own categories and are never escalated.
  */
 export function isCodexCyberRefusalResult(result: CodexCyberAttemptOutcome | undefined): boolean {
-  return (
-    hasCyberRefusalDiagnostic(result?.lastAssistant) ||
-    hasCyberRefusalDiagnostic(result?.currentAttemptAssistant)
-  );
+  // `lastAssistant` may carry an older turn's row, so it only speaks for this
+  // attempt when the attempt produced no row of its own.
+  return hasCyberRefusalDiagnostic(result?.currentAttemptAssistant ?? result?.lastAssistant);
 }
 
 /**

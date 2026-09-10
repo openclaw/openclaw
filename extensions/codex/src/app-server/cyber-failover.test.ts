@@ -160,6 +160,7 @@ describe("escalation planning", () => {
     recordCodexCyberEscalation({
       sessionKey: SESSION,
       outcome: "suppressed",
+      model: DAYBREAK,
       cooloffMs: 600_000,
       now,
     });
@@ -188,6 +189,7 @@ describe("escalation planning", () => {
     recordCodexCyberEscalation({
       sessionKey: SESSION,
       outcome: "answered",
+      model: DAYBREAK,
       cooloffMs: 600_000,
       now: 1_000,
     });
@@ -235,11 +237,12 @@ describe("escalation outcome", () => {
 });
 
 describe("window bookkeeping", () => {
-  it("never evicts a live suppression window to make room", () => {
+  it("keeps an unauthorized target suppressed for every session, through churn", () => {
     const now = 1_000;
     recordCodexCyberEscalation({
-      sessionKey: "suppressed-first",
-      outcome: "suppressed",
+      sessionKey: "first-to-learn",
+      outcome: "unavailable",
+      model: DAYBREAK,
       cooloffMs: 600_000,
       now,
     });
@@ -247,21 +250,51 @@ describe("window bookkeeping", () => {
       recordCodexCyberEscalation({
         sessionKey: `filler-${index}`,
         outcome: "answered",
+        model: DAYBREAK,
         cooloffMs: 600_000,
         now,
       });
     }
-    // The unauthorized target must still be suppressed, or it would be retried
-    // inside its cooloff.
+    // Authorization is an account-level fact, so a session that never saw the
+    // failure still must not pay the reconnect ladder for it.
     expect(
       planCodexCyberEscalation({
         config: config(),
-        sessionKey: "suppressed-first",
+        sessionKey: "never-seen-before",
         currentModel: PRIMARY,
         replaySafe: true,
         now: now + 1,
       }),
-    ).toEqual({ kind: "skip", reason: "cooling_off" });
+    ).toEqual({ kind: "skip", reason: "target_unavailable" });
+    // And it must not pre-route ordinary work to that target either.
+    expect(
+      resolveCodexCyberStickyModel({
+        config: config(),
+        sessionKey: "filler-399",
+        currentModel: PRIMARY,
+        now: now + 1,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("releases the target once its cooloff expires", () => {
+    const now = 1_000;
+    recordCodexCyberEscalation({
+      sessionKey: "learner",
+      outcome: "unavailable",
+      model: DAYBREAK,
+      cooloffMs: 600_000,
+      now,
+    });
+    expect(
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: nextSession(),
+        currentModel: PRIMARY,
+        replaySafe: true,
+        now: now + 600_001,
+      }),
+    ).toEqual({ kind: "escalate", model: DAYBREAK });
   });
 
   it("stays hard-bounded even when every live window is suppressed", () => {
@@ -270,6 +303,7 @@ describe("window bookkeeping", () => {
       recordCodexCyberEscalation({
         sessionKey: `hardcap-${index}`,
         outcome: "suppressed",
+        model: DAYBREAK,
         cooloffMs: 600_000,
         now,
       });
@@ -303,6 +337,7 @@ describe("window bookkeeping", () => {
       recordCodexCyberEscalation({
         sessionKey: `bounded-${index}`,
         outcome: "answered",
+        model: DAYBREAK,
         cooloffMs: 600_000,
         now,
       });
@@ -335,6 +370,7 @@ describe("sticky routing inside the window", () => {
     recordCodexCyberEscalation({
       sessionKey: SESSION,
       outcome: "answered",
+      model: DAYBREAK,
       cooloffMs: 600_000,
       now,
     });
@@ -354,6 +390,7 @@ describe("sticky routing inside the window", () => {
     recordCodexCyberEscalation({
       sessionKey: SESSION,
       outcome: "suppressed",
+      model: DAYBREAK,
       cooloffMs: 600_000,
       now,
     });
@@ -373,6 +410,7 @@ describe("sticky routing inside the window", () => {
     recordCodexCyberEscalation({
       sessionKey: SESSION,
       outcome: "answered",
+      model: DAYBREAK,
       cooloffMs: 600_000,
       now,
     });
@@ -391,6 +429,7 @@ describe("sticky routing inside the window", () => {
     recordCodexCyberEscalation({
       sessionKey: SESSION,
       outcome: "answered",
+      model: DAYBREAK,
       cooloffMs: 600_000,
       now: 1_000,
     });
