@@ -3120,6 +3120,7 @@
                   "agent-runtime-architecture",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
+                  "reference/secret-placeholder-conventions",
                   "reference/openclaw-ai",
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
@@ -3360,7 +3361,8 @@
                       "help/testing-live/long-context-and-matrix",
                       "help/testing-live/media-providers"
                     ]
-                  }
+                  },
+                  "channels/qa-channel"
                 ]
               },
               {
