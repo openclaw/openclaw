@@ -217,8 +217,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           providerKeyKnown: this.providerInitialized,
         });
       }
-      if (repairedIndexIdentity.status !== "valid") {
+      const pendingChunkingUpgradeKeywordOnly =
+        repairedIndexIdentity.status === "mismatched" &&
+        repairedIndexIdentity.owner === "openclaw" &&
+        repairedIndexIdentity.code === "chunking_version" &&
+        this.fts.enabled &&
+        this.fts.available;
+      if (repairedIndexIdentity.status !== "valid" && !pendingChunkingUpgradeKeywordOnly) {
         return [];
+      }
+      if (pendingChunkingUpgradeKeywordOnly) {
+        log.warn(
+          "memory search: chunking upgrade rebuild is pending; using the existing keyword-only index",
+        );
       }
       // No watcher can observe later edits after kernel capacity exhaustion.
       // Record a fresh generation at the search boundary so detached maintenance
@@ -245,7 +256,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           this.settings.store.databasePath,
           opts?.signal,
         );
-        if (embeddingBootstrapKeywordOnly) {
+        if (embeddingBootstrapKeywordOnly || pendingChunkingUpgradeKeywordOnly) {
           break;
         }
         const leasedIdentity = this.refreshIndexIdentityDirty({
@@ -295,7 +306,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           activeProjectKeys: opts?.activeProjectKeys,
         });
 
-      const keywordOnly = embeddingBootstrapKeywordOnly || !this.provider || opts?.lexicalOnly;
+      const keywordOnly =
+        embeddingBootstrapKeywordOnly ||
+        pendingChunkingUpgradeKeywordOnly ||
+        !this.provider ||
+        opts?.lexicalOnly;
       const loadKeywordResults = async () => {
         const results =
           (keywordOnly || hybrid.enabled) && this.fts.enabled && this.fts.available
