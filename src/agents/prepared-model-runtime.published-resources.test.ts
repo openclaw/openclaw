@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { OpenClawSchema } from "../config/zod-schema.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
@@ -25,7 +26,10 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runt
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 const selectedSource = vi.hoisted(() => {
-  const state: { input?: PreparedModelRuntimeInput } = {};
+  const state: {
+    input?: PreparedModelRuntimeInput;
+    acquisition?: { entered: () => void; completion: Promise<void> };
+  } = {};
   return state;
 });
 
@@ -37,13 +41,27 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => {
     loadPreparedModelRuntimeSnapshot: (
       input: Parameters<typeof runtime.loadPreparedModelRuntimeSnapshot>[0],
     ) => runtime.loadPreparedModelRuntimeSnapshot(selectedSource.input ?? input),
-    acquirePublishedPreparedModelRuntime: (
+    acquirePublishedPreparedModelRuntime: async (
       input: Parameters<typeof runtime.acquirePublishedPreparedModelRuntime>[0],
-    ) => runtime.acquirePublishedPreparedModelRuntime(selectedSource.input ?? input),
+    ) => {
+      const lease = await runtime.acquirePublishedPreparedModelRuntime(
+        selectedSource.input ?? input,
+      );
+      selectedSource.acquisition?.entered();
+      await selectedSource.acquisition?.completion;
+      return lease;
+    },
   };
 });
 
-it.each(["published borrow", "BTW harness cleanup", "BTW parent close"] as const)(
+const publishedRuntimeResourceModes = [
+  "published borrow",
+  "BTW harness cleanup",
+  "BTW parent close",
+  "BTW parent close during acquisition",
+] as const;
+
+it.each(publishedRuntimeResourceModes)(
   "retains an acquired SQLite source through %s and replacement",
   async (mode) => {
     await withOpenClawTestState({ label: "published-runtime-resources" }, async (state) => {
@@ -116,10 +134,12 @@ module.exports = {
       async runSideQuestion() {
         try {
           bridge.requestSignal.current = bridge.getRequestSignal();
-          bridge.requestSignal.current?.addEventListener("abort", () => {
+          const observeAbort = () => {
             bridge.abortRegistry.current = bridge.getRegistry();
             bridge.abortObserved.resolve();
-          }, { once: true });
+          };
+          bridge.requestSignal.current?.addEventListener("abort", observeAbort, { once: true });
+          if (bridge.requestSignal.current?.aborted) observeAbort();
           bridge.entered.resolve();
           await bridge.finish.promise;
           return { text: String(database.prepare("SELECT value FROM answer").get().value) };
@@ -136,10 +156,11 @@ module.exports = {
       );
       const config: OpenClawConfig = {
         agents: {
+          entries: { main: {} },
           defaults: {
             model: { primary: `${pluginId}/model` },
             workspace: state.workspaceDir,
-            agentRuntime: { id: pluginId },
+            models: { [`${pluginId}/model`]: { agentRuntime: { id: pluginId } } },
           },
         },
         models: {
@@ -168,6 +189,7 @@ module.exports = {
           entries: { [pluginId]: { enabled: true } },
         },
       };
+      expect(OpenClawSchema.safeParse(config).success).toBe(true);
       const input = {
         config,
         agentId: "main",
@@ -191,6 +213,9 @@ module.exports = {
             | Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>>
             | undefined;
           const owner = new AsyncWorkScope();
+          const acquisitionEntered = createDeferredCore();
+          const acquisitionFinish = createDeferredCore();
+          const cancellationReason = new Error("BTW parent closed");
           let sideQuestion: ReturnType<typeof runBtwSideQuestion> | undefined;
           try {
             first = await acquireReadOnlyPreparedModelRuntime(input, undefined, "static");
@@ -203,6 +228,12 @@ module.exports = {
               expect(borrower.snapshot).toBe(first.snapshot);
             } else {
               selectedSource.input = input;
+              if (mode === "BTW parent close during acquisition") {
+                selectedSource.acquisition = {
+                  entered: acquisitionEntered.resolve,
+                  completion: acquisitionFinish.promise,
+                };
+              }
               sideQuestion = owner.track(() =>
                 runBtwSideQuestion({
                   cfg: config,
@@ -222,6 +253,17 @@ module.exports = {
                   resolvedReasoningLevel: "off",
                 }),
               );
+              if (mode === "BTW parent close during acquisition") {
+                await Promise.race([
+                  acquisitionEntered.promise,
+                  sideQuestion.then(() => {
+                    throw new Error("BTW did not enter acquisition");
+                  }),
+                ]);
+                owner.beginClose(cancellationReason);
+                expect(original.disposals).toBe(0);
+                acquisitionFinish.resolve();
+              }
               await Promise.race([
                 bridge.entered.promise,
                 sideQuestion.then(() => {
@@ -229,10 +271,11 @@ module.exports = {
                 }),
               ]);
               if (mode === "BTW parent close") {
-                const reason = new Error("BTW parent closed");
-                owner.beginClose(reason);
+                owner.beginClose(cancellationReason);
+              }
+              if (mode.startsWith("BTW parent close")) {
                 expect(bridge.requestSignal.current?.aborted).toBe(true);
-                expect(bridge.requestSignal.current?.reason).toBe(reason);
+                expect(bridge.requestSignal.current?.reason).toBe(cancellationReason);
               }
               first.release();
             }
@@ -265,10 +308,12 @@ module.exports = {
             replacement.release();
             await expect.poll(() => successor.disposals).toBe(1);
           } finally {
+            acquisitionFinish.resolve();
             bridge.finish.resolve();
             bridge.cleanupFinish.resolve();
             await Promise.allSettled([sideQuestion, owner.drain()]);
             selectedSource.input = undefined;
+            selectedSource.acquisition = undefined;
             first?.release();
             borrower?.release();
             replacement?.release();
