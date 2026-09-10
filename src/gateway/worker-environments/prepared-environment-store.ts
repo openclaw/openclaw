@@ -8,8 +8,6 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { DB, WorkerEnvironments } from "../../state/openclaw-state-db.generated.js";
-import type { WorkerSessionPlacementRecord } from "./placement-record.js";
-import { find as findPlacement } from "./placement-row-codec.js";
 import type {
   PreparedEnvironmentPlacementBinding,
   PreparedEnvironmentSelection,
@@ -17,7 +15,9 @@ import type {
   WorkerEnvironmentPreparation,
   WorkerEnvironmentPreparationIntent,
   WorkerEnvironmentRecord,
-} from "./store.js";
+} from "./environment-record.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import { find as findPlacement } from "./placement-row-codec.js";
 
 type PreparationRow = Pick<
   Selectable<WorkerEnvironments>,
