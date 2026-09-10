@@ -93,8 +93,10 @@ an older image's demand window.
 Open **Settings → Connections → Cloud workers → Snapshots** to inspect local
 warm-image ownership, grouped by configured profile. Refresh reloads the list.
 The view shows available images, captures in progress, images held by outstanding
-allocations, and captures that need attention. Older records without display
-facts remain visible as unlabeled records. Legacy allocations appear under
+allocations, and captures that need attention. Group headers prefer recorded
+machine facts and fall back to the configured profile's backend, class, and
+operating system. Missing row details are omitted; unknown profile IDs appear
+under **Unlabeled profile**. Legacy allocations appear under
 **Needs migration** with Doctor recovery guidance.
 
 The Crabbox plugin advertises `crabbox.images.list` and `crabbox.images.recover`;

@@ -121,13 +121,30 @@ describe("Cloud worker snapshots", () => {
         ),
         "Machine snapshot row",
       );
-      expect(machineRow.textContent).toContain("aws · burst · linux");
+      expect(machineRow.textContent).toContain("aws · burst");
+      expect(machineRow.textContent).not.toContain("Created");
+      expect(machineRow.textContent).not.toContain("Last used");
+      expect(machineRow.textContent).not.toContain("Runtime:");
+      for (const row of snapshots.querySelectorAll(".settings-row")) {
+        expect(row.textContent).not.toContain("Unlabeled");
+      }
       expect(build.textContent).toContain("Commit: 01234567");
       expect(build.textContent).toContain("Allocations: 21");
       expect(build.textContent).toContain("Runtime: abcdef012345");
       expect(snapshots.textContent).toContain("Unlabeled profile");
-      expect(snapshots.textContent).toContain("Created Unlabeled");
-      expect(snapshots.textContent).toContain("Warm images off");
+      expect(snapshots.textContent).toContain("Project image");
+      const cold = expectDefined(
+        groups.find((group) => group.querySelector("h2")?.textContent?.includes("cold-build")),
+        "Configured profile without snapshots",
+      );
+      expect(cold.textContent).toContain("aws · standard · linux · Warm images off");
+      expect(cold.textContent).not.toContain("Unlabeled");
+      const classless = expectDefined(
+        groups.find((group) => group.querySelector("h2")?.textContent?.includes("classless-build")),
+        "Configured profile without a class",
+      );
+      expect(classless.textContent).toContain("aws · linux · Warm images off");
+      expect(classless.textContent).not.toContain("Unlabeled");
       expect(snapshots.textContent).toContain("Needs migration");
       expect(snapshots.textContent).toContain("openclaw doctor --fix");
       expect(

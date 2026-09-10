@@ -54,7 +54,13 @@ function profileStatus(settings: Readonly<Record<string, unknown>>) {
               : configured.warmImage === true
                 ? "Explicitly enabled in this profile."
                 : "Enabled by default for Linux with a known machine class and no setup environment.";
-    return { warmImages, reason };
+    return {
+      backend: configured.provider,
+      machineClass: configured.class,
+      os: configured.target,
+      warmImages,
+      reason,
+    };
   } catch (error) {
     return { warmImages: "off", reason: formatErrorMessage(error) };
   }

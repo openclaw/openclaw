@@ -41,7 +41,6 @@ export function snapshotListFixture() {
         profileId: "linux-build",
         backend: "aws",
         machineClass: "burst",
-        os: "linux",
         state: "no-image",
         allocations: {},
         allocationCount: 1,
@@ -57,10 +56,27 @@ export function snapshotListFixture() {
     profiles: [
       {
         id: "linux-build",
+        backend: "aws",
+        machineClass: "configured-class",
+        os: "linux",
         warmImages: "on",
         reason: "Warm images are enabled for this Linux class.",
       },
-      { id: "cold-build", warmImages: "off", reason: "Warm images are explicitly disabled." },
+      {
+        id: "cold-build",
+        backend: "aws",
+        machineClass: "standard",
+        os: "linux",
+        warmImages: "off",
+        reason: "Warm images are explicitly disabled.",
+      },
+      {
+        id: "classless-build",
+        backend: "aws",
+        os: "linux",
+        warmImages: "off",
+        reason: "A machine class is required.",
+      },
     ],
     legacyLeases: [
       {

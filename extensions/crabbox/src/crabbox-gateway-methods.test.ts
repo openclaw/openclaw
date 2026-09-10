@@ -171,13 +171,46 @@ describe("Crabbox snapshots Gateway methods", () => {
     const api = createApi();
     const respond = vi.fn();
     listCrabboxImages(api, { params: {}, respond });
+    const configuredFacts = { backend: "aws", machineClass: "standard", os: "linux" };
     expect(respond.mock.calls[0]![1].profiles).toEqual([
-      { id: "classless", warmImages: "off", reason: expect.stringContaining("machine class") },
-      { id: "disabled", warmImages: "off", reason: expect.stringContaining("Disabled") },
-      { id: "environment", warmImages: "off", reason: expect.stringContaining("environment") },
-      { id: "explicit", warmImages: "on", reason: expect.stringContaining("Explicitly") },
-      { id: "linux", warmImages: "on", reason: expect.stringContaining("default") },
-      { id: "mac", warmImages: "off", reason: expect.stringContaining("Linux") },
+      {
+        ...configuredFacts,
+        machineClass: undefined,
+        id: "classless",
+        warmImages: "off",
+        reason: expect.stringContaining("machine class"),
+      },
+      {
+        ...configuredFacts,
+        id: "disabled",
+        warmImages: "off",
+        reason: expect.stringContaining("Disabled"),
+      },
+      {
+        ...configuredFacts,
+        id: "environment",
+        warmImages: "off",
+        reason: expect.stringContaining("environment"),
+      },
+      {
+        ...configuredFacts,
+        id: "explicit",
+        warmImages: "on",
+        reason: expect.stringContaining("Explicitly"),
+      },
+      {
+        ...configuredFacts,
+        id: "linux",
+        warmImages: "on",
+        reason: expect.stringContaining("default"),
+      },
+      {
+        ...configuredFacts,
+        os: "macos",
+        id: "mac",
+        warmImages: "off",
+        reason: expect.stringContaining("Linux"),
+      },
     ]);
     api.config = {};
     respond.mockClear();

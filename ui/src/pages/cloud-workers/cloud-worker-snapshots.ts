@@ -43,7 +43,14 @@ type SnapshotImage = {
     stale: boolean;
   };
 };
-type SnapshotProfile = { id: string; warmImages: "on" | "off"; reason: string };
+type SnapshotProfile = {
+  id: string;
+  backend?: string;
+  machineClass?: string;
+  os?: string;
+  warmImages: "on" | "off";
+  reason: string;
+};
 type SnapshotsResult = {
   images: SnapshotImage[];
   profiles: SnapshotProfile[];
@@ -159,34 +166,36 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
   private renderImage(image: SnapshotImage, showMachineFacts: boolean) {
     const phase = image.capture?.phase;
     const imageState = phase ?? (image.state === "no-image" ? "noImage" : image.state);
-    const unknown = t("cloudWorkersPage.snapshots.unlabeled");
-    const age = (timestamp?: number | null) =>
-      formatRelativeTimestamp(timestamp, { fallback: unknown });
+    const runtimeDigest = image.runtimeIdentity?.nodeBootstrapSha256.slice(0, 12);
     const facts = [
-      ...(showMachineFacts
-        ? [
-            t("cloudWorkersPage.snapshots.machineFacts", {
-              backend: image.backend ?? unknown,
-              machineClass: image.machineClass ?? unknown,
-              os: image.os ?? unknown,
-            }),
-          ]
-        : []),
+      ...(showMachineFacts ? [image.backend, image.machineClass, image.os] : []),
       ...(image.baseCommit
         ? [t("cloudWorkersPage.snapshots.baseCommit", { commit: image.baseCommit.slice(0, 8) })]
         : []),
-      t("cloudWorkersPage.snapshots.created", { age: age(image.createdAtMs) }),
-      t("cloudWorkersPage.snapshots.lastUsed", { age: age(image.lastDemandAtMs) }),
+      ...(image.createdAtMs != null
+        ? [
+            t("cloudWorkersPage.snapshots.created", {
+              age: formatRelativeTimestamp(image.createdAtMs),
+            }),
+          ]
+        : []),
+      ...(image.lastDemandAtMs != null
+        ? [
+            t("cloudWorkersPage.snapshots.lastUsed", {
+              age: formatRelativeTimestamp(image.lastDemandAtMs),
+            }),
+          ]
+        : []),
       t("cloudWorkersPage.snapshots.allocations", { count: String(image.allocationCount) }),
-      t("cloudWorkersPage.snapshots.runtime", {
-        digest: image.runtimeIdentity?.nodeBootstrapSha256.slice(0, 12) ?? unknown,
-      }),
+      ...(runtimeDigest
+        ? [t("cloudWorkersPage.snapshots.runtime", { digest: runtimeDigest })]
+        : []),
     ];
     return renderSettingsRow({
       title: image.projectKey
-        ? (image.projectLabel ?? unknown)
+        ? (image.projectLabel ?? t("cloudWorkersPage.snapshots.projectImage"))
         : t("cloudWorkersPage.snapshots.machineImage"),
-      description: facts.join(" · "),
+      description: facts.filter(Boolean).join(" · "),
       stackedOnNarrow: true,
       control: html`
         ${renderSettingsStatus({
@@ -254,11 +263,14 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       ${
         groups.size
           ? [...groups].map(([id, group]) => {
-              const unknown = t("cloudWorkersPage.snapshots.unlabeled");
-              const metadata = (["backend", "machineClass", "os"] as const).map((key) =>
-                Array.from(new Set(group.images.map((image) => image[key] ?? unknown))),
-              );
-              const facts = metadata.map((values) => (values.length ? values.join(", ") : unknown));
+              const metadata = (["backend", "machineClass", "os"] as const).map((key) => {
+                const values = Array.from(
+                  new Set(group.images.map((image) => image[key]).filter(Boolean)),
+                );
+                const configured = group.profile?.[key];
+                return values.length ? values : configured ? [configured] : [];
+              });
+              const facts = metadata.map((values) => values.join(", ")).filter(Boolean);
               const mixedMetadata = metadata.some((values) => values.length > 1);
               if (group.profile) {
                 facts.push(
