@@ -314,7 +314,6 @@ it("uses the supplied origin when a continuation has no live parent", async () =
   expect(getActiveGatewayRootWorkHolders()).toEqual(["runtime:detached"]);
   releaseContinuation();
   await continuation;
-  await nextTurn();
   expect(getActiveGatewayRootWorkHolders()).toEqual([]);
 });
 
@@ -351,8 +350,8 @@ it.each(["admission", "continuation"] as const)(
     });
     await handlerReturned.promise;
     root.release();
+    const foregroundClosed = foreground.drain();
     try {
-      await foreground.drain();
       await nextTurn();
       expect(settled).toBe(true);
       expect(backgroundSignal).toBeDefined();
@@ -363,6 +362,7 @@ it.each(["admission", "continuation"] as const)(
       releaseChild.resolve();
       await child;
       await background;
+      await foregroundClosed;
       await nextTurn();
     }
     expect(backgroundSignal?.aborted).toBe(true);
