@@ -2,6 +2,7 @@ import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
+import { itemToolArgs, itemTranscriptResultText } from "./event-projector-tool-items.js";
 import {
   CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX,
   CODEX_NATIVE_SUBAGENT_TASK_KIND,
@@ -22,6 +23,7 @@ import { projectCodexThreadHistoryItem } from "./transcript-history-projection.j
 
 type TaskHistoryParams = Parameters<NonNullable<AgentHarnessV2["taskHistory"]>["read"]>[0];
 const MAX_SUBAGENT_ANCESTRY_READS = 32;
+const taskHistoryToolItems = { itemToolArgs, itemTranscriptResultText };
 
 function parentThreadId(thread: CodexThread): string | undefined {
   const source = thread.source;
@@ -173,7 +175,10 @@ export async function readCodexNativeSubagentHistory(
         limit: Math.max(1, Math.floor(Math.min(params.limit, 200) / 2)),
       },
       {
-        project: (entries) => entries.map((entry) => projectCodexThreadHistoryItem(thread, entry)),
+        project: (entries) =>
+          entries.map((entry) =>
+            projectCodexThreadHistoryItem(thread, entry, taskHistoryToolItems),
+          ),
         fits: (result) => Buffer.byteLength(JSON.stringify(result), "utf8") <= 512 * 1024,
       },
     );

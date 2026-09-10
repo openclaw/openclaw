@@ -5,7 +5,6 @@ import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { auditNativeToolName, itemName, itemStatus } from "./event-projector-items.js";
-import { itemToolArgs, itemTranscriptResultText } from "./event-projector-tool-items.js";
 import type { CodexThread, CodexTurn, JsonValue } from "./protocol.js";
 import type { CodexHistoryItemEntry } from "./thread-history-page.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -318,6 +317,11 @@ export function projectBoundedCodexVisibleSessionHistory(
 export function projectCodexThreadHistoryItem(
   thread: CodexThread,
   entry: CodexHistoryItemEntry,
+  // Catalog registration shares this module; only the lazy history reader loads tool runtime.
+  toolItems: Pick<
+    typeof import("./event-projector-tool-items.js"),
+    "itemToolArgs" | "itemTranscriptResultText"
+  >,
 ): AgentMessage[] {
   const { item } = entry;
   const timestamp = (entry.turn?.startedAt ?? thread.createdAt ?? 0) * 1000;
@@ -363,7 +367,14 @@ export function projectCodexThreadHistoryItem(
   }
   const messages: AgentMessage[] = [
     assistant(
-      [{ type: "toolCall", id: item.id, name: toolName, arguments: itemToolArgs(item) ?? {} }],
+      [
+        {
+          type: "toolCall",
+          id: item.id,
+          name: toolName,
+          arguments: toolItems.itemToolArgs(item) ?? {},
+        },
+      ],
       true,
     ),
   ];
@@ -375,7 +386,7 @@ export function projectCodexThreadHistoryItem(
           role: "toolResult",
           toolCallId: item.id,
           toolName,
-          content: [{ type: "text", text: itemTranscriptResultText(item) ?? status }],
+          content: [{ type: "text", text: toolItems.itemTranscriptResultText(item) ?? status }],
           isError: status === "failed" || status === "blocked",
           timestamp,
         },
