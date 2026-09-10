@@ -1499,6 +1499,28 @@ describe("browser tool snapshot maxChars", () => {
     expect(toolCommonMocks.fetchBrowserJson).not.toHaveBeenCalled();
   });
 
+  it("preserves WebMCP mutation uncertainty when the node proxy response is lost", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
+      new Error("node invoke timed out. Retry the browser tool once."),
+    );
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("webmcp-node", {
+        action: "webmcp_execute",
+        target: "node",
+        targetId: "tab",
+        contextId: "document",
+        toolName: "increment_counter",
+        input: {},
+      }),
+    ).rejects.toMatchObject({
+      message: "WebMCP execution outcome unknown. Inspect the page before retrying.",
+    });
+    expect(toolCommonMocks.fetchBrowserJson).not.toHaveBeenCalled();
+    expect(webMcpMocks.browserWebMcp).not.toHaveBeenCalled();
+  });
+
   it("does not host-fallback for a browser-service error with similar wording", async () => {
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool.mockResolvedValueOnce({

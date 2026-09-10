@@ -45,6 +45,7 @@ import {
 } from "./browser/act-policy.js";
 import { browserWebMcp } from "./browser/client-webmcp.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
+import { withWebMcpOutcome } from "./browser/webmcp-outcome.js";
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
@@ -129,13 +130,15 @@ export async function executeBrowserTabAction(context: {
       }
       const operation = action === "webmcp_list" ? "list" : "execute";
       const result = proxyRequest
-        ? await proxyRequest({
-            method: "POST",
-            path: `/webmcp/${operation}`,
-            profile,
-            body: request,
-            timeoutMs: toolTimeoutMs,
-          })
+        ? await withWebMcpOutcome(operation, () =>
+            proxyRequest({
+              method: "POST",
+              path: `/webmcp/${operation}`,
+              profile,
+              body: request,
+              timeoutMs: toolTimeoutMs,
+            }),
+          )
         : await browserWebMcp(
             baseUrl,
             operation,

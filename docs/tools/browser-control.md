@@ -15,7 +15,7 @@ CLI, and scripting patterns (snapshots, refs, waits, debug flows).
 
 `webmcp_list` and `webmcp_execute` expose page-provided tools through an
 `existing-session` profile's Chrome DevTools MCP connection. Other browser
-drivers return an unsupported-operation error. No page tools are dynamically
+drivers are rejected; discovery returns an unsupported-operation error. No page tools are dynamically
 registered as agent tools, and there is no DOM fallback.
 
 Chrome's WebMCP developer trial starts at Chrome 146; this integration was
@@ -56,13 +56,20 @@ metadata rather than silently damaging a schema. Existing agent-output limits
 can further truncate its displayed text. Oversized results may be rejected
 after execution; do not retry the mutation merely to obtain a smaller result.
 
-Missing MCP operations or disabled MCP WebMCP support return an enablement
-error. An empty tool list means the page exposes no tools **or** Chrome's WebMCP
+Discovery reports missing MCP operations or disabled MCP WebMCP support as an
+enablement error. An empty tool list means the page exposes no tools **or** Chrome's WebMCP
 capability is unavailable; the upstream list operation does not distinguish
 those states. Check the Chrome flag and version before concluding the page has
-no tools. Unknown tools, malformed input, stale references and MCP connection
-failures are returned explicitly, without changing profile or falling back to
-JavaScript execution.
+no tools. Unknown tools, malformed input and stale references are rejected without
+changing profile or falling back to JavaScript execution.
+
+Once an execution request enters the client, node proxy or CLI transport, errors
+are conservatively reported as **execution outcome unknown**, including service
+error responses. A failed response cannot reliably prove that no mutation happened.
+Inspect the page and rediscover its tools before deciding whether to retry; the
+caller never receives generic retry advice. Input validation performed locally
+before sending the request still reports its specific error. Discovery errors
+retain their diagnostic details.
 
 ## Control API (optional)
 

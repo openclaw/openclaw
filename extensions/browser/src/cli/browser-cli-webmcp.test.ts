@@ -9,6 +9,7 @@ import {
 } from "./browser-cli.test-support.js";
 import { defaultRuntime } from "./core-api.js";
 
+const actualRequest = shared.callBrowserRequest;
 const request = vi.spyOn(shared, "callBrowserRequest").mockResolvedValue({ ok: true });
 const runtime = getBrowserCliRuntime();
 vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
@@ -16,7 +17,7 @@ vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
 vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
 describe("WebMCP CLI", () => {
   beforeEach(() => {
-    request.mockClear();
+    request.mockReset().mockResolvedValue({ ok: true });
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
   it.each(["list", "execute"])("routes %s with the selected profile and target", async (action) => {
@@ -46,6 +47,7 @@ describe("WebMCP CLI", () => {
             : {}),
         }),
       }),
+      { timeoutMs: undefined },
     );
     expect(isBrowserMachineOutput({ argv: ["node", "openclaw", ...args] })).toBe(true);
   });
@@ -69,6 +71,62 @@ describe("WebMCP CLI", () => {
         { from: "user" },
       ),
     ).rejects.toThrow();
+    expect(request).not.toHaveBeenCalled();
+  });
+  it("reports unknown execution outcome when the Gateway response is lost", async () => {
+    const { program, browser, parentOpts } = createBrowserProgram();
+    registerBrowserWebMcpCommands(browser, parentOpts);
+    request.mockRejectedValueOnce(new Error("timed out. Retry the browser tool once."));
+    await expect(
+      program.parseAsync(
+        [
+          "browser",
+          "webmcp_execute",
+          "--target-id",
+          "tab",
+          "--context-id",
+          "document",
+          "--tool-name",
+          "increment_counter",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow();
+    expect(defaultRuntime.error).toHaveBeenLastCalledWith(
+      expect.stringContaining(
+        "WebMCP execution outcome unknown. Inspect the page before retrying.",
+      ),
+    );
+    expect(defaultRuntime.error).not.toHaveBeenLastCalledWith(
+      expect.stringContaining("Retry the browser tool once"),
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+  it("keeps invalid CLI timeout errors specific and does not dispatch", async () => {
+    const { program, browser, parentOpts } = createBrowserProgram();
+    browser.option("--timeout <ms>", "Gateway timeout");
+    registerBrowserWebMcpCommands(browser, parentOpts);
+    request.mockImplementationOnce(actualRequest);
+    await expect(
+      program.parseAsync(
+        [
+          "browser",
+          "--timeout",
+          "invalid",
+          "webmcp_execute",
+          "--target-id",
+          "tab",
+          "--context-id",
+          "document",
+          "--tool-name",
+          "increment_counter",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow();
+    expect(defaultRuntime.error).toHaveBeenLastCalledWith(
+      expect.stringContaining("--timeout must be a positive integer"),
+    );
     expect(request).not.toHaveBeenCalled();
   });
 });

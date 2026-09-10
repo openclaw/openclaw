@@ -1,7 +1,9 @@
 import type { Command } from "commander";
+import { withWebMcpOutcome } from "../browser/webmcp-outcome.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
   resolveBrowserProfileQuery,
   runBrowserCliCommand,
   type BrowserParentOpts,
@@ -30,17 +32,27 @@ export function registerBrowserWebMcpCommands(
         if (input !== undefined && (!input || typeof input !== "object" || Array.isArray(input))) {
           throw new Error("WebMCP input must be a JSON object.");
         }
-        const result = await callBrowserRequest(parent, {
-          method: "POST",
-          path: `/webmcp/${action}`,
-          query: resolveBrowserProfileQuery(parent.browserProfile),
-          body: {
-            targetId: opts.targetId,
-            contextId: opts.contextId,
-            toolName: opts.toolName,
-            input,
-          },
-        });
+        const timeoutMs =
+          typeof parent.timeout === "string"
+            ? parseBrowserPositiveIntegerOption(parent.timeout, "--timeout")
+            : undefined;
+        const result = await withWebMcpOutcome(action, () =>
+          callBrowserRequest(
+            parent,
+            {
+              method: "POST",
+              path: `/webmcp/${action}`,
+              query: resolveBrowserProfileQuery(parent.browserProfile),
+              body: {
+                targetId: opts.targetId,
+                contextId: opts.contextId,
+                toolName: opts.toolName,
+                input,
+              },
+            },
+            { timeoutMs },
+          ),
+        );
         defaultRuntime.writeJson(result);
       });
     });
