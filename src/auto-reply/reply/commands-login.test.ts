@@ -176,9 +176,9 @@ describe("handleLoginCommand", () => {
     expect(updateSessionEntryMock).not.toHaveBeenCalled();
   });
 
-  it("hands secret input to the private connection surface", async () => {
+  it("hands setup-only secret input to Configure Models", async () => {
     const result = await handleLoginCommand(buildLoginParams("/login openai/openai-api-key"), true);
-    expect(result?.reply?.text).toContain("needs secure input");
+    expect(result?.reply?.text).toContain("Models → Configure Models");
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
   });
 

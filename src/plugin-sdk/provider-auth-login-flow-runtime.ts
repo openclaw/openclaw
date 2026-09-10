@@ -413,11 +413,11 @@ export function formatProviderLoginFailed(choice: ProviderChannelLoginChoice): s
 
 function formatProviderLoginControlUiHandoff(choice: ProviderChannelLoginChoice): string {
   if (choice.mode === "setup") {
-    return `${choice.label} needs provider setup. Open Control UI → Models → Connect, then choose “${choice.label}” under Provider setup.`;
+    return `${choice.label} needs provider setup. Open Control UI → Models → Configure Models, then choose “${choice.label}”.`;
   }
   return choice.mode === "secret"
-    ? `${choice.label} needs secure input that chat must not store. Open Control UI → Models → Connect, then choose “${choice.label}” under Connect with an API key or token.`
-    : `${choice.label} needs provider sign-in. Open Control UI → Models → Connect, then choose “${choice.label}” under Sign in.`;
+    ? `${choice.label} needs secure input that chat must not store. Open Control UI → Models → Connect provider, then choose “${choice.label}”.`
+    : `${choice.label} needs provider sign-in. Open Control UI → Models → Connect provider, then choose “${choice.label}”.`;
 }
 
 export function buildProviderLoginChoicesReply(

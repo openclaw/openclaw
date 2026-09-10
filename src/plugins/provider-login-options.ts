@@ -126,9 +126,9 @@ function projectChannelChoice(choice: ProviderAuthChoiceMetadata): ProviderChann
     mode:
       choice.channelLogin && kind && choice.appGuidedAuth
         ? "chat"
-        : choice.appGuidedSecret
+        : kind === "secret"
           ? "secret"
-          : choice.appGuidedAuth
+          : kind
             ? "sign-in"
             : "setup",
   };
@@ -178,7 +178,7 @@ export function resolveProviderChannelLoginChoice(
     const matches = metadata.filter(
       (choice) =>
         formatProviderLoginChoiceRef(choice) === raw ||
-        formatProviderOAuthLoginRef(family(choice)) === raw,
+        (choice.appGuidedAuth !== undefined && formatProviderOAuthLoginRef(family(choice)) === raw),
     );
     return matches.length ? select(matches) : { status: "unsupported", choices };
   }

@@ -46,10 +46,19 @@ describe("provider login choices", () => {
     expect(listProviderLoginOptions([choice(), choice({ pluginId: "other" })])).toEqual([]);
   });
 
+  it("keeps a single provider behind an explicit menu selection", () => {
+    declarations.read.mockReturnValue([choice()]);
+    expect(resolveProviderChannelLoginChoice(undefined)).toEqual({
+      status: "providers",
+      providers: [{ pluginId: "demo", providerId: "demo", label: "Demo" }],
+    });
+  });
+
   it("lists provider families once even when login requires setup", () => {
     declarations.read.mockReturnValue([
       choice(),
       choice({ choiceId: "browser", methodId: "oauth" }),
+      choice({ choiceId: "api-key", appGuidedAuth: undefined, appGuidedSecret: true }),
       choice({
         pluginId: "setup",
         providerId: "setup",
@@ -64,6 +73,10 @@ describe("provider login choices", () => {
         { pluginId: "demo", providerId: "demo", label: "Demo" },
         { pluginId: "setup", providerId: "setup", label: "Setup" },
       ],
+    });
+    expect(resolveProviderChannelLoginChoice("oauth/demo/demo")).toMatchObject({
+      status: "ambiguous",
+      choices: [{ choiceId: "demo-device" }, { choiceId: "browser" }],
     });
   });
 
@@ -82,15 +95,14 @@ describe("provider login choices", () => {
         appGuidedSecret: true,
       }),
     ]);
-    for (const input of ["demo", "oauth/demo/demo"]) {
-      expect(resolveProviderChannelLoginChoice(input)).toMatchObject({
-        status: "ambiguous",
-        choices: [
-          { choiceId: "demo", mode: "setup" },
-          { choiceId: "demo-cloud", mode: "secret" },
-        ],
-      });
-    }
+    expect(resolveProviderChannelLoginChoice("demo")).toMatchObject({
+      status: "ambiguous",
+      choices: [
+        { choiceId: "demo", mode: "setup" },
+        { choiceId: "demo-cloud", mode: "secret" },
+      ],
+    });
+    expect(resolveProviderChannelLoginChoice("oauth/demo/demo").status).toBe("unsupported");
   });
 
   it("binds a qualified method to its owner and never falls back from a stale reference", () => {
@@ -120,7 +132,7 @@ describe("provider login choices", () => {
     declarations.read.mockReturnValue([choice({ credentialOnly: undefined })]);
     expect(resolveProviderChannelLoginChoice("demo/demo-device")).toMatchObject({
       status: "resolved",
-      choice: { mode: "sign-in" },
+      choice: { mode: "setup" },
     });
   });
 
