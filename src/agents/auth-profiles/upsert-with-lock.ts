@@ -1,5 +1,6 @@
 /** Locked auth profile writes and attempt-scoped compensation. */
 import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
@@ -341,6 +342,8 @@ export async function persistAuthProfileBatch(
 
 type AuthProfileUpsertParams = {
   profileId: string;
+  validateCurrentCredential?: (credential: AuthProfileCredential | undefined) => void;
+  preserveApiKeyMetadata?: boolean;
   credential: AuthProfileCredential;
   agentDir?: string;
   stateDir?: string;
@@ -364,6 +367,8 @@ export async function upsertAuthProfileWithLock(
         syncExternalCli: false,
       },
       updater: (store) => {
+        // Consumers can reject a changed profile kind under the same lock as the write.
+        params.validateCurrentCredential?.(store.profiles[params.profileId]);
         if (
           supersedesOAuthRefreshGenerationObservedAtAdmission({
             profileId: params.profileId,
@@ -381,7 +386,18 @@ export async function upsertAuthProfileWithLock(
           rejectedFencedGeneration = true;
           return false;
         }
-        store.profiles[params.profileId] = credential;
+        const existing = store.profiles[params.profileId];
+        if (
+          params.preserveApiKeyMetadata &&
+          existing?.type === "api_key" &&
+          credential.type === "api_key" &&
+          normalizeProviderId(existing.provider) === normalizeProviderId(credential.provider)
+        ) {
+          const { key: _key, keyRef: _keyRef, ...metadata } = existing;
+          store.profiles[params.profileId] = { ...metadata, ...credential };
+        } else {
+          store.profiles[params.profileId] = credential;
+        }
         return true;
       },
     });

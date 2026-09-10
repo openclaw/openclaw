@@ -86,6 +86,7 @@ export type ModelAuthLogoutResult = {
   provider: string;
   removedProfiles: string[];
   abortedRunIds: string[];
+  warning?: string;
 };
 
 export type ModelAuthOrderSetResult = {

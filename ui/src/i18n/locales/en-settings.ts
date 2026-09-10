@@ -352,7 +352,7 @@ const enSettings = {
       replace: "Replace key",
       remove: "Remove key",
       saved: "Secret saved.",
-      removed: "API key removed.",
+      removed: "Saved API keys removed.",
       authModeBlocked: 'API key changes are unavailable while auth mode is "{mode}".',
     },
     probe: {
@@ -437,9 +437,6 @@ const enSettings = {
       adminRequired: "Browsing only. Model changes require operator.admin access.",
     },
     notes: {
-      saveKey: "Save API key for {provider} from Control UI",
-      removeKey: "Remove API key for {provider} from Control UI",
-      addProvider: "Add model provider {provider} from Control UI",
       defaultModel: "Update defaults from Control UI",
     },
   },

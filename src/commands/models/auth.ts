@@ -70,7 +70,14 @@ import type { WizardPrompter } from "../../wizard/prompts.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
+import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
+import {
+  looksLikeOpenAIApiKey,
+  normalizeManualAuthProvider,
+  resolveDefaultTokenProfileId,
+  validateOpenAICodexApiKeyInput,
+} from "./auth-manual-input.js";
 import { refreshRunningGatewayAuthState, type ModelAuthRefreshOutcome } from "./auth-refresh.js";
 import {
   loadValidConfigSnapshotOrThrow,
@@ -150,58 +157,8 @@ async function readPastedSecret(params: {
   return normalized;
 }
 
-function resolveDefaultTokenProfileId(provider: string): string {
-  return `${normalizeProviderId(provider)}:manual`;
-}
-
-function normalizeManualAuthProvider(provider: string): string {
-  const normalized = normalizeProviderId(provider);
-  if (normalized === "openai-codex" || normalized === "codex-cli") {
-    throw new Error(`"${normalized}" is a legacy provider ID; use --provider openai.`);
-  }
-  return normalized === "openai" || normalized === "codex" ? "openai" : normalized;
-}
-
 function isOpenAIProvider(provider: string): boolean {
   return normalizeManualAuthProvider(provider) === "openai";
-}
-
-function stripBearerPrefix(value: string): string {
-  return value
-    .trim()
-    .replace(/^Bearer\s+/i, "")
-    .trim();
-}
-
-function looksLikeOpenAIApiKey(value: string): boolean {
-  return /^sk-[A-Za-z0-9_-]{8,}$/.test(value.trim());
-}
-
-function looksLikeJwtToken(value: string): boolean {
-  const token = stripBearerPrefix(value);
-  const parts = token.split(".");
-  return parts.length === 3 && parts.every((part) => /^[A-Za-z0-9_-]{8,}$/.test(part));
-}
-
-function looksLikeStructuredCredential(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed.startsWith("{") || trimmed.startsWith("[");
-}
-
-function validateOpenAICodexApiKeyInput(value: string): string | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "Required";
-  }
-  if (looksLikeOpenAIApiKey(trimmed)) {
-    return undefined;
-  }
-  if (looksLikeJwtToken(trimmed) || looksLikeStructuredCredential(trimmed)) {
-    // OAuth/token material belongs in token profiles; storing it as an API key
-    // would make provider auth fail later with misleading model errors.
-    return `That looks like token or OAuth material, not an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-token --provider openai")} for token auth material.`;
-  }
-  return "That does not look like an OpenAI API key.";
 }
 
 type ResolvedModelsAuthContext = {
@@ -860,7 +817,8 @@ export async function modelsAuthPasteApiKeyCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent);
+  const config = (await loadValidConfigSnapshotOrThrow()).runtimeConfig;
+  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent, config);
   const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error(
@@ -868,8 +826,6 @@ export async function modelsAuthPasteApiKeyCommand(
     );
   }
   const provider = normalizeManualAuthProvider(rawProvider);
-  const profileId =
-    normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
   const key = await readPastedSecret({
     message: `Paste API key for ${provider}`,
@@ -886,19 +842,13 @@ export async function modelsAuthPasteApiKeyCommand(
     },
   });
 
-  await upsertAuthProfileWithLockOrThrow({
-    profileId,
-    credential: {
-      type: "api_key",
-      provider,
-      key,
-    },
+  const profileId = await saveModelProviderApiKey({
+    config,
+    provider,
+    apiKey: key,
     agentDir,
+    profileId: normalizeOptionalString(opts.profileId),
   });
-
-  await updateConfig((cfg) =>
-    applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
-  );
 
   await refreshRunningGatewayAuthState(agentId, "login", runtime);
 
