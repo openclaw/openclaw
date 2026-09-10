@@ -68,6 +68,12 @@ describe("slack actions contract", () => {
 });
 
 describe("slack setup contract", () => {
+  it("advertises private requester delivery consistently in setup and runtime", () => {
+    expect(slackSetupPlugin.capabilities.requesterPrivateMessages).toBe(true);
+    expect(slackPlugin.capabilities.requesterPrivateMessages).toBe(true);
+    expect(slackPlugin.outbound?.sendPrivateText).toBeTypeOf("function");
+  });
+
   it("keeps a shared HTTP signing secret at the channel root during account promotion", () => {
     const cfg = {
       channels: {

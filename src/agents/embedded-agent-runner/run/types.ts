@@ -23,6 +23,7 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
+import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
 import type { ModelRef } from "../../model-selection.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
@@ -349,6 +350,7 @@ export type EmbeddedRunAttemptResult = {
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
   latestMcpAppChannelView?: McpAppChannelView;
+  latestMcpConnectAction?: McpConnectAction;
   lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;

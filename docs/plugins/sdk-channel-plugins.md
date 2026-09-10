@@ -300,7 +300,10 @@ raw callback string. Actor and source-message checks remain channel-owned.
       explicit reply tags without consuming an implicit single-use reply slot.
 
       Raw outbound adapters may also implement `sendPrivateText` for sensitive
-      host-generated messages. Its context contains `cfg`, the originating
+      host-generated messages. Advertise `capabilities.requesterPrivateMessages: true`
+      in both setup and runtime plugin views when this method is implemented;
+      setup uses that metadata without loading the messaging runtime. The send context
+      contains `cfg`, the originating
       `accountId`, authenticated `senderId`, `text`, and a required `assertActive`
       callback. Resolve the sender to a private destination on that account;
       never substitute a group, thread, default account, or configured approver.
@@ -313,7 +316,9 @@ raw callback string. Actor and source-message checks remain channel-owned.
       queues. It must not fall back to public delivery or grant DM pairing
       approval. Core returns only a safe delivery outcome to the caller. Discord
       and Slack implement it using direct messages; OAuth policy and credential
-      storage remain with the MCP owner.
+      storage remain with the MCP owner. For registered adapters without this
+      method, the MCP owner retains the existing in-chat sign-in link with a
+      shared-link warning. A failed private send never selects that path.
     </Accordion>
 
     ### Group tool-policy adapters

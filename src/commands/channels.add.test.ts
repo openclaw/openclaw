@@ -1666,6 +1666,38 @@ describe("channelsAddCommand", () => {
     });
   });
 
+  it.each([false, true])(
+    "warns after non-interactive setup only without private delivery (%s)",
+    async (requesterPrivateMessages) => {
+      configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+      setActivePluginRegistry(createTestRegistry());
+      catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+        createExternalChatCatalogEntry(),
+      ]);
+      const plugin = createExternalChatSetupPlugin();
+      plugin.capabilities.requesterPrivateMessages = requesterPrivateMessages;
+      vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+        createTestRegistry([{ pluginId: "external-chat", plugin, source: "test" }]),
+      );
+
+      await channelsAddCommand({ channel: "external-chat", token: "test-token" }, runtime, {
+        hasFlags: true,
+      });
+
+      expectExternalChatEnabledConfigWrite();
+      expect(snapshotCall().forceSetupOnlyChannelPlugins).toBe(true);
+      expect(runtime.error).not.toHaveBeenCalled();
+      const warning = expect.stringContaining(
+        "The External Chat plugin does not support private sign-in delivery.",
+      );
+      if (requesterPrivateMessages) {
+        expect(runtime.log).not.toHaveBeenCalledWith(warning);
+      } else {
+        expect(runtime.log).toHaveBeenCalledWith(warning);
+      }
+    },
+  );
+
   it("loads external channel setup snapshots for newly installed and existing plugins", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry());

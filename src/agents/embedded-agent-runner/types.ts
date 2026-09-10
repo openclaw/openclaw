@@ -17,6 +17,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
+import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ModelRef } from "../model-ref-shared.js";
@@ -245,6 +246,7 @@ export type EmbeddedAgentRunMeta = {
 
 export type EmbeddedAgentRunResult = {
   latestMcpAppChannelView?: McpAppChannelView;
+  latestMcpConnectAction?: McpConnectAction;
   payloads?: Array<{
     text?: string;
     mediaUrl?: string;

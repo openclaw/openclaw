@@ -89,7 +89,7 @@ export type RequesterMcpConnectDelivery = {
     serverName: string;
     authorizationUrl: string;
     assertActive: () => void;
-  }) => Promise<{ status: "sent" | "unavailable" | "failed" }>;
+  }) => Promise<{ status: "sent" | "unsupported" | "unavailable" | "failed" }>;
 };
 
 export type RequesterMcpConnect = {

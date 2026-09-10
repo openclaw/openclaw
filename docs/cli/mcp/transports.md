@@ -105,17 +105,19 @@ Set `oauth.identity: "per-requester"` when every authenticated sender should con
 The per-requester flow is sender-driven:
 
 1. The sender asks the agent to connect the server from an allowed conversation.
-2. The agent uses the server's `connect` tool. OpenClaw sends the sign-in link privately to that sender through the originating Discord or Slack account, even when the request came from a group.
-3. The conversation receives only a delivery confirmation. The sign-in URL is not included in the model's tool result or shared transcript.
-4. The sender opens the private link and authorizes the provider. After the Gateway callback succeeds, they return to the original conversation and retry their task on the next message.
+2. The agent uses the server's `connect` tool. On Discord and Slack, OpenClaw sends the sign-in link privately to that sender through the originating channel account, even when the request came from a group.
+3. On channels with private delivery, the conversation receives only a delivery confirmation; the link stays out of the model's tool result and shared transcript. Other channel plugins retain the existing in-chat link and a Connect button where supported, with a warning that anyone who sees the link can complete sign-in.
+4. The sender opens the link and authorizes the provider. After the Gateway callback succeeds, they return to the original conversation and retry their task on the next message.
 
 If `gateway.publicOrigin` is missing, the sign-in result names that setting and `openclaw doctor` reports the same operator fix. `openclaw mcp login` and `openclaw mcp logout` remain operator-only commands for shared credentials; they do not manage per-requester accounts.
 
-Private delivery requires a known sender and originating channel account. If that route is unsupported or the bot cannot send private messages, OpenClaw reports the failure without posting the link publicly. Allow private messages from the bot, or ask the operator to check its private messaging access, then try connecting again.
+Private delivery requires a known sender and originating channel account. If a channel supports private delivery but the bot cannot send the DM, OpenClaw reports the failure without posting the link publicly. Allow private messages from the bot, or ask the operator to check its private messaging access, then try connecting again. Missing requester context or a channel plugin that failed to load also never triggers public delivery.
+
+Channel setup warns when the plugin lacks private sign-in delivery. This is a limitation of the OpenClaw plugin, not necessarily the messaging service's DM support. On these channels, use personal connections only in trusted conversations: another participant can complete a visible sign-in link with their own account and attach it to the requester's pending connection. A separate credential for each sender does not protect a sign-in link posted to a shared conversation.
 
 Receiving a sign-in message does not approve the sender for DM conversations or change pairing, allowlists, or tool permissions. The sender can complete sign-in in the browser and continue in the original allowed group. `openclaw mcp login` is not a workaround: it manages the operator's shared connection, not the sender's account.
 
-Sign-in links remain single-use bearer links. Anyone the sender forwards a link to can connect their own account to the requester the link was issued for; the callback does not independently verify the browser user's Discord or Slack identity. Requester connections are scoped to the channel, channel account, and sender, not shared automatically across platforms. Separate credentials also do not make group replies or shared conversation history private.
+Sign-in links remain single-use bearer links. Anyone the sender forwards a link to can connect their own account to the requester the link was issued for; the callback does not independently verify the browser user's messaging identity. Requester connections are scoped to the channel, channel account, and sender, not shared automatically across platforms. Separate credentials also do not make group replies or shared conversation history private.
 
 The shared operator flow uses the following commands:
 

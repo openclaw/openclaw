@@ -290,6 +290,8 @@ export type ChannelTtsVoiceDeliveryCapabilities = {
 /** Static capability flags advertised by a channel plugin. */
 export type ChannelCapabilities = {
   chatTypes: Array<ChatType | "thread">;
+  /** Setup-safe declaration; true requires runtime outbound.sendPrivateText. */
+  requesterPrivateMessages?: boolean;
   polls?: boolean;
   reactions?: boolean;
   edit?: boolean;

@@ -785,6 +785,47 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     },
   );
 
+  it("preserves unsupported-channel linking when no bot account was recorded", async () => {
+    const runtime = await makeConnectRuntime({
+      sessionId: "session-unsupported-connect",
+      requesterSenderId: "alice",
+      publicOrigin: "https://gateway.example",
+    });
+    delete runtime.requesterScope!.agentAccountId;
+    mocks.setResolveImpl(async () => runtime);
+    startAuthorization.mockResolvedValue({
+      status: "redirect",
+      authorizationUrl: "https://auth.example/authorize?state=opaque",
+    });
+    sendRequesterPrivateMessage.mockImplementation(async ({ assertActive }) => {
+      assertActive();
+      return { status: "unsupported" };
+    });
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: runtime.sessionId,
+      workspaceDir: "/workspace",
+      requesterSenderId: "alice",
+      cfg: { gateway: { publicOrigin: "https://gateway.example" } },
+      assertActive: () => {},
+    });
+    try {
+      const connect = await result!.tools[0]!.execute("connect", {});
+      expect(connect).toMatchObject({
+        details: {
+          mcpConnect: {
+            serverName: "calendar",
+            authorizationUrl: "https://auth.example/authorize?state=opaque",
+          },
+        },
+      });
+      expect(sendRequesterPrivateMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "telegram", accountId: undefined, senderId: "alice" }),
+      );
+    } finally {
+      await result!.dispose();
+    }
+  });
+
   it("keeps private delivery bound to the current view when a requester runtime is reused", async () => {
     const runtime = await makeConnectRuntime({
       sessionId: "session-reused-connect",

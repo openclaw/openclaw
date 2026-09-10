@@ -86,10 +86,28 @@ async function connectRequesterOAuthServer(params: {
     sent = { status: "failed" };
   }
   assertActive();
+  if (sent.status === "unsupported") {
+    // Preserve the released in-chat flow only for a channel lacking this capability,
+    // never after a private send failed or its originating authority closed.
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `Connect MCP server "${params.serverName}" at ${result.authorizationUrl}\n` +
+            "This channel's plugin does not support private sign-in delivery. Anyone who can see this link can complete sign-in and connect their account to your pending connection. Use only in a trusted conversation.\n" +
+            "After sign-in completes, the server's tools become available on the next message.",
+        },
+      ],
+      details: {
+        mcpConnect: { serverName: params.serverName, authorizationUrl: result.authorizationUrl },
+      },
+    };
+  }
   if (sent.status === "unavailable") {
     return failure(
-      `Private sign-in delivery for MCP server "${params.serverName}" is not supported by this messaging channel. ` +
-        "Ask the operator to add private-delivery support to this channel's plugin. Changing DM settings will not enable this capability, and no sign-in link was posted to this conversation.",
+      `Private sign-in delivery for MCP server "${params.serverName}" is unavailable for this request. ` +
+        "Ask the operator to check the channel plugin and originating bot account, then try connecting again. No sign-in link was posted to this conversation.",
     );
   }
   if (sent.status !== "sent") {
@@ -134,8 +152,8 @@ function buildRequesterConnectCatalog(
       serverName,
       safeServerName: safeServerNamesByServer.get(serverName) ?? serverName,
       toolName: "connect",
-      description: `Connect your ${serverName} account with a private sign-in message.`,
-      fallbackDescription: `Connect your ${serverName} account with a private sign-in message.`,
+      description: `Connect your ${serverName} account. Sign-in is delivered privately when this channel supports it.`,
+      fallbackDescription: `Connect your ${serverName} account. Sign-in is delivered privately when this channel supports it.`,
       inputSchema: Type.Object({}),
     })),
   };

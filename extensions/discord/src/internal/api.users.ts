@@ -13,8 +13,10 @@ export async function getUser(rest: RequestClient, userId: string): Promise<APIU
 export async function createUserDmChannel(
   rest: RequestClient,
   recipientId: string,
+  assertRequestAuthorized?: () => void,
 ): Promise<Pick<APIChannel, "id">> {
   return (await rest.post(Routes.userChannels(), {
     body: { recipient_id: recipientId },
+    ...(assertRequestAuthorized ? { assertRequestAuthorized } : {}),
   })) as Pick<APIChannel, "id">;
 }

@@ -9,6 +9,7 @@ import {
   resetCodeModeTestState,
   runUntilCompleted,
 } from "./code-mode.test-support.js";
+import { readMcpConnectAction } from "./mcp-connect-action.js";
 
 const oauthStatus = vi.hoisted(() => vi.fn());
 const startAuthorization = vi.hoisted(() => vi.fn());
@@ -130,6 +131,7 @@ describe("requester MCP connect runtime", () => {
     expect(startAuthorization).not.toHaveBeenCalled();
     const result = await disconnected.tools[0]!.execute("connect", {});
     expect(JSON.stringify(result)).not.toContain("https://auth.example");
+    expect(readMcpConnectAction(result)).toBeUndefined();
     expect(result.content[0]).toMatchObject({ text: expect.stringContaining("private message") });
     expect(send).toHaveBeenCalledWith({
       serverName: "calendar",
@@ -199,7 +201,7 @@ describe("requester MCP connect runtime", () => {
     }
   });
 
-  it("distinguishes an unsupported channel from blocked private messages", async () => {
+  it("does not expose a link when private delivery context is unavailable", async () => {
     const runtime = await manager.getOrCreate(request);
     const materialized = await materializeBundleMcpToolsForRun({
       runtime,
@@ -212,10 +214,50 @@ describe("requester MCP connect runtime", () => {
       const result = await materialized.tools[0]!.execute("connect", {});
       expect(result.details).toMatchObject({ status: "error" });
       expect(result.content[0]).toMatchObject({
-        text: expect.stringContaining("not supported by this messaging channel"),
+        text: expect.stringContaining("unavailable for this request"),
       });
       expect(JSON.stringify(result)).not.toContain("https://auth.example");
       expect(JSON.stringify(result)).not.toContain("Allow private messages");
+    } finally {
+      await materialized.dispose();
+    }
+  });
+
+  it("preserves in-chat links and a warning only for an unsupported channel", async () => {
+    const runtime = await manager.getOrCreate(request);
+    const materialized = await materializeBundleMcpToolsForRun({
+      runtime,
+      requesterConnectDelivery: {
+        assertActive: () => {},
+        send: async () => ({ status: "unsupported" }),
+      },
+    });
+    try {
+      const result = await materialized.tools[0]!.execute("connect", {});
+      expect(readMcpConnectAction(result)).toEqual({
+        serverName: "calendar",
+        authorizationUrl: "https://auth.example/authorize?state=opaque",
+      });
+      expect(result.content[0]).toMatchObject({
+        text: expect.stringContaining("Anyone who can see this link"),
+      });
+      const codeMode = createCodeModeHarness();
+      applyCodeModeCatalog({
+        tools: [...codeMode.tools, ...materialized.tools],
+        config: codeMode.config,
+        catalogRef: codeMode.catalogRef,
+      });
+      const guest = await runUntilCompleted({
+        execTool: codeMode.tools[0]!,
+        waitTool: codeMode.tools[1]!,
+        code: "return await MCP.calendar.connect();",
+      });
+      expect(guest.status, JSON.stringify(guest)).toBe("completed");
+      expect(guest.value).toMatchObject({
+        content: [
+          { type: "text", text: expect.stringContaining("https://auth.example/authorize") },
+        ],
+      });
     } finally {
       await materialized.dispose();
     }
@@ -252,7 +294,7 @@ describe("requester MCP connect runtime", () => {
     },
   );
 
-  it.each(["sent", "failed"] as const)(
+  it.each(["sent", "failed", "unsupported"] as const)(
     "rejects revoked calls after private delivery resolves with %s",
     async (status) => {
       let active = true;

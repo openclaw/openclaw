@@ -470,6 +470,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
     getLatestMcpAppChannelView: () =>
       state.latestMcpAppChannelView ? { ...state.latestMcpAppChannelView } : undefined,
+    getLatestMcpConnectAction: () =>
+      state.latestMcpConnectAction ? { ...state.latestMcpConnectAction } : undefined,
     runToolLifecycle: createEmbeddedToolLifecycleRunner(ctx),
     unsubscribe,
     setTerminalLifecycleMeta: (meta: {

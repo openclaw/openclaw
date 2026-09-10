@@ -11,6 +11,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { discordSetupPlugin } from "../setup-plugin-api.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { createDiscordLivePolicyReader } from "./monitor/live-policy.js";
 import type { MonitorDiscordOpts } from "./monitor/provider.js";
@@ -269,6 +270,12 @@ describe("discordPlugin policy status", () => {
 });
 
 describe("discordPlugin outbound", () => {
+  it("advertises private requester delivery consistently in setup and runtime", () => {
+    expect(discordSetupPlugin.capabilities.requesterPrivateMessages).toBe(true);
+    expect(discordPlugin.capabilities.requesterPrivateMessages).toBe(true);
+    expect(discordPlugin.outbound?.sendPrivateText).toBeTypeOf("function");
+  });
+
   it("builds tool context with separate native and routable DM targets", () => {
     const buildToolContext = discordPlugin.threading?.buildToolContext;
     if (!buildToolContext) {

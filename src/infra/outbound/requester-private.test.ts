@@ -39,8 +39,33 @@ describe("sendRequesterPrivateMessage", () => {
     const sendText = vi.fn();
     loadOutbound.mockResolvedValue({ sendText });
 
-    await expect(sendRequesterPrivateMessage(request)).resolves.toEqual({ status: "unavailable" });
+    await expect(sendRequesterPrivateMessage(request)).resolves.toEqual({ status: "unsupported" });
     expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("does not treat missing registration as an unsupported capability", async () => {
+    loadOutbound.mockResolvedValue(undefined);
+    await expect(sendRequesterPrivateMessage(request)).resolves.toEqual({ status: "unavailable" });
+  });
+
+  it("allows the existing unsupported-channel flow without inventing a bot account", async () => {
+    loadOutbound.mockResolvedValue({ sendText: vi.fn() });
+    await expect(
+      sendRequesterPrivateMessage({ ...request, accountId: undefined }),
+    ).resolves.toEqual({
+      status: "unsupported",
+    });
+  });
+
+  it("requires the originating account for a private-capable channel", async () => {
+    const sendPrivateText = vi.fn();
+    loadOutbound.mockResolvedValue({ sendPrivateText });
+    await expect(
+      sendRequesterPrivateMessage({ ...request, accountId: undefined }),
+    ).resolves.toEqual({
+      status: "unavailable",
+    });
+    expect(sendPrivateText).not.toHaveBeenCalled();
   });
 
   it("redacts provider errors and never retries through the ordinary send path", async () => {
@@ -53,7 +78,7 @@ describe("sendRequesterPrivateMessage", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
-  it.each(["channel", "accountId", "senderId"] as const)(
+  it.each(["channel", "senderId"] as const)(
     "does not choose a default when %s is missing",
     async (key) => {
       await expect(sendRequesterPrivateMessage({ ...request, [key]: "" })).resolves.toEqual({

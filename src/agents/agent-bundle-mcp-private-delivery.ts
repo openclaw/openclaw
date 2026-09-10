@@ -4,7 +4,7 @@ import type {
   SessionMcpRequesterScope,
 } from "./agent-bundle-mcp-types.js";
 
-/** Keeps personal setup links outside model results and shared conversation history. */
+/** Resolves private delivery without exposing links to the shared send pipeline. */
 export function createRequesterMcpConnectDelivery(params: {
   cfg?: OpenClawConfig;
   requesterScope?: SessionMcpRequesterScope;
@@ -14,7 +14,7 @@ export function createRequesterMcpConnectDelivery(params: {
   const channel = params.requesterScope?.messageChannel?.trim();
   const accountId = params.requesterScope?.agentAccountId?.trim();
   const senderId = params.requesterScope?.requesterSenderId.trim();
-  if (!cfg || !channel || !accountId || !senderId || !assertActive) {
+  if (!cfg || !channel || !senderId || !assertActive) {
     return undefined;
   }
   return {

@@ -698,25 +698,27 @@ describe("sendMessageDiscord", () => {
     }
   });
 
-  it("fences private text at the physical send after an internal REST rate-limit retry", async () => {
-    vi.useFakeTimers();
-    try {
-      const firstAttempt = createDeferred<void>();
-      const authorityRevoked = new Error("delivery authority revoked");
-      let authorityActive = true;
-      const messageBodies: unknown[] = [];
-      const rest = new RequestClient("test-token", {
-        fetch: async (input, init) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/api/v10/users/@me/channels") {
-            return createJsonResponse({ id: "789" });
-          }
-          if (path === "/api/v10/channels/789" && init?.method === "GET") {
-            return createJsonResponse({ id: "789", type: ChannelType.DM });
-          }
-          if (path === "/api/v10/channels/789/messages" && init?.method === "POST") {
-            messageBodies.push(JSON.parse(String(init.body)));
-            if (messageBodies.length === 1) {
+  it.each(["dm-open", "message"] as const)(
+    "fences private %s requests after an internal REST rate-limit retry",
+    async (revokedAt) => {
+      vi.useFakeTimers();
+      try {
+        const firstAttempt = createDeferred<void>();
+        const authorityRevoked = new Error("delivery authority revoked");
+        let authorityActive = true;
+        const requests: string[] = [];
+        const messageBodies: unknown[] = [];
+        const dmPath = "/api/v10/users/@me/channels";
+        const messagePath = "/api/v10/channels/789/messages";
+        const revokedPath = revokedAt === "dm-open" ? dmPath : messagePath;
+        const rest = new RequestClient("test-token", {
+          fetch: async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            requests.push(`${init?.method} ${path}`);
+            if (path === messagePath) {
+              messageBodies.push(JSON.parse(String(init?.body)));
+            }
+            if (path === revokedPath && authorityActive) {
               authorityActive = false;
               firstAttempt.resolve();
               return createJsonResponse(
@@ -724,40 +726,52 @@ describe("sendMessageDiscord", () => {
                 { status: 429 },
               );
             }
-            return createJsonResponse({ id: "message", channel_id: "789" });
-          }
-          throw new Error(`Unexpected Discord request: ${init?.method} ${path}`);
-        },
-      });
-      const result = sendMessageDiscord("user:123", "https://example.com/connect", {
-        rest,
-        token: "test-token",
-        cfg: DISCORD_TEST_CFG,
-        suppressEmbeds: true,
-        allowedMentions: { parse: [] },
-        assertPlatformSendAuthorized: () => {
-          if (!authorityActive) {
-            throw authorityRevoked;
-          }
-        },
-      });
-      const rejected = expect(result).rejects.toBe(authorityRevoked);
-      await firstAttempt.promise;
-      await vi.advanceTimersByTimeAsync(100);
-      await rejected;
+            if (path === dmPath) {
+              return createJsonResponse({ id: "789" });
+            }
+            if (path === messagePath) {
+              return createJsonResponse({ id: "message", channel_id: "789" });
+            }
+            throw new Error(`Unexpected Discord request: ${init?.method} ${path}`);
+          },
+        });
+        const result = sendMessageDiscord("user:123", "https://example.com/connect", {
+          rest,
+          token: "test-token",
+          cfg: DISCORD_TEST_CFG,
+          suppressEmbeds: true,
+          allowedMentions: { parse: [] },
+          assertPlatformSendAuthorized: () => {
+            if (!authorityActive) {
+              throw authorityRevoked;
+            }
+          },
+        });
+        const rejected = expect(result).rejects.toBe(authorityRevoked);
+        await firstAttempt.promise;
+        await vi.advanceTimersByTimeAsync(100);
+        await rejected;
 
-      expect(messageBodies).toEqual([
-        expect.objectContaining({
-          content: "https://example.com/connect",
-          flags: MessageFlags.SuppressEmbeds,
-          allowed_mentions: { parse: [] },
-        }),
-      ]);
-      expect(rest.queueSize).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(requests).toEqual(
+          revokedAt === "dm-open" ? [`POST ${dmPath}`] : [`POST ${dmPath}`, `POST ${messagePath}`],
+        );
+        expect(messageBodies).toEqual(
+          revokedAt === "dm-open"
+            ? []
+            : [
+                expect.objectContaining({
+                  content: "https://example.com/connect",
+                  flags: MessageFlags.SuppressEmbeds,
+                  allowed_mentions: { parse: [] },
+                }),
+              ],
+        );
+        expect(rest.queueSize).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("allows Discord link embeds when suppressEmbeds is disabled", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
@@ -1058,8 +1072,8 @@ describe("sendMessageDiscord", () => {
     ]);
   });
 
-  it("starts DM when recipient is a user", async () => {
-    const { rest, postMock } = makeDiscordRest();
+  it("starts DM when recipient is a user without channel metadata lookup", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
     postMock
       .mockResolvedValueOnce({ id: "chan1" })
       .mockResolvedValueOnce({ id: "msg1", channel_id: "chan1" });
@@ -1073,6 +1087,22 @@ describe("sendMessageDiscord", () => {
     expectRestRoute(postMock, 1, Routes.channelMessages("chan1"));
     expect(requireRestBody(postMock, 1).content).toBe("hiya");
     expect(res.channelId).toBe("chan1");
+    expect(getMock).not.toHaveBeenCalled();
+  });
+
+  it("does not probe guild permissions after a resolved DM send fails", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    const apiError = Object.assign(new Error("Missing Permissions"), { code: 50013, status: 403 });
+    postMock.mockResolvedValueOnce({ id: "chan1" }).mockRejectedValueOnce(apiError);
+
+    await expect(
+      sendMessageDiscord("user:123", "https://example.com/connect", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).rejects.toBe(apiError);
+    expect(getMock).not.toHaveBeenCalled();
   });
 
   it("treats bare numeric outbound IDs as channels", async () => {

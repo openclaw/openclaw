@@ -19,6 +19,7 @@ import {
   shouldShowChannelInSetup,
 } from "../commands/channel-setup/discovery.js";
 import { loadChannelSetupPluginRegistrySnapshotForChannel } from "../commands/channel-setup/plugin-install.js";
+import { getChannelPrivateSignInWarning } from "../commands/channel-setup/private-sign-in-warning.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import {
   getTrustedChannelPluginCatalogEntry,
@@ -487,6 +488,10 @@ export async function setupChannels(
     const plugin = getVisibleChannelPlugin(channel);
     if (plugin) {
       options?.onResolvedPlugin?.(channel, plugin);
+      const privateSignInWarning = getChannelPrivateSignInWarning(plugin);
+      if (privateSignInWarning) {
+        await prompter.note(privateSignInWarning, t("wizard.channels.privateSignInTitle"));
+      }
     }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (result.accountId) {

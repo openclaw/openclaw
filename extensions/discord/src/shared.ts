@@ -129,6 +129,7 @@ export function createDiscordPluginBase(params: {
     meta: { ...getChatChannelMeta(DISCORD_CHANNEL) },
     capabilities: {
       chatTypes: ["direct", "channel", "thread"],
+      requesterPrivateMessages: true,
       polls: true,
       reactions: true,
       threads: true,
