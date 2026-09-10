@@ -227,6 +227,7 @@ For configuration specifically, it points agents to the `gateway` tool action `c
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop)
 - [Agent runtime](/concepts/agent)
 - [Agent workspace](/concepts/agent-workspace)
 - [Context engine](/concepts/context-engine)

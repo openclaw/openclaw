@@ -264,6 +264,7 @@ For advanced configuration (reserve tokens, identifier preservation, custom cont
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop): the turn lifecycle that triggers auto-compaction.
 - [Session](/concepts/session): session management and lifecycle.
 - [Session pruning](/concepts/session-pruning): trimming tool results.
 - [Context](/concepts/context): how context is built for agent turns.

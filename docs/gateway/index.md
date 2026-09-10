@@ -115,7 +115,7 @@ Gateway startup uses the same effective port and bind when it seeds local Contro
 | `off`                 | No config reload                           |
 | `hybrid` (default)    | Hot-apply when safe, restart when required |
 
-The earlier `hot` and `restart` modes are retired; [`openclaw doctor --fix`](/cli/doctor) maps both to `hybrid`.
+The earlier `hot` and `restart` modes were retired in `v2026.7.2-beta.4`, stable from `v2026.8.1`. [`openclaw doctor --fix`](/cli/doctor) maps both to `hybrid`.
 
 ## Operator command set
 

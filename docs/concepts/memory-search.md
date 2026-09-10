@@ -56,11 +56,11 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
 | Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
 | LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
-| Mistral           | `mistral`           | Yes           |                                   |
+| Mistral           | `mistral`           | Yes           | Default model `mistral-embed`     |
 | Ollama            | `ollama`            | No            | Local/self-hosted server          |
 | OpenAI            | `openai`            | Yes           | Default                           |
 | OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
-| Voyage            | `voyage`            | Yes           |                                   |
+| Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
 
 ## How search works
 

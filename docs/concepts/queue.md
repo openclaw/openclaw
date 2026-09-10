@@ -192,6 +192,7 @@ The Control UI **System busyness** overlay and `diagnostics.lanes` report this w
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop)
 - [Session management](/concepts/session)
 - [Steering queue](/concepts/queue-steering)
 - [Steer](/tools/steer)
