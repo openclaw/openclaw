@@ -11,7 +11,8 @@ function git(...args) {
     ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", ...args],
     { maxBuffer: 64 * 1024 * 1024 },
   );
-  return new TextDecoder("utf-8", { fatal: true }).decode(output);
+  // Git emits filenames, so an initial U+FEFF belongs to the first path.
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(output);
 }
 
 function records(...args) {

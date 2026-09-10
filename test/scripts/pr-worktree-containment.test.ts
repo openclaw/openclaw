@@ -674,6 +674,16 @@ describePosix("scripts/pr worktree containment", () => {
       dirtyFile: "main-only.txt",
       dirtyContent: "foreign addition\n",
     },
+    {
+      name: "BOM-prefixed untracked target lookalike",
+      setup: [
+        'printf "/.local/\\n" >> "$(git rev-parse --git-path info/exclude)"',
+        "printf 'foreign BOM\\n' > '\ufeffmain-only.txt'",
+      ],
+      expectedStatus: "main-only.txt",
+      dirtyFile: "\ufeffmain-only.txt",
+      dirtyContent: "foreign BOM\n",
+    },
   ]) {
     it(`refuses and preserves ${testCase.name} foreign state`, () => {
       const fixture = createReviewFixture();
