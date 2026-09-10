@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createUpdateRun, finishUpdateRun } from "../../infra/update-run-ledger.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import { startUpdateRunWatcher } from "../update-run-watcher.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { updateStatusHandlers } from "./update-status.js";
 
@@ -48,6 +50,50 @@ afterEach(async () => {
 });
 
 describe("update history RPCs", () => {
+  it.each(["update.status", "update.runs.get"] as const)(
+    "revalidates recorded dead drivers through %s",
+    async (method) => {
+      const driver = expectDefined(readUpdateRunDriver(), "local driver identity");
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now - 31 * 60_000);
+      const run = createUpdateRun({
+        trigger: "cli",
+        origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
+      });
+      clock.mockReturnValue(now);
+      await requestUpdateRead(method, method === "update.runs.get" ? { runId: run.runId } : {});
+      expect(getUpdateRun(run.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
+    },
+  );
+
+  it.each(["update.status", "update.runs.get"] as const)(
+    "reconciles expired legacy admission before %s reaches the UI",
+    async (method) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
+      const legacy = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+      clock.mockReturnValue(now);
+      const respond = await requestUpdateRead(
+        method,
+        method === "update.runs.get" ? { runId: legacy.runId } : {},
+      );
+      expect(getUpdateRun(legacy.runId)).toMatchObject({
+        phase: "finished",
+        status: "failed",
+        reason: "legacy-driver-expired",
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          [method === "update.status" ? "lastRun" : "run"]: expect.objectContaining({
+            status: "failed",
+            reason: "legacy-driver-expired",
+          }),
+        }),
+      );
+    },
+  );
+
   it("projects distinct active and latest runs and reads persisted history in creation order", async () => {
     expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(true, {
       sentinel: null,
@@ -113,4 +159,26 @@ describe("update history RPCs", () => {
       );
     }
   });
+});
+
+it("reconciles an expired legacy admission on Gateway watcher startup", async () => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
+  const legacy = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+  clock.mockReturnValue(now);
+  const broadcast = vi.fn();
+  const watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+  try {
+    expect(getUpdateRun(legacy.runId)).toMatchObject({
+      phase: "finished",
+      status: "failed",
+      reason: "legacy-driver-expired",
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "update.run.changed",
+      expect.objectContaining({ runId: legacy.runId, status: "failed" }),
+    );
+  } finally {
+    await watcher.stop();
+  }
 });

@@ -2,7 +2,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { buildStatusUpdateRows } from "../../commands/status-update-restart.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
+import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   createUpdateRun,
@@ -261,6 +263,61 @@ afterEach(() => {
 });
 
 describe("update status abandoned-run reporting", () => {
+  it("does not advertise expiry for a legacy admission reserved by recovery", async () => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
+    const legacy = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+    const from = {
+      root: process.env.OPENCLAW_STATE_DIR ?? "/fixture",
+      nodePath: process.execPath,
+      version: "2026.9.2",
+      buildId: null,
+    };
+    createRetainedUpdateRecovery(
+      { runId: legacy.runId, from, to: { ...from, version: "2026.9.3" } },
+      {},
+    );
+    vi.mocked(Date.now).mockReturnValue(now);
+    await updateStatusCommand({ json: true });
+    expect(getUpdateRun(legacy.runId)).toEqual(legacy);
+    expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("abandonedRun");
+    expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("advisories");
+  });
+
+  it.each(["json", "text", "status"])(
+    "reconciles expired legacy admission through %s",
+    async (surface) => {
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
+      const legacy = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+      vi.mocked(Date.now).mockReturnValue(now);
+      finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
+      let output: string;
+      if (surface === "status") {
+        output = JSON.stringify(buildStatusUpdateRows(null));
+      } else {
+        await updateStatusCommand({ json: surface === "json" });
+        output =
+          surface === "json"
+            ? JSON.stringify(runtime.writeJson.mock.lastCall?.[0])
+            : runtime.log.mock.calls.flat().join("\n");
+      }
+      expect(getUpdateRun(legacy.runId)).toMatchObject({
+        phase: "finished",
+        status: "failed",
+        reason: "legacy-driver-expired",
+      });
+      expect(output).toContain("treated as abandoned after 24 h");
+      expect(output).toContain("openclaw update");
+      expect(findActiveUpdateRun()).toBeUndefined();
+      // A later read must still surface the advisory after the terminal write.
+      await updateStatusCommand({ json: true });
+      expect(JSON.stringify(runtime.writeJson.mock.lastCall?.[0])).toContain(
+        "treated as abandoned after 24 h",
+      );
+    },
+  );
+
   it.each([true, false])(
     "does not publish partial history when the latest terminal row is unreadable (JSON: %s)",
     async (json) => {

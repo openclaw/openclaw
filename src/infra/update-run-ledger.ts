@@ -19,6 +19,7 @@ import {
 } from "./kysely-sync.js";
 import {
   inspectUpdateRunAbandonment,
+  isAbandonedUpdateRun,
   isStaleIdentitylessUpdateRun,
   recordedUpdateRunDrivers,
 } from "./update-run-activity.js";
@@ -34,6 +35,7 @@ import {
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import { listUpdateRuns, readUpdateRunRecord as readRun } from "./update-run-reader.js";
 import {
   finishUpdateRunRecord,
@@ -331,8 +333,7 @@ export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOpti
     runId,
     (record) => {
       if (
-        record.status === "failed" &&
-        record.reason === "abandoned" &&
+        isAbandonedUpdateRun(record) &&
         !record.steps.some((step) => step.step === "reconcile:acknowledged")
       ) {
         upsertStep(record, {
@@ -348,7 +349,12 @@ export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOpti
 
 /** The writer rechecks activity and process identity in the same transaction as terminalization. */
 export function reconcileAbandonedUpdateRuns(
-  input: { explicit?: boolean; runIds?: readonly string[]; requireAllActive?: boolean } = {},
+  input: {
+    explicit?: boolean;
+    runIds?: readonly string[];
+    requireAllActive?: boolean;
+    legacyOnly?: boolean;
+  } = {},
   options: LedgerOptions = {},
 ): UpdateRunRecord[] {
   if (input.runIds?.length === 0) {
@@ -412,7 +418,7 @@ export function reconcileAbandonedUpdateRuns(
         return [];
       }
       return selected.flatMap(({ record, rule }) => {
-        if (!rule) {
+        if (!rule || (input.legacyOnly && rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON)) {
           return [];
         }
         upsertStep(record, {
@@ -421,7 +427,10 @@ export function reconcileAbandonedUpdateRuns(
           endedAtMs: Date.now(),
           detail: rule,
         });
-        finishUpdateRunRecord(record, { status: "failed", reason: "abandoned" });
+        finishUpdateRunRecord(record, {
+          status: "failed",
+          reason: rule === LEGACY_UPDATE_RUN_EXPIRED_REASON ? rule : "abandoned",
+        });
         return [persistRun(db, record, options)];
       });
     },

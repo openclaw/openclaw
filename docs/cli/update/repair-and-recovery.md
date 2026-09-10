@@ -97,6 +97,14 @@ openclaw update repair --accept-capabilities
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                                                          |
 
+Untouched, identityless 2026.9.2-era update admissions heal automatically after
+more than 24 hours. Gateway startup, `openclaw update status`, and `openclaw status`
+retain the row as an abandoned failure with reason `legacy-driver-expired` and an
+advisory to run `openclaw update` to retry. The Control UI refreshes the Gateway's
+recovery classification before refusing a suspended config write, so an expired
+orphan does not keep settings or provider sign-in blocked. Live updates and
+pending recovery remain protected. No explicit repair is needed for this shape.
+
 `update repair` first inspects stale update history. When the installed Gateway
 generation is healthy and the only remaining problem is an inactive ledger row,
 repair records `failed` / `abandoned` and exits successfully without Doctor,

@@ -34,7 +34,7 @@ export async function getUpdateRunAsync(
   );
 }
 
-type ListInput = { limit?: number; active?: boolean };
+type ListInput = { limit?: number; active?: boolean; reason?: string };
 
 function readRuns(db: DatabaseSync, input: ListInput): UpdateRunRecord[] {
   if (!tableExists(db, "update_runs")) {
@@ -45,6 +45,9 @@ function readRuns(db: DatabaseSync, input: ListInput): UpdateRunRecord[] {
     .selectAll();
   if (input.active) {
     query = query.where("status", "=", "running");
+  }
+  if (input.reason) {
+    query = query.where("reason", "=", input.reason);
   }
   return executeSqliteQuerySync(
     db,

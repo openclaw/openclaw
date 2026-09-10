@@ -15,6 +15,30 @@ import {
 } from "./config-test-harness.ts";
 
 describe("config write coordinator", () => {
+  it.each(["expired", "live", "recovery-held"])(
+    "revalidates %s update admission before a config write",
+    async (kind) => {
+      const server = createConfigServerMock();
+      const { runtimeConfig } = createConfigCapabilityHarness(
+        server.request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
+      const refresh = vi.fn(async () => {
+        // The Gateway owns expiry and companion recovery evidence; the UI consumes its outcome.
+        runtimeConfig.setWritesSuspended(kind !== "expired", refresh);
+      });
+      runtimeConfig.setWritesSuspended(true, refresh);
+      runtimeConfig.setRaw('{"count":2}');
+      try {
+        expect(await runtimeConfig.save()).toBe(kind === "expired");
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(server.submissions).toHaveLength(kind === "expired" ? 1 : 0);
+      } finally {
+        runtimeConfig.dispose();
+      }
+    },
+  );
+
   it("rebinds a retained draft to an opaque revision when the reconnect base is unchanged", async () => {
     vi.useFakeTimers();
     let hash = "legacy-raw-hash";

@@ -15,6 +15,7 @@ import {
   getUpdateRunAsync,
   listUpdateRuns,
   listUpdateRunsAsync,
+  reconcileAbandonedUpdateRuns,
 } from "../../infra/update-run-ledger.js";
 import {
   getUpdateAvailable,
@@ -66,6 +67,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         );
       }
     }
+    reconcileAbandonedUpdateRuns();
     const activeRun = findActiveUpdateRun();
     const [lastRun] = listUpdateRuns({ limit: 1 });
     const result = {
@@ -125,6 +127,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateRunsGetParams, "update.runs.get", respond)) {
       return;
     }
+    reconcileAbandonedUpdateRuns({ runIds: [params.runId] });
     respond(true, { run: (await getUpdateRunAsync(params.runId)) ?? null });
   },
   "update.runs.list": async ({ params, respond }) => {
