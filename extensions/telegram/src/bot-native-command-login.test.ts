@@ -515,11 +515,12 @@ describe("registerTelegramNativeCommands /login", () => {
     const store = { "agent:main:main": previous };
     loginSessionMocks.loadSessionStore.mockReturnValue(store);
     loginSessionMocks.patchSessionEntry.mockImplementationOnce(
-      async (write: {
-        update: (entry: SessionEntry) => Partial<SessionEntry> | null;
-        assertCommitAllowed?: () => void;
-      }) => {
-        const patch = await write.update({ ...previous });
+      async (
+        write: Parameters<
+          typeof import("openclaw/plugin-sdk/session-store-runtime").patchSessionEntry
+        >[0],
+      ) => {
+        const patch = await write.update({ ...previous }, { existingEntry: previous });
         commands.ownerAllowFrom = ["999"];
         write.assertCommitAllowed?.();
         store["agent:main:main"] = patch ? { ...previous, ...patch } : previous;
