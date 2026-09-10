@@ -637,6 +637,22 @@ async function runImagePrompt(params: {
         provider,
         providerRegistry,
       );
+      const request = {
+        provider,
+        model: modelId,
+        prompt: params.prompt,
+        maxTokens: resolveImageToolMaxTokens(undefined),
+        timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
+        cfg: providerCfg,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        ...(params.preparedModelRuntime
+          ? { preparedModelRuntime: params.preparedModelRuntime }
+          : {}),
+      };
       if (
         params.images.length > 1 &&
         (imageProvider?.describeImages || !imageProvider?.describeImage)
@@ -651,20 +667,7 @@ async function runImagePrompt(params: {
             fileName: `image-${index + 1}`,
             mime: image.mimeType,
           })),
-          provider,
-          model: modelId,
-          prompt: params.prompt,
-          maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs,
-          ...(params.signal ? { signal: params.signal } : {}),
-          cfg: providerCfg,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-          ...(params.preparedModelRuntime
-            ? { preparedModelRuntime: params.preparedModelRuntime }
-            : {}),
+          ...request,
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
@@ -681,20 +684,7 @@ async function runImagePrompt(params: {
           buffer: image.buffer,
           fileName: "image-1",
           mime: image.mimeType,
-          provider,
-          model: modelId,
-          prompt: params.prompt,
-          maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs,
-          ...(params.signal ? { signal: params.signal } : {}),
-          cfg: providerCfg,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-          ...(params.preparedModelRuntime
-            ? { preparedModelRuntime: params.preparedModelRuntime }
-            : {}),
+          ...request,
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
@@ -707,20 +697,8 @@ async function runImagePrompt(params: {
           buffer: image.buffer,
           fileName: `image-${index + 1}`,
           mime: image.mimeType,
-          provider,
-          model: modelId,
+          ...request,
           prompt: `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length}.`,
-          maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs,
-          ...(params.signal ? { signal: params.signal } : {}),
-          cfg: providerCfg,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-          ...(params.preparedModelRuntime
-            ? { preparedModelRuntime: params.preparedModelRuntime }
-            : {}),
         });
         parts.push(`Image ${index + 1}:\n${described.text.trim()}`);
       }
