@@ -13,7 +13,7 @@ rollups:
       label: Beta
   category_average:
     quality:
-      score: 67
+      score: 66
       label: Alpha
     completeness:
       score: 73
@@ -2518,7 +2518,7 @@ surfaces:
           reason: none
           human_override: false
   - id: containers
-    name: Docker and Podman hosting
+    name: Fleet, containers, and cloud execution
     family: platform-app
     level:
       id: beta
@@ -2526,10 +2526,10 @@ surfaces:
       label: Beta
     scores:
       quality:
-        score: 71
-        label: Beta
+        score: 67
+        label: Alpha
       completeness:
-        score: 79
+        score: 71
         label: Beta
     lts:
       status: none
@@ -2544,10 +2544,10 @@ surfaces:
     categories:
       - name: Container Setup
         quality:
-          score: 68
+          score: 66
           label: Alpha
         completeness:
-          score: 79
+          score: 74
           label: Beta
         lts:
           supported: false
@@ -2555,10 +2555,10 @@ surfaces:
           human_override: false
       - name: Container Operations
         quality:
-          score: 68
+          score: 64
           label: Alpha
         completeness:
-          score: 79
+          score: 70
           label: Beta
         lts:
           supported: false
@@ -2566,10 +2566,10 @@ surfaces:
           human_override: false
       - name: Image Release and Validation
         quality:
-          score: 79
+          score: 72
           label: Beta
         completeness:
-          score: 79
+          score: 72
           label: Beta
         lts:
           supported: false
@@ -2577,11 +2577,11 @@ surfaces:
           human_override: false
       - name: Agent Sandbox and Tooling
         quality:
-          score: 68
+          score: 64
           label: Alpha
         completeness:
-          score: 79
-          label: Beta
+          score: 68
+          label: Alpha
         lts:
           supported: false
           reason: none

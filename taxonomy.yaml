@@ -7271,11 +7271,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: containers
-    name: Docker and Podman hosting
+    name: Fleet, containers, and cloud execution
     family: platform-app
     level: beta
     level_code: M3
-    rationale: Install docs exist and are common deployment paths. Promote after recurring release smoke captures upgrade and volume behavior.
+    rationale: OpenClaw supports local container hosting, isolated fleet cells, and cloud-worker execution. The main workflows exist, but fleet and cloud lifecycle, recovery, placement, and image guarantees remain less mature than the local Docker and Podman path.
     completeness_instructions: references/completeness/docker-podman-hosting.md
     categories:
       - name: Container Setup
@@ -7299,14 +7299,25 @@ surfaces:
           - name: Rootless Podman image setup
             coverageIds: [containers.rootless-podman-image-setup]
             description: Rootless Podman image setup, launch, setup/onboarding, host CLI routing, Quadlet autostart, and owner/permission checks
+          - name: Isolated fleet cell setup
+            coverageIds: [containers.isolated-fleet-cell-setup]
+            description: Creation of tenant-scoped fleet cells with their own Gateway, state, credentials, channel accounts, container, and loopback host port.
+          - name: Cloud worker profiles and runtime bootstrap
+            coverageIds: [containers.cloud-worker-profiles-and-runtime-bootstrap]
+            description: Cloud worker profile configuration, machine prerequisites, verified runtime and worker bundle installation, and fail-closed enrollment.
         docs:
           - docs/install/docker.md
           - docs/install/podman.md
+          - docs/cli/fleet.md
+          - docs/gateway/cloud-workers.md
+          - docs/gateway/cloud-workers/setup-and-bundle-installation.md
         search_anchors:
           - docker / podman hosting docker install, compose, and first-run setup
           - docker install, compose, and first-run setup
           - docker / podman hosting podman rootless, quadlet, and host cli
           - podman rootless, quadlet, and host cli
+          - isolated fleet cell setup
+          - cloud worker profiles and runtime bootstrap
         category_note: docker-install-compose-and-first-run-setup.md
         human_lts_override: false
       - name: Container Operations
@@ -7345,12 +7356,22 @@ surfaces:
           - name: Operator-facing update
             coverageIds: [containers.operator-facing-update]
             description: Operator-facing update, backup, persistence, low-memory, and troubleshooting guidance
+          - name: Fleet cell lifecycle and diagnostics
+            coverageIds: [containers.fleet-cell-lifecycle-and-diagnostics]
+            description: List, status, logs, start, stop, restart, upgrade, doctor, backup, restore, and removal workflows for isolated cells.
+          - name: Cloud session lifecycle and recovery
+            coverageIds: [containers.cloud-session-lifecycle-and-recovery]
+            description: Dispatch, status, sleep, wake, teardown, replay, recovery, and replacement behavior for cloud-backed sessions.
         docs:
           - docs/install/podman.md
           - docs/install/docker-vm-runtime.md
           - docs/install/docker.md
           - docs/install/hetzner.md
           - docs/install/hostinger.md
+          - docs/cli/fleet.md
+          - docs/cli/worker.md
+          - docs/gateway/cloud-sessions.md
+          - docs/gateway/cloud-workers/session-lifecycle.md
         search_anchors:
           - docker / podman hosting host cli container targeting and update lifecycle
           - host cli container targeting and update lifecycle
@@ -7360,6 +7381,8 @@ surfaces:
           - networking, control ui, health, and observability
           - docker / podman hosting provider-hosted vps and operator runbooks
           - provider-hosted vps and operator runbooks
+          - fleet cell lifecycle and diagnostics
+          - cloud session lifecycle and recovery
         category_note: runtime-configuration-state-volumes-and-secrets.md
         human_lts_override: false
       - name: Image Release and Validation
@@ -7386,15 +7409,24 @@ surfaces:
           - name: Release-path install
             coverageIds: [containers.release-path-install]
             description: Release-path install, update, upgrade survivor, live-provider, plugin, Open WebUI, and cleanup scenario planning
+          - name: Worker image preparation and retention
+            coverageIds: [containers.worker-image-preparation-and-retention]
+            description: Prepared worker images, runtime identity, bounded retention, replacement, deletion obligations, and operator recovery.
+          - name: Warm image reuse and refresh
+            coverageIds: [containers.warm-image-reuse-and-refresh]
+            description: Deterministic cold-versus-warm allocation, checkpoint reuse, refresh boundaries, and safe cleanup across supported providers.
         docs:
           - docs/install/docker.md
           - docs/install/docker-vm-runtime.md
           - docs/reference/full-release-validation.md
+          - docs/gateway/cloud-workers/warm-images.md
         search_anchors:
           - docker / podman hosting image build, release packaging, and attestations
           - image build, release packaging, and attestations
           - docker / podman hosting docker e2e release smoke and scheduler
           - docker e2e release smoke and scheduler
+          - worker image preparation and retention
+          - warm image reuse and refresh
         category_note: image-build-release-packaging-and-attestations.md
         human_lts_override: false
       - name: Agent Sandbox and Tooling
@@ -7409,12 +7441,23 @@ surfaces:
           - name: Container image dependency baking
             coverageIds: [containers.container-image-dependency-baking]
             description: Container image dependency baking for skills/plugins/tools
+          - name: Cloud placement and machine admission
+            coverageIds: [containers.cloud-placement-and-machine-admission]
+            description: Session placement, provider admission, machine-class selection, capacity, and project-default routing for remote workers.
+          - name: Cloud desktop and computer control
+            coverageIds: [containers.cloud-desktop-and-computer-control]
+            description: Authenticated observation and control of desktop-capable cloud workers without public desktop ingress.
         docs:
           - docs/install/docker.md
           - docs/install/docker-vm-runtime.md
+          - docs/gateway/cloud-workers/placement-and-machine-selection.md
+          - docs/gateway/cloud-workers/per-project-default-profiles.md
+          - docs/gateway/cloud-workers/desktop.md
         search_anchors:
           - docker / podman hosting containerized agents, sandbox, and tooling support
           - containerized agents, sandbox, and tooling support
+          - cloud placement and machine admission
+          - cloud desktop and computer control
         category_note: containerized-agents-sandbox-and-tooling-support.md
         human_lts_override: false
     last_score_run:

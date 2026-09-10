@@ -132,11 +132,6 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>7 areas - 80% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#docker-and-podman-hosting">
-      <span className="maturity-surface-title">Docker and Podman hosting</span>
-      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas - 79% complete</span></span>
-    </a>
-
     <a className="maturity-surface-link" href="#windows-via-wsl2">
       <span className="maturity-surface-title">Windows via WSL2</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas - 79% complete</span></span>
@@ -155,6 +150,11 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <a className="maturity-surface-link" href="#linux-companion-app">
       <span className="maturity-surface-title">Linux companion app</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas - 76% complete</span></span>
+    </a>
+
+    <a className="maturity-surface-link" href="#fleet-containers-and-cloud-execution">
+      <span className="maturity-surface-title">Fleet, containers, and cloud execution</span>
+      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas - 71% complete</span></span>
     </a>
 
     <a className="maturity-surface-link" href="#windows-app-node">
@@ -2392,75 +2392,6 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Docker and Podman hosting - M3 Beta - 4 areas">
-    <a id="docker-and-podman-hosting" />
-
-    Install docs exist and are common deployment paths. Promote after recurring release smoke captures upgrade and volume behavior.
-
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 28%</span><span>Quality Beta - 71%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
-
-    <div className="maturity-category-list">
-      <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Container Setup</span>
-          <span>6 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Docker](/install/docker), [Podman](/install/podman)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Container Operations</span>
-          <span>11 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Podman](/install/podman), [Docker Vm Runtime](/install/docker-vm-runtime), [Docker](/install/docker), [Hetzner](/install/hetzner), [Hostinger](/install/hostinger)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Image Release and Validation</span>
-          <span>7 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>29%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "29%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime), [Full Release Validation](/reference/full-release-validation)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Agent Sandbox and Tooling</span>
-          <span>3 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime)
-
-    </div>
-      </div>
-    </div>
-
-  </Accordion>
-
   <Accordion title="Windows via WSL2 - M3 Beta - 6 areas">
     <a id="windows-via-wsl2" />
 
@@ -2829,6 +2760,76 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">
 
     [Linux](/platforms/linux), [OpenClaw](/start/openclaw), [Doctor](/gateway/doctor)
+
+    </div>
+      </div>
+    </div>
+
+  </Accordion>
+
+  <Accordion title="Fleet, containers, and cloud execution - M3 Beta - 4 areas">
+    <a id="fleet-containers-and-cloud-execution" />
+    <a id="docker-and-podman-hosting" />
+
+    OpenClaw supports local container hosting, isolated fleet cells, and cloud-worker execution. The main workflows exist, but fleet and cloud lifecycle, recovery, placement, and image guarantees remain less mature than the local Docker and Podman path.
+
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 21%</span><span>Quality Alpha - 67%</span><span>Completeness Beta - 71%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+
+    <div className="maturity-category-list">
+      <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Container Setup</span>
+          <span>8 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>25%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "25%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Docker](/install/docker), [Podman](/install/podman), [Fleet](/cli/fleet), [Cloud Workers](/gateway/cloud-workers), [Setup And Bundle Installation](/gateway/cloud-workers/setup-and-bundle-installation)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Container Operations</span>
+          <span>13 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>15%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "15%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>70%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "70%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Podman](/install/podman), [Docker Vm Runtime](/install/docker-vm-runtime), [Docker](/install/docker), [Hetzner](/install/hetzner), [Hostinger](/install/hostinger), [Fleet](/cli/fleet), [Worker](/cli/worker), [Cloud Sessions](/gateway/cloud-sessions), [Session Lifecycle](/gateway/cloud-workers/session-lifecycle)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Image Release and Validation</span>
+          <span>9 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>22%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "22%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime), [Full Release Validation](/reference/full-release-validation), [Warm Images](/gateway/cloud-workers/warm-images)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Agent Sandbox and Tooling</span>
+          <span>5 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>20%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "20%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime), [Placement And Machine Selection](/gateway/cloud-workers/placement-and-machine-selection), [Per Project Default Profiles](/gateway/cloud-workers/per-project-default-profiles), [Desktop](/gateway/cloud-workers/desktop)
 
     </div>
       </div>
