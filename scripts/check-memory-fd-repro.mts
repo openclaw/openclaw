@@ -809,18 +809,25 @@ async function main() {
       onReady(launched) {
         child = launched;
         launched.once("exit", () => invokeStop.abort());
+        const captureOutputError = (error: unknown) => {
+          if (outputErrors.length === 0) {
+            outputErrors.push(error);
+          }
+          stop.abort();
+        };
         const append = (chunk: Uint8Array | string) => {
           const text = chunk.toString();
           Object.assign(outputState, updateGatewayReadyOutputState(outputState, text));
           try {
             fs.appendFileSync(logPath, text);
           } catch (error) {
-            if (outputErrors.length === 0) {
-              outputErrors.push(error);
-            }
-            stop.abort();
+            captureOutputError(error);
           }
         };
+        // Observe both error channels before data listeners start flowing;
+        // read failures must retire the owner through the same cleanup path.
+        launched.stdout!.on("error", captureOutputError);
+        launched.stderr!.on("error", captureOutputError);
         launched.stdout!.on("data", append);
         launched.stderr!.on("data", append);
       },

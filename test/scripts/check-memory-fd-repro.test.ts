@@ -29,6 +29,8 @@ const FOREIGN_PID = 2_147_483_645;
 type OwnershipScenario =
   | "owned-success"
   | "owned-success-inherited-root"
+  | "stdout-error"
+  | "stderr-error"
   | "foreign-ready"
   | "exited-ready"
   | "replaced-during"
@@ -154,6 +156,11 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "};",
         "globalThis.fetch = async () => {",
         "  if (scenario === 'replaced-during') { replaced = true; finish(23); }",
+        "  if (scenario === 'stdout-error' || scenario === 'stderr-error') {",
+        "    const channel = scenario === 'stdout-error' ? 'stdout' : 'stderr';",
+        "    child[channel].destroy(Object.assign(",
+        "      new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
+        "  }",
         "  return new Response(JSON.stringify({ ok: true, result: { results: [] } }), { status: 200 });",
         "};",
         "process.on('exit', () => write(" + JSON.stringify(journalPath) + ", JSON.stringify({",
@@ -210,7 +217,7 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
     if (scenario === "ignored-stop") {
       expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
     } else {
-      expect(() => owner.assertReleased()).not.toThrow();
+      expect(() => owner.assertReleased(), result.stderr).not.toThrow();
     }
     const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
       samples: { pid: number; alive: boolean }[];
@@ -509,6 +516,24 @@ describe("check-memory-fd-repro", () => {
       expect(result.stderr).toContain("23");
       expect(journal.closed).toBe(true);
     });
+
+    it.each(["stdout-error", "stderr-error"] as const)(
+      "diagnoses pipe failure after joining the owned process (%s)",
+      (scenario) => {
+        const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
+        const channel = scenario === "stdout-error" ? "stdout" : "stderr";
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain(`injected Gateway ${channel} read EIO`);
+        expect(result.stderr).not.toContain("Unhandled 'error' event");
+        expect(journal.samples).toEqual([{ pid: OWNED_PID, alive: true }]);
+        expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
+        expect(journal.closed).toBe(true);
+        expect(journal.alive).toBe(false);
+        expect(journal.events).toEqual(["close", "cleanup"]);
+        expect(journal.rootExists).toBe(false);
+        expect(summary).toBeUndefined();
+      },
+    );
 
     it.each(["owned-success", "owned-success-inherited-root"] as const)(
       "joins the launched process before publishing success (%s)",
