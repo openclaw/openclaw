@@ -48,6 +48,8 @@ resolve one with this descriptor. OpenClaw rejects ambiguous or unresolved owner
 persists the start or invokes the provider. Provider aliases are lookup names
 only and must not be used for this declaration.
 
+### Worker providers
+
 Worker providers must also declare their id in `contracts.workerProviders`.
 Providers may implement `maintain({ profiles, signal, assertCurrent })` for bounded cleanup that must continue with no active leases. The Gateway invokes it for enabled, configured providers from its existing periodic worker sweep, separately from allocation and reconciliation waits. `profiles` contains cloned settings for the provider's current configured profiles. Call `assertCurrent()` immediately before external effects and after awaited work before durable mutations; authority ends when the invocation settles, its configuration or registration changes, or the Gateway stops. Honor `signal` and settle only after owned commands stop. A provider's plugin service must also cancel and drain maintenance during generation replacement. The hook must not allocate running capacity or treat maintenance as user demand; retention and cleanup policy remain provider-owned.
 

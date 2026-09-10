@@ -228,6 +228,14 @@
     "target": "Azure Speech provider"
   },
   {
+    "source": "Fish Audio provider",
+    "target": "Fish Audio provider"
+  },
+  {
+    "source": "ElevenLabs",
+    "target": "ElevenLabs"
+  },
+  {
     "source": "Web tools",
     "target": "Web 工具"
   },
@@ -642,6 +650,14 @@
   {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
+  },
+  {
+    "source": "Mistral",
+    "target": "Mistral"
+  },
+  {
+    "source": "OpenRouter",
+    "target": "OpenRouter"
   },
   {
     "source": "Model providers",
@@ -1458,6 +1474,18 @@
   {
     "source": "Lobster plugin reference",
     "target": "Lobster 插件参考"
+  },
+  {
+    "source": "ACPx plugin reference",
+    "target": "ACPx 插件参考"
+  },
+  {
+    "source": "Llama Cpp plugin reference",
+    "target": "Llama Cpp 插件参考"
+  },
+  {
+    "source": "Policy plugin reference",
+    "target": "Policy 插件参考"
   },
   {
     "source": "A2A plugin reference",

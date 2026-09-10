@@ -43,8 +43,10 @@ Use `configContracts` for manifest-owned config behavior that generic core helpe
 | ----------------------------- | -------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `compatibilityMigrationPaths` | No       | `string[]` | Root-relative config paths that indicate this plugin's setup-time compatibility migrations might apply. Lets generic runtime config reads skip every plugin setup surface when the config never references the plugin.                 |
 | `compatibilityRuntimePaths`   | No       | `string[]` | Root-relative compatibility paths this plugin can service during runtime before plugin code fully activates. Use this for legacy surfaces that should narrow bundled candidate sets without importing every compatible plugin runtime. |
-| `dangerousFlags`              | No       | `object[]` | Config literals that `openclaw doctor` should flag as insecure or dangerous when enabled. See below.                                                                                                                                   |
-| `secretInputs`                | No       | `object`   | Config paths under `plugins.entries.<id>.config` for SecretRef migration, audit, startup materialization, and optional runtime owner isolation. See below.                                                                             |
+| `dangerousFlags`              | No       | `object[]` | Config literals that `openclaw doctor` should flag as insecure or dangerous when enabled. See [dangerousFlags entries](#dangerousflags-entries).                                                                                       |
+| `secretInputs`                | No       | `object`   | Config paths under `plugins.entries.<id>.config` for SecretRef migration, audit, startup materialization, and optional runtime owner isolation. See [secretInputs paths](#secretinputs-paths).                                         |
+
+### dangerousFlags entries
 
 Each `dangerousFlags` entry supports:
 
@@ -52,6 +54,8 @@ Each `dangerousFlags` entry supports:
 | -------- | -------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `path`   | Yes      | `string`                              | Dot-separated config path relative to `plugins.entries.<id>.config`. Supports `*` wildcards for map/array segments. |
 | `equals` | Yes      | `string \| number \| boolean \| null` | Exact literal that marks this config value as dangerous.                                                            |
+
+### secretInputs paths
 
 `secretInputs` supports:
 

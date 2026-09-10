@@ -167,3 +167,7 @@ an already-running exec tool can use the new value.
 When the owning run closes, its proxy authorization and existing connections are
 revoked, including background subprocess tunnels. Bytes already handed to the
 upstream transport cannot be recalled.
+
+## Related
+
+- [Ask user](/tools/ask-user) — structured questions for non-credential decisions; a credential is never a valid answer to one

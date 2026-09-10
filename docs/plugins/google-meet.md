@@ -246,4 +246,5 @@ resolve here.
 - [Meeting plugins overview](/plugins/meeting-plugins)
 - [Voice call plugin](/plugins/voice-call)
 - [Talk mode](/nodes/talk)
+- [ElevenLabs](/providers/elevenlabs) — the speech and transcription provider used in the Meet config examples
 - [Building plugins](/plugins/building-plugins)

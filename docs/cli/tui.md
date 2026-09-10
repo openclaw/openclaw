@@ -159,3 +159,4 @@ rerun `openclaw config validate`. See [TUI](/web/tui) and
 - [Devices](/cli/devices)
 - [Goal](/tools/goal)
 - [`openclaw attach`](/cli/attach) — launch Claude Code with a temporary session-scoped Gateway MCP grant
+- [`openclaw resume`](/cli/resume) — attach this TUI to an existing Gateway session
