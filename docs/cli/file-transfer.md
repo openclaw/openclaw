@@ -66,8 +66,11 @@ an upgrade script.
 | Nothing to review             | `{"status":"ok","changed":false,"message":"No legacy permissions need review."}`                              | 0         |
 | Permissions still need review | `{"status":"needs-input","changed":false,"items":[...],"command":"openclaw file-transfer approvals migrate"}` | 2         |
 
-Without `--json`, a non-interactive shell is an error. The command tells you to
-rerun it in a terminal rather than guessing an outcome for each permission.
+Without `--json`, the command checks for work first. A non-interactive shell is
+an error only when permissions still need review. The command then tells you to
+rerun it in a terminal rather than guessing an outcome for each permission. A
+non-interactive run with nothing to review prints the same no-work message and
+exits 0, so a repeated upgrade script stays quiet.
 
 ## Related
 
