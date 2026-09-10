@@ -1,14 +1,14 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withFileLock } from "openclaw/plugin-sdk/file-lock";
-import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  listMemoryArtifactProvenance,
+  withMemoryArtifactWriteLock,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendConsolidationSkippedSummary,
@@ -38,8 +38,17 @@ import {
   buildPromotionRecallAnnotations,
   groupPromotionCandidatesByProjectKey,
 } from "./short-term-promotion-metadata.js";
-import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
-import { rehydratePromotionCandidate } from "./short-term-promotion-rehydrate.js";
+import {
+  isCurrentRelocatedRangeUntrusted,
+  isRelocatedRangeUntrusted,
+  withAuthoritativeProvenance,
+  withDailyRangeQuarantine,
+} from "./short-term-promotion-provenance.js";
+import {
+  promotionSourceFingerprint,
+  readPromotionSourceText,
+  rehydratePromotionCandidate,
+} from "./short-term-promotion-rehydrate.js";
 import { readStore, writeStore } from "./short-term-promotion-store.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -59,11 +68,6 @@ import {
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
-const MEMORY_WRITE_LOCK_OPTIONS = {
-  retries: { retries: 100, factor: 1.2, minTimeout: 25, maxTimeout: 250 },
-  stale: 120_000,
-  staleRecovery: "fail-closed" as const,
-};
 
 function buildPromotionSection(
   candidates: PromotionCandidate[],
@@ -155,72 +159,8 @@ function consolidationCandidateFingerprint(candidate: PromotionCandidate): strin
   });
 }
 
-function withAuthoritativeProvenance(
-  candidate: PromotionCandidate,
-  provenance: PromotionCandidate["provenance"],
-): PromotionCandidate {
-  if (isPromotionOriginBlocked(candidate)) {
-    return candidate;
-  }
-  const next = { ...candidate };
-  if (provenance) {
-    next.provenance = provenance;
-  } else {
-    delete next.provenance;
-  }
-  return next;
-}
-
-function withDailyFileQuarantine(
-  candidate: PromotionCandidate,
-  provenanceByPath: ReadonlyMap<
-    string,
-    { fileHash: string; originClass: "agent" | "untrusted"; observedAt: number }
-  >,
-): PromotionCandidate {
-  const record = provenanceByPath.get(candidate.path.replaceAll("\\", "/"));
-  if (record?.originClass !== "untrusted") {
-    return candidate;
-  }
-  return {
-    ...candidate,
-    provenance: {
-      originClass: "untrusted",
-      sessionKind: candidate.provenance?.sessionKind ?? "unknown",
-      observedAt: record.observedAt,
-    },
-  };
-}
-
 function recallStoreEntryFingerprint(entry: ShortTermRecallEntry | undefined): string {
   return JSON.stringify(entry ?? null);
-}
-
-async function promotionSourceFingerprint(
-  workspaceDir: string,
-  candidate: PromotionCandidate,
-): Promise<string> {
-  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, candidate.path)) {
-    try {
-      const content = await fs.readFile(sourcePath);
-      return createHash("sha256").update(content).digest("hex");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-  }
-  return "missing";
-}
-
-async function resolveMemoryPromotionLockTarget(workspaceDir: string): Promise<string> {
-  const lockDir = path.join(resolveStateDir(), "locks");
-  await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
-  const canonicalWorkspace = await fs
-    .realpath(workspaceDir)
-    .catch(() => path.resolve(workspaceDir));
-  const workspaceHash = createHash("sha256").update(canonicalWorkspace).digest("hex");
-  return path.join(lockDir, `memory-promotion-${workspaceHash}`);
 }
 
 export async function applyShortTermPromotions(
@@ -257,24 +197,40 @@ export async function applyShortTermPromotions(
   const store = await withMemoryWorkspaceLock(workspaceDir, async () =>
     readStore(workspaceDir, nowIso),
   );
-  const currentCandidates = options.candidates.map((candidate) => {
-    const entry = store.entries[candidate.key];
-    const authoritative = entry
-      ? withAuthoritativeProvenance(
-          {
-            ...candidate,
-            path: entry.path,
-            startLine: entry.startLine,
-            endLine: entry.endLine,
-            snippet: entry.snippet,
-          },
-          entry.provenance,
-        )
-      : candidate;
-    // Flush quarantine is sticky at the daily-file boundary. This deliberately
-    // sacrifices trusted lines in a mixed file so untrusted text cannot promote.
-    return withDailyFileQuarantine(authoritative, dailyProvenanceByPath);
-  });
+  const dailySourceTextByPath = new Map<string, string | undefined>();
+  const currentCandidates = await Promise.all(
+    options.candidates.map(async (candidate) => {
+      const entry = store.entries[candidate.key];
+      const authoritative = entry
+        ? withAuthoritativeProvenance(
+            {
+              ...candidate,
+              path: entry.path,
+              startLine: entry.startLine,
+              endLine: entry.endLine,
+              snippet: entry.snippet,
+            },
+            entry.provenance,
+          )
+        : candidate;
+      const normalizedPath = authoritative.path.replaceAll("\\", "/");
+      const record = dailyProvenanceByPath.get(normalizedPath);
+      if (record?.originClass !== "untrusted") {
+        return authoritative;
+      }
+      if (!dailySourceTextByPath.has(normalizedPath)) {
+        dailySourceTextByPath.set(
+          normalizedPath,
+          await readPromotionSourceText(workspaceDir, normalizedPath),
+        );
+      }
+      return withDailyRangeQuarantine(
+        authoritative,
+        record,
+        dailySourceTextByPath.get(normalizedPath),
+      );
+    }),
+  );
   const rejectionReasons = new Map<string, string>();
   const eligible = currentCandidates.filter((candidate) => {
     const latest = store.entries[candidate.key];
@@ -311,9 +267,21 @@ export async function applyShortTermPromotions(
 
   const rehydratedSelected: PromotionCandidate[] = [];
   const plannedSourceFingerprints = new Map<string, string>();
+  const plannedSourceRanges = new Map<string, readonly { startLine: number; endLine: number }[]>();
   for (const candidate of selected) {
     const sourceFingerprintBefore = await promotionSourceFingerprint(workspaceDir, candidate);
-    const rehydrated = await rehydratePromotionCandidate(workspaceDir, candidate);
+    const rehydratedResult = await rehydratePromotionCandidate(workspaceDir, candidate);
+    const rehydrated = rehydratedResult?.candidate;
+    const normalizedPath = candidate.path.replaceAll("\\", "/");
+    const record = dailyProvenanceByPath.get(normalizedPath);
+    const relocatedSourceText = rehydrated
+      ? await readPromotionSourceText(workspaceDir, normalizedPath)
+      : undefined;
+    const relocatedRangeIsUntrusted = isRelocatedRangeUntrusted({
+      record,
+      content: relocatedSourceText,
+      ranges: rehydratedResult?.sourceRanges,
+    });
     const sourceFingerprintAfter = await promotionSourceFingerprint(workspaceDir, candidate);
     // Integrity is guarded by source-fingerprint stability during rehydration,
     // successful rehydration (the snippet still exists in the live file), the
@@ -323,10 +291,12 @@ export async function applyShortTermPromotions(
     if (
       sourceFingerprintBefore === sourceFingerprintAfter &&
       rehydrated &&
-      !isContaminatedDreamingSnippet(rehydrated.snippet)
+      !isContaminatedDreamingSnippet(rehydrated.snippet) &&
+      !relocatedRangeIsUntrusted
     ) {
       rehydratedSelected.push(rehydrated);
       plannedSourceFingerprints.set(candidate.key, sourceFingerprintAfter);
+      plannedSourceRanges.set(candidate.key, rehydratedResult.sourceRanges);
     } else {
       rejectionReasons.set(
         candidate.key,
@@ -334,7 +304,9 @@ export async function applyShortTermPromotions(
           ? "source rehydration failed"
           : sourceFingerprintBefore !== sourceFingerprintAfter
             ? "source changed during apply"
-            : "contamination filter after rehydration",
+            : relocatedRangeIsUntrusted
+              ? "origin filter (untrusted after rehydration)"
+              : "contamination filter after rehydration",
       );
     }
   }
@@ -408,9 +380,8 @@ export async function applyShortTermPromotions(
   let committedMemoryContent: string | undefined;
   let appendedCandidates = 0;
   let rewriteSkippedReason: string | undefined;
-  const promotionLockTarget = await resolveMemoryPromotionLockTarget(workspaceDir);
-  await withFileLock(promotionLockTarget, MEMORY_WRITE_LOCK_OPTIONS, async () => {
-    await withMemoryWorkspaceLock(workspaceDir, async () => {
+  await withMemoryWorkspaceLock(workspaceDir, async () => {
+    await withMemoryArtifactWriteLock(workspaceDir, async () => {
       const latestStore = await readStore(workspaceDir, nowIso);
       let retainedPreimageKeys: Set<string> | undefined;
       const authoritativeSelected: PromotionCandidate[] = [];
@@ -424,9 +395,15 @@ export async function applyShortTermPromotions(
           const sourceUnchanged =
             plannedSourceFingerprints.get(candidate.key) ===
             (await promotionSourceFingerprint(workspaceDir, candidate));
+          const trustIsCurrent = !(await isCurrentRelocatedRangeUntrusted({
+            workspaceDir,
+            candidate,
+            ranges: plannedSourceRanges.get(candidate.key),
+          }));
           if (
             wasDirectCandidate &&
             sourceUnchanged &&
+            trustIsCurrent &&
             !isContaminatedDreamingSnippet(candidate.snippet)
           ) {
             authoritativeSelected.push(candidate);
@@ -441,7 +418,12 @@ export async function applyShortTermPromotions(
         const sourceChanged =
           plannedSourceFingerprints.get(candidate.key) !==
           (await promotionSourceFingerprint(workspaceDir, candidate));
-        if (storeChanged || sourceChanged) {
+        const trustInvalidated = await isCurrentRelocatedRangeUntrusted({
+          workspaceDir,
+          candidate,
+          ranges: plannedSourceRanges.get(candidate.key),
+        });
+        if (storeChanged || sourceChanged || trustInvalidated) {
           continue;
         }
         const currentCandidate = withAuthoritativeProvenance(candidate, entry.provenance);

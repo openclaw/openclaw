@@ -52,6 +52,8 @@ vi.mock("../../../memory/memory-artifact-provenance.js", () => ({
   normalizeMemoryArtifactRelativePath: (relativePath: string) => relativePath,
   recordMemoryArtifactWriteProvenance: memoryProvenanceMocks.recordMemoryArtifactWriteProvenance,
   clearMemoryArtifactProvenance: vi.fn(),
+  withMemoryArtifactWriteLock: async (_workspaceDir: string, task: () => Promise<unknown>) =>
+    await task(),
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {

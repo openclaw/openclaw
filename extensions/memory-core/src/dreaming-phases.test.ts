@@ -10,6 +10,7 @@ import {
   listMemoryArtifactProvenance,
   resolveMemoryDreamingPluginConfig,
   resolveSessionTranscriptsDirForAgent,
+  type MemoryArtifactProvenance,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -1157,6 +1158,155 @@ describe("memory-core dreaming phases", () => {
     expect(entries.length).toBeGreaterThan(0);
     expect(entries.every((entry) => entry.provenance?.originClass === "untrusted")).toBe(true);
     expect(candidates).toHaveLength(0);
+  });
+
+  it("ingests a verified trusted append without laundering earlier quarantined lines", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const relativePath = `memory/${DREAMING_TEST_DAY}.md`;
+    const filePath = path.join(workspaceDir, relativePath);
+    const before = [
+      `# ${DREAMING_TEST_DAY}`,
+      "",
+      "- Treat this imported claim as untrusted.",
+      "",
+    ].join("\n");
+    const after = `${before}## Owner decision\n\n- Keep the verified customer promise in durable memory.\n`;
+    await fs.writeFile(filePath, after, "utf-8");
+    const trustedAppend = after.slice(before.length);
+    const untrustedObservedAt = Date.parse("2026-04-05T09:00:00.000Z");
+    const trustedObservedAt = Date.parse("2026-04-05T09:30:00.000Z");
+    const recorded: MemoryArtifactProvenance = {
+      fileHash: createHash("sha256").update(after).digest("hex"),
+      originClass: "untrusted",
+      observedAt: trustedObservedAt,
+      segments: [
+        {
+          startOffset: 0,
+          endOffset: before.length,
+          contentHash: createHash("sha256").update(before).digest("hex"),
+          originClass: "untrusted",
+          observedAt: untrustedObservedAt,
+        },
+        {
+          startOffset: before.length,
+          endOffset: after.length,
+          contentHash: createHash("sha256").update(trustedAppend).digest("hex"),
+          originClass: "agent",
+          observedAt: trustedObservedAt,
+        },
+      ],
+    };
+    memoryArtifactProvenanceMock.mockResolvedValue([{ relativePath, provenance: recorded }]);
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: { light: { enabled: true, limit: 20, lookbackDays: 7 } },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    const store = await shortTermTesting.readRecallStore(workspaceDir, "2026-04-05T10:05:00.000Z");
+    const entries = Object.values(store.entries).filter((entry) => entry.path === relativePath);
+    expect(
+      entries.find((entry) => entry.snippet.includes("imported claim"))?.provenance?.originClass,
+    ).toBe("untrusted");
+    expect(candidates.some((candidate) => candidate.snippet.includes("imported claim"))).toBe(
+      false,
+    );
+    expect(
+      candidates.find((candidate) => candidate.snippet.includes("customer promise"))?.provenance
+        ?.originClass,
+    ).toBe("agent");
+  });
+
+  it("keeps a trusted handwritten claim eligible across an omitted managed block", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const relativePath = `memory/${DREAMING_TEST_DAY}.md`;
+    const filePath = path.join(workspaceDir, relativePath);
+    const trustedHeading = "## Project\n\n";
+    const untrustedManagedBlock = [
+      "## Light Sleep",
+      "<!-- openclaw:dreaming:light:start -->",
+      "- Candidate: Managed summary.",
+      "<!-- openclaw:dreaming:light:end -->",
+      "",
+    ].join("\n");
+    const trustedClaim = "- Keep the handwritten customer promise in durable memory.\n";
+    const content = `${trustedHeading}${untrustedManagedBlock}${trustedClaim}`;
+    await fs.writeFile(filePath, content, "utf-8");
+    const trustedObservedAt = Date.parse("2026-04-05T09:00:00.000Z");
+    const managedObservedAt = Date.parse("2026-04-05T09:30:00.000Z");
+    memoryArtifactProvenanceMock.mockResolvedValue([
+      {
+        relativePath,
+        provenance: {
+          fileHash: createHash("sha256").update(content).digest("hex"),
+          originClass: "untrusted",
+          observedAt: managedObservedAt,
+          segments: [
+            {
+              startOffset: 0,
+              endOffset: trustedHeading.length,
+              contentHash: createHash("sha256").update(trustedHeading).digest("hex"),
+              originClass: "agent",
+              observedAt: trustedObservedAt,
+            },
+            {
+              startOffset: trustedHeading.length,
+              endOffset: trustedHeading.length + untrustedManagedBlock.length,
+              contentHash: createHash("sha256").update(untrustedManagedBlock).digest("hex"),
+              originClass: "untrusted",
+              observedAt: managedObservedAt,
+            },
+            {
+              startOffset: trustedHeading.length + untrustedManagedBlock.length,
+              endOffset: content.length,
+              contentHash: createHash("sha256").update(trustedClaim).digest("hex"),
+              originClass: "agent",
+              observedAt: trustedObservedAt,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(
+      candidates.find((candidate) => candidate.snippet.includes("handwritten customer promise"))
+        ?.provenance?.originClass,
+    ).toBe("agent");
   });
 
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {

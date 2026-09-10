@@ -1,21 +1,28 @@
 // Memory Core tests cover short term promotion plugin behavior.
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  listMemoryArtifactProvenance,
+  replaceMemoryArtifactFileWithProvenance,
+  withMemoryArtifactWriteLock,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
+vi.mock("./memory-workspace-lock.js", { spy: true });
 
 import {
   configureMemoryCoreDreamingState,
@@ -1864,6 +1871,182 @@ describe("short-term promotion", () => {
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
+  it("rechecks provenance after relocating a candidate into an untrusted segment", async (workspaceDir) => {
+    const relativePath = "memory/2026-04-01.md";
+    const trustedPrefix = "Trusted replacement\n";
+    const untrustedClaim = "Relocated customer promise\n";
+    const content = `${trustedPrefix}${untrustedClaim}`;
+    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+      "Trusted replacement",
+      "Relocated customer promise",
+    ]);
+    await recordMemoryRecalls(workspaceDir, "customer promise", [
+      memoryRecallResult(relativePath, 1, 1, 0.92, "Relocated customer promise", {
+        provenance: {
+          originClass: "agent",
+          sessionKind: "unknown",
+          observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+        },
+      }),
+    ]);
+    const ranked = await rankAllCandidates(workspaceDir);
+    vi.mocked(listMemoryArtifactProvenance).mockResolvedValueOnce([
+      {
+        relativePath,
+        provenance: {
+          fileHash: createHash("sha256").update(content).digest("hex"),
+          originClass: "untrusted",
+          observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+          segments: [
+            {
+              startOffset: 0,
+              endOffset: trustedPrefix.length,
+              contentHash: createHash("sha256").update(trustedPrefix).digest("hex"),
+              originClass: "agent",
+              observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+            },
+            {
+              startOffset: trustedPrefix.length,
+              endOffset: content.length,
+              contentHash: createHash("sha256").update(untrustedClaim).digest("hex"),
+              originClass: "untrusted",
+              observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+            },
+          ],
+        },
+      },
+    ]);
+
+    const applied = await applyAllCandidates(workspaceDir, ranked);
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe(
+      "origin filter (untrusted after rehydration)",
+    );
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+  });
+
+  it("rechecks incorporated heading provenance after relocation", async (workspaceDir) => {
+    const relativePath = "memory/2026-04-01.md";
+    const untrustedHeading = "## Imported decision\n";
+    const trustedBodyAndTail = "- Keep the verified customer promise\n\nTrusted replacement\n";
+    const content = `${untrustedHeading}${trustedBodyAndTail}`;
+    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+      "## Imported decision",
+      "- Keep the verified customer promise",
+      "",
+      "Trusted replacement",
+    ]);
+    await recordMemoryRecalls(workspaceDir, "customer promise", [
+      memoryRecallResult(
+        relativePath,
+        4,
+        4,
+        0.92,
+        "Imported decision: Keep the verified customer promise",
+        {
+          provenance: {
+            originClass: "agent",
+            sessionKind: "unknown",
+            observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+          },
+        },
+      ),
+    ]);
+    const ranked = await rankAllCandidates(workspaceDir);
+    vi.mocked(listMemoryArtifactProvenance).mockResolvedValueOnce([
+      {
+        relativePath,
+        provenance: {
+          fileHash: createHash("sha256").update(content).digest("hex"),
+          originClass: "untrusted",
+          observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+          segments: [
+            {
+              startOffset: 0,
+              endOffset: untrustedHeading.length,
+              contentHash: createHash("sha256").update(untrustedHeading).digest("hex"),
+              originClass: "untrusted",
+              observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+            },
+            {
+              startOffset: untrustedHeading.length,
+              endOffset: content.length,
+              contentHash: createHash("sha256").update(trustedBodyAndTail).digest("hex"),
+              originClass: "agent",
+              observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+            },
+          ],
+        },
+      },
+    ]);
+
+    const applied = await applyAllCandidates(workspaceDir, ranked);
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe(
+      "origin filter (untrusted after rehydration)",
+    );
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+  });
+
+  it("rechecks heading provenance for a shortened list-marker fallback", async (workspaceDir) => {
+    const relativePath = "memory/2026-04-01.md";
+    const untrustedHeading = "## Imported decision\n";
+    const trustedBodyAndTail = "- Keep the promise\n\nTrusted replacement\n";
+    const content = `${untrustedHeading}${trustedBodyAndTail}`;
+    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+      "## Imported decision",
+      "- Keep the promise",
+      "",
+      "Trusted replacement",
+    ]);
+    await recordMemoryRecalls(workspaceDir, "customer promise", [
+      memoryRecallResult(relativePath, 4, 4, 0.92, "Old: Keep the promise tomorrow", {
+        provenance: {
+          originClass: "agent",
+          sessionKind: "unknown",
+          observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+        },
+      }),
+    ]);
+    const ranked = await rankAllCandidates(workspaceDir);
+    vi.mocked(listMemoryArtifactProvenance).mockResolvedValueOnce([
+      {
+        relativePath,
+        provenance: {
+          fileHash: createHash("sha256").update(content).digest("hex"),
+          originClass: "untrusted",
+          observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+          segments: [
+            {
+              startOffset: 0,
+              endOffset: untrustedHeading.length,
+              contentHash: createHash("sha256").update(untrustedHeading).digest("hex"),
+              originClass: "untrusted",
+              observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+            },
+            {
+              startOffset: untrustedHeading.length,
+              endOffset: content.length,
+              contentHash: createHash("sha256").update(trustedBodyAndTail).digest("hex"),
+              originClass: "agent",
+              observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+            },
+          ],
+        },
+      },
+    ]);
+
+    const applied = await applyAllCandidates(workspaceDir, ranked);
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe(
+      "origin filter (untrusted after rehydration)",
+    );
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+  });
+
   it("does not double-prefix promoted snippets that are already markdown bullets", async (workspaceDir) => {
     await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
       "alpha",
@@ -3112,6 +3295,157 @@ describe("short-term promotion", () => {
   });
 
   describe("MEMORY.md atomic promotion write", () => {
+    it("uses workspace-before-artifact order when phase publication overlaps promotion", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const dailyText = "Keep phase publication and promotion free of lock cycles.";
+        await writeDailyMemoryNote(workspaceDir, "2026-04-29", [dailyText]);
+        await recordMemoryRecalls(
+          workspaceDir,
+          "lock hierarchy",
+          [memoryRecallResult("memory/2026-04-29.md", 1, 1, 0.96, dailyText)],
+          { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+        );
+        const ranked = await rankAllCandidates(workspaceDir);
+        const actualWorkspaceLock = (
+          await vi.importActual<typeof import("./memory-workspace-lock.js")>(
+            "./memory-workspace-lock.js",
+          )
+        ).withMemoryWorkspaceLock;
+        const actualArtifactLock = (
+          await vi.importActual<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>(
+            "openclaw/plugin-sdk/memory-core-host-runtime-core",
+          )
+        ).withMemoryArtifactWriteLock;
+        const initialWorkspaceReadFinished = createDeferred<void>();
+        const releasePromotionAfterInitialRead = createDeferred<void>();
+        const phaseOwnsWorkspace = createDeferred<void>();
+        const releasePhasePublication = createDeferred<void>();
+        const promotionWorkspaceAttempted = createDeferred<void>();
+        const promotionArtifactAttempted = createDeferred<void>();
+        const workspaceLock = vi.mocked(withMemoryWorkspaceLock);
+        const artifactLock = vi.mocked(withMemoryArtifactWriteLock);
+        let promotionWorkspaceCalls = 0;
+        workspaceLock.mockImplementation(async (lockedWorkspaceDir, task) => {
+          promotionWorkspaceCalls += 1;
+          if (promotionWorkspaceCalls === 1) {
+            const result = await actualWorkspaceLock(lockedWorkspaceDir, task);
+            initialWorkspaceReadFinished.resolve();
+            await releasePromotionAfterInitialRead.promise;
+            return result;
+          }
+          promotionWorkspaceAttempted.resolve();
+          return await actualWorkspaceLock(lockedWorkspaceDir, task);
+        });
+        artifactLock.mockImplementation(async (lockedWorkspaceDir, task) => {
+          promotionArtifactAttempted.resolve();
+          return await actualArtifactLock(lockedWorkspaceDir, task);
+        });
+        artifactLock.mockClear();
+
+        const promotion = applyAllCandidates(workspaceDir, ranked);
+        await initialWorkspaceReadFinished.promise;
+        const phasePublication = actualWorkspaceLock(workspaceDir, async () => {
+          phaseOwnsWorkspace.resolve();
+          await releasePhasePublication.promise;
+          await writeDailyDreamingPhaseBlock({
+            workspaceDir,
+            phase: "light",
+            bodyLines: ["- Candidate: retain one lock hierarchy."],
+            hasContent: true,
+            nowMs: Date.parse("2026-04-30T10:00:01.000Z"),
+            timezone: "UTC",
+            storage: { mode: "inline", separateReports: false },
+          });
+        });
+        await phaseOwnsWorkspace.promise;
+        releasePromotionAfterInitialRead.resolve();
+
+        const firstPublicationLock = await Promise.race([
+          promotionWorkspaceAttempted.promise.then(() => "workspace" as const),
+          promotionArtifactAttempted.promise.then(() => "artifact" as const),
+        ]);
+        expect(firstPublicationLock).toBe("workspace");
+        releasePhasePublication.resolve();
+
+        const [, applied] = await Promise.all([phasePublication, promotion]);
+        expect(applied).toMatchObject({ applied: 1, appended: 1 });
+        await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).resolves.toContain(
+          dailyText,
+        );
+      });
+    });
+
+    for (const testCase of [
+      { name: "atomic replace", forceInPlaceFallback: false },
+      { name: "in-place fallback", forceInPlaceFallback: true },
+    ]) {
+      it(`serializes a late provenance quarantine through ${testCase.name} publication`, async () => {
+        const { forceInPlaceFallback } = testCase;
+        await withTempWorkspace(async (workspaceDir) => {
+          const dailyText = "Keep the publication authority boundary intact.\n";
+          const dailyPath = await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+            dailyText.trim(),
+          ]);
+          const memoryPath = path.join(workspaceDir, "MEMORY.md");
+          await fs.writeFile(memoryPath, "# Long-Term Memory\n\n", "utf8");
+          await recordMemoryRecalls(
+            workspaceDir,
+            "publication authority",
+            [memoryRecallResult("memory/2026-04-29.md", 1, 1, 0.96, dailyText.trim())],
+            { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+          );
+          const ranked = await rankAllCandidates(workspaceDir);
+          const originalRename = fs.rename.bind(fs);
+          let quarantinePromise: Promise<void> | undefined;
+          let quarantineWasBlocked = false;
+          vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+            const sourcePath = source.toString();
+            const destinationPath = destination.toString();
+            if (
+              !quarantinePromise &&
+              path.resolve(destinationPath) === path.resolve(memoryPath) &&
+              path.basename(sourcePath).startsWith("MEMORY.md.promotion")
+            ) {
+              const quarantinedText = `${dailyText}- Later quarantined append.\n`;
+              quarantinePromise = replaceMemoryArtifactFileWithProvenance({
+                workspaceDir,
+                relativePath: "memory/2026-04-29.md",
+                expectedContentBefore: dailyText,
+                contentAfter: quarantinedText,
+                observedAt: Date.parse("2026-04-29T10:00:01.000Z"),
+              });
+              quarantineWasBlocked = await Promise.race([
+                quarantinePromise.then(() => false),
+                new Promise<true>((resolve) => {
+                  setTimeout(() => resolve(true), 25);
+                }),
+              ]);
+              if (forceInPlaceFallback) {
+                throw Object.assign(new Error("EPERM: atomic replace denied"), { code: "EPERM" });
+              }
+            }
+            return await originalRename(source, destination);
+          });
+
+          const applied = await applyAllCandidates(workspaceDir, ranked);
+          await quarantinePromise;
+
+          expect(quarantineWasBlocked).toBe(true);
+          expect(applied).toMatchObject({ applied: 1, appended: 1 });
+          await expect(fs.readFile(memoryPath, "utf8")).resolves.toContain(dailyText.trim());
+          await expect(fs.readFile(dailyPath, "utf8")).resolves.toContain(
+            "Later quarantined append",
+          );
+          await expect(listMemoryArtifactProvenance({ workspaceDir })).resolves.toEqual([
+            expect.objectContaining({
+              relativePath: "memory/2026-04-29.md",
+              provenance: expect.objectContaining({ originClass: "untrusted" }),
+            }),
+          ]);
+        });
+      });
+    }
+
     it.runIf(process.platform !== "win32")(
       "preserves a dangling MEMORY.md symlink and its target directory mode",
       async () => {

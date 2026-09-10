@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { createMemoryChunkWriter } from "./manager-chunk-writer.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -173,4 +174,61 @@ describe("memory chunk publication", () => {
       }
     },
   );
+
+  it("normalizes fractional provenance timestamps before strict SQLite publication", async () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE memory_index_chunks (
+        id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL,
+        start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
+        model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE memory_index_chunk_recall_metadata (
+        chunk_id TEXT PRIMARY KEY, importance INTEGER, triggers TEXT, project_key TEXT
+      ) STRICT;
+      CREATE TABLE memory_index_chunk_provenance (
+        chunk_id TEXT PRIMARY KEY, origin_class TEXT NOT NULL, session_kind TEXT NOT NULL,
+        observed_at INTEGER NOT NULL, supersedes_key TEXT
+      ) STRICT;
+    `);
+    const fractionalTimestamp = 1_789_000_000_000.75;
+    try {
+      const writeChunk = createMemoryChunkWriter(db, {
+        path: "memory/2026-09-09.md",
+        source: "memory",
+        model: "test",
+        now: 1_789_000_000_001,
+      });
+      expect(() =>
+        writeChunk(
+          "fractional",
+          {
+            startLine: 1,
+            endLine: 1,
+            text: "Fractional provenance timestamp.",
+            hash: "hash",
+            importance: null,
+            triggers: null,
+            projectKey: null,
+            provenance: {
+              originClass: "agent",
+              sessionKind: "interactive",
+              observedAt: fractionalTimestamp,
+            },
+          },
+          [],
+        ),
+      ).not.toThrow();
+      expect(
+        db
+          .prepare(
+            "SELECT observed_at AS observedAt FROM memory_index_chunk_provenance WHERE chunk_id = ?",
+          )
+          .get("fractional"),
+      ).toEqual({ observedAt: Math.trunc(fractionalTimestamp) });
+    } finally {
+      db.close();
+    }
+  });
 });

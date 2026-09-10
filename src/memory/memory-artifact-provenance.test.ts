@@ -1,4 +1,4 @@
-import { mkdir, symlink } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
@@ -9,6 +9,7 @@ import {
   normalizeMemoryArtifactRelativePath,
   readMemoryArtifactProvenance,
   recordMemoryArtifactWriteProvenance,
+  replaceMemoryArtifactFileWithProvenance,
 } from "./memory-artifact-provenance.js";
 
 afterEach(() => {
@@ -46,7 +47,7 @@ describe("memory artifact provenance", () => {
     });
   });
 
-  it("keeps the least-trusted origin sticky across later writes", async () => {
+  it("keeps the file summary conservative while preserving append provenance", async () => {
     await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
       const address = { workspaceDir: tempRoot, relativePath: "memory/2026-08-20.md" };
       await recordMemoryArtifactWriteProvenance({
@@ -67,10 +68,115 @@ describe("memory artifact provenance", () => {
       await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
         originClass: "untrusted",
         observedAt: 2,
+        segments: [
+          expect.objectContaining({ originClass: "untrusted", startOffset: 0, endOffset: 10 }),
+          expect.objectContaining({ originClass: "agent", startOffset: 10, endOffset: 18 }),
+        ],
       });
       await expect(listMemoryArtifactProvenance({ workspaceDir: tempRoot })).resolves.toEqual([
         expect.objectContaining({ relativePath: address.relativePath }),
       ]);
+    });
+  });
+
+  it("preserves trusted segments on both sides of a quarantined append", async () => {
+    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+      const address = { workspaceDir: tempRoot, relativePath: "memory/2026-08-20.md" };
+      await recordMemoryArtifactWriteProvenance({
+        ...address,
+        contentBefore: "",
+        contentAfter: "trusted\n",
+        originClass: "agent",
+        observedAt: 1,
+      });
+      await recordMemoryArtifactWriteProvenance({
+        ...address,
+        contentBefore: "trusted\n",
+        contentAfter: "trusted\nrestricted\n",
+        originClass: "untrusted",
+        observedAt: 2,
+      });
+      await recordMemoryArtifactWriteProvenance({
+        ...address,
+        contentBefore: "trusted\nrestricted\n",
+        contentAfter: "trusted\nrestricted\nlater trusted\n",
+        originClass: "agent",
+        observedAt: 3,
+      });
+
+      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
+        originClass: "untrusted",
+        segments: [
+          expect.objectContaining({ originClass: "agent" }),
+          expect.objectContaining({ originClass: "untrusted" }),
+          expect.objectContaining({ originClass: "agent" }),
+        ],
+      });
+    });
+  });
+
+  it("rebases managed replacements without trusting changed text", async () => {
+    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+      const address = { workspaceDir: tempRoot, relativePath: "memory/2026-08-20.md" };
+      const before = "trusted prefix\nold managed block\ntrusted suffix\n";
+      const after = "trusted prefix\nnew managed block\ntrusted suffix\n";
+      await mkdir(path.join(tempRoot, "memory"));
+      await writeFile(path.join(tempRoot, address.relativePath), before);
+      await recordMemoryArtifactWriteProvenance({
+        ...address,
+        contentBefore: "",
+        contentAfter: before,
+        originClass: "agent",
+        observedAt: 1,
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+      });
+      await replaceMemoryArtifactFileWithProvenance({
+        ...address,
+        expectedContentBefore: before,
+        contentAfter: after,
+        observedAt: 2,
+      });
+
+      await expect(readFile(path.join(tempRoot, address.relativePath), "utf8")).resolves.toBe(
+        after,
+      );
+      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
+        originClass: "untrusted",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        segments: [
+          expect.objectContaining({ originClass: "agent" }),
+          expect.objectContaining({ originClass: "untrusted" }),
+          expect.objectContaining({ originClass: "agent" }),
+        ],
+      });
+    });
+  });
+
+  it("preserves grandfathered note trust around a first managed replacement", async () => {
+    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+      const address = { workspaceDir: tempRoot, relativePath: "memory/2026-08-20.md" };
+      const before = "trusted prefix\nold managed block\ntrusted suffix\n";
+      const after = "trusted prefix\nnew managed block\ntrusted suffix\n";
+      await mkdir(path.join(tempRoot, "memory"));
+      await writeFile(path.join(tempRoot, address.relativePath), before);
+
+      await replaceMemoryArtifactFileWithProvenance({
+        ...address,
+        expectedContentBefore: before,
+        contentAfter: after,
+        observedAt: 2,
+      });
+
+      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
+        originClass: "untrusted",
+        segments: [
+          expect.objectContaining({ originClass: "agent" }),
+          expect.objectContaining({ originClass: "untrusted" }),
+          expect.objectContaining({ originClass: "agent" }),
+        ],
+      });
     });
   });
 

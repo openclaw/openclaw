@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
@@ -8,6 +9,41 @@ const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
+
+export async function readPromotionSourceText(
+  workspaceDir: string,
+  candidatePath: string,
+): Promise<string | undefined> {
+  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, candidatePath)) {
+    try {
+      return await fs.readFile(sourcePath, "utf-8");
+    } catch (error) {
+      // SAFETY: Node filesystem failures expose errno codes through NodeJS.ErrnoException.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  return undefined;
+}
+
+export async function promotionSourceFingerprint(
+  workspaceDir: string,
+  candidate: PromotionCandidate,
+): Promise<string> {
+  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, candidate.path)) {
+    try {
+      const content = await fs.readFile(sourcePath);
+      return createHash("sha256").update(content).digest("hex");
+    } catch (error) {
+      // SAFETY: Node filesystem failures expose errno codes through NodeJS.ErrnoException.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  return "missing";
+}
 
 function normalizeRangeSnippet(lines: string[], startLine: number, endLine: number): string {
   const startIndex = Math.max(0, startLine - 1);
@@ -67,9 +103,15 @@ function isGenericDailyHeadingForPromotion(heading: string): boolean {
   return GENERIC_DAY_HEADING_RE.test(normalized);
 }
 
-function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
-  const headings: (string | null)[] = Array.from({ length: lines.length + 1 }, () => null);
-  let currentHeading: string | null = null;
+type RelocatedHeadingContext = { text: string; line: number };
+type RelocatedSourceRange = { startLine: number; endLine: number };
+
+function buildRelocatedDailyHeadingLookup(lines: string[]): (RelocatedHeadingContext | null)[] {
+  const headings: (RelocatedHeadingContext | null)[] = Array.from(
+    { length: lines.length + 1 },
+    () => null,
+  );
+  let currentHeading: RelocatedHeadingContext | null = null;
   for (let index = 0; index < lines.length; index += 1) {
     headings[index + 1] = currentHeading;
     const line = lines[index] ?? "";
@@ -78,7 +120,8 @@ function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
       continue;
     }
     if (/^#{1,6}\s+.+$/.test(line.trim())) {
-      currentHeading = normalizeDailyHeadingForPromotion(line);
+      const text = normalizeDailyHeadingForPromotion(line);
+      currentHeading = text ? { text, line: index + 1 } : null;
     }
   }
   return headings;
@@ -148,7 +191,12 @@ function compareCandidateWindow(
 function relocateCandidateRange(
   lines: string[],
   candidate: PromotionCandidate,
-): { startLine: number; endLine: number; snippet: string } | null {
+): {
+  startLine: number;
+  endLine: number;
+  snippet: string;
+  sourceRanges: RelocatedSourceRange[];
+} | null {
   const targetSnippet = normalizeSnippet(candidate.snippet);
   const preferredSpan = Math.max(1, candidate.endLine - candidate.startLine + 1);
   if (targetSnippet.length === 0) {
@@ -160,6 +208,7 @@ function relocateCandidateRange(
       startLine: candidate.startLine,
       endLine: candidate.endLine,
       snippet: fallbackSnippet,
+      sourceRanges: [{ startLine: candidate.startLine, endLine: candidate.endLine }],
     };
   }
 
@@ -169,13 +218,21 @@ function relocateCandidateRange(
       startLine: candidate.startLine,
       endLine: candidate.endLine,
       snippet: exactSnippet,
+      sourceRanges: [{ startLine: candidate.startLine, endLine: candidate.endLine }],
     };
   }
 
   const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 3, 8));
   const headingLookup = buildRelocatedDailyHeadingLookup(lines);
   let bestMatch:
-    | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
+    | {
+        startLine: number;
+        endLine: number;
+        snippet: string;
+        quality: number;
+        distance: number;
+        sourceRanges: RelocatedSourceRange[];
+      }
     | undefined;
   for (let startIndex = 0; startIndex < lines.length; startIndex += 1) {
     for (let span = 1; span <= maxSpan && startIndex + span <= lines.length; span += 1) {
@@ -184,8 +241,9 @@ function relocateCandidateRange(
       const snippet = normalizeRangeSnippet(lines, startLine, endLine);
       const comparison = compareCandidateWindow(targetSnippet, snippet);
       const listMarkerFreeSnippet = normalizeListMarkerFreeRangeSnippet(lines, startLine, endLine);
+      const headingContext = headingLookup[startLine] ?? null;
       const listMarkerFreeMatchSnippet = buildListMarkerFreeMatchSnippet(
-        headingLookup[startLine] ?? null,
+        headingContext?.text ?? null,
         listMarkerFreeSnippet,
       );
       const listMarkerFreeComparison =
@@ -232,6 +290,10 @@ function relocateCandidateRange(
               ? listMarkerFreeMatchSnippet
               : listMarkerFreeSnippet
             : snippet;
+      const incorporatesHeading =
+        headingContext !== null &&
+        matchedSnippet === listMarkerFreeMatchSnippet &&
+        listMarkerFreeMatchSnippet !== listMarkerFreeSnippet;
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
@@ -248,6 +310,12 @@ function relocateCandidateRange(
           snippet: matchedSnippet,
           quality: bestComparison.quality,
           distance,
+          sourceRanges: [
+            { startLine, endLine },
+            ...(incorporatesHeading
+              ? [{ startLine: headingContext.line, endLine: headingContext.line }]
+              : []),
+          ],
         };
       }
     }
@@ -260,6 +328,7 @@ function relocateCandidateRange(
     startLine: bestMatch.startLine,
     endLine: bestMatch.endLine,
     snippet: bestMatch.snippet,
+    sourceRanges: bestMatch.sourceRanges,
   };
 }
 
@@ -304,7 +373,10 @@ function lineRangeOverlapsDreamingFence(
 export async function rehydratePromotionCandidate(
   workspaceDir: string,
   candidate: PromotionCandidate,
-): Promise<PromotionCandidate | null> {
+): Promise<{
+  candidate: PromotionCandidate;
+  sourceRanges: RelocatedSourceRange[];
+} | null> {
   const sourcePaths = resolveShortTermSourcePathCandidates(workspaceDir, candidate.path);
   for (const sourcePath of sourcePaths) {
     let rawSource: string;
@@ -330,10 +402,13 @@ export async function rehydratePromotionCandidate(
       continue;
     }
     return {
-      ...candidate,
-      startLine: relocated.startLine,
-      endLine: relocated.endLine,
-      snippet: relocated.snippet,
+      candidate: {
+        ...candidate,
+        startLine: relocated.startLine,
+        endLine: relocated.endLine,
+        snippet: relocated.snippet,
+      },
+      sourceRanges: relocated.sourceRanges,
     };
   }
   return null;
