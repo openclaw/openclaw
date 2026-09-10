@@ -1,6 +1,7 @@
 // Message access tests cover channel message visibility and permission helpers.
 import { describe, expect, it } from "vitest";
 import { decideChannelIngress } from "./decision.js";
+import { createIdentityAdapter, defineStableChannelIngressIdentity } from "./runtime-identity.js";
 import { resolveChannelIngressState } from "./state.js";
 import type {
   ChannelIngressPolicyInput,
@@ -275,5 +276,38 @@ describe("channel message access ingress", () => {
         reasonCode: "sender_not_required",
       });
     }
+  });
+});
+
+describe("channel ingress DM allowlist wildcards", () => {
+  const prefixedWildcardIdentity = defineStableChannelIngressIdentity({
+    normalizeEntry: (raw) =>
+      raw
+        .trim()
+        .replace(/^demo:/i, "")
+        .trim() || null,
+    isWildcardEntry: (entry) =>
+      entry
+        .trim()
+        .replace(/^demo:/i, "")
+        .trim() === "*",
+  });
+
+  async function dmHasWildcard(entries: string[]): Promise<boolean> {
+    const state = await resolveChannelIngressState(
+      baseInput({
+        adapter: createIdentityAdapter(prefixedWildcardIdentity),
+        allowlists: { dm: entries },
+      }),
+    );
+    return state.allowlists.dm.hasWildcard;
+  }
+
+  it.each(["*", "demo:*"])("reports %s as a wildcard DM allowlist", async (entry) => {
+    await expect(dmHasWildcard([entry])).resolves.toBe(true);
+  });
+
+  it("keeps a narrow DM allowlist without a wildcard", async () => {
+    await expect(dmHasWildcard(["demo:sender-1"])).resolves.toBe(false);
   });
 });
