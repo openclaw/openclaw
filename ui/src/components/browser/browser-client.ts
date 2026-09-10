@@ -1,4 +1,4 @@
-import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client";
+import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 // Typed Control UI wrapper over the `browser.request` gateway method.
 //
 // The gateway method speaks an HTTP-shaped envelope ({method, path, body})
@@ -82,7 +82,7 @@ export function bindBrowserRequestClient(
     async request<T>(
       method: string,
       params?: unknown,
-      options?: GatewayProtocolRequestOptions,
+      options?: GatewayClientRequestOptions,
     ): Promise<T> {
       if (!current()) {
         throw new DOMException("Browser request scope ended", "AbortError");

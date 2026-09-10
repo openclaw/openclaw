@@ -90,11 +90,13 @@ describe.skipIf(!isLiveTestEnabled())("current-document downloads (real Chromium
         const recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
         const chunks: Blob[] = [];
         recorder.addEventListener("dataavailable", (event) => chunks.push(event.data));
-        const stopped = new Promise<void>((resolve) =>
-          recorder.addEventListener("stop", () => resolve(), { once: true }),
-        );
+        const stopped = new Promise<void>((resolve) => {
+          recorder.addEventListener("stop", () => resolve(), { once: true });
+        });
         recorder.start();
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 200);
+        });
         recorder.stop();
         await stopped;
         stream.getTracks().forEach((track) => track.stop());
@@ -118,7 +120,9 @@ describe.skipIf(!isLiveTestEnabled())("current-document downloads (real Chromium
     await closePlaywrightBrowserConnection({ cdpUrl });
     await context?.close();
     server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 

@@ -77,7 +77,7 @@ describe("Browser panel downloads", () => {
         credentials: "same-origin",
       },
     );
-    expect(fetchFile.mock.calls[0][1].headers.get("Authorization")).toBe("Bearer fixture-token");
+    expect(fetchFile.mock.calls[0]?.[1].headers.get("Authorization")).toBe("Bearer fixture-token");
     expect(createObjectURL).toHaveBeenCalledWith(content);
     expect(downloads).toEqual([
       { href: "blob:https://ui.example.test/download", filename: "Design review.mp4" },

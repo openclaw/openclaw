@@ -417,8 +417,8 @@ export async function downloadCurrentDocumentViaPlaywright(
     try {
       assertCurrentDocument();
       const trigger = page.evaluate(
-        ({ expectedUrl, deadline }) => {
-          if (location.href !== expectedUrl || Date.now() >= deadline) {
+        ({ expectedUrl: documentUrl, deadline }) => {
+          if (location.href !== documentUrl || Date.now() >= deadline) {
             throw new Error("The tab changed before its download started. Try again.");
           }
           // The browser owns cookies, streaming and Content-Disposition. A detached,
