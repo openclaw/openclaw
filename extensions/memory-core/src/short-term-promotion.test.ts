@@ -22,6 +22,7 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
+vi.mock("./memory-workspace-lock.js", { spy: true });
 
 import {
   configureMemoryCoreDreamingState,
@@ -3305,12 +3306,45 @@ describe("short-term promotion", () => {
           { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
         );
         const ranked = await rankAllCandidates(workspaceDir);
+        const actualWorkspaceLock = (
+          await vi.importActual<typeof import("./memory-workspace-lock.js")>(
+            "./memory-workspace-lock.js",
+          )
+        ).withMemoryWorkspaceLock;
+        const actualArtifactLock = (
+          await vi.importActual<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>(
+            "openclaw/plugin-sdk/memory-core-host-runtime-core",
+          )
+        ).withMemoryArtifactWriteLock;
+        const initialWorkspaceReadFinished = createDeferred<void>();
+        const releasePromotionAfterInitialRead = createDeferred<void>();
         const phaseOwnsWorkspace = createDeferred<void>();
         const releasePhasePublication = createDeferred<void>();
+        const promotionWorkspaceAttempted = createDeferred<void>();
+        const promotionArtifactAttempted = createDeferred<void>();
+        const workspaceLock = vi.mocked(withMemoryWorkspaceLock);
         const artifactLock = vi.mocked(withMemoryArtifactWriteLock);
+        let promotionWorkspaceCalls = 0;
+        workspaceLock.mockImplementation(async (lockedWorkspaceDir, task) => {
+          promotionWorkspaceCalls += 1;
+          if (promotionWorkspaceCalls === 1) {
+            const result = await actualWorkspaceLock(lockedWorkspaceDir, task);
+            initialWorkspaceReadFinished.resolve();
+            await releasePromotionAfterInitialRead.promise;
+            return result;
+          }
+          promotionWorkspaceAttempted.resolve();
+          return await actualWorkspaceLock(lockedWorkspaceDir, task);
+        });
+        artifactLock.mockImplementation(async (lockedWorkspaceDir, task) => {
+          promotionArtifactAttempted.resolve();
+          return await actualArtifactLock(lockedWorkspaceDir, task);
+        });
         artifactLock.mockClear();
 
-        const phasePublication = withMemoryWorkspaceLock(workspaceDir, async () => {
+        const promotion = applyAllCandidates(workspaceDir, ranked);
+        await initialWorkspaceReadFinished.promise;
+        const phasePublication = actualWorkspaceLock(workspaceDir, async () => {
           phaseOwnsWorkspace.resolve();
           await releasePhasePublication.promise;
           await writeDailyDreamingPhaseBlock({
@@ -3318,18 +3352,19 @@ describe("short-term promotion", () => {
             phase: "light",
             bodyLines: ["- Candidate: retain one lock hierarchy."],
             hasContent: true,
-            nowMs: Date.parse("2026-04-29T10:00:01.000Z"),
+            nowMs: Date.parse("2026-04-30T10:00:01.000Z"),
             timezone: "UTC",
             storage: { mode: "inline", separateReports: false },
           });
         });
         await phaseOwnsWorkspace.promise;
-        const promotion = applyAllCandidates(workspaceDir, ranked);
+        releasePromotionAfterInitialRead.resolve();
 
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 25);
-        });
-        expect(artifactLock).not.toHaveBeenCalled();
+        const firstPublicationLock = await Promise.race([
+          promotionWorkspaceAttempted.promise.then(() => "workspace" as const),
+          promotionArtifactAttempted.promise.then(() => "artifact" as const),
+        ]);
+        expect(firstPublicationLock).toBe("workspace");
         releasePhasePublication.resolve();
 
         const [, applied] = await Promise.all([phasePublication, promotion]);
