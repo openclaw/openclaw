@@ -289,4 +289,5 @@ Compatibility:
 - rename `discovery` to `catalog`. A provider plugin that still registers
   `discovery` publishes no catalog rows
 - `augmentModelCatalog` is deprecated; bundled providers should publish
-  supplemental rows through `registerModelCatalogProvider`
+  supplemental rows through `registerModelCatalogProvider`. Its removal gate is
+  2026-10-01

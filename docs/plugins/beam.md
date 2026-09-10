@@ -110,7 +110,7 @@ accepts them.
 
 Uploading the same `beamId` updates the existing catalog row when its `updatedAt` is newer. Equal-timestamp uploads may refresh the same state or mark a live row completed, but cannot regress a completed row to live. Older uploads and equal-timestamp completion regressions still return the normal `200` success response, but OpenClaw ignores them. Only accepted updates refresh retention and uploader attribution.
 
-`sourceModel` is optional. Current automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
+`sourceModel` is optional. Automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
 
 ## Continue on the Team Gateway
 

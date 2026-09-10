@@ -82,7 +82,10 @@ families](/plugins/sdk-provider-plugins/hook-families) for the shared builders.
 
     The older `resolveWebSocketSessionPolicy` hook remains supported but is
     deprecated. Move its fields under `resolveTransportTurnState.websocket`;
-    fields from the new hook take precedence during migration.
+    fields from the new hook take precedence during migration. The hook carries
+    a TypeScript `@deprecated` annotation only: it has no compatibility-registry
+    record and therefore no published removal date. See the [removal
+    timeline](/plugins/sdk-migration/removal-timeline) for the surfaces that do.
 
   </Tab>
   <Tab title="Usage and billing">
@@ -94,6 +97,7 @@ families](/plugins/sdk-provider-plugins/hook-families) for the shared builders.
       return auth ? { token: auth.token } : null;
     },
     fetchUsageSnapshot: async (ctx) => {
+      // fetchAcmeUsage is your plugin's own vendor API call, not an SDK export.
       return await fetchAcmeUsage(ctx.token, ctx.timeoutMs);
     },
     ```

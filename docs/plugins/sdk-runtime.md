@@ -91,6 +91,8 @@ Use `createPluginRuntimeStore` to store the runtime reference for use outside th
     ```typescript
     import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 
+    // `myPlugin` is your own `ChannelPlugin` object and `store` is the store
+    // created in the previous step; neither is an SDK export.
     export default defineChannelPluginEntry({
       id: "my-plugin",
       name: "My Plugin",
