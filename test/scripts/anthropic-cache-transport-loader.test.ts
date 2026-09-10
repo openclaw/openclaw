@@ -1,18 +1,16 @@
+import type { StreamFn } from "@openclaw/ai";
 import { describe, expect, it, vi } from "vitest";
 import { loadAnthropicTransportStream } from "../../scripts/e2e/lib/anthropic-cache/transport-loader.mts";
 
 describe("loadAnthropicTransportStream", () => {
   it("loads the managed transport when the candidate exports it", async () => {
-    const stream = vi.fn();
+    const stream = vi.fn<StreamFn>();
     const factory = vi.fn(() => stream);
 
     await expect(
-      loadAnthropicTransportStream(
-        async () =>
-          ({
-            createAnthropicMessagesTransportStreamFn: factory,
-          }) as never,
-      ),
+      loadAnthropicTransportStream(async () => ({
+        createAnthropicMessagesTransportStreamFn: factory,
+      })),
     ).resolves.toBe(stream);
     expect(factory).toHaveBeenCalledOnce();
   });

@@ -1,7 +1,8 @@
 import type { StreamFn } from "@openclaw/ai";
 
-type AnthropicTransportModule = typeof import("@openclaw/ai/transports");
-type AnthropicTransportImporter = () => Promise<AnthropicTransportModule>;
+type AnthropicTransportImporter = () => Promise<
+  Pick<typeof import("@openclaw/ai/transports"), "createAnthropicMessagesTransportStreamFn">
+>;
 
 function isMissingTransportExport(error: unknown): boolean {
   return (
