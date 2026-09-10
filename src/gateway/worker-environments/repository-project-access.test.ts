@@ -103,6 +103,7 @@ describe("prepared repository source access", () => {
       inState: (candidate, ...states) => states.includes(candidate.state),
       isStopping: () => false,
       providerFor: () => fixture.provider,
+      resolveProvider: () => fixture.provider,
       serviceError: (_code, message) => new Error(message),
       withLock: async (_id, run) => await run(),
     });
