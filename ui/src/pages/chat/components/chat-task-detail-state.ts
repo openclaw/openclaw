@@ -21,13 +21,11 @@ type TaskTranscriptLoad = { status: "loading" } | LoadedTaskTranscript | { statu
 type TaskDetailState = {
   client: GatewayBrowserClient;
   connectionEpoch: number | undefined;
-  eventVersion: number;
-  refreshedEventVersion: number;
+  refreshPending: boolean;
   inFlight: boolean;
   lastRequestStartedAt: number;
   load: TaskTranscriptLoad;
   refreshTimer: number | null;
-  requestId: number;
   olderCursors: Set<string>;
   taskId: string;
 };
@@ -81,25 +79,21 @@ function transcriptEntryKey(message: unknown): string | undefined {
   if (!identity) {
     return undefined;
   }
-  const key = identity.externalSource
+  return identity.externalSource
     ? `external:${identity.externalSource}`
     : identity.id
       ? `id:${identity.id}`
       : identity.sequence == null
         ? undefined
         : `seq:${identity.sequence}`;
-  return key;
 }
 
-function mergeTranscriptMessages(earlier: unknown[], later: unknown[]): unknown[] {
+function transcriptOverlap(earlier: unknown[], later: unknown[]): number {
   const laterKeys = new Set(later.map(transcriptEntryKey).filter(Boolean));
-  const overlap = earlier.findIndex((message) => {
+  return earlier.findIndex((message) => {
     const key = transcriptEntryKey(message);
     return key !== undefined && laterKeys.has(key);
   });
-  // An entry can project into several rows. Replace the overlapping tail as a
-  // whole so updated, added, and removed siblings stay together.
-  return [...earlier.slice(0, overlap < 0 ? earlier.length : overlap), ...later];
 }
 
 async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, cursor?: string) {
@@ -117,12 +111,11 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
     host.requestUpdate?.();
     return;
   }
-  const requestId = ++state.requestId;
-  const eventVersion = state.eventVersion;
   const previous = state.load.status === "loaded" ? state.load : undefined;
   state.inFlight = true;
   if (!cursor) {
     state.lastRequestStartedAt = Date.now();
+    state.refreshPending = false;
   }
   state.load = previous ? { ...previous, loading: true, error: undefined } : { status: "loading" };
   host.requestUpdate?.();
@@ -134,12 +127,11 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
       ...(cursor ? { cursor } : {}),
     });
     const messages = visibleChatHistoryMessages(result.messages);
-    const previousKeys = new Set(previous?.messages.map(transcriptEntryKey).filter(Boolean));
-    const overlaps = messages.some((message) => {
-      const key = transcriptEntryKey(message);
-      return key !== undefined && previousKeys.has(key);
-    });
-    const retainPrevious = previous !== undefined && (cursor !== undefined || overlaps);
+    const previousMessages = previous?.messages ?? [];
+    const earlier = cursor ? messages : previousMessages;
+    const later = cursor ? previousMessages : messages;
+    const overlap = transcriptOverlap(earlier, later);
+    const retainPrevious = previous !== undefined && (cursor !== undefined || overlap >= 0);
     if (cursor) {
       state.olderCursors.add(cursor);
     } else if (!retainPrevious) {
@@ -149,10 +141,9 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
     }
     load = {
       status: "loaded",
+      // Replace whole overlapping entries, including their projected siblings.
       messages: retainPrevious
-        ? cursor
-          ? mergeTranscriptMessages(messages, previous.messages)
-          : mergeTranscriptMessages(previous.messages, messages)
+        ? [...earlier.slice(0, overlap < 0 ? earlier.length : overlap), ...later]
         : messages,
       // Only overlapping refreshes preserve the oldest boundary already loaded.
       nextCursor:
@@ -171,7 +162,6 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
   const current = host.taskDetailState;
   if (
     current !== state ||
-    current.requestId !== requestId ||
     host.client !== client ||
     host.connectionEpoch !== state.connectionEpoch
   ) {
@@ -179,12 +169,9 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
   }
   state.inFlight = false;
   state.load = load;
-  if (!cursor) {
-    state.refreshedEventVersion = eventVersion;
-  }
   host.requestUpdate?.();
   // Also refresh after events received during an older-page request.
-  if (state.eventVersion > state.refreshedEventVersion) {
+  if (state.refreshPending) {
     scheduleTranscriptLoad(host, state);
   }
 }
@@ -210,13 +197,11 @@ export function readTaskTranscript(
   const next: TaskDetailState = {
     client,
     connectionEpoch: host.connectionEpoch,
-    eventVersion: 0,
-    refreshedEventVersion: 0,
+    refreshPending: false,
     inFlight: false,
     lastRequestStartedAt: Number.NEGATIVE_INFINITY,
     load: { status: "loading" },
     refreshTimer: null,
-    requestId: 0,
     olderCursors: new Set(),
     taskId: selection.taskId,
   };
@@ -266,8 +251,8 @@ export function observeTaskDetailEvent(
   if (event.action !== "upserted" || event.task.id !== state.taskId) {
     return;
   }
-  state.eventVersion += 1;
-  // A terminal version remains pending through an in-flight or throttled read,
+  state.refreshPending = true;
+  // Terminal events remain pending through an in-flight or throttled read,
   // so the next request is always the final task-session snapshot.
   scheduleTranscriptLoad(host, state);
 }
