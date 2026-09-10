@@ -98,13 +98,17 @@ export function recordCodexCyberEscalation(params: {
         escalationWindows.delete(sessionKey);
       }
     }
-    // Insertion order approximates age closely enough to shed the oldest live
-    // windows if a burst of sessions is still inside its cooloff.
-    for (const sessionKey of escalationWindows.keys()) {
+    // Only answered windows may be shed to make room: losing one costs a routing
+    // optimization, while losing a suppressed window would let an unauthorized
+    // target be retried inside its cooloff. If every live window is suppressed,
+    // the bound yields rather than break that guarantee.
+    for (const [sessionKey, record] of escalationWindows) {
       if (escalationWindows.size < MAX_ESCALATION_WINDOWS) {
         break;
       }
-      escalationWindows.delete(sessionKey);
+      if (record.outcome === "answered") {
+        escalationWindows.delete(sessionKey);
+      }
     }
   }
   escalationWindows.set(params.sessionKey, {
@@ -192,6 +196,7 @@ type CyberRefusalMessage = {
   role?: string;
   diagnostics?: readonly { type: string; details?: Record<string, unknown> }[];
   errorMessage?: string;
+  stopReason?: string;
 };
 
 export type CodexCyberAttemptOutcome = {
@@ -234,6 +239,24 @@ export function isCodexCyberRefusalResult(result: CodexCyberAttemptOutcome | und
     hasCyberRefusalDiagnostic(result?.lastAssistant) ||
     hasCyberRefusalDiagnostic(result?.currentAttemptAssistant)
   );
+}
+
+/**
+ * True when the escalated attempt actually produced a reply. Absence of an
+ * authorization error is not evidence of one: a transport failure, cancellation,
+ * or any other terminal error must not be mistaken for Daybreak answering.
+ */
+export function isCodexCyberEscalationAnswered(
+  result: CodexCyberAttemptOutcome | undefined,
+): boolean {
+  if (result?.promptError !== undefined && result.promptError !== null) {
+    return false;
+  }
+  const message = result?.currentAttemptAssistant ?? result?.lastAssistant;
+  if (message?.role !== "assistant") {
+    return false;
+  }
+  return message.stopReason !== "error" && message.stopReason !== "aborted";
 }
 
 const AUTHORIZATION_FAILURE_RE = /\b(401|403)\b|unauthorized|not authorized|forbidden/i;

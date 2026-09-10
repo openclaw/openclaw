@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  isCodexCyberEscalationAnswered,
   isCodexCyberEscalationReplaySafe,
   isCodexCyberRefusalResult,
   isCodexDaybreakUnavailableResult,
@@ -202,7 +203,67 @@ describe("escalation planning", () => {
   });
 });
 
+describe("escalation outcome", () => {
+  it("counts only a real reply as answered", () => {
+    expect(
+      isCodexCyberEscalationAnswered({
+        currentAttemptAssistant: { role: "assistant", stopReason: "stop" },
+      }),
+    ).toBe(true);
+    // A transport failure is not a reply, even though it carries no refusal.
+    expect(isCodexCyberEscalationAnswered({ promptError: "stream disconnected" })).toBe(false);
+    expect(
+      isCodexCyberEscalationAnswered({ lastAssistant: { role: "assistant", stopReason: "error" } }),
+    ).toBe(false);
+    expect(
+      isCodexCyberEscalationAnswered({
+        lastAssistant: { role: "assistant", stopReason: "aborted" },
+      }),
+    ).toBe(false);
+    expect(isCodexCyberEscalationAnswered({})).toBe(false);
+    expect(isCodexCyberEscalationAnswered(undefined)).toBe(false);
+  });
+
+  it("prefers the current attempt over an older assistant row", () => {
+    expect(
+      isCodexCyberEscalationAnswered({
+        lastAssistant: { role: "assistant", stopReason: "stop" },
+        currentAttemptAssistant: { role: "assistant", stopReason: "error" },
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("window bookkeeping", () => {
+  it("never evicts a live suppression window to make room", () => {
+    const now = 1_000;
+    recordCodexCyberEscalation({
+      sessionKey: "suppressed-first",
+      outcome: "suppressed",
+      cooloffMs: 600_000,
+      now,
+    });
+    for (let index = 0; index < 400; index += 1) {
+      recordCodexCyberEscalation({
+        sessionKey: `filler-${index}`,
+        outcome: "answered",
+        cooloffMs: 600_000,
+        now,
+      });
+    }
+    // The unauthorized target must still be suppressed, or it would be retried
+    // inside its cooloff.
+    expect(
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: "suppressed-first",
+        currentModel: PRIMARY,
+        replaySafe: true,
+        now: now + 1,
+      }),
+    ).toEqual({ kind: "skip", reason: "cooling_off" });
+  });
+
   it("stays bounded when many sessions escalate", () => {
     const now = 1_000;
     for (let index = 0; index < 400; index += 1) {

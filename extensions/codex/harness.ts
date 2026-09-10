@@ -297,6 +297,7 @@ export function createCodexAppServerAgentHarness(
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       const {
+        isCodexCyberEscalationAnswered,
         isCodexCyberEscalationReplaySafe,
         isCodexCyberRefusalResult,
         isCodexDaybreakUnavailableResult,
@@ -346,19 +347,24 @@ export function createCodexAppServerAgentHarness(
       // only evidence. An unauthorized target must not be attempted again inside
       // the window: each try costs the transport's full reconnect ladder.
       const unavailable = isCodexDaybreakUnavailableResult(escalated);
-      // Only a Daybreak reply earns sticky routing. If Daybreak refused too,
-      // sending later turns to the weaker model would buy nothing.
-      const answered = !unavailable && !isCodexCyberRefusalResult(escalated);
+      // Only a real Daybreak reply earns sticky routing. A second refusal, a
+      // transport failure, or a cancellation all leave the session suppressed.
+      const answered = !unavailable && isCodexCyberEscalationAnswered(escalated);
       recordCodexCyberEscalation({
         sessionKey: params.sessionKey,
         outcome: answered ? "answered" : "suppressed",
         cooloffMs: cyberFailover.cooloffMs,
       });
-      await emitCodexCyberNotice(params, {
-        state: unavailable ? "unavailable" : "escalated",
-        model: requestedModel,
-        fallbackModel: plan.model,
-      });
+      // Announce only the two outcomes this owner can state truthfully. A turn
+      // Daybreak also refused keeps the projector's own block, and any other
+      // failure surfaces through its normal terminal error.
+      if (answered || unavailable) {
+        await emitCodexCyberNotice(params, {
+          state: answered ? "escalated" : "unavailable",
+          model: requestedModel,
+          fallbackModel: plan.model,
+        });
+      }
       // A Daybreak target the workspace cannot use leaves the original refusal as
       // the honest outcome for this turn.
       return unavailable ? result : escalated;
