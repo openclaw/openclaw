@@ -135,7 +135,6 @@ export async function installPluginFromManagedNpmRoot(
       scan: async () =>
         await preflightPluginNpmInstallPolicy({
           config: params.config,
-          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
           logger,
           mode: policyMode,
@@ -529,7 +528,6 @@ export async function installPluginFromManagedNpmRoot(
       }
     }
     const result = await installPluginFromInstalledPackageDir({
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       onInstallPolicyWarning: params.onInstallPolicyWarning,
       config: params.config,
       additionalDependencyPackageDirs: newRootPackageDirs,

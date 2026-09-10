@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MEMORY_SEARCH_DEADLINE_CONTROL } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 // Memory Core integration tests exercise the real SQLite search manager through tools.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
@@ -546,6 +547,48 @@ describe("memory_search real manager", () => {
       query: "zebra",
       corpus: "memory",
     });
+    expect(retried.details).not.toHaveProperty("unavailable");
+    expect(fixture.provider.embedQueryCalls).toBe(2);
+  });
+
+  it("survives a managed local-service cold start longer than the search deadline", async () => {
+    const cfg = fixture.createConfig({ minScore: 0 });
+    const manager = await fixture.getFreshManager(cfg);
+    await manager.sync({ reason: "baseline", force: true });
+    const acquisitionStarted = createDeferred<void>();
+    const acquisitionReady = createDeferred<void>();
+    fixture.provider.beforeEmbedQuery = async (options) => {
+      const control = options?.[MEMORY_SEARCH_DEADLINE_CONTROL];
+      control?.report("pause");
+      try {
+        acquisitionStarted.resolve();
+        await acquisitionReady.promise;
+      } finally {
+        control?.report("resume");
+      }
+    };
+    const tool = createMemorySearchTool({ config: cfg, agentId: "main" });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+    vi.useFakeTimers();
+    const execution = tool.execute("cold-start-readiness", { query: "zebra", corpus: "memory" });
+    try {
+      await acquisitionStarted.promise;
+      await vi.advanceTimersByTimeAsync(70_000);
+      acquisitionReady.resolve();
+      const result = await execution;
+      expect(result.details).toMatchObject({
+        results: [expect.objectContaining({ path: "memory/2026-01-12.md", source: "memory" })],
+      });
+      expect(result.details).not.toHaveProperty("error");
+      expect(result.details).not.toHaveProperty("partial");
+    } finally {
+      acquisitionReady.resolve();
+      fixture.provider.beforeEmbedQuery = null;
+      vi.useRealTimers();
+    }
+    const retried = await tool.execute("cold-start-retry", { query: "zebra", corpus: "memory" });
     expect(retried.details).not.toHaveProperty("unavailable");
     expect(fixture.provider.embedQueryCalls).toBe(2);
   });

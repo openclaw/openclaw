@@ -7,7 +7,7 @@ import { fetchPagedSessionRows } from "./paged-session-rows.ts";
 const CHILD_SESSION_LIST_PAGE_SIZE = 100;
 
 export async function fetchChildSessionRows(params: {
-  sessions: SessionCapability;
+  sessions: Pick<SessionCapability, "list" | "inheritRow">;
   parentKey: string;
   isCurrent: () => boolean;
   pageSize?: number;
@@ -28,7 +28,7 @@ export async function fetchChildSessionRows(params: {
     mapPageRows: (rows) => {
       const runtimeSampledAt = Date.now();
       // Keep each server page's lifecycle sample coherent across sibling rows.
-      return rows.map((row) => ({ ...row, runtimeSampledAt }));
+      return rows.map((row) => params.sessions.inheritRow({ ...row, runtimeSampledAt }, row));
     },
   });
 }

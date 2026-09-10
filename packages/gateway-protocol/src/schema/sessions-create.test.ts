@@ -6,6 +6,25 @@ import {
 } from "../index.js";
 
 describe("sessions.create schema", () => {
+  it.each([undefined, 0, 1800000])("accepts initial run timeout %s", (timeoutMs) => {
+    expect(
+      validateSessionsCreateParams({
+        agentId: "main",
+        task: "review",
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      }),
+    ).toBe(true);
+  });
+
+  it.each([-1, 1.5, "1800000", null, Number.NaN, Infinity])(
+    "rejects invalid initial run timeout %s",
+    (timeoutMs) => {
+      expect(validateSessionsCreateParams({ agentId: "main", task: "review", timeoutMs })).toBe(
+        false,
+      );
+    },
+  );
+
   it.each([
     { url: "https://github.com/openclaw/openclaw.git" },
     { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" },

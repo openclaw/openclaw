@@ -76,6 +76,8 @@ See [llama.cpp Provider](/plugins/llama-cpp).
 
 Set `timeoutSeconds` on the provider entry (not `localService`) so slow cold starts and long generations do not hit the default model request timeout. Set an explicit `healthUrl` whenever your server exposes readiness somewhere other than `/models` on the base URL.
 
+During `memory_search`, managed embedding startup uses `readyTimeoutMs` instead of the search and query-embedding timeouts. Those timers resume after the service is ready. Embedding requests, retrieval, and result processing keep their existing time limits. Concurrent wiki searches and manager cleanup keep separate limits, and caller cancellation can still stop startup.
+
 ## Fields
 
 | Field            | Required | Description                                                                                                                          |

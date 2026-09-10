@@ -20,7 +20,11 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { withCodexAppServerJsonClient } from "./app-server/request.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { codexControlRequest, type CodexControlRequestOptions } from "./command-rpc.js";
+import {
+  codexControlRequest,
+  prepareCodexControlSessionAuth,
+  type CodexControlRequestOptions,
+} from "./command-rpc.js";
 
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 const withCodexAppServerJsonClientMock = vi.hoisted(() => vi.fn());
@@ -90,6 +94,7 @@ describe("Codex command RPC helpers", () => {
       ) =>
         await run(requestCodexAppServerJsonMock, harness.client, {
           assertCurrent: () => undefined,
+          abort: vi.fn(),
         }),
     );
     await upsertSessionEntry({
@@ -137,6 +142,20 @@ describe("Codex command RPC helpers", () => {
       typeof withCodexAppServerJsonClient
     >[0];
   }
+
+  it("keeps plugin reads without an admitted session on the selected auth partition", async () => {
+    const options = { config, authProfileId: "openai:selected" };
+    const startOptions = { transport: "stdio" as const, command: "codex", args: [], headers: {} };
+    await expect(prepareCodexControlSessionAuth(options, startOptions)).resolves.toEqual({
+      authProfileId: "openai:selected",
+      clientOptions: { authProfileId: "openai:selected" },
+    });
+    await expect(
+      prepareCodexControlSessionAuth({ ...options, onResponse: vi.fn() }, startOptions),
+    ).rejects.toThrow("requires admitted session authority");
+    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+    expect(requestCodexAppServerJsonMock).not.toHaveBeenCalled();
+  });
 
   it("resumes with the prepared environment API key and publishes no legacy profile", async () => {
     vi.stubEnv("OPENAI_API_KEY", "control-platform-key");

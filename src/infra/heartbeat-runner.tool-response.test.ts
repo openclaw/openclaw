@@ -1,10 +1,10 @@
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 // Covers heartbeat tool-response handling and visible reply policy.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../agents/failover/user-copy.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,

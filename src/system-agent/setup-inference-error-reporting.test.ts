@@ -154,7 +154,7 @@ async function observeScenario(scenario: Scenario, json: boolean) {
                   runtime,
                   requireExecutionOwner: true,
                   deps,
-                  onVerifiedExecution: (_auth, verified) => {
+                  onVerifiedExecution: (verified) => {
                     phases.push("callback");
                     callbackAttempts += 1;
                     if (scenario === "callback") {

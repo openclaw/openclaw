@@ -66,6 +66,7 @@ export function registerGenerationRecoveryTests(
         opts: { json: true, run },
         refreshServiceEnv: false,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
         gatewayPort: 19305,
         requireRunningServiceAfterRestart: true,
@@ -165,7 +166,11 @@ export function registerGenerationRecoveryTests(
       mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
         healthy: mocks.running,
         staleGatewayPids: [],
-        runtime: { status: mocks.running ? "running" : "stopped" },
+        runtime: {
+          status: mocks.running ? "running" : "stopped",
+          pid: mocks.running ? 4242 : undefined,
+        },
+        gatewayBootId: "service-boot",
         gatewayVersion: mocks.running ? VERSION : undefined,
         expectedVersion: expectedVersion ?? undefined,
         portUsage: { port, status: mocks.running ? "busy" : "free", listeners: [], hints: [] },

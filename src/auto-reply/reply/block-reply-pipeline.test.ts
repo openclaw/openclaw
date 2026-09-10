@@ -505,6 +505,163 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 });
 
 describe("createBlockReplyPipeline content coverage dedup", () => {
+  it.each([false, true])(
+    "recognizes delivered source through synthetic fence wrappers (coalescing=%s)",
+    async (coalescing) => {
+      const sent: ReplyPayload[] = [];
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: async (payload) => {
+          sent.push(payload);
+        },
+        timeoutMs: 5000,
+        ...(coalescing
+          ? { coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: "\n\n" } }
+          : {}),
+      });
+      const first = "```ts\nconst x = \n```";
+      const second = "```ts\n1;\n```";
+      const final = setReplyPayloadMetadata(
+        { text: "```ts\nconst x = 1;\n```" },
+        { assistantMessageIndex: 7 },
+      );
+      pipeline.enqueue(
+        setReplyPayloadMetadata(
+          { text: first },
+          { assistantMessageIndex: 7, blockSourceText: "```ts\nconst x = " },
+        ),
+      );
+      pipeline.enqueue(
+        setReplyPayloadMetadata(
+          { text: second },
+          { assistantMessageIndex: 7, blockSourceText: "1;\n```" },
+        ),
+      );
+      expect(pipeline.hasSentPayload(final)).toBe(false);
+
+      await pipeline.flush({ force: true });
+
+      expect(sent.map((payload) => payload.text)).toEqual(
+        coalescing ? [`${first}\n\n${second}`] : [first, second],
+      );
+      expect(pipeline.hasSentPayload(final)).toBe(true);
+      expect(pipeline.hasSentExactPayload?.(final)).toBe(false);
+      expect(
+        pipeline.hasSentPayload(
+          setReplyPayloadMetadata({ ...final }, { assistantMessageIndex: 8 }),
+        ),
+      ).toBe(false);
+      expect(pipeline.hasSentPayload({ text: "```ts\nconst x = 2;\n```" })).toBe(false);
+    },
+  );
+
+  it("does not acknowledge source from a rejected fenced block", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        if (payload.text === "```ts\n1;\n```") {
+          throw new Error("channel rejected the continuation");
+        }
+      },
+      timeoutMs: 5000,
+    });
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "```ts\nconst x = \n```" },
+        { blockSourceText: "```ts\nconst x = " },
+      ),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata({ text: "```ts\n1;\n```" }, { blockSourceText: "1;\n```" }),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ text: "```ts\nconst x = 1;\n```" })).toBe(false);
+    expect(pipeline.hasSentPayload({ text: "```ts\nconst x = " })).toBe(true);
+  });
+
+  it("merges source coverage through ordinary text and a media continuation", async () => {
+    const sent: ReplyPayload[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push(payload);
+      },
+      timeoutMs: 5000,
+      coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+    });
+    pipeline.enqueue({ text: "Example:" });
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "```ts\nconst x = \n```" },
+        { blockSourceText: "```ts\nconst x = " },
+      ),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "```ts\n1;\n```", mediaUrl: "file:///example.png" },
+        { blockSourceText: "1;\n```" },
+      ),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      text: "Example:\n\n```ts\nconst x = \n```\n\n```ts\n1;\n```",
+      mediaUrl: "file:///example.png",
+    });
+    expect(pipeline.hasSentPayload({ text: "Example:\n```ts\nconst x = 1;\n```" })).toBe(true);
+    expect(pipeline.getSentMediaUrls()).toEqual(["file:///example.png"]);
+  });
+
+  it("does not credit removed source text when merging a media-only reply", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+      coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+    });
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "```ts\nconst x = 1;\n```" },
+        { blockSourceText: "```ts\nconst x = 1;\n```" },
+      ),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { mediaUrl: "file:///example.png" },
+        { blockSourceText: "withdrawn source" },
+      ),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ text: "```ts\nconst x = 1;\n```" })).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "```ts\nconst x = 1;\n```withdrawn source" })).toBe(
+      false,
+    );
+  });
+
+  it("retains source coverage when buffered audio gains voice presentation", async () => {
+    const sent: ReplyPayload[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push(payload);
+      },
+      timeoutMs: 5000,
+      buffer: createAudioAsVoiceBuffer({ isAudioPayload: (payload) => Boolean(payload.mediaUrl) }),
+    });
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "```ts\n1;\n```", mediaUrl: "file:///example.ogg", audioAsVoice: true },
+        { blockSourceText: "1;\n```", assistantMessageIndex: 7 },
+      ),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(sent[0]).toMatchObject({ audioAsVoice: true, mediaUrl: "file:///example.ogg" });
+    expect(
+      pipeline.hasSentPayload(
+        setReplyPayloadMetadata({ text: "1;\n```" }, { assistantMessageIndex: 7 }),
+      ),
+    ).toBe(true);
+  });
+
   it("matches final assembled text to successfully streamed text chunks after abort", async () => {
     vi.useFakeTimers();
 

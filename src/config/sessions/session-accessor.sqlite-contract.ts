@@ -52,6 +52,10 @@ export type TranscriptEventAppendOptions = {
   appendIntent?: "active-branch";
   /** Synchronous authority check run inside the append transaction. */
   beforeCommitInTransaction?: () => void;
+  /** Reject the append when the transcript changed since the caller loaded it. */
+  expectedMutationAt?: number | null;
+  /** Captures the parent selected by an active-branch event append. */
+  captureEffectiveParentIdInTransaction?: (parentId: string | null) => void;
 };
 
 export type TranscriptAppendRefusal =

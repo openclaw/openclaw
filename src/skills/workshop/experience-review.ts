@@ -214,7 +214,6 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     });
     const run = () =>
       runSkillWorkshopReview({
-        reviewKind: "experience",
         ...foregroundPromptContext,
         preparedRunAdmission,
         sessionId: reviewSession.sessionId,

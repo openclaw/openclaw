@@ -608,7 +608,7 @@ const setupWizard: ChannelSetupWizard = {
     openclaw plugins install @myorg/openclaw-my-plugin
     ```
 
-    Bare package specs install from npm during the launch cutover, unless the name matches a bundled or official plugin id, in which case OpenClaw uses that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` for deterministic source selection — see [Manage plugins](/plugins/manage-plugins).
+    Bare package specs install from npm, unless the name matches a bundled or official plugin id, in which case OpenClaw uses that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` for deterministic source selection — see [Manage plugins](/plugins/manage-plugins).
 
   </Tab>
   <Tab title="ClawHub only">
@@ -644,3 +644,6 @@ Bundled package metadata is explicit, not inferred from built JavaScript at gate
 - [Building plugins](/plugins/building-plugins) — step-by-step getting started guide
 - [Plugin manifest](/plugins/manifest) — full manifest schema reference
 - [SDK entry points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry`
+- [Plugin SDK overview](/plugins/sdk-overview) — import map and registration API reference
+- [Plugin SDK subpaths](/plugins/sdk-subpaths) — the public entrypoint catalog
+- [Plugin architecture internals](/plugins/architecture-internals) — load pipeline and registry model

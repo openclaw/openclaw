@@ -74,6 +74,13 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                          |
 
+Ordinary pull requests that change only independent Control UI unit-test entries
+keep all three UI unit rows, performance checks, and existing type/lint gates,
+without repeating dedicated UI E2E jobs. Browser and Node test entries, shared
+fixtures/helpers, production or build inputs, and tests imported by another
+owner retain E2E coverage. Main pushes, manual validation, and frozen targets
+keep their existing selection.
+
 The `docker-seed-e2e` job selects the executable owners of changed E2E helpers
 and the published-upgrade regression gate through one scheduler invocation.
 The published lane runs `legacy-operator-state` against only `openclaw@latest`
@@ -180,6 +187,16 @@ CSS file fails the comparison. The existing largest-file, JavaScript, request-co
 and isolated-renderer ceilings still apply independently. Reports include exact
 bytes, base deltas, and remaining headroom, with an early warning when the largest
 CSS file has less than 1 KiB of headroom.
+
+JavaScript accounting separates ordinary chunks, deferred special-purpose
+chunks, startup assets, and the full bundle total. The 215 KiB ordinary-chunk
+ceiling excludes the isolated Mermaid renderer and configured locale catalogs.
+A locale catalog must match `assets/<locale>-<nonempty-suffix>.js`; each
+configured locale may produce one deferred chunk, with at most 20 locale chunks
+overall and a 300 KiB ceiling per chunk. Locale chunks remain forbidden in the
+startup asset set. Total JavaScript accounting includes ordinary, deferred, and
+startup assets for reporting while enforcement stays on the category-specific
+limits.
 
 CI builds the selected checkout and the exact preflight base with the same
 installed Node, Vite, and dependencies. The temporary base's CSS sidecars are

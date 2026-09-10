@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
-import { pathForPluginsHubTab, pathForRoute } from "../../../app-route-paths.ts";
+import { pathForRoute } from "../../../app-route-paths.ts";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import { icons } from "../../../components/icons.ts";
@@ -17,6 +17,7 @@ import {
   nextWebSearchToolOverrides,
   readOwnEntry,
   resolveToolOverrideState,
+  resolveWebSearchToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import type { ComposerLibraryProps } from "../composer-library-session.ts";
 import {
@@ -129,10 +130,21 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
   ).length;
   const hasSkillOverrides = Object.keys(props.toolOverrides?.skills ?? {}).length > 0;
   const enabledSkillCount = props.skills?.filter((skill) => skill.enabled).length ?? 0;
-  const webSearchEnabled = resolveToolOverrideState(
+  const webSearchEnabled = resolveWebSearchToolOverrideState(
     props.webSearchBaseEnabled,
     props.toolOverrides?.webSearch,
   );
+  const staleWebSearchEnable =
+    !props.webSearchBaseEnabled && props.toolOverrides?.webSearch === true;
+  const webSearchDisabled =
+    props.mutationBlockedReason !== null || (!props.webSearchBaseEnabled && !staleWebSearchEnable);
+  const webSearchTitle =
+    props.mutationBlockedReason ??
+    (staleWebSearchEnable
+      ? t("chat.composer.menu.webSearchClearStaleEnable")
+      : !props.webSearchBaseEnabled
+        ? t("chat.composer.menu.webSearchGloballyDisabled")
+        : "");
   const attachments = renderChatAttachmentMenuOptions(icons.paperclip);
   const rootToggles = props.rootToggles ?? [];
   if (!props.showCapabilities && rootToggles.length === 0) {
@@ -173,7 +185,7 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
               </span>
             </wa-dropdown-item>
             <wa-dropdown-item class="agent-chat__capability-menu-item" value="open-connectors">
-              <span slot="icon" aria-hidden="true">${icons.puzzle}</span>
+              <span slot="icon" aria-hidden="true">${icons.plug}</span>
               <span>${t("chat.composer.menu.connectors")}</span>
               <span slot="details" class="agent-chat__capability-menu-details">
                 <span class="agent-chat__capability-menu-badge">${connectorCount}</span>
@@ -186,14 +198,14 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
               value: "toggle-web-search",
               label: t("chat.composer.menu.webSearch"),
               checked: webSearchEnabled,
-              disabled: props.mutationBlockedReason !== null,
-              title: props.mutationBlockedReason,
+              disabled: webSearchDisabled,
+              title: webSearchTitle,
               icon: icons.globe,
               checkbox: true,
             })}
             ${menuDivider()}
             <wa-dropdown-item class="agent-chat__capability-menu-item" value="manage-plugins">
-              <span slot="icon" aria-hidden="true">${icons.puzzle}</span>
+              <span slot="icon" aria-hidden="true">${icons.plug}</span>
               ${internalLink(
                 pathForRoute("plugins", props.basePath),
                 t("chat.composer.menu.managePlugins"),
@@ -329,18 +341,6 @@ function renderConnectorView(props: ChatComposerPlusMenuProps) {
           </wa-dropdown-item>`
         : nothing
     }
-    <wa-dropdown-item
-      class="agent-chat__capability-menu-item"
-      value="browse-connectors"
-      ?disabled=${adminDisabled}
-      title=${adminDisabled ? (props.adminBlockedReason ?? "") : ""}
-    >
-      <span slot="icon" aria-hidden="true">${icons.search}</span>
-      ${internalLink(
-        pathForPluginsHubTab("discover", props.basePath),
-        t("chat.composer.menu.browseConnectors"),
-      )}
-    </wa-dropdown-item>
   `;
 }
 
@@ -490,7 +490,15 @@ function handleMenuSelection(
     if (props.mutationBlockedReason) {
       return;
     }
-    const enabled = resolveToolOverrideState(
+    if (!props.webSearchBaseEnabled) {
+      if (props.toolOverrides?.webSearch === true) {
+        props.onPatchToolOverrides(
+          nextWebSearchToolOverrides(props.toolOverrides, false, props.webSearchBaseEnabled),
+        );
+      }
+      return;
+    }
+    const enabled = resolveWebSearchToolOverrideState(
       props.webSearchBaseEnabled,
       props.toolOverrides?.webSearch,
     );
@@ -580,10 +588,6 @@ function handleMenuSelection(
     props.onNavigate("skills");
   } else if (value === "manage-plugins") {
     props.onNavigate("plugins");
-  } else if (value === "browse-connectors") {
-    props.onNavigate("plugins", {
-      pathname: pathForPluginsHubTab("discover", props.basePath),
-    });
   }
 }
 

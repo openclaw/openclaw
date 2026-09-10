@@ -762,14 +762,29 @@ describe("collectPackedTestCargoErrors", () => {
     ]);
   });
 
-  it("allows normal runtime files", () => {
+  it("allows normal runtime files and shipped Markdown reference guides", () => {
     expect(
       collectPackedTestCargoErrors([
         "dist/index.js",
         "dist/extensions/whatsapp/node_modules/pino/lib/proto.js",
         "dist/extensions/webhooks/node_modules/zod/v4/core/api.js",
+        "docs/reference/test/local.md",
+        "docs/reference/tests/guide.md",
+        String.raw`docs\reference\test\docker.md`,
       ]),
     ).toStrictEqual([]);
+  });
+
+  it("still rejects test code in docs and Markdown fixtures outside root docs", () => {
+    const paths = [
+      "dist/node_modules/example/docs/test/fixture.md",
+      "docs/reference/example.test.ts",
+      "docs/reference/test/example.js",
+      "test/fixtures/docs/guide.md",
+    ];
+    expect(collectPackedTestCargoErrors(paths)).toEqual(
+      paths.map((path) => `npm package must not include test cargo "${path}".`),
+    );
   });
 
   it("allows legitimate package roots named test under node_modules", () => {

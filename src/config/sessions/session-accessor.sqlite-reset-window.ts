@@ -18,6 +18,7 @@ import {
 import { projectModelContextNavigationSql } from "./session-model-context-projection.js";
 
 type VisibleMessagePositions = {
+  boundaryActivePosition?: number;
   kept: number[];
   postStart: number;
   total: number;
@@ -336,6 +337,7 @@ export function resolveVisibleMessagePositions(
     return { kept: [], postStart: 0, total: projection.state.activeMessageCount };
   }
   return {
+    boundaryActivePosition: window.boundaryActivePosition,
     kept: window.keptMessagePositions,
     postStart: window.postBoundaryMessagePosition,
     total:

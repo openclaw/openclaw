@@ -39,6 +39,7 @@ import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayEvent
@@ -53,13 +54,16 @@ import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.gateway.GatewayTlsProbeRunner
 import ai.openclaw.app.gateway.GatewayTlsTrustDecision
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
 import ai.openclaw.app.gateway.decideGatewayTlsTrust
 import ai.openclaw.app.gateway.formatGatewayAuthority
+import ai.openclaw.app.gateway.gatewayNetworkConnectError
 import ai.openclaw.app.gateway.isGatewayTlsSystemTrustCandidate
+import ai.openclaw.app.gateway.isTailscaleGatewayHost
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.gateway.parseChatSendAck
@@ -672,7 +676,9 @@ data class GatewayConnectionProblem(
   val clientMaxProtocol: Int? = null,
   val expectedProtocol: Int? = null,
   val minimumProbeProtocol: Int? = null,
+  val isTailscaleRoute: Boolean = false,
 ) {
+  val isNetworkFailure: Boolean = code == "NETWORK_UNREACHABLE"
   val isPairingRequired: Boolean = code == "PAIRING_REQUIRED"
   val canAutoRetry: Boolean =
     isPairingRequired &&
@@ -723,6 +729,18 @@ internal fun gatewayConnectionStatusForDisplay(statusText: String): String {
       nativeString("Reconnecting…")
     }
 
+    status == "Gateway connection timed out. Check your network and that the Gateway is running, then retry." -> {
+      nativeString("Gateway connection timed out. Check your network and that the Gateway is running, then retry.")
+    }
+
+    status == "Could not reach the Gateway. Check your network and that the Gateway is running, then retry." -> {
+      nativeString("Could not reach the Gateway. Check your network and that the Gateway is running, then retry.")
+    }
+
+    status == "The previous network request is still stopping. Check your connection, then retry." -> {
+      nativeString("The previous network request is still stopping. Check your connection, then retry.")
+    }
+
     status == "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected." -> {
       nativeString("Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.")
     }
@@ -748,12 +766,15 @@ internal fun gatewayConnectionStatusForDisplay(statusText: String): String {
   }
 }
 
-private fun gatewayProblemAfterDisconnect(
+internal fun gatewayProblemAfterDisconnect(
   problem: GatewayConnectionProblem?,
   statusText: String,
 ): GatewayConnectionProblem? =
-  // Automatic bootstrap pairing retries need their approval guidance until success or a different failure.
-  problem?.takeIf { statusText == "Reconnecting…" && it.canAutoRetry }
+  // Background retries must not erase the recovery action while the route remains unreachable.
+  problem?.takeIf {
+    (statusText == "Reconnecting…" && it.canAutoRetry) ||
+      (it.isNetworkFailure && (statusText == "Connecting…" || statusText == "Reconnecting…"))
+  }
 
 internal fun gatewayConnectionDisplay(
   operatorConnected: Boolean,
@@ -877,6 +898,18 @@ private fun openAndroidChatStores(
     externalTranscriptCache = transcriptCache,
   )
 
+internal sealed interface GatewayTargetSelection {
+  class Selected(
+    val isCurrent: () -> Boolean,
+    val awaitReady: suspend () -> Boolean,
+    val selectSession: (sessionKey: String, agentId: String, callerIsCurrent: () -> Boolean) -> Boolean,
+  ) : GatewayTargetSelection
+
+  data object Unavailable : GatewayTargetSelection
+
+  data object Retired : GatewayTargetSelection
+}
+
 class NodeRuntime private constructor(
   context: Context,
   val prefs: SecurePrefs,
@@ -890,13 +923,26 @@ class NodeRuntime private constructor(
   private val chatCommandOutbox = chatStores.commandOutbox
   private val clientDatabases = chatStores.clientDatabases
   private val externalTranscriptCache = chatStores.externalTranscriptCache
-  private val screenshotRequester by lazy { AndroidScreenshotFixture.createRequester() }
+
+  // Reentry retains this runtime, so requester data and both capability paths must share its original mode.
+  private val screenshotBranchesEnabled = mode == NodeRuntimeMode.ScreenshotFixture && AndroidScreenshotFixture.branchesEnabled
+  private val screenshotRequester by lazy { AndroidScreenshotFixture.createRequester(branchesEnabled = screenshotBranchesEnabled) }
   private val gatewayAuthLifecycleLock = Any()
   private var gatewayAuthResetInProgress = false
   private var gatewayConnectOperationsInFlight = 0
   private var gatewayConnectOperationsDrained = CompletableDeferred(Unit)
 
-  @Volatile private var connectingEndpointStableId: String? = null
+  @Volatile private var connectingEndpoint: GatewayEndpoint? = null
+
+  private class GatewayConnectAttempt(
+    val id: Long,
+    val endpoint: GatewayEndpoint,
+  ) {
+    val operatorReady = MutableStateFlow<GatewaySession.RequestLease?>(null)
+    var operation: GatewayConnectionOperation? = null
+  }
+
+  private val acceptedConnectAttempt = MutableStateFlow<GatewayConnectAttempt?>(null)
   private val gatewayDataScopeLock = Any()
   private val gatewaySwitchMutex = Mutex()
   private val inlineWidgetRefreshMutex = Mutex()
@@ -1075,6 +1121,7 @@ class NodeRuntime private constructor(
 
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  private val tlsProbeRunner = GatewayTlsProbeRunner(scope, tlsFingerprintProbe)
   private val deviceAuthStore = DeviceAuthStore(prefs)
   val camera = CameraCaptureManager(appContext) { prefs.preferredCameraFacing.value }
   val location = LocationCaptureManager(appContext)
@@ -1124,6 +1171,7 @@ class NodeRuntime private constructor(
   // of the UI request or lifecycle sequence that originally admitted it.
   private class GatewayConnectionContext(
     private val initialAuth: GatewayConnectAuth,
+    val attempt: GatewayConnectAttempt?,
     // A started session owns retries and auth pauses before readiness is published.
     // Only bootstrap without operator auth may admit this role after the node connects.
     var operatorConnectAdmitted: Boolean = false,
@@ -1556,6 +1604,22 @@ class NodeRuntime private constructor(
   private var nodeStatusText: String = "Offline"
   private var operatorConnectionProblem: GatewayConnectionProblem? = null
   private var nodeConnectionProblem: GatewayConnectionProblem? = null
+  private var gatewayRetirementDisplay: GatewayConnectionDisplay? = null
+  private var gatewayStandaloneDisplay: GatewayConnectionDisplay? = null
+  private var gatewayConnectionOperation: GatewayConnectionOperation? = null
+  private var tlsProbeJob: Job? = null
+
+  internal class GatewayConnectionOperation(
+    private val isCurrent: () -> Boolean,
+  ) : () -> Boolean {
+    var deadline: Job? = null
+    var handedOff = false
+    var waitingForAdmission = true
+    var deadlineExpired = false
+
+    override fun invoke(): Boolean = isCurrent()
+  }
+
   private val gatewayStatusLock = Any()
 
   private val operatorSession: GatewaySession =
@@ -1614,8 +1678,8 @@ class NodeRuntime private constructor(
         val wearFailure = wearConnectionFailure(operatorConnectionProblem?.code, message)
         updateStatus {
           operatorConnected = false
-          operatorStatusText = message
           operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
+          operatorStatusText = operatorConnectionProblem?.takeIf { it.isNetworkFailure }?.message ?: message
         }
         systemAgentChatController.refresh(startIfNeeded = false)
         micCapture.onGatewayConnectionChanged(false)
@@ -1982,13 +2046,14 @@ class NodeRuntime private constructor(
         nodeHostStatsJob = null
         updateStatus {
           _nodeConnected.value = false
-          nodeStatusText = message
           nodeConnectionProblem = gatewayProblemAfterDisconnect(nodeConnectionProblem, message)
+          nodeStatusText = nodeConnectionProblem?.takeIf { it.isNetworkFailure }?.message ?: message
         }
       },
       onConnectFailure = { error, pauseReconnect ->
         updateStatus {
           nodeConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+          nodeStatusText = nodeConnectionProblem?.message ?: error.message
         }
         if (nodeConnectFailureNeedsApprovalRefresh(error)) refreshNodesDevices()
       },
@@ -2120,7 +2185,12 @@ class NodeRuntime private constructor(
           requestGateway = screenshotRequester,
           commandOutbox = chatCommandOutbox,
           cacheScope = { ChatCacheScope(AndroidScreenshotFixture.gatewayId, connectionGeneration = 0L) },
-          gatewayAdvertisesMethod = { method -> method != "sessions.branches.list" },
+          gatewayAdvertisesMethod = { method ->
+            when (method) {
+              "sessions.branches.list", "sessions.branches.switch" -> screenshotBranchesEnabled
+              else -> true
+            }
+          },
           gatewayAdvertisesCapability = { _ -> true },
         )
       }
@@ -2462,7 +2532,7 @@ class NodeRuntime private constructor(
   private fun mainSessionBinding(sessionKey: String): MainSessionBinding =
     MainSessionBinding(
       key = sessionKey,
-      label = buildAndroidAppSessionLabel(prefs.displayName.value, identityStore.loadOrCreate().deviceId),
+      autoLabel = buildAndroidAppSessionLabel(prefs.displayName.value, identityStore.loadOrCreate().deviceId),
     )
 
   private fun updateMainSessionKey(sessionKey: String): Boolean =
@@ -2480,12 +2550,16 @@ class NodeRuntime private constructor(
       true
     }
 
-  private fun updateStatus(update: () -> Unit = {}) {
+  private fun updateStatus(
+    preserveStandalone: Boolean = false,
+    update: () -> Unit = {},
+  ) {
     synchronized(gatewayStatusLock) {
       update()
+      if (!preserveStandalone) gatewayStandaloneDisplay = null
       // Select and publish text plus diagnostics atomically; operator and node callbacks run concurrently.
       val display =
-        gatewayConnectionDisplay(
+        gatewayRetirementDisplay ?: gatewayStandaloneDisplay ?: gatewayConnectionDisplay(
           operatorConnected = operatorConnected,
           nodeConnected = _nodeConnected.value,
           operatorStatusText = operatorStatusText,
@@ -2500,9 +2574,19 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun setStandaloneGatewayStatus(statusText: String) {
+  private fun setStandaloneGatewayStatus(
+    statusText: String,
+    problem: GatewayConnectionProblem? = null,
+    operation: GatewayConnectionOperation? = null,
+  ) {
     synchronized(gatewayStatusLock) {
-      val display = GatewayConnectionDisplay(operatorConnected, statusText, null)
+      // Accepted TLS can finish behind a newer UI request; retain its result below that request's progress.
+      if (operation == null || gatewayConnectionOperation == null || gatewayConnectionOperation === operation) {
+        gatewayRetirementDisplay = null
+      }
+      val standalone = GatewayConnectionDisplay(operatorConnected, statusText, problem)
+      gatewayStandaloneDisplay = standalone
+      val display = gatewayRetirementDisplay ?: standalone
       _gatewayConnectionDisplay.value = display
       _isConnected.value = display.isConnected
       _statusText.value = display.statusText
@@ -2513,6 +2597,7 @@ class NodeRuntime private constructor(
   private fun gatewayConnectionProblem(
     error: GatewaySession.ErrorShape,
     pauseReconnect: Boolean,
+    endpoint: GatewayEndpoint? = connectedEndpoint,
   ): GatewayConnectionProblem {
     val details = error.details
     return GatewayConnectionProblem(
@@ -2527,6 +2612,7 @@ class NodeRuntime private constructor(
       clientMaxProtocol = details?.clientMaxProtocol,
       expectedProtocol = details?.expectedProtocol,
       minimumProbeProtocol = details?.minimumProbeProtocol,
+      isTailscaleRoute = endpoint?.let { isTailscaleGatewayHost(it.host) } == true,
     )
   }
 
@@ -2969,11 +3055,14 @@ class NodeRuntime private constructor(
   suspend fun resetGatewaySetupAuth(stableId: String): Boolean =
     advanceGatewayLifecycleIntent().let { intent ->
       gatewaySwitchMutex.withLock {
-        if (intent != gatewayLifecycleIntentSeq.get()) false else resetGatewaySetupAuthLocked(stableId)
+        if (intent != gatewayLifecycleIntentSeq.get()) false else resetGatewaySetupAuthLocked(stableId, gatewayLifecycleIntent(intent))
       }
     }
 
-  private suspend fun resetGatewaySetupAuthLocked(stableId: String): Boolean {
+  private suspend fun resetGatewaySetupAuthLocked(
+    stableId: String,
+    isCurrent: () -> Boolean,
+  ): Boolean {
     val connectOperationsDrained =
       synchronized(gatewayAuthLifecycleLock) {
         if (gatewayAuthResetInProgress) {
@@ -2990,13 +3079,8 @@ class NodeRuntime private constructor(
       if (connectedEndpoint?.stableId == stableId) {
         disconnectAndJoin()
       }
-      if (connectingEndpointStableId == stableId) {
-        connectAttemptSeq.incrementAndGet()
-        connectingEndpointStableId = null
-        _pendingGatewayTrust.value = null
-        chat.onGatewayScopeChanging(retireRunState = true)
-      }
       drainIdleGatewaySessionTails()
+      if (!isCurrent()) return false
       // A deliberate disconnect retains reconnect ownership. Authentication replacement does not.
       chat.onGatewayScopeChanging(retireRunState = true)
       // Replacing authentication retires the old identity even when the endpoint is unchanged.
@@ -3012,12 +3096,15 @@ class NodeRuntime private constructor(
           setStandaloneGatewayStatus("Failed: couldn't clear offline chat data. Retry sign out.")
         }.isSuccess
       if (!cacheCleared) return false
-      prefs.clearGatewayCredentials(stableId)
-      clearAppearancePreferenceOwner(stableId)
-      val deviceId = identityStore.loadOrCreate().deviceId
-      deviceAuthStore.clearToken(stableId, deviceId, "node")
-      deviceAuthStore.clearToken(stableId, deviceId, "operator")
-      true
+      synchronized(gatewayLifecycleIntentLock) {
+        if (!isCurrent()) return false
+        prefs.clearGatewayCredentials(stableId)
+        clearAppearancePreferenceOwner(stableId)
+        val deviceId = identityStore.loadOrCreate().deviceId
+        deviceAuthStore.clearToken(stableId, deviceId, "node")
+        deviceAuthStore.clearToken(stableId, deviceId, "operator")
+        true
+      }
     } finally {
       synchronized(gatewayAuthLifecycleLock) { gatewayAuthResetInProgress = false }
       requestBackgroundGatewayReconciliation()
@@ -3108,7 +3195,15 @@ class NodeRuntime private constructor(
     _serverName.value = "OpenClaw Gateway"
     _remoteAddress.value = "Mac Studio on local network"
     _gatewayVersion.value = BuildConfig.VERSION_NAME
-    replaceGatewayMethods(setOf(GatewayMethod.DesktopObserve.rawValue))
+    replaceGatewayMethods(
+      buildSet {
+        add(GatewayMethod.DesktopObserve.rawValue)
+        if (screenshotBranchesEnabled) {
+          add("sessions.branches.list")
+          add("sessions.branches.switch")
+        }
+      },
+    )
     replaceGatewayCapabilities(setOf(SESSION_UNREAD_ACK_CAPABILITY))
     _gatewayControlPage.value =
       GatewayControlPage(
@@ -3229,7 +3324,7 @@ class NodeRuntime private constructor(
         mobileUiHandler.isConnected.collect { connected ->
           if (connected == lastMobileUiConnected) return@collect
           lastMobileUiConnected = connected
-          refreshNodeSurfaceAfterSettingsChange()
+          refreshAcceptedGatewayConnection()
         }
       }
     }
@@ -3492,28 +3587,73 @@ class NodeRuntime private constructor(
     return resolveRegistryEndpoint(entry)
   }
 
-  suspend fun switchToGateway(
+  internal suspend fun switchToGateway(
     stableId: String,
     isCurrent: () -> Boolean = { true },
-  ): Boolean {
-    val entry =
-      prefs.gatewayRegistry.entries.value
-        .firstOrNull { it.stableId == stableId } ?: return false
-    val endpoint =
-      when (entry.kind) {
-        GatewayRegistryEntryKind.MANUAL -> {
-          manualGatewayEndpoint(entry) ?: return false
+  ): GatewayTargetSelection {
+    val intent =
+      synchronized(gatewayLifecycleIntentLock) {
+        if (!isCurrent()) return GatewayTargetSelection.Retired
+        // Unavailable notifications must not retire another caller's valid switch.
+        if (resolveGatewaySwitchEndpoint(stableId) == null) return GatewayTargetSelection.Unavailable
+        // Selecting an unchanged attempt must not retire its pending credential handoff.
+        if (isCurrentConnectAttempt(connectAttemptSeq.get()) &&
+          (connectedEndpoint?.stableId == stableId || connectingEndpoint?.stableId == stableId)
+        ) {
+          return selectedGatewayTarget()
         }
-
-        GatewayRegistryEntryKind.DISCOVERED -> {
-          gateways.value.firstOrNull { it.stableId == stableId }
-            ?: run {
-              setStandaloneGatewayStatus("Gateway not currently discoverable")
-              return false
-            }
+        beginGatewayReplacementOperation(isCurrent) ?: return GatewayTargetSelection.Retired
+      }
+    try {
+      return gatewaySwitchMutex.withLock {
+        val endpoint =
+          synchronized(gatewayLifecycleIntentLock) {
+            if (!intent()) return@withLock GatewayTargetSelection.Retired
+            // Registry/discovery can change while another switch owns the mutex.
+            resolveGatewaySwitchEndpoint(stableId) ?: return@withLock GatewayTargetSelection.Unavailable
+          }
+        if (!connectGatewayLocked(endpoint, explicitAuth = null, intent = intent)) return@withLock GatewayTargetSelection.Retired
+        synchronized(gatewayLifecycleIntentLock) {
+          if (intent()) selectedGatewayTarget() else GatewayTargetSelection.Retired
         }
       }
-    return connectSwitchingGateway(endpoint, isCurrent = isCurrent)
+    } finally {
+      finishGatewayConnectionOperation(intent, unlessHandedOff = true)
+    }
+  }
+
+  private fun resolveGatewaySwitchEndpoint(stableId: String): GatewayEndpoint? {
+    val entry =
+      prefs.gatewayRegistry.entries.value
+        .firstOrNull { it.stableId == stableId } ?: return null
+    // An accepted target survives a disappearing discovery advertisement.
+    return connectedEndpoint?.takeIf { it.stableId == stableId }
+      ?: connectingEndpoint?.takeIf { it.stableId == stableId }
+      ?: when (entry.kind) {
+        GatewayRegistryEntryKind.MANUAL -> manualGatewayEndpoint(entry)
+        GatewayRegistryEntryKind.DISCOVERED -> gateways.value.firstOrNull { it.stableId == stableId }
+      }
+  }
+
+  private fun selectedGatewayTarget(): GatewayTargetSelection {
+    val attempt = acceptedConnectAttempt.value ?: return GatewayTargetSelection.Retired
+    return GatewayTargetSelection.Selected(
+      isCurrent = { isCurrentConnectAttempt(attempt.id) },
+      awaitReady = { awaitConnectedGateway(attempt) },
+      selectSession = { sessionKey, agentId, callerIsCurrent ->
+        // Gateway replacement and chat selection cannot interleave between owner validation and commit.
+        synchronized(gatewayLifecycleIntentLock) {
+          synchronized(gatewayDataScopeLock) {
+            if (!callerIsCurrent() || !isCurrentConnectAttempt(attempt.id)) {
+              false
+            } else {
+              applyChatSessionSelection(sessionKey, agentId)
+              true
+            }
+          }
+        }
+      },
+    )
   }
 
   fun setGatewayConnectionEnabled(
@@ -3531,46 +3671,65 @@ class NodeRuntime private constructor(
     explicitAuth: GatewayConnectAuth? = null,
     isCurrent: () -> Boolean = { true },
   ): Boolean {
-    val intent = admitGatewayConnection(isCurrent) ?: return false
+    val intent = beginGatewayReplacementOperation(isCurrent) ?: return false
     return connectGateway(endpoint, explicitAuth, intent)
+  }
+
+  internal suspend fun configureGatewayAndConnect(
+    endpoint: GatewayEndpoint,
+    explicitAuth: GatewayConnectAuth?,
+    operation: GatewayConnectionOperation,
+    replaceAuth: Boolean,
+    clearComposer: suspend () -> Unit,
+    persistConfig: () -> Unit,
+  ): Boolean {
+    val intent = beginGatewayReplacementOperation(operation) ?: return false
+    return connectGateway(endpoint, explicitAuth, intent) {
+      if (replaceAuth) {
+        if (!resetGatewaySetupAuthLocked(endpoint.stableId, operation)) return@connectGateway false
+        clearComposer()
+      }
+      synchronized(gatewayLifecycleIntentLock) {
+        if (!operation()) return@synchronized false
+        persistConfig()
+        true
+      }
+    }
   }
 
   private suspend fun connectGateway(
     endpoint: GatewayEndpoint,
     explicitAuth: GatewayConnectAuth?,
-    intent: () -> Boolean,
-  ): Boolean =
-    gatewaySwitchMutex.withLock {
-      try {
-        if (!intent()) return@withLock false
-        val currentStableId =
-          connectedEndpoint?.stableId
-            ?: connectingEndpointStableId
-            ?: prefs.gatewayRegistry.activeStableId.value
-        if (currentStableId != null && currentStableId != endpoint.stableId) {
-          disconnectAndJoin()
-        } else {
-          drainIdleGatewaySessionTails()
+    intent: GatewayConnectionOperation,
+    prepare: suspend () -> Boolean = { true },
+  ): Boolean = gatewaySwitchMutex.withLock { connectGatewayLocked(endpoint, explicitAuth, intent, prepare) }
+
+  private suspend fun connectGatewayLocked(
+    endpoint: GatewayEndpoint,
+    explicitAuth: GatewayConnectAuth?,
+    intent: GatewayConnectionOperation,
+    prepare: suspend () -> Boolean = { true },
+  ): Boolean {
+    try {
+      if (!drainGatewayConnectionsForConnect(endpoint, intent)) return false
+      if (!prepare()) return false
+      synchronized(gatewayLifecycleIntentLock) {
+        if (!intent()) return false
+        if (prefs.gatewayRegistry.entries.value
+            .any { it.stableId == endpoint.stableId }
+        ) {
+          prefs.gatewayRegistry.setActive(endpoint.stableId)
         }
-        // Focus can promote a secondary operator to the primary session for the same gateway.
-        // Its accepted credentials must finish before either primary role reads them.
-        disconnectSecondaryGatewayConnection(endpoint.stableId)?.disconnectAndJoin()
-        synchronized(gatewayLifecycleIntentLock) {
-          if (!intent()) return@withLock false
-          if (prefs.gatewayRegistry.entries.value
-              .any { it.stableId == endpoint.stableId }
-          ) {
-            prefs.gatewayRegistry.setActive(endpoint.stableId)
-          }
-          beginConnect(endpoint, resolveGatewayConnectAuth(endpoint, explicitAuth), intent)
-        }
-        chat.restoreSelectedGatewayOfflineState()
-        intent()
-      } finally {
-        // A superseded promotion may already have retired an enabled secondary.
-        requestBackgroundGatewayReconciliation()
+        beginConnect(endpoint, resolveGatewayConnectAuth(endpoint, explicitAuth), intent)
       }
+      chat.restoreSelectedGatewayOfflineState()
+      return intent()
+    } finally {
+      finishGatewayConnectionOperation(intent, unlessHandedOff = true)
+      // A superseded promotion may already have retired an enabled secondary.
+      requestBackgroundGatewayReconciliation()
     }
+  }
 
   private fun autoConnectIfNeeded() {
     if (preferredGatewayReconnectSuppressed) return
@@ -3585,19 +3744,30 @@ class NodeRuntime private constructor(
     // down permanently instead of overriding the user's decision with a stale auto-connect.
     if (!gatewayLifecycleIntentSeq.compareAndSet(0L, 1L)) return
     requestBackgroundGatewayReconciliation()
-    launchConnect(endpoint, explicitAuth = null, intent = gatewayLifecycleIntent(1L))
+    val operation =
+      synchronized(gatewayLifecycleIntentLock) {
+        if (gatewayLifecycleIntentSeq.get() != 1L) return
+        createGatewayConnectionOperation(gatewayLifecycleIntent(1L))
+      }
+    launchConnect(endpoint, explicitAuth = null, intent = operation)
   }
 
-  private fun reconnectPreferredGatewayOnForeground() {
-    if (preferredGatewayReconnectSuppressed) return
-    if (gatewayConnectionDisplay.value.isConnected) return
-    if (_pendingGatewayTrust.value != null) return
-    if (connectedEndpoint != null) {
-      refreshGatewayConnection()
-      return
+  private fun reconnectPreferredGatewayOnForeground() =
+    synchronized(gatewayLifecycleIntentLock) {
+      if (preferredGatewayReconnectSuppressed || gatewayConnectionDisplay.value.isConnected || connectingEndpoint != null) return@synchronized
+      if (connectedEndpoint != null) {
+        val connection = activeGatewayConnection
+        val attempt = acceptedConnectAttempt.value
+        if (connection != null && attempt != null && connection.attempt === attempt) {
+          // Foreground recovery refreshes auth/transport without replacing the user's selection.
+          refreshAcceptedGatewayConnection()
+        } else {
+          refreshGatewayConnection()
+        }
+      } else {
+        resolvePreferredGatewayEndpoint()?.let { connect(it) }
+      }
     }
-    resolvePreferredGatewayEndpoint()?.let { connect(it) }
-  }
 
   /**
    * Reconnect a live node only when Android authority changed since its last connect.
@@ -3605,7 +3775,7 @@ class NodeRuntime private constructor(
   fun refreshNodePermissionSurface() {
     val permissions = connectionManager.buildPermissions()
     if (permissions == lastNodePermissions) return
-    refreshNodeSurfaceAfterSettingsChange()
+    refreshAcceptedGatewayConnection()
   }
 
   fun setDisplayName(value: String) {
@@ -3615,13 +3785,13 @@ class NodeRuntime private constructor(
   fun setCameraEnabled(value: Boolean) {
     if (prefs.cameraEnabled.value == value) return
     prefs.setCameraEnabled(value)
-    refreshNodeSurfaceAfterSettingsChange()
+    refreshAcceptedGatewayConnection()
   }
 
   fun setLocationMode(mode: LocationMode) {
     if (prefs.locationMode.value == mode) return
     prefs.setLocationMode(mode)
-    refreshNodeSurfaceAfterSettingsChange()
+    refreshAcceptedGatewayConnection()
   }
 
   fun setLocationPreciseEnabled(value: Boolean) {
@@ -3651,13 +3821,13 @@ class NodeRuntime private constructor(
   fun grantInstalledAppsDisclosureConsent() {
     if (prefs.installedAppsSharingEnabled.value) return
     prefs.grantInstalledAppsDisclosureConsent()
-    refreshNodeSurfaceAfterSettingsChange()
+    refreshAcceptedGatewayConnection()
   }
 
   fun revokeInstalledAppsDisclosureConsent() {
     if (!prefs.installedAppsSharingEnabled.value) return
     prefs.revokeInstalledAppsDisclosureConsent()
-    refreshNodeSurfaceAfterSettingsChange()
+    refreshAcceptedGatewayConnection()
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
@@ -4170,7 +4340,7 @@ class NodeRuntime private constructor(
     val enabled = isVoiceWakeCapabilityEnabled()
     if (enabled == lastVoiceWakeCapabilityEnabled) return
     lastVoiceWakeCapabilityEnabled = enabled
-    refreshNodeSurfaceAfterSettingsChange()
+    refreshAcceptedGatewayConnection()
   }
 
   suspend fun runVoiceE2e(
@@ -4522,50 +4692,146 @@ class NodeRuntime private constructor(
     }
 
   fun refreshGatewayConnection(isCurrent: () -> Boolean = { true }) {
-    val intent = admitGatewayConnection(isCurrent) ?: return
+    val intent = beginGatewayReplacementOperation(isCurrent) ?: return
+    intent.handedOff = true
     launchGatewayLifecycle(intent) {
       val endpoint = connectedEndpoint
       if (endpoint == null) {
         val preferred = resolvePreferredGatewayEndpoint()
         if (preferred == null) {
+          finishGatewayConnectionOperation(intent)
           setStandaloneGatewayStatus("Failed: no saved gateway endpoint")
         } else {
           launchConnect(preferred, explicitAuth = null, intent = intent)
         }
         return@launchGatewayLifecycle
       }
+      finishGatewayConnectionOperation(intent)
       updateStatus {
         operatorStatusText = "Connecting…"
         operatorConnectionProblem = null
       }
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
+      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint)) {
+        beginConnectAttempt(endpoint)
+      }
     }
   }
 
-  private fun refreshNodeSurfaceAfterSettingsChange() {
+  private fun refreshAcceptedGatewayConnection() {
     val connection = activeGatewayConnection ?: return
     val endpoint = connectedEndpoint ?: return
-    launchGatewayLifecycle({ activeGatewayConnection === connection && connectedEndpoint?.stableId == endpoint.stableId }) {
+    launchGatewayLifecycle({
+      val accepted = acceptedConnectAttempt.value
+      // A settled replacement may leave a healthy physical connection, but pending replacement trust still owns admission.
+      activeGatewayConnection === connection &&
+        (if (accepted == null) gatewayConnectionOperation == null else accepted === connection.attempt) &&
+        connectedEndpoint?.stableId == endpoint.stableId
+    }) {
       if (preferredGatewayReconnectSuppressed) return@launchGatewayLifecycle
       connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
     }
   }
 
-  private fun admitGatewayConnection(isCurrent: () -> Boolean): (() -> Boolean)? =
+  internal fun beginGatewayConnectionOperation(isCurrent: () -> Boolean): GatewayConnectionOperation? =
     synchronized(gatewayLifecycleIntentLock) {
       if (!isCurrent()) return@synchronized null
-      preferredGatewayReconnectSuppressed = false
-      secondaryGatewayConnectionsEnabled = true
-      gatewayLifecycleIntent(advanceGatewayLifecycleIntent(), isCurrent)
+      // The ViewModel starts this owner before its config queue. Reuse its deadline;
+      // a new UI request supersedes queued work, not an already accepted target.
+      if (isCurrent is GatewayConnectionOperation) {
+        return@synchronized isCurrent.takeIf { gatewayConnectionOperation === it }
+      }
+      val previousFailure = gatewayConnectionDisplay.value.problem?.isNetworkFailure == true
+      createGatewayConnectionOperation(gatewayLifecycleIntent(advanceGatewayRequestIntent(), isCurrent), previousFailure)
     }
 
-  // Queued callers can exit before cleanup, so generation changes must request reconciliation.
-  private fun advanceGatewayLifecycleIntent(): Long =
+  private fun beginGatewayReplacementOperation(isCurrent: () -> Boolean): GatewayConnectionOperation? =
     synchronized(gatewayLifecycleIntentLock) {
+      val operation = beginGatewayConnectionOperation(isCurrent) ?: return@synchronized null
+      // Endpoint validation (or an explicit connect/refresh) commits replacement intent before
+      // queued cleanup. Generic UI operation birth and same/unavailable selections do not.
+      clearAcceptedConnectAttempt()
       activeGatewayConnection?.bootstrapHandoff?.invalidate()
-      gatewayLifecycleIntentSeq.incrementAndGet().also {
-        requestBackgroundGatewayReconciliation()
+      operation
+    }
+
+  private fun createGatewayConnectionOperation(
+    isCurrent: () -> Boolean,
+    waitingForCleanup: Boolean = false,
+  ): GatewayConnectionOperation {
+    val operation = GatewayConnectionOperation(isCurrent)
+    gatewayConnectionOperation = operation
+    publishGatewayAdmission(operation, waitingForCleanup)
+    operation.deadline =
+      scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        delay(GATEWAY_CONNECT_TIMEOUT_MS)
+        synchronized(gatewayLifecycleIntentLock) {
+          operation.deadlineExpired = true
+          if (operation.waitingForAdmission) publishGatewayAdmission(operation, waitingForCleanup = true)
+        }
       }
+    return operation
+  }
+
+  private fun publishGatewayAdmission(
+    operation: GatewayConnectionOperation,
+    waitingForCleanup: Boolean,
+  ) {
+    if (gatewayConnectionOperation !== operation ||
+      (!operation() && acceptedConnectAttempt.value?.operation !== operation)
+    ) {
+      return
+    }
+    val problem =
+      if (waitingForCleanup) {
+        gatewayConnectionProblem(gatewayNetworkConnectError(waitingForCleanup = true), false, null)
+      } else {
+        null
+      }
+    updateStatus(preserveStandalone = true) {
+      val statusText = problem?.message ?: nativeText("Connecting…").source
+      gatewayRetirementDisplay = GatewayConnectionDisplay(false, statusText, problem)
+    }
+  }
+
+  internal fun finishGatewayConnectionOperation(
+    operation: GatewayConnectionOperation,
+    unlessHandedOff: Boolean = false,
+  ) = synchronized(gatewayLifecycleIntentLock) {
+    if (unlessHandedOff && operation.handedOff) return@synchronized
+    operation.deadline?.cancel()
+    operation.deadline = null
+    val attempt = acceptedConnectAttempt.value
+    if (attempt != null && attempt.operation === operation) attempt.operation = null
+    if (gatewayConnectionOperation !== operation) return@synchronized
+    // A transient same/unavailable selection may have covered accepted TLS progress.
+    // Restore that owner's original budget, rather than restarting it or losing its timer.
+    gatewayConnectionOperation = attempt?.operation
+    if (gatewayRetirementDisplay != null) updateStatus(preserveStandalone = true) { gatewayRetirementDisplay = null }
+    gatewayConnectionOperation?.let {
+      if (it.waitingForAdmission) {
+        publishGatewayAdmission(it, waitingForCleanup = it.deadlineExpired)
+      } else {
+        setStandaloneGatewayStatus("Verify gateway TLS fingerprint…")
+      }
+    }
+  }
+
+  private fun advanceGatewayRequestIntent(): Long {
+    gatewayConnectionOperation
+      ?.takeUnless { acceptedConnectAttempt.value?.operation === it }
+      ?.let { finishGatewayConnectionOperation(it) }
+    return gatewayLifecycleIntentSeq.incrementAndGet().also { requestBackgroundGatewayReconciliation() }
+  }
+
+  // Queued callers retire immediately; accepted work retires only with its target.
+  private fun advanceGatewayLifecycleIntent(retiringGatewayId: String? = null): Long =
+    synchronized(gatewayLifecycleIntentLock) {
+      val sequence = advanceGatewayRequestIntent()
+      if (retiringGatewayId == null || connectedEndpoint?.stableId == retiringGatewayId || connectingEndpoint?.stableId == retiringGatewayId) {
+        clearAcceptedConnectAttempt()
+        activeGatewayConnection?.bootstrapHandoff?.invalidate()
+      }
+      sequence
     }
 
   private fun gatewayLifecycleIntent(
@@ -4607,8 +4873,9 @@ class NodeRuntime private constructor(
     runGatewayConnectOperation {
       beforeConnect()
       activeGatewayConnection?.bootstrapHandoff?.invalidate()
-      val connection = GatewayConnectionContext(auth)
+      val connection = GatewayConnectionContext(auth, acceptedConnectAttempt.value)
       activeGatewayConnection = connection
+      connection.attempt?.operatorReady?.value = null
       val tls = connectionManager.resolveTlsParams(endpoint)
       val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
       refreshGatewayControlPage(endpoint, auth, storedOperatorEntry?.token)
@@ -4641,6 +4908,7 @@ class NodeRuntime private constructor(
               ),
           ),
           tls,
+          onReady = { publishOperatorReadiness(connection) },
         )
       }
       val nodeConnectOptions = connectionManager.buildNodeConnectOptions()
@@ -4688,7 +4956,7 @@ class NodeRuntime private constructor(
   private fun beginConnect(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
-    intent: () -> Boolean,
+    intent: GatewayConnectionOperation,
   ) {
     synchronized(gatewayAuthLifecycleLock) {
       if (gatewayAuthResetInProgress) return
@@ -4699,67 +4967,139 @@ class NodeRuntime private constructor(
     }
     notificationOutbox.clear()
     invalidateNodeCapabilityApprovalState()
-    val connectAttemptId = connectAttemptSeq.incrementAndGet()
-    connectingEndpointStableId = endpoint.stableId
+    val connectAttemptId = beginConnectAttempt(endpoint, intent)
+    connectingEndpoint = endpoint
     chat.onGatewayScopeChanging()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true) {
       val storedFingerprint = tls.expectedFingerprint
-      setStandaloneGatewayStatus("Verify gateway TLS fingerprint…")
-      scope.launch {
-        val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
-        launchGatewayLifecycle(intent) {
-          if (!isCurrentConnectAttempt(connectAttemptId)) return@launchGatewayLifecycle
-          when (
-            val decision =
-              decideGatewayTlsTrust(
-                storedFingerprint = storedFingerprint,
-                systemTrustCandidate = isGatewayTlsSystemTrustCandidate(endpoint.host),
-                probeResult = tlsProbe,
-              )
-          ) {
-            GatewayTlsTrustDecision.SystemTrusted -> {
-              // Automatic platform trust only applies where no user-accepted pin exists.
-              // Replacing a pin always requires explicit confirmation in the trust prompt.
-              registerGateway(endpoint, setActive = true)
-              connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+      intent.handedOff = true
+      tlsProbeJob =
+        scope.launch {
+          val tlsProbe =
+            try {
+              tlsProbeRunner.probe(endpoint.host, endpoint.port) {
+                synchronized(gatewayLifecycleIntentLock) {
+                  if (!isCurrentConnectAttempt(connectAttemptId)) throw CancellationException("Gateway request superseded")
+                  // Actual TLS probing has its own network deadline. Keep this operation's
+                  // admission budget for the lifecycle queue after the probe returns.
+                  intent.waitingForAdmission = false
+                  setStandaloneGatewayStatus("Verify gateway TLS fingerprint…", operation = intent)
+                }
+              }
+            } catch (error: Throwable) {
+              finishGatewayConnectionOperation(intent)
+              throw error
             }
+          synchronized(gatewayLifecycleIntentLock) {
+            if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
+            intent.waitingForAdmission = true
+            publishGatewayAdmission(intent, waitingForCleanup = intent.deadlineExpired)
+          }
+          // Once admitted, TLS is owned by this attempt rather than its superseded UI caller.
+          launchGatewayLifecycle({ isCurrentConnectAttempt(connectAttemptId) }) {
+            finishGatewayConnectionOperation(intent)
+            if (!isCurrentConnectAttempt(connectAttemptId)) return@launchGatewayLifecycle
+            when (
+              val decision =
+                decideGatewayTlsTrust(
+                  storedFingerprint = storedFingerprint,
+                  systemTrustCandidate = isGatewayTlsSystemTrustCandidate(endpoint.host),
+                  probeResult = tlsProbe,
+                )
+            ) {
+              GatewayTlsTrustDecision.SystemTrusted -> {
+                // Automatic platform trust only applies where no user-accepted pin exists.
+                // Replacing a pin always requires explicit confirmation in the trust prompt.
+                registerGateway(endpoint, setActive = true)
+                connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+              }
 
-            is GatewayTlsTrustDecision.PinnedTrust -> {
-              connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
-            }
+              is GatewayTlsTrustDecision.PinnedTrust -> {
+                connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+              }
 
-            is GatewayTlsTrustDecision.PromptRequired -> {
-              decision.probeFailure?.let { setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(it)) }
-              publishGatewayTrustPromptIfCurrent(
-                connectAttemptId = connectAttemptId,
-                prompt =
-                  GatewayTrustPrompt(
-                    endpoint = endpoint,
-                    fingerprintSha256 = decision.fingerprintSha256,
-                    auth = auth,
-                    previousFingerprintSha256 = decision.previousFingerprintSha256,
-                    probeFailure = decision.probeFailure,
-                    systemTrustAvailable = decision.systemTrustAvailable,
-                  ),
-              )
-            }
+              is GatewayTlsTrustDecision.PromptRequired -> {
+                setStandaloneGatewayStatus(
+                  decision.probeFailure?.let(::gatewayTlsProbeFailureMessage) ?: "Verify gateway TLS fingerprint…",
+                  operation = intent,
+                )
+                publishGatewayTrustPromptIfCurrent(
+                  connectAttemptId = connectAttemptId,
+                  prompt =
+                    GatewayTrustPrompt(
+                      endpoint = endpoint,
+                      fingerprintSha256 = decision.fingerprintSha256,
+                      auth = auth,
+                      previousFingerprintSha256 = decision.previousFingerprintSha256,
+                      probeFailure = decision.probeFailure,
+                      systemTrustAvailable = decision.systemTrustAvailable,
+                    ),
+                )
+              }
 
-            is GatewayTlsTrustDecision.Failed -> {
-              connectingEndpointStableId = null
-              setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(decision.reason))
+              is GatewayTlsTrustDecision.Failed -> {
+                clearAcceptedConnectAttempt()
+                val problem =
+                  if (decision.reason == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
+                    gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
+                  } else {
+                    null
+                  }
+                setStandaloneGatewayStatus(problem?.message ?: gatewayTlsProbeFailureMessage(decision.reason), problem, operation = intent)
+              }
             }
           }
         }
-      }
       return
     }
 
+    finishGatewayConnectionOperation(intent)
     connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
   }
 
-  private fun isCurrentConnectAttempt(connectAttemptId: Long): Boolean = connectAttemptSeq.get() == connectAttemptId
+  private fun beginConnectAttempt(
+    endpoint: GatewayEndpoint,
+    operation: GatewayConnectionOperation? = null,
+  ): Long {
+    clearAcceptedConnectAttempt()
+    activeGatewayConnection?.bootstrapHandoff?.invalidate()
+    preferredGatewayReconnectSuppressed = false
+    secondaryGatewayConnectionsEnabled = true
+    return connectAttemptSeq.incrementAndGet().also {
+      acceptedConnectAttempt.value = GatewayConnectAttempt(it, endpoint).apply { this.operation = operation }
+    }
+  }
+
+  private fun clearAcceptedConnectAttempt() =
+    synchronized(gatewayLifecycleIntentLock) {
+      val attempt = acceptedConnectAttempt.value
+      acceptedConnectAttempt.value = null
+      // Retiring the target also retires its TLS presentation, even if replacement disappears while queued.
+      if (attempt != null) synchronized(gatewayStatusLock) { gatewayStandaloneDisplay = null }
+      tlsProbeJob?.cancel()
+      tlsProbeJob = null
+      tlsProbeRunner.cancel()
+      attempt?.operation?.let { finishGatewayConnectionOperation(it) }
+      _pendingGatewayTrust.value = null
+      connectingEndpoint = null
+    }
+
+  private fun retireConnectAttempt(): Long =
+    synchronized(gatewayLifecycleIntentLock) {
+      clearAcceptedConnectAttempt()
+      connectAttemptSeq.incrementAndGet()
+    }
+
+  private fun isCurrentConnectAttempt(connectAttemptId: Long): Boolean = acceptedConnectAttempt.value?.id == connectAttemptId && connectAttemptSeq.get() == connectAttemptId
+
+  private fun publishOperatorReadiness(connection: GatewayConnectionContext) {
+    // Called under the session lock: read the published owner without reversing the runtime/session lock order.
+    val attempt = connection.attempt ?: return
+    if (activeGatewayConnection !== connection || acceptedConnectAttempt.value !== attempt) return
+    attempt.operatorReady.value = operatorSession.captureRequestLease(attempt.endpoint.stableId)
+  }
 
   private fun publishGatewayTrustPromptIfCurrent(
     connectAttemptId: Long,
@@ -4798,10 +5138,11 @@ class NodeRuntime private constructor(
     auth: GatewayConnectAuth,
     connectAttemptId: Long,
   ) {
+    // Trust approval continues the accepted attempt instead of retiring its waiting callers.
     if (!isCurrentConnectAttempt(connectAttemptId)) return
     connectWithAuth(endpoint = endpoint, auth = auth) {
       connectedEndpoint = endpoint
-      connectingEndpointStableId = null
+      connectingEndpoint = null
       updateStatus {
         operatorConnectionProblem = null
         nodeConnectionProblem = null
@@ -4815,14 +5156,14 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth? = null,
   ) {
-    val intent = admitGatewayConnection { true } ?: return
+    val intent = beginGatewayReplacementOperation { true } ?: return
     launchConnect(endpoint, explicitAuth = auth, intent = intent)
   }
 
   private fun launchConnect(
     endpoint: GatewayEndpoint,
     explicitAuth: GatewayConnectAuth?,
-    intent: () -> Boolean,
+    intent: GatewayConnectionOperation,
   ) {
     scope.launch { connectGateway(endpoint, explicitAuth, intent) }
   }
@@ -4846,40 +5187,55 @@ class NodeRuntime private constructor(
     )
   }
 
-  fun acceptGatewayTrustPrompt(manualFingerprint: String? = null) {
-    val prompt = _pendingGatewayTrust.value ?: return
+  private fun currentGatewayTrustAttempt(prompt: GatewayTrustPrompt): Long? = acceptedConnectAttempt.value?.id?.takeIf { _pendingGatewayTrust.value === prompt && isCurrentConnectAttempt(it) }
+
+  fun acceptGatewayTrustPrompt(
+    prompt: GatewayTrustPrompt,
+    manualFingerprint: String? = null,
+  ) {
     val acceptedFingerprint =
       normalizeGatewayTlsFingerprintInput(
         prompt.fingerprintSha256 ?: manualFingerprint ?: return,
       ) ?: return
-    val intent = gatewayLifecycleIntent(advanceGatewayLifecycleIntent())
-    launchGatewayLifecycle(intent) {
-      if (_pendingGatewayTrust.value != prompt) return@launchGatewayLifecycle
-      _pendingGatewayTrust.value = null
+    continueGatewayTrustPrompt(prompt) {
       prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, acceptedFingerprint)
-      registerGateway(prompt.endpoint, setActive = true)
-      beginConnect(endpoint = prompt.endpoint, auth = prompt.auth, intent = intent)
     }
   }
 
-  fun useSystemGatewayTrustPrompt() {
-    val prompt = _pendingGatewayTrust.value ?: return
+  fun useSystemGatewayTrustPrompt(prompt: GatewayTrustPrompt) {
     if (!prompt.systemTrustAvailable) return
-    val intent = gatewayLifecycleIntent(advanceGatewayLifecycleIntent())
-    launchGatewayLifecycle(intent) {
-      if (_pendingGatewayTrust.value != prompt) return@launchGatewayLifecycle
-      _pendingGatewayTrust.value = null
-      prefs.clearGatewayTlsFingerprint(prompt.endpoint.stableId)
-      registerGateway(prompt.endpoint, setActive = true)
-      beginConnect(endpoint = prompt.endpoint, auth = prompt.auth, intent = intent)
+    continueGatewayTrustPrompt(prompt) { prefs.clearGatewayTlsFingerprint(prompt.endpoint.stableId) }
+  }
+
+  private fun continueGatewayTrustPrompt(
+    prompt: GatewayTrustPrompt,
+    persistTrust: () -> Unit,
+  ) {
+    synchronized(gatewayLifecycleIntentLock) {
+      val connectAttemptId = currentGatewayTrustAttempt(prompt) ?: return
+      val attempt = acceptedConnectAttempt.value ?: return
+      // Repeated taps cannot replace an already queued continuation or abandon its deadline.
+      if (attempt.operation != null) return
+      val intent = beginGatewayConnectionOperation { true } ?: return
+      attempt.operation = intent
+      intent.handedOff = true
+      launchGatewayLifecycle({ isCurrentConnectAttempt(connectAttemptId) }) {
+        finishGatewayConnectionOperation(intent)
+        if (_pendingGatewayTrust.value !== prompt) return@launchGatewayLifecycle
+        _pendingGatewayTrust.value = null
+        persistTrust()
+        registerGateway(prompt.endpoint, setActive = true)
+        connectAfterTlsCheckLocked(endpoint = prompt.endpoint, auth = prompt.auth, connectAttemptId = connectAttemptId)
+      }
     }
   }
 
-  fun declineGatewayTrustPrompt() {
-    val intent = gatewayLifecycleIntent(advanceGatewayLifecycleIntent())
-    launchGatewayLifecycle(intent) {
-      _pendingGatewayTrust.value = null
-      connectingEndpointStableId = null
+  fun declineGatewayTrustPrompt(prompt: GatewayTrustPrompt) {
+    synchronized(gatewayLifecycleIntentLock) {
+      currentGatewayTrustAttempt(prompt) ?: return
+      // Identity and its modal presentation retire together, before another intent can be admitted.
+      advanceGatewayLifecycleIntent()
+      connectAttemptSeq.incrementAndGet()
       setStandaloneGatewayStatus("Offline")
     }
   }
@@ -4952,6 +5308,7 @@ class NodeRuntime private constructor(
                 ),
             ),
             connectionManager.resolveTlsParams(endpoint),
+            onReady = { publishOperatorReadiness(connection) },
           )
         }
       }
@@ -5002,7 +5359,7 @@ class NodeRuntime private constructor(
     val intent =
       synchronized(gatewayLifecycleIntentLock) {
         if (!isCurrent()) return false
-        gatewayLifecycleIntent(advanceGatewayLifecycleIntent(), isCurrent)
+        gatewayLifecycleIntent(advanceGatewayLifecycleIntent(retiringGatewayId = stableId.trim()), isCurrent)
       }
     return gatewaySwitchMutex.withLock {
       if (!intent()) false else forgetGatewayLocked(stableId)
@@ -5028,11 +5385,6 @@ class NodeRuntime private constructor(
       disconnectSecondaryGatewayConnection(normalized)?.disconnectAndJoin()
       if (connectedEndpoint?.stableId == normalized) {
         disconnectAndJoin()
-      } else if (connectingEndpointStableId == normalized) {
-        connectAttemptSeq.incrementAndGet()
-        connectingEndpointStableId = null
-        _pendingGatewayTrust.value = null
-        chat.onGatewayScopeChanging(retireRunState = true)
       } else if (wasActive) {
         prepareDisconnect(retireRunState = true)
       }
@@ -5112,27 +5464,48 @@ class NodeRuntime private constructor(
     if (setActive) prefs.gatewayRegistry.setActive(endpoint.stableId)
   }
 
+  private suspend fun drainGatewayConnectionsForConnect(
+    endpoint: GatewayEndpoint,
+    intent: () -> Boolean,
+  ): Boolean {
+    val retirePrimary: Boolean
+    synchronized(gatewayLifecycleIntentLock) {
+      if (!intent()) return false
+      val currentStableId =
+        connectedEndpoint?.stableId
+          ?: connectingEndpoint?.stableId
+          ?: prefs.gatewayRegistry.activeStableId.value
+      retirePrimary = currentStableId != null && currentStableId != endpoint.stableId
+      if (retirePrimary) prepareDisconnect(retireRunState = true)
+    }
+    // The operation's deadline can publish while these drains or the enclosing mutex wait.
+    // It must not cancel accepted token persistence or admit another physical connection.
+    if (retirePrimary) drainPrimaryGatewaySessions() else drainIdleGatewaySessionTails()
+    disconnectSecondaryGatewayConnection(endpoint.stableId)?.disconnectAndJoin()
+    return intent()
+  }
+
   private suspend fun disconnectAndJoin() {
     prepareDisconnect(retireRunState = true)
-    // Both sockets close before either reconnect loop is joined, so no authenticated role stays
-    // live while reset waits for the other role's terminal callback.
-    coroutineScope {
-      launch { operatorSession.disconnectAndJoin() }
-      launch { nodeSession.disconnectAndJoin() }
-    }
+    drainPrimaryGatewaySessions()
   }
 
   private suspend fun drainIdleGatewaySessionTails() {
-    if (connectedEndpoint != null || connectingEndpointStableId != null) return
+    if (connectedEndpoint != null || connectingEndpoint != null) return
+    drainPrimaryGatewaySessions()
+  }
+
+  private suspend fun drainPrimaryGatewaySessions() {
+    // Close both sockets before joining either role's accepted token writes.
     coroutineScope {
       launch { operatorSession.disconnectAndJoin() }
       launch { nodeSession.disconnectAndJoin() }
     }
   }
 
-  private fun prepareDisconnect(retireRunState: Boolean) {
+  private fun prepareDisconnect(retireRunState: Boolean): Long {
     notificationOutbox.clear()
-    connectAttemptSeq.incrementAndGet()
+    val disconnectAttemptId = retireConnectAttempt()
     synchronized(gatewayDataScopeLock) {
       gatewayDataGeneration += 1
       clearOperatorGatewayState(retirePendingCronRuns = true)
@@ -5153,7 +5526,6 @@ class NodeRuntime private constructor(
       talkMode.setMainSessionKey(defaultMainSessionKey)
     }
     connectedEndpoint = null
-    connectingEndpointStableId = null
     _gatewayControlPage.value = null
     activeGatewayConnection?.bootstrapHandoff?.invalidate()
     activeGatewayConnection = null
@@ -5165,7 +5537,7 @@ class NodeRuntime private constructor(
       operatorConnectionProblem = null
       nodeConnectionProblem = null
     }
-    _pendingGatewayTrust.value = null
+    return disconnectAttemptId
   }
 
   internal suspend fun resolveInlineWidgetResource(
@@ -5295,6 +5667,8 @@ class NodeRuntime private constructor(
 
   suspend fun refreshChatSessionBranches(): Boolean = chat.refreshSessionBranches()
 
+  internal fun canSwitchChatSessionBranch(sessionKey: String): Boolean = chat.canSwitchSessionBranch(sessionKey)
+
   suspend fun switchChatSessionBranch(leafEntryId: String): Boolean = chat.switchSessionBranch(chatSessionKey.value, leafEntryId)
 
   fun setChatThinkingLevel(level: String) {
@@ -5332,9 +5706,16 @@ class NodeRuntime private constructor(
     ownerAgentId: String? = null,
   ) {
     synchronized(gatewayDataScopeLock) {
-      retirePendingChatSelection()
-      chat.switchSession(sessionKey, ownerAgentId)
+      applyChatSessionSelection(sessionKey, ownerAgentId)
     }
+  }
+
+  private fun applyChatSessionSelection(
+    sessionKey: String,
+    ownerAgentId: String?,
+  ) {
+    retirePendingChatSelection()
+    chat.switchSession(sessionKey, ownerAgentId)
   }
 
   internal fun refreshSystemAgentChat() {
@@ -5442,11 +5823,17 @@ class NodeRuntime private constructor(
     message: ChatMessage,
   ) = chat.prepareFullMessageRead(owner, selectionGeneration, catalogRevision, message)
 
-  private suspend fun awaitConnectedGateway(stableId: String): Boolean {
-    _isConnected.first { connected ->
-      connected && connectedEndpoint?.stableId == stableId
-    }
-    return true
+  private suspend fun awaitConnectedGateway(attempt: GatewayConnectAttempt): Boolean {
+    // Display status can still describe an older live socket while this attempt awaits TLS approval.
+    val ready =
+      combine(acceptedConnectAttempt, attempt.operatorReady) { current, lease ->
+        when {
+          current !== attempt -> false
+          lease?.isCurrent() == true -> true
+          else -> null
+        }
+      }.first { it != null }
+    return ready == true && isCurrentConnectAttempt(attempt.id)
   }
 
   internal suspend fun sendChatForOwnerAwaitAcceptance(
@@ -5455,6 +5842,7 @@ class NodeRuntime private constructor(
     thinking: String,
     attachments: List<OutgoingAttachment>,
     idempotencyKey: String,
+    canAdmit: () -> Boolean = { true },
   ): Boolean =
     chat.sendMessageForOwnerAwaitAcceptance(
       message = message,
@@ -5462,40 +5850,39 @@ class NodeRuntime private constructor(
       attachments = attachments,
       expectedOwner = owner,
       idempotencyKey = idempotencyKey,
+      canAdmit = canAdmit,
     )
 
   internal suspend fun openConversationNotificationTarget(
     target: ConversationNotificationTarget,
-    isCurrent: () -> Boolean = { true },
-  ): Boolean =
+    isCurrent: () -> Boolean,
+  ): GatewayTargetSelection =
     routeConversationNotificationTarget(
       target = target,
-      activeGatewayStableId = { prefs.gatewayRegistry.activeStableId.value },
       switchGateway = { switchToGateway(it, isCurrent) },
       isCurrent = isCurrent,
-      switchSession = { sessionKey, agentId -> switchChatSession(sessionKey, agentId) },
     )
 
   internal suspend fun sendConversationNotificationReply(
     target: ConversationNotificationTarget,
     reply: String,
     idempotencyKey: String,
+    isCurrent: () -> Boolean,
   ): Boolean =
     routeConversationNotificationReply(
       target = target,
       reply = reply,
       idempotencyKey = idempotencyKey,
-      activeGatewayStableId = { prefs.gatewayRegistry.activeStableId.value },
-      switchGateway = { switchToGateway(it) },
-      awaitGatewayReady = ::awaitConnectedGateway,
-      switchSession = { sessionKey, agentId -> switchChatSession(sessionKey, agentId) },
-      send = { owner, message, commandId ->
+      switchGateway = { switchToGateway(it, isCurrent) },
+      isCurrent = isCurrent,
+      send = { owner, message, commandId, canAdmit ->
         sendChatForOwnerAwaitAcceptance(
           owner = owner,
           message = message,
           thinking = chatThinkingLevel.value,
           attachments = emptyList(),
           idempotencyKey = commandId,
+          canAdmit = canAdmit,
         )
       },
     )
@@ -9548,16 +9935,7 @@ data class GatewayNodesDevicesSummary(
   val devicePairingAvailable: Boolean = true,
 )
 
-enum class GatewayNodeApprovalState {
-  Loading,
-  Unsupported,
-  Approved,
-  PendingApproval,
-  PendingReapproval,
-  Unapproved,
-}
-
-/** Current phone approval state; only pending variants can carry an approval target. */
+/** Node capability approval state; only pending variants can carry an approval target. */
 sealed interface GatewayNodeCapabilityApproval {
   data object Loading : GatewayNodeCapabilityApproval
 
@@ -9591,7 +9969,7 @@ internal fun GatewayNodeCapabilityApproval.withoutExactRequestId(): GatewayNodeC
     }
   }
 
-internal fun GatewayNodesDevicesSummary.withoutExactApprovalRequestIds(): GatewayNodesDevicesSummary = copy(nodes = nodes.map { node -> node.copy(pendingRequestId = null) })
+internal fun GatewayNodesDevicesSummary.withoutExactApprovalRequestIds(): GatewayNodesDevicesSummary = copy(nodes = nodes.map { node -> node.copy(approvalState = node.approvalState.withoutExactRequestId() ?: node.approvalState) })
 
 /** Prevents an older gateway response from publishing after a newer refresh begins. */
 internal class LatestGatewayRefreshGuard {
@@ -9619,14 +9997,24 @@ internal class LatestGatewayRefreshGuard {
     }
 }
 
-internal fun parseGatewayNodeApprovalState(raw: String?): GatewayNodeApprovalState =
-  when (raw?.trim()?.lowercase()) {
-    null, "" -> GatewayNodeApprovalState.Loading
-    "approved" -> GatewayNodeApprovalState.Approved
-    "pending-approval" -> GatewayNodeApprovalState.PendingApproval
-    "pending-reapproval" -> GatewayNodeApprovalState.PendingReapproval
-    "unapproved" -> GatewayNodeApprovalState.Unapproved
-    else -> GatewayNodeApprovalState.Loading
+private fun parseGatewayNodeApprovalState(node: JsonObject): GatewayNodeCapabilityApproval {
+  // Only omission identifies a legacy gateway; malformed and future values stay fail-closed.
+  if (!node.containsKey("approvalState")) return GatewayNodeCapabilityApproval.Unsupported
+  val requestId = node["pendingRequestId"].asStringOrNull()
+  return when (node["approvalState"].asStringOrNull()?.trim()?.lowercase()) {
+    "approved" -> GatewayNodeCapabilityApproval.Approved
+    "pending-approval" -> GatewayNodeCapabilityApproval.PendingApproval(requestId)
+    "pending-reapproval" -> GatewayNodeCapabilityApproval.PendingReapproval(requestId)
+    "unapproved" -> GatewayNodeCapabilityApproval.Unapproved
+    else -> GatewayNodeCapabilityApproval.Loading
+  }.withSafeRequestId()
+}
+
+private fun GatewayNodeCapabilityApproval.withSafeRequestId(): GatewayNodeCapabilityApproval =
+  when (this) {
+    is GatewayNodeCapabilityApproval.PendingApproval -> copy(requestId = normalizeGatewayApprovalRequestId(requestId))
+    is GatewayNodeCapabilityApproval.PendingReapproval -> copy(requestId = normalizeGatewayApprovalRequestId(requestId))
+    else -> this
   }
 
 internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "PAIRING_REQUIRED"
@@ -9634,38 +10022,7 @@ internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorS
 internal fun currentNodeCapabilityApproval(
   nodes: List<GatewayNodeSummary>,
   selfNodeId: String,
-): GatewayNodeCapabilityApproval {
-  val node = nodes.firstOrNull { it.id == selfNodeId } ?: return GatewayNodeCapabilityApproval.Loading
-  return when (node.approvalState) {
-    GatewayNodeApprovalState.Loading -> {
-      GatewayNodeCapabilityApproval.Loading
-    }
-
-    GatewayNodeApprovalState.Unsupported -> {
-      GatewayNodeCapabilityApproval.Unsupported
-    }
-
-    GatewayNodeApprovalState.Approved -> {
-      GatewayNodeCapabilityApproval.Approved
-    }
-
-    GatewayNodeApprovalState.PendingApproval -> {
-      GatewayNodeCapabilityApproval.PendingApproval(
-        normalizeGatewayApprovalRequestId(node.pendingRequestId),
-      )
-    }
-
-    GatewayNodeApprovalState.PendingReapproval -> {
-      GatewayNodeCapabilityApproval.PendingReapproval(
-        normalizeGatewayApprovalRequestId(node.pendingRequestId),
-      )
-    }
-
-    GatewayNodeApprovalState.Unapproved -> {
-      GatewayNodeCapabilityApproval.Unapproved
-    }
-  }
-}
+): GatewayNodeCapabilityApproval = nodes.firstOrNull { it.id == selfNodeId }?.approvalState?.withSafeRequestId() ?: GatewayNodeCapabilityApproval.Loading
 
 internal fun parseGatewayNodeSummary(item: JsonElement): GatewayNodeSummary? {
   val obj = item.asObjectOrNull() ?: return null
@@ -9679,14 +10036,7 @@ internal fun parseGatewayNodeSummary(item: JsonElement): GatewayNodeSummary? {
     deviceFamily = obj["deviceFamily"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
     paired = obj.boolean("paired"),
     connected = obj.boolean("connected"),
-    // Only an omitted field identifies a legacy gateway; malformed and future values stay fail-closed.
-    approvalState =
-      if (obj.containsKey("approvalState")) {
-        parseGatewayNodeApprovalState(obj["approvalState"].asStringOrNull())
-      } else {
-        GatewayNodeApprovalState.Unsupported
-      },
-    pendingRequestId = normalizeGatewayApprovalRequestId(obj["pendingRequestId"].asStringOrNull()),
+    approvalState = parseGatewayNodeApprovalState(obj),
     capabilities = parseGatewayStringArray(obj["caps"] as? JsonArray),
     commands = parseGatewayStringArray(obj["commands"] as? JsonArray),
   )
@@ -9719,8 +10069,7 @@ data class GatewayNodeSummary(
   val deviceFamily: String?,
   val paired: Boolean,
   val connected: Boolean,
-  val approvalState: GatewayNodeApprovalState,
-  val pendingRequestId: String?,
+  val approvalState: GatewayNodeCapabilityApproval,
   val capabilities: List<String>,
   val commands: List<String>,
 )

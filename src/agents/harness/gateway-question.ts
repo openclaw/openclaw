@@ -288,7 +288,7 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   });
 }
 
-/** Claims eligible question input; unmatched input remains owned by ordinary admission. */
+/** Owns reservation and persistence; absent questions return before checking caller authority. */
 export async function claimPendingAgentQuestionAnswer(params: {
   sessionKey?: string;
   text: string;

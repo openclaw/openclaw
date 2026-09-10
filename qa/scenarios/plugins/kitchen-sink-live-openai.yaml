@@ -99,6 +99,7 @@ scenario:
         - "http route registration missing or invalid auth: /kitchen-sink/http-route"
         - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
         - "trusted tool policy registration requires id, description, and evaluate()"
+        - memory prompt preparation registration missing prepare function
         - memory prompt supplement registration missing builder
         - model catalog provider registration missing provider
         - node invoke policy registration missing commands
@@ -125,6 +126,7 @@ flow:
               - install
               - expr: config.pluginSpec
               - --force
+              - --accept-capabilities
             - timeoutMs: 180000
         - call: runQaCli
           args:

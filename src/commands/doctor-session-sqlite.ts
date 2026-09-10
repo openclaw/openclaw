@@ -384,11 +384,16 @@ async function inspectOrMigrateTarget(params: {
       countLegacyTranscript(record, report);
     }
   } else {
-    validateLegacySessionRecords(params.target, records, report);
+    validateLegacySessionRecords(params.target, records, report, "validate");
   }
   let validationPassed = false;
   if (params.mode === "import" && blockingIssueCount(report) === 0) {
-    validationPassed = validateImportedTargetBeforeArchive(params.target, records, report);
+    validationPassed = validateLegacySessionRecords(
+      params.target,
+      records,
+      report,
+      "before-archive",
+    );
     updateMigrationManifestTarget(
       params.activeRun,
       createMigrationTargetInput(params.target),
@@ -809,12 +814,13 @@ function markAlreadyMigratedTranscript(
   return true;
 }
 
-function validateImportedTargetBeforeArchive(
+function validateLegacySessionRecords(
   target: SessionStoreTarget,
   records: readonly LegacySessionRecord[],
   report: DoctorSessionSqliteTargetReport,
+  purpose: "validate" | "before-archive",
 ): boolean {
-  if (records.length === 0) {
+  if (purpose === "before-archive" && records.length === 0) {
     return true;
   }
   const issueCountBeforeValidation = report.issues.length;
@@ -827,17 +833,22 @@ function validateImportedTargetBeforeArchive(
     return false;
   }
   for (const record of records) {
-    validateImportedRecordBeforeArchive(record, report, validation.snapshot);
+    validateLegacySessionRecord(record, report, validation.snapshot, purpose);
   }
   return report.issues.length === issueCountBeforeValidation;
 }
 
-function validateImportedRecordBeforeArchive(
+function validateLegacySessionRecord(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
   snapshot: ReadOnlySqliteValidationSnapshot,
+  purpose: "validate" | "before-archive",
 ): void {
-  const normalizedKey = record.sessionKey;
+  const beforeArchive = purpose === "before-archive";
+  // Import preserves aliases until canonical repair; standalone validation compares canonical keys.
+  const normalizedKey = beforeArchive
+    ? record.sessionKey
+    : normalizeStoreSessionKey(record.sessionKey);
   const sqliteSessionId = snapshot.sessionIdsBySessionKey.get(normalizedKey);
   if (!sqliteSessionId) {
     report.issues.push({
@@ -855,8 +866,15 @@ function validateImportedRecordBeforeArchive(
     });
     return;
   }
+  if (!beforeArchive) {
+    report.validatedEntries += 1;
+  }
   const result = countTranscriptEvents(record);
   if (result.status === "missing") {
+    if (!beforeArchive) {
+      report.validatedTranscriptEvents +=
+        snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
+    }
     return;
   }
   if (result.status !== "ok") {
@@ -870,13 +888,20 @@ function validateImportedRecordBeforeArchive(
     return;
   }
   const sqliteEvents = snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
-  const expectedEvents = record.recovery?.events ?? result.events;
-  if (sqliteEvents < expectedEvents) {
+  // Verified import may retain later history and repair source rows; validation compares the raw count.
+  const expectedEvents = beforeArchive ? (record.recovery?.events ?? result.events) : result.events;
+  if (beforeArchive ? sqliteEvents < expectedEvents : sqliteEvents !== expectedEvents) {
     report.issues.push({
       code: "sqlite_transcript_count_mismatch",
-      message: `SQLite transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`,
+      message: beforeArchive
+        ? `SQLite transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`
+        : `SQLite transcript has ${sqliteEvents} events; source has ${result.events}.`,
       sessionKey: record.sessionKey,
     });
+    return;
+  }
+  if (!beforeArchive) {
+    report.validatedTranscriptEvents += sqliteEvents;
   }
 }
 
@@ -1223,86 +1248,6 @@ async function archiveImportedLegacySessionStores(
   }
 }
 
-function validateLegacySessionRecords(
-  target: SessionStoreTarget,
-  records: readonly LegacySessionRecord[],
-  report: DoctorSessionSqliteTargetReport,
-): void {
-  const validation = readOnlySqliteValidationSnapshot(target);
-  if (!validation.ok) {
-    report.issues.push({
-      code: "sqlite_read_failed",
-      message: `SQLite validation read failed: ${String(validation.error)}`,
-    });
-    return;
-  }
-  for (const record of records) {
-    validateLegacySessionRecord(record, report, validation.snapshot);
-  }
-}
-
-function validateLegacySessionRecord(
-  record: LegacySessionRecord,
-  report: DoctorSessionSqliteTargetReport,
-  snapshot: ReadOnlySqliteValidationSnapshot,
-): void {
-  const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
-  const sqliteSessionId = snapshot.sessionIdsBySessionKey.get(normalizedKey);
-  if (!sqliteSessionId) {
-    report.issues.push({
-      code: "sqlite_entry_missing",
-      message: `SQLite entry is missing for ${normalizedKey}.`,
-      sessionKey: record.sessionKey,
-    });
-    return;
-  }
-  if (sqliteSessionId !== record.entry.sessionId) {
-    report.issues.push({
-      code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
-      sessionKey: record.sessionKey,
-    });
-    return;
-  }
-  report.validatedEntries += 1;
-  validateTranscriptEventCount(record, report, snapshot);
-}
-
-function validateTranscriptEventCount(
-  record: LegacySessionRecord,
-  report: DoctorSessionSqliteTargetReport,
-  snapshot: ReadOnlySqliteValidationSnapshot,
-): void {
-  const result = countTranscriptEvents(record);
-  if (result.status === "missing") {
-    const migratedEvents = countAlreadyMigratedTranscriptEventsForValidate(snapshot, record);
-    if (migratedEvents !== undefined) {
-      report.validatedTranscriptEvents += migratedEvents;
-    }
-    return;
-  }
-  if (result.status !== "ok") {
-    if (!hasSessionIssue(report, "transcript_malformed", record.sessionKey)) {
-      report.issues.push({
-        code: "transcript_malformed",
-        message: result.message,
-        sessionKey: record.sessionKey,
-      });
-    }
-    return;
-  }
-  const sqliteEvents = snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
-  if (sqliteEvents !== result.events) {
-    report.issues.push({
-      code: "sqlite_transcript_count_mismatch",
-      message: `SQLite transcript has ${sqliteEvents} events; source has ${result.events}.`,
-      sessionKey: record.sessionKey,
-    });
-    return;
-  }
-  report.validatedTranscriptEvents += sqliteEvents;
-}
-
 function hasSessionIssue(
   report: DoctorSessionSqliteTargetReport,
   code: string,
@@ -1319,17 +1264,6 @@ function countAlreadyMigratedTranscriptEventsForImport(
     return undefined;
   }
   const normalizedKey = record.sessionKey;
-  if (snapshot.sessionIdsBySessionKey.get(normalizedKey) !== record.entry.sessionId) {
-    return undefined;
-  }
-  return snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
-}
-
-function countAlreadyMigratedTranscriptEventsForValidate(
-  snapshot: ReadOnlySqliteValidationSnapshot,
-  record: LegacySessionRecord,
-): number | undefined {
-  const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
   if (snapshot.sessionIdsBySessionKey.get(normalizedKey) !== record.entry.sessionId) {
     return undefined;
   }

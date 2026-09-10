@@ -16,6 +16,10 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
 };
 
+export type ChatHistorySessions = Pick<SessionCapability, "captureReconcile">;
+
+export type ChatHistoryHost = ChatState & { sessions: ChatHistorySessions };
+
 export type ChatState = StreamCausalBoundaryState & {
   client: GatewayBrowserClient | null;
   connected: boolean;

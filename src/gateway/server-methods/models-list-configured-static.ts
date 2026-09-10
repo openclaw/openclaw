@@ -98,17 +98,7 @@ export function includeConfiguredStaticCatalogEntries(params: {
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     manifestPlugins: params.metadataSnapshot,
   });
-  const configuredKeys = new Set(
-    [...policy.configuredKeys].map((key) => {
-      const separator = key.indexOf("/");
-      return separator > 0
-        ? resolveModelCatalogIdentityKey({
-            provider: key.slice(0, separator),
-            id: key.slice(separator + 1),
-          })
-        : key;
-    }),
-  );
+  const configuredKeys = policy.configuredKeys;
   const catalog = [...params.snapshot.entries];
   const seen = new Set(catalog.map(resolveModelCatalogIdentityKey));
   for (const entry of params.snapshot.staticEntries) {

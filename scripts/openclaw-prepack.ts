@@ -305,6 +305,8 @@ async function main(): Promise<void> {
   // Preserve those artifacts while still running the complete packaging lifecycle.
   if (buildEnv[PREPARED_RELEASE_ENV]?.trim() !== "1") {
     runPnpm(["build:package"], buildEnv);
+  } else {
+    runPnpm(["update:compat:check"], buildEnv);
   }
   await preparePrepackArtifacts(buildEnv);
 }

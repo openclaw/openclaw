@@ -49,10 +49,6 @@ read_when:
 
 ## Configuration
 
-<Note>
-The `deviceAutoApprove` examples below target beta/current-main builds. Stable `v2026.7.1` does not support this option.
-</Note>
-
 ```json5
 {
   gateway: {
@@ -112,6 +108,7 @@ Internal Gateway clients that do not travel through the reverse proxy should use
 
 <ParamField path="gateway.trustedProxies" type="string[]" required>
   Array of proxy IP addresses (or CIDRs) to trust. Requests from other IPs are rejected.
+  IPv4 ranges may be written plainly (`10.0.0.0/8`) or in IPv4-mapped IPv6 form (`::ffff:10.0.0.0/104`); the two are equivalent, and both match a peer connecting as `10.1.2.3` or as `::ffff:10.1.2.3`. A mapped prefix counts the 96 leading mapped bits, so `::ffff:0:0/96` denotes all of IPv4 — including loopback, which still requires `gateway.auth.trustedProxy.allowLoopback`. Native IPv6 peers never match a mapped range.
 </ParamField>
 <ParamField path="gateway.auth.mode" type="string" required>
   Must be `"trusted-proxy"`.
@@ -636,3 +633,4 @@ A Gateway token cannot replace proxy authentication. Do not send identity header
 - [Remote access](/gateway/remote) — other remote access patterns
 - [Security](/gateway/security) — full security guide
 - [Tailscale](/gateway/tailscale) — simpler alternative for tailnet-only access
+- [Security audit checks](/gateway/security/audit-checks) — the catalog entry for the trusted-proxy findings

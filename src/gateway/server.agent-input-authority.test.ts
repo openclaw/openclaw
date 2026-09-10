@@ -160,6 +160,7 @@ describe("spawn input ownership transfer", () => {
               entered.resolve();
               await releaseWriter.promise;
             },
+            "session.transcript.batch",
           );
           await entered.promise;
         }

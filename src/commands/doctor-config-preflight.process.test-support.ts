@@ -103,7 +103,14 @@ export function createSourceRuntime(root: string): string {
       process.platform === "win32" ? "junction" : "dir",
     );
   }
-  for (const filename of ["node-version.mjs", "package.json", "tsconfig.json"]) {
+  for (const filename of [
+    "node-version.mjs",
+    "node-sqlite.mjs",
+    "node-runtime-update.mjs",
+    "node-runtime-recovery.mjs",
+    "package.json",
+    "tsconfig.json",
+  ]) {
     fs.copyFileSync(path.resolve(filename), path.join(runtimeRoot, filename));
   }
   fs.writeFileSync(

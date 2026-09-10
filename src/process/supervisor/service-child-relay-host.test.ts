@@ -9,6 +9,7 @@ import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorPayload,
+  type ServiceChildControlMessage,
 } from "./service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
 import { createProcessSupervisor } from "./supervisor.js";
@@ -43,12 +44,20 @@ async function createRelay(platform: "linux" | "darwin" | "win32") {
   });
   const stub = createStubChild();
   const cancellations: Array<(error: Error) => void> = [];
+  const acknowledgements: ServiceChildControlMessage[] = [];
   // Keep channel closure independently controlled from cancellation write completion.
   const control = new Duplex({
     autoDestroy: false,
     read() {},
-    write(_chunk, _encoding, callback) {
-      cancellations.push(callback);
+    write(chunk: Buffer, _encoding, callback) {
+      // SAFETY: this exact adapter is the sole writer on its private control channel.
+      const message = JSON.parse(chunk.toString()) as ServiceChildControlMessage;
+      if (message.type === "cancel") {
+        cancellations.push(callback);
+      } else {
+        acknowledgements.push(message);
+        callback();
+      }
     },
   });
   Object.defineProperty(stub.child, "stdio", {
@@ -80,6 +89,7 @@ async function createRelay(platform: "linux" | "darwin" | "win32") {
     } else {
       control.push(Buffer.from(encodeServiceChildMessage(message)));
     }
+    return message;
   };
   emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
   const adapter = await starting;
@@ -125,7 +135,9 @@ async function createRelay(platform: "linux" | "darwin" | "win32") {
   cleanups.push(close);
   return {
     adapter,
+    start,
     cancellations,
+    acknowledgements,
     emit,
     completeRoot,
     endOutput,
@@ -324,6 +336,34 @@ it("bounds the newline search before inspecting an oversized control frame", asy
 });
 
 describe.each(["linux", "win32"] as const)("service closing authority (%s)", (platform) => {
+  it("acknowledges the exact POSIX receipt without certifying extinction", async () => {
+    const { adapter, start, acknowledgements, emit, completeRoot, close } =
+      await createRelay(platform);
+    expect(start.acknowledgeClosing).toBe(platform === "linux" ? true : undefined);
+    completeRoot();
+    await adapter.wait();
+    const closing = emit({ type: "closing", reason: "lineage-closed" });
+    const settled = vi.fn();
+    const extinction = adapter.waitForExtinction();
+    void extinction.then(settled, settled);
+    await nextTurn();
+    expect(acknowledgements).toEqual(
+      platform === "linux"
+        ? [
+            {
+              type: "closing-ack",
+              generation: closing.generation,
+              sequence: 1,
+              closingSequence: closing.sequence,
+            },
+          ]
+        : [],
+    );
+    expect(settled).not.toHaveBeenCalled();
+    close();
+    await expect(extinction).resolves.toBeUndefined();
+  });
+
   it.each([false, true])(
     "keeps root knowledge independent of failed extinction (root observed=%s)",
     async (rootObserved) => {

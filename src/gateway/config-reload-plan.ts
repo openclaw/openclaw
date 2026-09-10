@@ -420,61 +420,29 @@ function getPluginInstallRecords(config: unknown): Record<string, unknown> {
   return isPlainObject(installs) ? installs : {};
 }
 
-function listPluginInstallRecordDiffPaths(
-  prevConfig: unknown,
-  nextConfig: unknown,
-  visit: (record: {
-    id: string;
-    prevRecord: unknown;
-    nextRecord: unknown;
-    paths: string[];
-  }) => void,
-): string[] {
+export function resolvePluginInstallReloadMetadata(prevConfig: unknown, nextConfig: unknown) {
   const prevInstalls = getPluginInstallRecords(prevConfig);
   const nextInstalls = getPluginInstallRecords(nextConfig);
   const ids = new Set([...Object.keys(prevInstalls), ...Object.keys(nextInstalls)]);
-  const paths: string[] = [];
+  const noopPaths: string[] = [];
+  const forceChangedPaths: string[] = [];
 
   for (const id of ids) {
-    visit({ id, prevRecord: prevInstalls[id], nextRecord: nextInstalls[id], paths });
+    const prevRecord = prevInstalls[id];
+    const nextRecord = nextInstalls[id];
+    if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
+      // A dotted install id can collide with a timestamp path; whole records must still reload.
+      forceChangedPaths.push(`plugins.installs.${id}`);
+      continue;
+    }
+    for (const key of PLUGIN_INSTALL_TIMESTAMP_KEYS) {
+      if (prevRecord[key] !== nextRecord[key]) {
+        noopPaths.push(`plugins.installs.${id}.${key}`);
+      }
+    }
   }
 
-  return paths;
-}
-
-export function listPluginInstallTimestampMetadataPaths(
-  prevConfig: unknown,
-  nextConfig: unknown,
-): string[] {
-  return listPluginInstallRecordDiffPaths(
-    prevConfig,
-    nextConfig,
-    ({ id, prevRecord, nextRecord, paths }) => {
-      if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
-        return;
-      }
-      for (const key of PLUGIN_INSTALL_TIMESTAMP_KEYS) {
-        if (prevRecord[key] !== nextRecord[key]) {
-          paths.push(`plugins.installs.${id}.${key}`);
-        }
-      }
-    },
-  );
-}
-
-export function listPluginInstallWholeRecordPaths(
-  prevConfig: unknown,
-  nextConfig: unknown,
-): string[] {
-  return listPluginInstallRecordDiffPaths(
-    prevConfig,
-    nextConfig,
-    ({ id, prevRecord, nextRecord, paths }) => {
-      if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
-        paths.push(`plugins.installs.${id}`);
-      }
-    },
-  );
+  return { noopPaths, forceChangedPaths };
 }
 
 function extractAccountIdFromPath(channel: ChannelId, path: string): string | null {
@@ -484,7 +452,7 @@ function extractAccountIdFromPath(channel: ChannelId, path: string): string | nu
   return id && id !== DEFAULT_ACCOUNT_ID ? id : null;
 }
 
-function isResolvableChannelAccount(params: {
+function isInspectableChannelAccount(params: {
   plugin: ChannelPlugin;
   accountId: string;
   config: OpenClawConfig;
@@ -493,7 +461,9 @@ function isResolvableChannelAccount(params: {
     if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
       return false;
     }
-    params.plugin.config.resolveAccount(params.config, params.accountId);
+    const inspectAccount =
+      params.plugin.config.inspectAccount ?? params.plugin.config.resolveAccount;
+    inspectAccount(params.config, params.accountId);
     return true;
   } catch {
     return false;
@@ -577,7 +547,7 @@ export function buildGatewayReloadPlan(
       if (
         accountId === null ||
         (options.candidateConfig &&
-          !isResolvableChannelAccount({ plugin, accountId, config: options.candidateConfig }))
+          !isInspectableChannelAccount({ plugin, accountId, config: options.candidateConfig }))
       ) {
         plan.restartChannels.add(plugin.id);
         continue;

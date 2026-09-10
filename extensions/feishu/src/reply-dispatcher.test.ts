@@ -229,17 +229,25 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  function useNonStreamingAutoAccount() {
-    resolveFeishuAccountMock.mockReturnValue({
+  function createReplyAccount(
+    renderMode: "auto" | "card",
+    streamingMode: "off" | "partial",
+    domain: "feishu" | "lark",
+  ) {
+    return {
       accountId: "main",
       appId: "app_id",
       appSecret: "app_secret",
-      domain: "feishu",
+      domain,
       config: {
-        renderMode: "auto",
-        streaming: { mode: "off" },
+        renderMode,
+        streaming: { mode: streamingMode },
       },
-    });
+    };
+  }
+
+  function useNonStreamingAutoAccount() {
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "off", "feishu"));
   }
 
   it.each([
@@ -293,16 +301,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       getGlobalHookRunnerMock.mockReturnValue({
         hasHooks: vi.fn((name: string) => name === hookName),
       });
-      resolveFeishuAccountMock.mockReturnValue({
-        accountId: "main",
-        appId: "app_id",
-        appSecret: "app_secret",
-        domain: "lark",
-        config: {
-          renderMode: "card",
-          streaming: { mode: "partial" },
-        },
-      });
+      resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "lark"));
       const { result, options } = createDispatcherHarness();
 
       await options.onReplyStart?.();
@@ -854,16 +853,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("does not attach automatic mentions to card replies", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "off" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "off", "feishu"));
 
     const { options } = createDispatcherHarness({
       replyToMessageId: "om_msg",
@@ -1712,16 +1702,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent", template: "green" },
     });
 
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "off" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "off", "feishu"));
     const { options: staticOptions } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
       identity,
@@ -1921,16 +1902,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("skips final text already closed by idle streaming", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
 
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -2005,16 +1977,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("delivers distinct late final text after streaming card close", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
 
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -2119,16 +2082,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("treats block updates as delta chunks", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
 
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -2146,16 +2100,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("skips block payloads that exactly repeat the latest partial snapshot", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
 
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -2213,16 +2158,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("preserves previous generation blocks when partial snapshots reset after tools", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
 
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -2245,16 +2181,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("strips reasoning tags from streamed partial snapshots", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
 
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -3521,16 +3448,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("passes replyInThread to sendStructuredCardFeishu for card text", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "off" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "off", "feishu"));
 
     const { options } = createDispatcherHarness({
       replyToMessageId: "om_msg",
@@ -3603,16 +3521,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("omits reasoning callbacks when streaming is disabled", () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "auto",
-        streaming: { mode: "off" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "off", "feishu"));
 
     const { result } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -3719,16 +3628,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("omits the generic main header from streaming and static cards", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
 
     const { options } = createDispatcherHarness({
       agentId: "main",
@@ -3741,16 +3641,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       header: undefined,
     });
 
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "off" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "off", "feishu"));
 
     const { options: staticOptions } = createDispatcherHarness({
       agentId: "main",
@@ -3764,16 +3655,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("shows shared transient tool status on streaming cards but omits it from the final close", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
 
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -3821,16 +3703,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("omits message-like tools from streaming card status", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
 
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -3845,16 +3718,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("does not suppress a later final after error closeout", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
 
     const { options } = createDispatcherHarness({
@@ -3886,16 +3750,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("does not suppress a recovery final after late media failure", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
 
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -4324,16 +4179,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("sends no-visible-reply fallback after an empty card streaming close", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: { mode: "partial" },
-      },
-    });
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
     const runtime = createRuntimeLogger();
     const { result, options } = createDispatcherHarness({ runtime });
 

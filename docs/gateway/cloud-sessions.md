@@ -23,7 +23,7 @@ A **session** is the conversation clients attach to. A **device** is paired hard
 
 ## Start without a Gateway checkout
 
-In **New Session**, select a GitHub repository in **Place**, choose a paired device or cloud profile, and optionally set the source ref under **Remote checkout**. The Gateway records the source; the node fetches it and creates the session branch. No project clone or worktree is created on the Gateway. Startup waits for active placement before sending your prompt, and retry/reload recovery preserves the repository and ref.
+In **New Session**, select a GitHub repository in **Place**, choose a paired device or cloud profile, and optionally set the source ref under **Remote checkout**. Cloud profiles can also offer operating-system and machine-class choices in Place; the machine list follows the selected operating system. The Gateway records the source; the node fetches it and creates the session branch. No project clone or worktree is created on the Gateway. Startup waits for active placement before sending your prompt, and retry/reload recovery preserves the repository and ref.
 
 Both OpenClaw and Codex use the managed node connection for repository preparation. A provider with only an SSH carrier cannot host this source. Selecting an existing Gateway folder instead keeps the [managed-worktree flow](/concepts/managed-worktrees), including local changes and unpublished commits.
 
@@ -67,11 +67,13 @@ See [Cloud Workers](/gateway/cloud-workers) for profiles, requirements, dispatch
 
 ## Viewing the session desktop
 
-Open **Desktop** from a session to view its execution machine. Cloud sessions select their worker desktop; sessions on paired devices select that device. By default, the pop-out window keeps the session in its link, so both viewers follow placement changes and disconnect from the previous machine when the session moves or stops. A stopped cloud session does not switch either viewer to the Gateway desktop.
+Open **Desktop** from a session to connect directly to its execution machine. Cloud sessions select their worker desktop; sessions on paired devices select that device. The chat panel shows connection progress or a retry action instead of offering unrelated machines. The pop-out window keeps the session in its link, so both viewers follow placement changes and disconnect from the previous machine when the session moves or stops. A stopped cloud session does not switch either viewer to the Gateway desktop.
 
 If you choose a source in the Desktop picker, the panel keeps that choice when the session's placement changes. **Open desktop in new window** opens that source and requests the panel's current view-only or control mode. Desktop links contain no credentials and do not grant control; the new viewer still performs its normal authentication and permission checks.
 
-The machine must already support desktop viewing. For cloud workers, enable the [Cloud Worker Desktop lab and desktop profile setting](/gateway/cloud-workers#desktop-interactive). Opening Desktop starts in view-only mode and does not change the machine's permissions or the agent's tool policy. The global Desktop command in the command palette still opens the machine picker, including on chat pages.
+The machine must already support desktop viewing. For cloud workers, enable the [Cloud Worker Desktop lab and desktop profile setting](/gateway/cloud-workers#desktop-interactive). Opening Desktop starts in view-only mode and does not change the machine's permissions or the agent's tool policy. The command palette's Desktop action also follows the current session on chat pages. Outside chat, it opens the machine picker.
+
+To enter text from your local clipboard, take control and choose **Keyboard** before pasting with **Command+V** on macOS or **Ctrl+V** on Windows and Linux. The Keyboard field sends the pasted text to the remote desktop; shortcuts directed at the desktop canvas still operate on the remote machine. Keyboard input stays disabled until the control connection is ready.
 
 ## Desktop and computer control
 
@@ -89,14 +91,14 @@ For `remote-exec` turns, computer cleanup finishes before workspace reconciliati
 
 You do not have to pick a device. Choosing **Auto** (least-busy device) in the Place picker — or dispatching with `autoDevice: true` — selects a paired session host automatically and retries up to three ranked hosts if provisioning fails before a machine is allocated. OpenClaw `worker-turn` placements rank hosts by most free worker slots, breaking ties by device ID; Codex `remote-exec` placements do not consume worker slots, so eligible hosts are ranked by device ID alone. When no host qualifies, the error says exactly why: no session hosts paired, all disconnected, or all at capacity.
 
-See [Nodes](/nodes#host-openclaw-sessions) for the selection rules and [Control UI](/web/control-ui) for the picker.
+See [Nodes](/nodes/session-hosting#host-openclaw-sessions) for the selection rules and [Control UI](/web/control-ui) for the picker.
 
 ## Sleeping and waking: idle suspension and warm images
 
 Two profile settings turn cloud workers from always-on machines into compute that sleeps when idle:
 
 - `suspendAfter: "2h"` — after the session has been idle for the duration, the Gateway performs the same safe stop as **Stop cloud worker…**: it reconciles the workspace first, then releases the machine. While suspended, you pay for retained snapshot storage only. The next message provisions a replacement automatically — no button to press.
-- `settings.warmImage` — prepare the project's committed checkout and node runtime, then capture a reusable image before node enrollment. Later sessions for the same project and profile can start from that image; the first session does not have to stop first. Enabled by default when the effective machine class is known and `setupEnv` is empty. Profiles that forward host environment into setup capture only when you opt in explicitly, and `settings.warmImage: false` keeps any profile cold.
+- `settings.warmImage` — prepare the project's committed checkout and node runtime, then capture a reusable image before node enrollment. Later sessions for the same project and profile can start from that image; the first session does not have to stop first. Linux only, and enabled by default when the effective machine class is known and `setupEnv` is empty. Profiles that forward host environment into setup capture only when you opt in explicitly, and `settings.warmImage: false` keeps any profile cold.
 
 For sessions sourced from a Gateway checkout, linked worktrees share a stable project identity. A warm image retains the pristine committed seed and verified runtime, while every new session gets fresh enrollment and its current workspace files. A matching seed skips origin access and a full Git pack transfer, including for private or unpublished commits. Changed commits prepare a new seed and can refresh the project's image. Repository-only sessions instead fetch on the node and can reuse machine/runtime images and verified Git seeds; they do not prepare a project image from a Gateway checkout. The first dispatch includes preparation and any needed capture; provider startup and capture costs still determine overall latency.
 

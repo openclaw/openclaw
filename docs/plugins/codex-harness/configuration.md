@@ -103,8 +103,11 @@ scoped instructions are not silently clipped. Ordinary conversation tool-policy
 restrictions preserve that budget because project instructions are context, not
 tool authority. Their isolated native environment cannot read workspace files,
 so OpenClaw supplies the bounded workspace `AGENTS.md` snapshot as thread-level
-developer instructions. Lightweight, ring-zero, message-only, and tool-disabled
-internal turns set the native project-document budget to zero instead.
+developer instructions. An explicitly authored native
+`project_doc_max_bytes` setting overrides the 128 KiB fallback for ordinary
+threads; Codex's materialized 32 KiB default does not. Lightweight, ring-zero,
+message-only, and tool-disabled internal turns set the native project-document
+budget to zero instead.
 
 This byte budget is separate from the character-based workspace bootstrap
 limits configured through `agents.defaults.bootstrapMaxChars` and

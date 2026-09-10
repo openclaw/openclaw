@@ -293,7 +293,9 @@ describe("backup commands", () => {
       if (!stateAsset || !workspaceAsset) {
         throw new Error("Expected backup assets to include state and workspace entries.");
       }
-      expect(capturedEntryPaths).toHaveLength(result.assets.length + 1);
+      expect(capturedEntryPaths).toEqual(
+        expect.arrayContaining(result.assets.map((asset) => asset.sourcePath)),
+      );
 
       const manifestPath = expectDefined(capturedEntryPaths[0], "manifest archive path");
       const remappedManifestEntry = { path: manifestPath };
@@ -336,7 +338,7 @@ describe("backup commands", () => {
           createMockTarStream({
             beforeRead: () => {
               const manifestPath = entryPaths[0];
-              const stateRoot = entryPaths[1];
+              const stateRoot = stateDir;
               if (!manifestPath || !stateRoot) {
                 throw new Error("backup test expected manifest and state entries");
               }

@@ -80,9 +80,9 @@ class CopilotNativeSubagentTaskMirror {
         status: "cancelled",
         endedAt: eventAt,
         lastEventAt: eventAt,
-        error: "Copilot native subagent ended with its parent attempt.",
-        progressSummary: "Copilot native subagent cancelled with its parent attempt.",
-        terminalSummary: "Copilot native subagent cancelled.",
+        error: "Subagent ended with its parent attempt.",
+        progressSummary: "Subagent cancelled with its parent attempt.",
+        terminalSummary: "Subagent cancelled.",
       });
     }
     this.activeRunIds.clear();
@@ -102,19 +102,19 @@ class CopilotNativeSubagentTaskMirror {
     }
     const eventAt = this.now();
     const label = event.data.agentDisplayName.trim() || event.data.agentName.trim();
-    const task = event.data.agentDescription.trim() || `Copilot native subagent ${label}`;
+    const task = event.data.agentDescription.trim() || `Subagent ${label}`;
     const taskRecord = this.runtime.tryCreateRunningTaskRun({
       sourceId: toolCallId,
       agentId: this.params.agentId,
       runId,
-      label: label || "Copilot subagent",
+      label: label || "Subagent",
       task,
       notifyPolicy: "silent",
       deliveryStatus: "not_applicable",
       preferMetadata: true,
       startedAt: eventAt,
       lastEventAt: eventAt,
-      progressSummary: "Copilot native subagent started.",
+      progressSummary: "Subagent started.",
     });
     if (!taskRecord) {
       return;
@@ -143,7 +143,7 @@ class CopilotNativeSubagentTaskMirror {
       status: "succeeded",
       endedAt: eventAt,
       lastEventAt: eventAt,
-      progressSummary: "Copilot native subagent completed.",
+      progressSummary: "Subagent completed.",
       terminalSummary: buildCompletionSummary(event),
     });
   }
@@ -164,8 +164,8 @@ class CopilotNativeSubagentTaskMirror {
       endedAt: eventAt,
       lastEventAt: eventAt,
       error: event.data.error,
-      progressSummary: "Copilot native subagent failed.",
-      terminalSummary: "Copilot native subagent failed.",
+      progressSummary: "Subagent failed.",
+      terminalSummary: "Subagent failed.",
     });
   }
 
@@ -193,7 +193,5 @@ function buildCompletionSummary(
     event.data.totalToolCalls !== undefined ? `${event.data.totalToolCalls} tool calls` : undefined,
     event.data.totalTokens !== undefined ? `${event.data.totalTokens} tokens` : undefined,
   ].filter((value): value is string => value !== undefined);
-  return details.length > 0
-    ? `Copilot native subagent completed (${details.join(", ")}).`
-    : "Copilot native subagent completed.";
+  return details.length > 0 ? `Subagent completed (${details.join(", ")}).` : "Subagent completed.";
 }

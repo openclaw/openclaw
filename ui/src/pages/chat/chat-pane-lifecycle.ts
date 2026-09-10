@@ -381,6 +381,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       }
     }
     chatState.attach(pageState);
+    chatState.addCleanup(
+      this.context.agentIdentity.subscribe(() => void pageState.loadAssistantIdentity()),
+    );
     chatState.restoreComposer({ preserveCurrent: true });
     const sessionHandoff = this.takeSessionHandoff(pageState.sessionKey);
     if (sessionHandoff?.restore) {
@@ -481,7 +484,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
             state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
             state.requestUpdate?.();
             chatAvatars.invalidateChatAvatarCache(state);
-            state.assistantIdentityRequestVersion += 1;
             void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
           }
           handleQuestionPromptEvent(this.questionPromptState, event);

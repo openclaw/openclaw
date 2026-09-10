@@ -81,6 +81,21 @@ describe("update progress", () => {
     expect(lines.join("\n")).toContain("Build type error");
   });
 
+  it("prints the exact repair command from a recoverable step", () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    presentation = createUpdateProgress(true, context);
+    const message =
+      "Skipped temporary cleanup. Run: rm -rf -- '/opt/update fixture/candidate'. Reason: permission denied";
+    presentation.progress.onStepComplete?.({
+      ...step,
+      durationMs: 1,
+      exitCode: 1,
+      stderrTail: "permission denied",
+      advisory: { kind: "recoverable-maintenance", message },
+    });
+    expect(log.mock.calls.flat().join("\n")).toContain(message);
+  });
+
   it("follows restart verification after step progress stops and flushes before the final report", async () => {
     vi.useFakeTimers();
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});

@@ -155,8 +155,62 @@ describe("acquireFileLock", () => {
         stale: 10,
         staleRecovery: "fail-closed",
       }),
-    ).rejects.toMatchObject({ code: FILE_LOCK_STALE_ERROR_CODE });
+    ).rejects.toMatchObject({
+      code: FILE_LOCK_STALE_ERROR_CODE,
+      message: expect.stringContaining(`[owner-process-exited pid=${deadPid}`),
+    });
     await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid":${deadPid}`);
+  });
+
+  it.each([
+    {
+      name: "definitely dead",
+      payload: { pid: 2 ** 30, createdAt: "2000-01-01T00:00:00Z" },
+      reclaim: true,
+    },
+    {
+      name: "live",
+      payload: { pid: process.pid, createdAt: "2000-01-01T00:00:00Z" },
+      reclaim: false,
+    },
+    { name: "unknown owner", payload: { createdAt: "2000-01-01T00:00:00Z" }, reclaim: false },
+    { name: "invalid age", payload: { createdAt: "invalid" }, reclaim: false },
+  ])("requires definite owner retirement for $name sidecars", async ({ payload, reclaim }) => {
+    const filePath = path.join(tempDir, "owner-retirement");
+    const lockPath = `${filePath}.lock`;
+    const bytes = JSON.stringify(payload);
+    await fs.writeFile(lockPath, bytes);
+    const options = {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 10,
+      staleRecovery: "remove-if-definitely-stale",
+    } as const;
+    if (reclaim) {
+      const held = await acquireFileLock(filePath, options);
+      expect(JSON.parse(await fs.readFile(lockPath, "utf8")).pid).toBe(process.pid);
+      await held.release();
+    } else {
+      await expect(acquireFileLock(filePath, options)).rejects.toMatchObject({
+        code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+      });
+      expect(await fs.readFile(lockPath, "utf8")).toBe(bytes);
+    }
+  });
+
+  it("does not grant stale removal for an unsupported JavaScript policy", async () => {
+    const filePath = path.join(tempDir, "unsupported-policy");
+    const bytes = JSON.stringify({ pid: 2 ** 30, createdAt: "2000-01-01T00:00:00Z" });
+    await fs.writeFile(`${filePath}.lock`, bytes);
+    // JavaScript consumers are not constrained by the TypeScript option union.
+    const runtimeOptions = JSON.parse('{"staleRecovery":"unsupported-runtime-policy"}');
+    await expect(
+      acquireFileLock(filePath, {
+        retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+        stale: 10,
+        ...runtimeOptions,
+      }),
+    ).rejects.toMatchObject({ code: FILE_LOCK_STALE_ERROR_CODE });
+    expect(await fs.readFile(`${filePath}.lock`, "utf8")).toBe(bytes);
   });
 
   it("keeps a fresh lock when its payload is not readable", async () => {

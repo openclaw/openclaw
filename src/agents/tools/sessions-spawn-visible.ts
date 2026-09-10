@@ -33,6 +33,7 @@ import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-de
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
+import { resolveAgentTimeoutMs } from "../timeout.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import {
   callInProcessGatewayTool,
@@ -332,6 +333,10 @@ export async function maybeSpawnVisibleSession(params: {
         ...(group ? { category: group } : {}),
         model: resolvedModel,
         task: params.task,
+        timeoutMs:
+          runTimeoutSeconds === 0
+            ? 0
+            : resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds }),
         parentSessionKey: requesterKey,
         // Declared spawn lineage: without it the child persists as a depth-0 root
         // and could spawn past maxSpawnDepth.

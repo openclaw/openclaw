@@ -10,7 +10,7 @@ import {
   applyPresentationActionLimits,
   presentationPageSize,
   reduceInteractiveReply,
-} from "./interactive.js";
+} from "../../../plugin-sdk/interactive-runtime.js";
 
 describe("reduceInteractiveReply", () => {
   it("walks authored blocks in order", () => {

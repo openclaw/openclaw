@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 /**
  * Simple completion runtime preparation.
@@ -16,6 +17,12 @@ import {
 } from "../plugins/provider-hook-runtime.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import {
+  AsyncWorkScope,
+  captureAsyncWorkTracker,
+  getAsyncWorkSignal,
+} from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
@@ -65,38 +72,15 @@ import {
   createPreparedSimpleCompletionResolverContext,
   type PreparedSimpleCompletionResolverContext,
 } from "./simple-completion-scope.js";
+import type {
+  AgentSimpleCompletionSelection,
+  PreparedSimpleCompletionModel,
+  PreparedSimpleCompletionModelForAgent,
+  PrepareSimpleCompletionModelForAgentParams,
+} from "./simple-completion.types.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
-
-export type PreparedSimpleCompletionModel =
-  | {
-      model: Model;
-      auth: ResolvedProviderAuth;
-      /** Non-reversible owner proof captured from the same auth snapshot. */
-      sourceAuthFingerprint?: string;
-    }
-  | {
-      error: string;
-      auth?: ResolvedProviderAuth;
-    };
-
-type AgentSimpleCompletionSelection = {
-  provider: string;
-  modelId: string;
-  /** Shipped SDK return field; new selections carry canonical identity in provider. */
-  runtimeProvider?: string;
-  profileId?: string;
-  agentDir: string;
-};
-
-type PreparedSimpleCompletionModelForAgent =
-  | (Extract<PreparedSimpleCompletionModel, { model: Model }> & {
-      selection: AgentSimpleCompletionSelection;
-    })
-  | (Extract<PreparedSimpleCompletionModel, { error: string }> & {
-      selection?: AgentSimpleCompletionSelection;
-    });
 
 type SimpleCompletionSelectionParams = {
   cfg: OpenClawConfig;
@@ -181,7 +165,7 @@ export function resolveSimpleCompletionSelectionForAgent(
   return resolveSimpleCompletionSelectionRequest(params)?.selection ?? null;
 }
 
-export async function prepareSimpleCompletionModel(params: {
+export type PrepareSimpleCompletionModelParams = {
   cfg: OpenClawConfig | undefined;
   agentId?: string;
   provider: string;
@@ -198,26 +182,35 @@ export async function prepareSimpleCompletionModel(params: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   workspaceDir?: string;
   agentRuntimeId?: string;
-}): Promise<PreparedSimpleCompletionModel> {
-  return await withPreparedSimpleCompletionRuntime(
-    params,
-    [
-      {
-        provider: params.provider,
-        modelId: params.modelId,
-        ...(params.agentRuntimeId ? { runtime: params.agentRuntimeId } : {}),
-      },
-    ],
-    async (context) =>
-      await prepareSimpleCompletionModelCore(
-        { ...params, agentDir: context.preparedModelRuntime.agentDir },
-        context,
-      ),
+};
+
+/** Prepares a model within the exact generation already held by its caller. */
+export async function prepareSimpleCompletionModel(
+  params: PrepareSimpleCompletionModelParams & {
+    preparedModelRuntime: PreparedModelRuntimeSnapshot;
+  },
+): Promise<PreparedSimpleCompletionModel> {
+  const config = params.cfg ?? {};
+  const preparedModelRuntime = params.preparedModelRuntime;
+  const context = createPreparedSimpleCompletionResolverContext({
+    preparedModelRuntime,
+    workspaceDir:
+      params.workspaceDir ??
+      preparedModelRuntime.workspaceDir ??
+      resolveAgentWorkspaceDir(config, params.agentId ?? resolveDefaultAgentId(config)),
+    modelResolver: params.modelResolver,
+    agentRuntimeId: params.agentRuntimeId,
+  });
+  return await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
+    prepareSimpleCompletionModelCore(
+      { ...params, agentDir: preparedModelRuntime.agentDir },
+      context,
+    ),
   );
 }
 
 async function prepareSimpleCompletionModelCore(
-  params: Parameters<typeof prepareSimpleCompletionModel>[0],
+  params: PrepareSimpleCompletionModelParams,
   context: PreparedSimpleCompletionResolverContext,
 ): Promise<PreparedSimpleCompletionModel> {
   const { modelResolver, workspaceDir } = context;
@@ -442,8 +435,8 @@ async function prepareSimpleCompletionModelCore(
     pluginMetadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
   });
   const preparedModel = attachModelProviderRuntimePluginHandle(model, providerRuntimeHandle);
-  // Select transport hooks before releasing this generation. Keep the logical
-  // model API visible to callers that build prompts before dispatch.
+  // Capture this generation's transport hooks while keeping the logical model API
+  // visible to callers that build prompts before dispatch.
   const completionTransport = attachModelProviderRuntimePluginHandle(
     prepareModelForSimpleCompletion({
       apiRegistry: modelRuntime.apiRegistry,
@@ -460,79 +453,84 @@ async function prepareSimpleCompletionModelCore(
   };
 }
 
-async function withPreparedSimpleCompletionRuntime<T>(
+async function acquirePreparedSimpleCompletionRuntime(
   params: {
     cfg: OpenClawConfig | undefined;
     agentId?: string;
     agentDir?: string;
     modelResolver?: typeof resolveModelAsync;
-    preparedModelRuntime?: PreparedModelRuntimeSnapshot;
     workspaceDir?: string;
     agentRuntimeId?: string;
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
   runtimePluginSelections: readonly AgentHarnessPluginSelection[],
-  run: (context: PreparedSimpleCompletionResolverContext) => Promise<T>,
-): Promise<T> {
+  onAcquired: (release: () => void) => void,
+): Promise<PreparedSimpleCompletionResolverContext> {
   const config = params.cfg ?? {};
   const agentId = params.agentId ?? resolveDefaultAgentId(config);
   const agentDir = params.agentDir?.trim() || resolveAgentDir(config, agentId);
-  const requestedWorkspaceDir =
-    params.workspaceDir ??
-    params.preparedModelRuntime?.workspaceDir ??
-    resolveAgentWorkspaceDir(config, agentId);
-  const lease = params.preparedModelRuntime
-    ? undefined
-    : await acquireAgentRunPreparedModelRuntime(
-        {
-          config,
-          agentId,
-          agentDir,
-          workspaceDir: requestedWorkspaceDir,
-          loadRuntimePlugins: true,
-          runtimePluginSelections: runtimePluginSelections.map((selection) => ({
-            ...selection,
-            agentId,
-          })),
-        },
-        {
-          catalogMode: "static",
-          ...(params.pluginMetadataSnapshot
-            ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-            : {}),
-        },
-      );
-  const preparedModelRuntime = params.preparedModelRuntime ?? lease!.snapshot;
-  const workspaceDir =
-    params.workspaceDir ?? preparedModelRuntime.workspaceDir ?? requestedWorkspaceDir;
-  const context = createPreparedSimpleCompletionResolverContext({
-    preparedModelRuntime,
-    workspaceDir,
+  const requestedWorkspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
+  const lease = await acquireAgentRunPreparedModelRuntime(
+    {
+      config,
+      agentId,
+      agentDir,
+      workspaceDir: requestedWorkspaceDir,
+      loadRuntimePlugins: true,
+      runtimePluginSelections: runtimePluginSelections.map((selection) => ({
+        ...selection,
+        agentId,
+      })),
+    },
+    {
+      catalogMode: "static",
+      ...(params.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
+    },
+  );
+  onAcquired(() => lease.release());
+  return createPreparedSimpleCompletionResolverContext({
+    preparedModelRuntime: lease.snapshot,
+    workspaceDir: params.workspaceDir ?? lease.snapshot.workspaceDir ?? requestedWorkspaceDir,
     modelResolver: params.modelResolver,
     agentRuntimeId: params.agentRuntimeId,
   });
-  try {
-    return await withPluginRuntimeGenerationScope(preparedModelRuntime, () => run(context));
-  } finally {
-    lease?.release();
-  }
 }
 
-export async function prepareSimpleCompletionModelForAgent(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  agentDir?: string;
-  modelRef?: string;
-  useUtilityModel?: boolean;
-  preferredProfile?: string;
-  allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
-  allowBundledStaticCatalogFallback?: boolean;
-  /** @deprecated no-op; kept for plugin-SDK source compatibility, remove at next SDK-breaking window. */
-  useAsyncModelResolution?: boolean;
-  skipAgentDiscovery?: boolean;
-  bindAuthOwner?: boolean;
-  modelResolver?: typeof resolveModelAsync;
-}): Promise<PreparedSimpleCompletionModelForAgent> {
+type AcquiredSimpleCompletionModel =
+  | (Extract<PreparedSimpleCompletionModel, { model: Model }> & { release: () => void })
+  | Extract<PreparedSimpleCompletionModel, { error: string }>;
+
+/** Acquire the exact provider/model already selected by a finite internal caller. */
+export async function acquireSimpleCompletionModel(
+  params: Omit<Parameters<typeof prepareSimpleCompletionModel>[0], "preparedModelRuntime">,
+): Promise<AcquiredSimpleCompletionModel> {
+  return await acquirePreparedSimpleCompletionModel(
+    params,
+    [
+      {
+        provider: params.provider,
+        modelId: params.modelId,
+        ...(params.agentRuntimeId ? { runtime: params.agentRuntimeId } : {}),
+      },
+    ],
+    (context) =>
+      prepareSimpleCompletionModelCore(
+        { ...params, agentDir: context.preparedModelRuntime.agentDir },
+        context,
+      ),
+  );
+}
+
+type AcquiredSimpleCompletionModelForAgent =
+  | (Extract<PreparedSimpleCompletionModelForAgent, { model: Model }> & { release: () => void })
+  | Extract<PreparedSimpleCompletionModelForAgent, { error: string }>;
+
+/** Keeps prepared facts in use until the internal completion owner releases its lease. */
+export async function acquireSimpleCompletionModelForAgent(
+  params: PrepareSimpleCompletionModelForAgentParams,
+): Promise<AcquiredSimpleCompletionModelForAgent> {
   const selectionParams = {
     cfg: params.cfg,
     agentId: params.agentId,
@@ -605,15 +603,11 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       return { error: `No model configured for agent ${params.agentId}.` };
     }
   }
-  return await withPreparedSimpleCompletionRuntime(
-    {
-      ...params,
-      agentDir: selection.agentDir,
-      pluginMetadataSnapshot: metadataSnapshot,
-    },
+  const acquired = await acquirePreparedSimpleCompletionModel(
+    { ...params, agentDir: selection.agentDir, pluginMetadataSnapshot: metadataSnapshot },
     [{ provider: selection.provider, modelId: selection.modelId }],
-    async (context) => {
-      const prepared = await prepareSimpleCompletionModelCore(
+    (context) =>
+      prepareSimpleCompletionModelCore(
         {
           cfg: params.cfg,
           agentId: params.agentId,
@@ -630,10 +624,82 @@ export async function prepareSimpleCompletionModelForAgent(params: {
           bindAuthOwner: params.bindAuthOwner,
         },
         context,
-      );
-      return { ...prepared, selection };
-    },
+      ),
   );
+  return { ...acquired, selection };
+}
+
+async function acquirePreparedSimpleCompletionModel(
+  params: Parameters<typeof acquirePreparedSimpleCompletionRuntime>[0],
+  runtimePluginSelections: readonly AgentHarnessPluginSelection[],
+  prepareModel: (
+    context: PreparedSimpleCompletionResolverContext,
+  ) => Promise<PreparedSimpleCompletionModel>,
+): Promise<AcquiredSimpleCompletionModel> {
+  const result = createDeferredCore<AcquiredSimpleCompletionModel>();
+  const trackOwner = captureAsyncWorkTracker();
+  const parentSignal = getAsyncWorkSignal();
+  const work = new AsyncWorkScope();
+  let runInContext = work.run(() => AsyncLocalStorage.snapshot());
+  let releaseRuntime: (() => void) | undefined;
+  let setupSettled = false;
+  let callerReleased = true;
+  const releaseWhenUnused = () => {
+    if (setupSettled && callerReleased) {
+      const release = releaseRuntime;
+      releaseRuntime = undefined;
+      release?.();
+    }
+  };
+  const prepare = async () => {
+    const context = await acquirePreparedSimpleCompletionRuntime(
+      params,
+      runtimePluginSelections,
+      (release) => {
+        releaseRuntime = release;
+      },
+    );
+    const prepared = await withPluginRuntimeGenerationScope(context.preparedModelRuntime, () => {
+      runInContext = AsyncLocalStorage.snapshot();
+      return prepareModel(context);
+    });
+    if ("error" in prepared) {
+      return prepared;
+    }
+    callerReleased = false;
+    return {
+      ...prepared,
+      release: () => {
+        callerReleased = true;
+        releaseWhenUnused();
+      },
+    };
+  };
+  // Host work includes setup only; host close releases adopted model claims after drainage.
+  void trackOwner(async () => {
+    const closeFromParent = () => runInContext(() => work.beginClose(parentSignal?.reason));
+    parentSignal?.addEventListener("abort", closeFromParent, { once: true });
+    if (parentSignal?.aborted) {
+      closeFromParent();
+    }
+    try {
+      result.resolve(await work.track(prepare));
+    } catch (error) {
+      result.reject(error);
+    } finally {
+      try {
+        await AsyncWorkScope.runWhenAllIdle(
+          () => [work],
+          () => runInContext(() => work.drain()),
+        );
+      } finally {
+        parentSignal?.removeEventListener("abort", closeFromParent);
+        setupSettled = true;
+        releaseWhenUnused();
+      }
+    }
+  }).catch(result.reject);
+  return await result.promise;
 }
 
 export { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";

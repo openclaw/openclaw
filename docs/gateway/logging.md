@@ -12,7 +12,7 @@ For a user-facing overview (CLI + Control UI + config), see [/logging](/logging)
 
 OpenClaw has two log surfaces:
 
-- **Console output** - what you see in the terminal / Debug UI.
+- **Console output** - what you see in the terminal.
 - **File logs** - JSON lines written by the gateway logger.
 
 At startup, the Gateway logs the resolved default agent model plus the mode defaults that affect new sessions:
@@ -199,7 +199,7 @@ The console formatter is **TTY-aware** and prints consistent, prefixed lines. Su
 - **Shortened subsystem prefixes**: drops a leading `gateway/`, `channels/`, or `providers/` segment, then keeps at most the last 2 remaining segments (e.g. `channels/turn/execution` displays as `turn/execution`). Known channel subsystems (`telegram`, `whatsapp`, `slack`, etc.) always collapse to just the channel name.
 - **Sub-loggers by subsystem** (auto prefix + structured field `{ subsystem }`).
 - **`logRaw()`** for QR/UX output (no prefix, no formatting).
-- **Console styles**: `pretty` | `compact` | `json`.
+- **Console styles**: `pretty` | `json` (`compact` is applied automatically off-TTY and is not a settable value).
 - **Console log level** is separate from file log level (file keeps full detail when `logging.level` is `debug`/`trace`).
 - **WhatsApp message bodies** log at `debug` (use `--verbose` to see them).
 
@@ -210,3 +210,4 @@ This keeps file logs stable while making interactive output scannable.
 - [Logging](/logging)
 - [OpenTelemetry export](/gateway/opentelemetry)
 - [Diagnostics export](/gateway/diagnostics)
+- [`openclaw logs`](/cli/logs) — tail Gateway logs over RPC from the CLI

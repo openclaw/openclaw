@@ -424,6 +424,10 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     const params = baseRunParams({
       sessionTarget,
       toolsAllow: ["memory_search", "memory_get", "notes_retrieve_context"],
+      fastMode: "auto",
+      fastModeStartedAtMs: 1000,
+      fastModeAutoOnSeconds: 15,
+      authProfileId: "selected-subscription-profile",
     });
 
     const result = await runEmbeddedAgentViaCliBackendIfEligible(params);
@@ -438,6 +442,10 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       sessionFile: "/tmp/recall/session.jsonl",
       timeoutMs: 30_000,
       runTimeoutOverrideMs: 30_000,
+      fastMode: "auto",
+      fastModeStartedAtMs: 1000,
+      fastModeAutoOnSeconds: 15,
+      authProfileId: "selected-subscription-profile",
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
       requireExplicitMessageTarget: true,

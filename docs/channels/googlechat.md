@@ -259,7 +259,7 @@ openclaw channels status
 ## Related
 
 - [Channels Overview](/channels) — all supported channels
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
 - [Gateway configuration](/gateway/configuration)
 - [Groups](/channels/groups) — group chat behavior and mention gating
 - [Pairing](/channels/pairing) — DM authentication and pairing flow

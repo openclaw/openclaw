@@ -26,6 +26,7 @@ import {
   canAccessTaskRequesterSession,
   prepareTaskSessionReadFilter,
 } from "../task-session-access.js";
+import { taskHistoryHandler } from "./task-history.js";
 import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -289,6 +290,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     // stay compact while detail views can show the operator what was requested.
     respond(true, { task: mapTaskSummary(task, { includePrompt: true }) });
   },
+  "tasks.history": taskHistoryHandler,
   "tasks.cancel": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksCancelParams, "tasks.cancel", respond)) {
       return;

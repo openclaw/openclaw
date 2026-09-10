@@ -178,8 +178,11 @@ async function readTelegramIngressStatuses(stateDir: string, eventIds: string[])
         .selectFrom("channel_ingress_events")
         .select([
           "account_id as accountId",
+          "attempts",
           "event_id as eventId",
           "lane_key as laneKey",
+          "last_attempt_at as lastAttemptAt",
+          "last_error as lastError",
           "queue_name as queueName",
           "status",
         ])
@@ -637,16 +640,14 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
               timeout: 30_000,
             })
             .toBe("providers");
-          await expect
-            .poll(() => gateway.call("models.list", { view: "default" }), {
-              interval: 50,
-              timeout: 30_000,
-            })
-            .toMatchObject({
-              models: expect.arrayContaining([
-                expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
-              ]),
-            });
+          // Startup publishes a static owner; one explicit refresh owns live discovery.
+          await expect(
+            gateway.call("models.list", { view: "default", refresh: true }),
+          ).resolves.toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+            ]),
+          });
           expect(discoveryRequests).toBeGreaterThan(0);
           const warmDiscoveryRequests = discoveryRequests;
           discoveryFrozen = true;
@@ -930,9 +931,20 @@ test("recovers a replaced model catalog and drains the following Telegram callba
   const pendingUpdates: unknown[] = [];
   const getUpdatesOffsets: Array<number | undefined> = [];
   let telegramPolls = 0;
+  let pendingGetUpdatesResponse: ServerResponse | undefined;
+
+  const flushPendingUpdates = () => {
+    if (!pendingGetUpdatesResponse || pendingUpdates.length === 0) {
+      return;
+    }
+    const response = pendingGetUpdatesResponse;
+    pendingGetUpdatesResponse = undefined;
+    succeed(response, pendingUpdates.splice(0));
+  };
 
   const queueCallback = (updateId: number, data: string) => {
     pendingUpdates.push(callbackUpdate(updateId, `replacement-callback-${updateId}`, data));
+    flushPendingUpdates();
   };
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
@@ -960,7 +972,18 @@ test("recovers a replaced model catalog and drains the following Telegram callba
     if (method === "getUpdates") {
       telegramPolls += 1;
       getUpdatesOffsets.push(typeof body.offset === "number" ? body.offset : undefined);
-      succeed(res, pendingUpdates.splice(0));
+      if (pendingUpdates.length > 0) {
+        succeed(res, pendingUpdates.splice(0));
+      } else {
+        // Model Telegram's long poll so callbacks queued after an empty poll do not wait for
+        // grammY's idle backoff before reaching the durable ingress queue.
+        pendingGetUpdatesResponse = res;
+        res.once("close", () => {
+          if (pendingGetUpdatesResponse === res) {
+            pendingGetUpdatesResponse = undefined;
+          }
+        });
+      }
       return;
     }
     telegramCalls.push({ method, body });
@@ -1011,27 +1034,28 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           await gateway.request("mark");
           queueCallback(10, `mdl_list_${REPLACEMENT_PROVIDER}_1`);
           queueCallback(11, "mdl_prov");
+          // Wait for a durable stale-catalog retry, not merely the initial pending enqueue.
           await expect
-            .poll(async () => await readTelegramIngressStatuses(stateDir, eventIds), {
-              interval: 5,
-              timeout: 600,
-            })
-            .toEqual([
+            .poll(
+              async () => {
+                const first = (await readTelegramIngressStatuses(stateDir, eventIds))[0];
+                return first ? { ...first, retryRecorded: Number(first.attempts) >= 1 } : first;
+              },
               {
+                interval: 25,
+                timeout: 30_000,
+              },
+            )
+            .toEqual(
+              expect.objectContaining({
                 accountId: "picker",
                 eventId: eventIds[0],
-                laneKey: `telegram:${CHAT_ID}`,
-                queueName: '["telegram","picker"]',
-                status: "claimed",
-              },
-              {
-                accountId: "picker",
-                eventId: eventIds[1],
-                laneKey: `telegram:${CHAT_ID}`,
-                queueName: '["telegram","picker"]',
+                lastAttemptAt: expect.any(Number),
+                lastError: expect.stringContaining("Model catalog is not ready"),
+                retryRecorded: true,
                 status: "pending",
-              },
-            ]);
+              }),
+            );
 
           await gateway.request("replace");
 
@@ -1049,12 +1073,14 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           );
           expect(firstPickerEdit).toBeDefined();
           expect(hasCallback(firstPickerEdit!, `mdl_sel_${REPLACEMENT_MODEL_REF}`)).toBe(true);
+          // A durable retry may re-acknowledge a callback; require coverage of both callback ids.
           expect(
-            telegramCalls
-              .filter((call) => call.method === "answerCallbackQuery")
-              .map((call) => call.body.callback_query_id)
-              .toSorted((a, b) => String(a).localeCompare(String(b))),
-          ).toEqual(["replacement-callback-10", "replacement-callback-11"]);
+            new Set(
+              telegramCalls
+                .filter((call) => call.method === "answerCallbackQuery")
+                .map((call) => call.body.callback_query_id),
+            ),
+          ).toEqual(new Set(["replacement-callback-10", "replacement-callback-11"]));
           expect(getUpdatesOffsets).toContain(12);
 
           await expect
@@ -1071,10 +1097,13 @@ test("recovers a replaced model catalog and drains the following Telegram callba
               claims: 0,
               failed: 0,
               pending: 0,
-              statuses: eventIds.map((eventId) => ({
+              statuses: eventIds.map((eventId, index) => ({
                 accountId: "picker",
+                attempts: index === 0 ? expect.any(Number) : 0,
                 eventId,
                 laneKey: `telegram:${CHAT_ID}`,
+                lastAttemptAt: null,
+                lastError: null,
                 queueName: '["telegram","picker"]',
                 status: "completed",
               })),

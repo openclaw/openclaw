@@ -41,7 +41,7 @@ metadata precedence does not change MIME detection when media bytes are loaded o
 
 - Input: local file path **or** HTTP(S) URL.
 - Flow: load into a buffer, detect media kind, then build the outbound payload per kind:
-  - **Images:** optimized to fit under `channels.whatsapp.mediaMaxMb` (default 50MB). Opaque images are recompressed to JPEG (default side ladder starts at 2048px, descending on repeated size misses); images with transparency are kept as PNG. If the source is already an acceptable JPEG/PNG/WebP within the size and side-length budget, the original bytes are preserved unchanged instead of being recompressed. Animated GIFs are never re-encoded, only size-checked.
+  - **Images:** optimized to fit under `channels.whatsapp.mediaMaxMb` (default 50MB). Opaque images are recompressed to JPEG (default side ladder starts at 2048px, descending on repeated size misses); images with transparency are kept as PNG. If the source is already an acceptable JPEG/PNG/WebP within the size and side-length budget, the original bytes are preserved unchanged instead of being recompressed, even when a stale `.heic` or `.heif` filename remains after conversion. Animated GIFs are never re-encoded, only size-checked.
   - **Audio/voice:** unless already native voice audio (`.ogg`/`.opus`, or `audio/ogg`/`audio/opus`), outbound audio is transcoded via `ffmpeg` to Opus/OGG (48kHz mono, 64kbps, capped at 20 minutes) before sending as a voice note (`ptt: true`).
   - **Video:** pass-through up to 16MB.
   - **Documents:** anything else, up to 100MB, with filename preserved when available.

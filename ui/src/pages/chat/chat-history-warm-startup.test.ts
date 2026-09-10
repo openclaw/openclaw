@@ -1,6 +1,11 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "../../lib/sessions/session-capability.test-support.ts";
+import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
 import {
   resetChatHistoryProjection,
   synchronizeInitialChatSnapshotConnection,
@@ -12,6 +17,7 @@ import {
   nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import type { ChatMessageCache, ChatSessionSnapshot } from "./session-message-cache.ts";
 import * as snapshotDatabase from "./session-snapshot-database.ts";
@@ -45,8 +51,9 @@ function mountPane(
   panes.push(pane);
   vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
   vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
-  pane.context = createInitializationContext();
-  pane.context.gateway.snapshot.phase = connectedAtMount ? "connected" : "connecting";
+  const context = createInitializationContext();
+  context.gateway.snapshot.phase = connectedAtMount ? "connected" : "connecting";
+  pane.context = { ...context, sessions: createTestSessionCapability(context.gateway) };
   pane.sessionKey = key;
   pane.chatMessagesBySession = memory;
   if (withStore) {
@@ -61,13 +68,14 @@ function mountPane(
   const liveResult = {
     messages: liveMessages,
     sessionId: "warm-session",
-    sessionInfo: { key, kind: "direct", sessionId: "warm-session" },
+    sessionInfo: { key, kind: "direct", sessionId: "warm-session", updatedAt: 1 },
     hasMore: false,
     deltaCursor: "live-cursor",
   };
-  const request = vi.fn(async () => liveResult);
+  const request = createGatewayRequestMock(async () => liveResult);
   const client = createGatewayBrowserClientFixture({ request });
   return {
+    client,
     state,
     read,
     request,
@@ -84,6 +92,32 @@ function mountPane(
   };
 }
 
+function connectSessionOwner(
+  h: ReturnType<typeof mountPane>,
+  history = h.liveResult,
+  startup = h.liveResult,
+) {
+  h.connect();
+  h.request.mockImplementation(async (method) => {
+    switch (method) {
+      case "chat.history":
+        return history;
+      case "chat.startup":
+        return startup;
+      case "agent.identity.get":
+      case "chat.metadata":
+        return {};
+      default:
+        throw new Error(`Unexpected request: ${method}`);
+    }
+  });
+  const { gateway } = createGatewayHarness(h.client);
+  const sessions = createTestSessionCapability(gateway);
+  h.state.sessions = sessions;
+  onTestFinished(() => sessions.dispose());
+  return { gateway, sessions };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
@@ -92,6 +126,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const pane of panes.splice(0)) {
     pane.disconnectedCallback();
+    pane.context.sessions.dispose();
   }
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -162,19 +197,72 @@ describe("first chat startup snapshot ordering", () => {
     );
   });
 
-  it("still requests startup after an ordinary history refresh completes during the wait", async () => {
+  it("observes startup at actual issuance after an ordinary history refresh during the wait", async () => {
     const h = mountPane();
-    h.connect();
-    const startup = h.start();
-    await loadChatHistory(h.state, { deferBranches: true });
+    const during = {
+      ...h.liveResult,
+      sessionInfo: { ...h.liveResult.sessionInfo, label: "During hydration wait" },
+    };
+    const after = {
+      ...h.liveResult,
+      sessionInfo: { ...h.liveResult.sessionInfo, label: "After hydration wait" },
+    };
+    const { sessions } = connectSessionOwner(h, during, after);
+    const historyMethods = () =>
+      h.request.mock.calls
+        .map(([method]) => method)
+        .filter((method) => method === "chat.history" || method === "chat.startup");
+    const startup = refreshPageChat(h.state, {
+      historyLoad: h.start(),
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+    await refreshPageChat(h.state, {
+      historyLoad: loadChatHistory(h.state, { deferBranches: true }),
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
     expect(h.request).toHaveBeenCalledExactlyOnceWith("chat.history", expect.anything());
-    h.read.resolve(stored);
+    expect(sessions.state.result?.sessions[0]?.label).toBe(during.sessionInfo.label);
+    await vi.advanceTimersByTimeAsync(299);
+    expect(historyMethods()).toEqual(["chat.history"]);
+    await vi.advanceTimersByTimeAsync(1);
     await startup;
-    expect(h.request).toHaveBeenCalledTimes(2);
+    expect(historyMethods()).toEqual(["chat.history", "chat.startup"]);
     expect(h.request).toHaveBeenLastCalledWith(
       "chat.startup",
       expect.objectContaining({ cursor: "live-cursor" }),
     );
+    expect(sessions.state.result?.sessions[0]?.label).toBe(after.sessionInfo.label);
+    expect(h.state.chatMessages).toEqual(liveMessages);
+    h.read.resolve(stored);
+  });
+
+  it("retires the prior session owner while the shared hydration wait is pending", async () => {
+    const h = mountPane();
+    const { gateway, sessions } = connectSessionOwner(h);
+    const retired = h.start();
+    await vi.advanceTimersByTimeAsync(100);
+    const replacement = createTestSessionCapability(gateway);
+    onTestFinished(() => replacement.dispose());
+    h.state.sessions = replacement;
+    const current = refreshPageChat(h.state, {
+      historyLoad: h.start(),
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+    await vi.advanceTimersByTimeAsync(199);
+    expect(h.request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(retired).resolves.toBeUndefined();
+    await current;
+    expect(h.request.mock.calls.filter(([method]) => method === "chat.startup")).toEqual([
+      ["chat.startup", expect.anything()],
+    ]);
+    expect(sessions.state.result).toBeNull();
+    expect(replacement.state.result?.sessions[0]).toMatchObject(h.liveResult.sessionInfo);
+    expect(h.state.chatMessages).toEqual(liveMessages);
+    h.read.resolve(stored);
   });
 
   it.each([

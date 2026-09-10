@@ -189,7 +189,17 @@ function seedUnknownWorkerState(
   const database = openOpenClawStateDatabase({ path: databasePath });
   try {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    database.db
+      .prepare(
+        "UPDATE worker_environments SET state = 'attached', attached_session_ids_json = ? WHERE environment_id = ?",
+      )
+      .run(JSON.stringify([lost.sessionId]), ENVIRONMENT_ID);
     seedPlacement(store, lost);
+    database.db
+      .prepare(
+        "UPDATE worker_environments SET state = 'orphaned', attached_session_ids_json = '[]' WHERE environment_id = ?",
+      )
+      .run(ENVIRONMENT_ID);
     let other = store.startDispatch(isolated);
     other = store.transition({
       sessionId: isolated.sessionId,
@@ -239,7 +249,7 @@ async function runProof(options: ProducerOptions) {
   const gatewayOwner = createQaGatewayChild();
   let gateway: Gateway | undefined;
   let verdict: Record<string, unknown> | undefined;
-  let proofError: unknown;
+  let proofError: Error | undefined;
   try {
     bus = await startQaBusServer({ state });
     mock = await startQaMockOpenAiServer();
@@ -292,9 +302,13 @@ async function runProof(options: ProducerOptions) {
     ) {
       throw new Error("session placements did not retain their distinct environment identities");
     }
-    const firstReason = String(first.terminalReason ?? "");
-    if (!firstReason.startsWith("cloud worker disappeared:") || firstReason.length > 1_024) {
-      throw new Error(`unexpected disappearance reason: ${firstReason}`);
+    const firstReason = first.terminalReason;
+    if (
+      typeof firstReason !== "string" ||
+      !firstReason.startsWith("cloud worker disappeared:") ||
+      firstReason.length > 1_024
+    ) {
+      throw new Error(`unexpected disappearance reason: ${JSON.stringify(firstReason)}`);
     }
     if (independent.terminalReason !== INDEPENDENT_REASON || firstReason === INDEPENDENT_REASON) {
       throw new Error("independent session placements leaked terminal reasons");
@@ -362,7 +376,10 @@ async function runProof(options: ProducerOptions) {
       "utf8",
     );
   } catch (error) {
-    proofError = error;
+    proofError =
+      error instanceof Error
+        ? error
+        : new Error("cloud worker disappearance proof failed", { cause: error });
   } finally {
     const cleanup = await Promise.allSettled([
       stopQaGatewayFixture(gatewayOwner),

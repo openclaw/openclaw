@@ -17,6 +17,8 @@ Setup commands by intent:
 - `openclaw configure` changes targeted parts of an existing setup: model auth, gateway, channels, plugins, or skills.
 - `openclaw channels add` configures channel accounts after the baseline exists; a channel selection alone uses guided setup, while account, credential, or channel-config flags use the direct path for scripts.
 
+<a id="status" />
+
 ## Command pages
 
 | Area                         | Commands                                                                                                                                                                                                                              |
@@ -27,11 +29,12 @@ Setup commands by intent:
 | Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
 | Gateway and logs             | [`fleet`](/cli/fleet) · [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                     |
 | Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`wiki`](/cli/wiki)                                                            |
-| Network and nodes            | [`connect`](/cli/connect) · [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                         |
+| Network and nodes            | [`connect`](/cli/connect) · [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
 | Runtime and sandbox          | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)             |
-| Automation                   | [`cron`](/cli/cron) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                 |
+| Worktrees                    | [`worktrees`](/concepts/managed-worktrees)                                                                                                                                                                                            |
+| Automation                   | [`cron`](/cli/cron) (alias `automations`) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                           |
 | Discovery and docs           | [`dns`](/cli/dns) · [`docs`](/cli/docs)                                                                                                                                                                                               |
-| Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`channels`](/cli/channels)                                                                                                                                                             |
+| Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`devices`](/cli/devices) · [`channels`](/cli/channels)                                                                                                                                 |
 | Security and plugins         | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                 |
 | Legacy aliases               | [`daemon`](/cli/daemon) (gateway service) · [`clawbot`](/cli/clawbot) (namespace)                                                                                                                                                     |
 | Plugins (optional)           | [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) · [`workboard`](/cli/workboard) (if installed)                                                                                                          |
@@ -88,8 +91,11 @@ envelope:
 ```
 
 A command may add domain-specific fields, such as per-item results, beside this
-envelope. Failure messages are sanitized. Human-readable diagnostics may also be
-written to stderr, so scripts should parse stdout and still check the exit status.
+envelope. Gateway-backed agent turns that fail after the Gateway accepted the run
+also record the accepted `runId` and `origin: "gateway"` beside the envelope, so
+scripts can report the in-flight run. Failure messages are sanitized. Human-readable
+diagnostics may also be written to stderr, so scripts should parse stdout and still
+check the exit status.
 
 ## Color palette
 
@@ -331,6 +337,12 @@ openclaw [--dev] [--profile <name>] <command>
     restart
     upgrade
     rm
+  worktrees
+    list
+    create
+    remove
+    restore
+    gc
   daemon
     status
     install

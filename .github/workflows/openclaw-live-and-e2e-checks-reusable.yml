@@ -109,6 +109,11 @@ on:
           - beta
           - stable
           - full
+      gateway_repo_e2e_use_github_hosted_runners:
+        description: Use GitHub-hosted Gateway repo E2E when the overall hosted-runner option is enabled
+        required: false
+        default: true
+        type: boolean
       use_github_hosted_runners:
         description: Use GitHub-hosted runners where supported, including OpenWebUI
         required: false
@@ -461,6 +466,11 @@ on:
         required: false
         default: stable
         type: string
+      gateway_repo_e2e_use_github_hosted_runners:
+        description: Use GitHub-hosted Gateway repo E2E when the overall hosted-runner option is enabled
+        required: false
+        default: true
+        type: boolean
       use_github_hosted_runners:
         description: Use GitHub-hosted runners where supported, including OpenWebUI
         required: false
@@ -1083,7 +1093,7 @@ jobs:
          {"name":"Gateway 2/4","command":"pnpm test:e2e:gateway --shard=2/4"},
          {"name":"Gateway 3/4","command":"pnpm test:e2e:gateway --shard=3/4"},
          {"name":"Gateway 4/4","command":"pnpm test:e2e:gateway --shard=4/4"}]
-      use_github_hosted_runners: ${{ inputs.use_github_hosted_runners }}
+      use_github_hosted_runners: ${{ inputs.use_github_hosted_runners && inputs.gateway_repo_e2e_use_github_hosted_runners }}
       advisory: ${{ inputs.advisory }}
       allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
@@ -1562,6 +1572,9 @@ jobs:
           if [[ "$credentials" == *",anthropic,"* ]]; then
             require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
           fi
+          if [[ "$credentials" == *",anthropic-api-key,"* ]]; then
+            require_any "Anthropic API key" ANTHROPIC_API_KEY
+          fi
           if [[ "$credentials" == *",factory,"* ]]; then
             require_any Factory FACTORY_API_KEY
           fi
@@ -1596,6 +1609,8 @@ jobs:
             OPENCLAW_SKIP_DOCKER_BUILD=0 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
           fi
 
+          source .release-harness/scripts/lib/frozen-target-compat.sh
+          openclaw_resolve_frozen_update_channel_dry_run_mode "$GITHUB_WORKSPACE"
           node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize Docker E2E chunk
@@ -1947,6 +1962,9 @@ jobs:
           if [[ "$credentials" == *",anthropic,"* ]]; then
             require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
           fi
+          if [[ "$credentials" == *",anthropic-api-key,"* ]]; then
+            require_any "Anthropic API key" ANTHROPIC_API_KEY
+          fi
           if [[ "$credentials" == *",factory,"* ]]; then
             require_any Factory FACTORY_API_KEY
           fi
@@ -1984,6 +2002,8 @@ jobs:
           fi
           export OPENCLAW_DOCKER_ALL_BUILD=0
 
+          source .release-harness/scripts/lib/frozen-target-compat.sh
+          openclaw_resolve_frozen_update_channel_dry_run_mode "$GITHUB_WORKSPACE"
           node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize targeted Docker E2E lanes
@@ -2391,6 +2411,9 @@ jobs:
           if [[ "$PREPARE_ONLY" == "true" ]]; then
             # Shared artifacts serve both release-path and plugin prerelease consumers.
             # Plan their union here without expanding either child's execution scope.
+            if [[ -z "$OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS" ]]; then
+              export OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS="base legacy-operator-state"
+            fi
             preparation_lanes="$(node --input-type=module <<'NODE'
           import { allReleasePathLanes } from "./.release-harness/scripts/lib/docker-e2e-scenarios.mts";
           import { createPluginPrereleaseTestPlan } from "./.release-harness/scripts/lib/plugin-prerelease-test-plan.mts";

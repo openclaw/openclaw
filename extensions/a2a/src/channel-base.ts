@@ -1,4 +1,5 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
   listA2aChannelAccountIds,
   resolveA2aChannelAccount,
@@ -65,20 +66,17 @@ export function createA2aChannelPluginBase(): A2aChannelPluginBase {
           const peerName = setup.peerName?.trim();
           const peerToken = setup.peerToken?.trim();
           const advertisedUrl = setup.advertisedUrl?.trim();
-          return {
-            ...cfg,
-            channels: {
-              ...cfg.channels,
-              a2a: {
-                ...current,
-                enabled: true,
-                ...(advertisedUrl ? { advertisedUrl } : {}),
-                ...(peerName && peerToken
-                  ? { peers: { ...current.peers, [peerName]: { token: peerToken } } }
-                  : {}),
-              },
+          return patchTopLevelChannelConfigSection({
+            cfg,
+            channel: A2A_CHANNEL_ID,
+            enabled: true,
+            patch: {
+              ...(advertisedUrl ? { advertisedUrl } : {}),
+              ...(peerName && peerToken
+                ? { peers: { ...current.peers, [peerName]: { token: peerToken } } }
+                : {}),
             },
-          };
+          });
         },
       },
     }),

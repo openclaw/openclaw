@@ -4,6 +4,11 @@ type AttachmentPayload = {
   blob?: Blob;
   dataUrl?: string;
   previewUrl?: string;
+  videoPoster?: {
+    controller: AbortController;
+    promise: Promise<string | null>;
+    url?: string;
+  };
 };
 
 const payloads = new Map<string, AttachmentPayload>();
@@ -37,6 +42,55 @@ export function registerChatAttachmentPayload(params: {
 
 export function getChatAttachmentDataUrl(attachment: ChatAttachment): string | null {
   return attachment.dataUrl ?? payloads.get(attachment.id)?.dataUrl ?? null;
+}
+
+export function getChatAttachmentVideoPosterUrl(
+  attachment: ChatAttachment,
+): Promise<string | null> | null {
+  const payload = payloads.get(attachment.id);
+  if (payload?.videoPoster) {
+    return payload.videoPoster.promise;
+  }
+  // Use retained Files; never reconstruct a data URL just for a poster.
+  if (!(payload?.blob instanceof File) || payload.blob.size > 512 * 1024 * 1024) {
+    return null;
+  }
+  const file = payload.blob;
+  const src = createObjectUrl(file);
+  if (!src) {
+    return null;
+  }
+  const controller = new AbortController();
+  const poster: NonNullable<AttachmentPayload["videoPoster"]> = {
+    controller,
+    promise: import("../../lib/media/video-poster.ts")
+      .then(
+        ({ requestVideoPoster }) =>
+          requestVideoPoster({
+            key: file,
+            src,
+            width: 54,
+            height: 54,
+            signal: controller.signal,
+          }),
+        () => null,
+      )
+      .then((blob) => {
+        if (!blob || payloads.get(attachment.id)?.videoPoster !== poster) {
+          return null;
+        }
+        poster.url = createObjectUrl(blob);
+        return poster.url ?? null;
+      })
+      .finally(() => revokeObjectUrl(src)),
+  };
+  payload.videoPoster = poster;
+  return poster.promise;
+}
+
+function releaseVideoPoster(payload: AttachmentPayload): void {
+  payload.videoPoster?.controller.abort();
+  revokeObjectUrl(payload.videoPoster?.url);
 }
 
 function blobFromDataUrl(dataUrl: string): Blob | null {
@@ -107,6 +161,7 @@ export function releaseChatAttachmentPayload(id: string): void {
   if (!payload) {
     return;
   }
+  releaseVideoPoster(payload);
   revokeObjectUrl(payload.previewUrl);
   payloads.delete(id);
 }
@@ -168,6 +223,7 @@ function discardChatAttachmentDataUrl(id: string): void {
   if (!payload) {
     return;
   }
+  releaseVideoPoster(payload);
   if (payload.previewUrl) {
     payloads.set(id, { previewUrl: payload.previewUrl });
     return;

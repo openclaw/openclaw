@@ -30,6 +30,34 @@ export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 // `providers --json` is a static compiled report; bound picker latency for a hung binary.
 // Failed reads leave machine overrides unavailable until a later discovery request succeeds.
 export const CRABBOX_MACHINE_CATALOG_TIMEOUT_MS = 5_000;
+export const WARM_IMAGE_COMMAND_TIMEOUT_MS = 60_000;
+// Keep the existing three-minute envelope for scrub and checkpoint command overhead.
+export const WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS = 180_000;
+// Match Crabbox's native-capture timeout; Daytona includes source preparation and stop.
+export const WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS = 45 * 60_000;
+
+export function resolveCrabboxCheckpointCaptureTimeoutMs(provider: string): number {
+  // Machine0 stops/restores with separate default 15m windows. Daytona grants
+  // 3m for source recovery after its native-capture budget.
+  const sourceLifecycleMs =
+    provider === "machine0" ? 30 * 60_000 : provider === "daytona" ? 180_000 : 0;
+  return (
+    WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS + WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS + sourceLifecycleMs
+  );
+}
+
+export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): number {
+  // Include collection, verification, missing-image deletion, capacity reclamation,
+  // and predecessor retirement as well as scrub/create; core must await the owner.
+  return (
+    5 * WARM_IMAGE_COMMAND_TIMEOUT_MS +
+    WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS +
+    resolveCrabboxCheckpointCaptureTimeoutMs(provider) +
+    // Each timed-out command must join its child/tree before core closes the owner.
+    7 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS
+  );
+}
+
 // Fixed-lease inspection can follow warmup's final read; allow four one-minute retries.
 const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 5 * 60_000;
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.

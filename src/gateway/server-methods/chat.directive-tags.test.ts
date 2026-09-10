@@ -14,6 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
+import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
@@ -52,6 +53,7 @@ import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import {
   getActiveSessionWorkAdmissionCount,
+  getSessionWorkAdmissionRelease,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { projectAssistantDisplayContent } from "../../shared/assistant-display-content.js";
@@ -1243,7 +1245,7 @@ function setSavedMediaResults(...results: Array<[path: string, contentType: stri
 async function createAudioTranscriptFixture(prefix: string, fileName = "tts.mp3") {
   const transcriptDir = await createTranscriptFixture(prefix);
   const audioPath = path.join(transcriptDir, fileName);
-  fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+  fs.writeFileSync(audioPath, createPlaybackMediaFixture("mp3"));
   mockState.config = { agents: { defaults: { workspace: transcriptDir } } };
   return { audioPath, transcriptDir };
 }
@@ -3445,6 +3447,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       },
     ]);
+    const { storePath, sessionId } = mockState;
     const { send } = createChatRequestFixture();
 
     await send({
@@ -3453,25 +3456,24 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
-    await waitForAssertion(() => {
-      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "audio");
-      const message = assistantUpdate?.message as Record<string, any> | undefined;
-      const content = Array.isArray(message?.content)
-        ? (message.content as Array<Record<string, any>>)
-        : [];
-      expect(message?.role).toBe("assistant");
-      expect(message?.idempotencyKey).toBe("idem-agent-audio:assistant-media");
-      expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-      expect(content[1]).toEqual(
-        expect.objectContaining({
-          type: "audio",
-          artifactId: expect.stringMatching(/^artifact_managed_media_/u),
-          fileName: "reply.mp3",
-          mimeType: "audio/mpeg",
-        }),
-      );
-      expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
-    });
+    await getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionId] });
+    const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "audio");
+    const message = assistantUpdate?.message as Record<string, any> | undefined;
+    const content = Array.isArray(message?.content)
+      ? (message.content as Array<Record<string, any>>)
+      : [];
+    expect(message?.role).toBe("assistant");
+    expect(message?.idempotencyKey).toBe("idem-agent-audio:assistant-media");
+    expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
+    expect(content[1]).toEqual(
+      expect.objectContaining({
+        type: "audio",
+        artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+        fileName: "reply.mp3",
+        mimeType: "audio/mpeg",
+      }),
+    );
+    expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
   });
 
   it.each([false, true])(
@@ -4757,7 +4759,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
     const transcriptDir = await createTranscriptFixture("openclaw-chat-send-command-tts-final-");
     const audioPath = path.join(transcriptDir, "tts.mp3");
-    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(audioPath, createPlaybackMediaFixture("mp3"));
     mockState.config = {
       agents: {
         defaults: {
@@ -4836,7 +4838,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-command-block-media-final-",
     );
     const audioPath = path.join(transcriptDir, "tts.mp3");
-    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(audioPath, createPlaybackMediaFixture("mp3"));
     mockState.config = {
       agents: {
         defaults: {

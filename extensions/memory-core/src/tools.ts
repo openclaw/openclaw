@@ -1,6 +1,7 @@
 import {
   resolveMemorySearchStaleness,
   stripMemoryAnnotationCarriers,
+  type MemorySearchDeadlineControl,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -287,6 +288,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         };
         const searchMemory = async (
           signal: AbortSignal,
+          deadlineControl?: MemorySearchDeadlineControl,
         ): Promise<MemoryCorpusAttempt<PrimaryMemorySearchValue | null>> => {
           if (cooldown) {
             return { corpus: "memory", outcome: "unavailable", value: null, ...cooldown };
@@ -349,6 +351,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 },
                 visibility: { cfg, agentId, sandboxed: options.sandboxed === true },
                 signal,
+                deadlineControl,
                 onPartialResults: (result) => {
                   if (acceptingPartial) {
                     partial = result;
@@ -413,18 +416,24 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           return await runMemoryCorpusDeadline({
             operation: "memory_search",
             parentSignal: callerSignal,
-            run: async (signal) => {
+            run: async (signal, deadlineControl) => {
               searchSignal = signal;
               const [memory, wiki] = await Promise.all([
-                searchesMemory ? searchMemory(signal) : Promise.resolve(null),
+                searchesMemory ? searchMemory(signal, deadlineControl) : Promise.resolve(null),
                 searchesWiki
-                  ? searchMemoryCorpusSupplements({
-                      query,
-                      maxResults,
-                      agentId,
-                      agentSessionKey: options.agentSessionKey,
-                      sandboxed: options.sandboxed,
-                      signal,
+                  ? runMemoryCorpusDeadline({
+                      operation: "memory_search",
+                      parentSignal: callerSignal,
+                      // Managed memory readiness must not extend concurrent wiki work.
+                      run: (wikiSignal) =>
+                        searchMemoryCorpusSupplements({
+                          query,
+                          maxResults,
+                          agentId,
+                          agentSessionKey: options.agentSessionKey,
+                          sandboxed: options.sandboxed,
+                          signal: wikiSignal,
+                        }),
                     })
                   : Promise.resolve(null),
               ]);

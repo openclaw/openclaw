@@ -543,6 +543,16 @@ describe("markdownToMatrixHtml", () => {
       html: "<p>`literal then @alice:example.org</p>",
     },
     {
+      name: "keeps escaped mentions literal after unmatched backticks",
+      markdown: "`literal then \\@alice:example.org",
+      html: "<p>`literal then @alice:example.org</p>",
+    },
+    {
+      name: "keeps escaped room mentions literal after unmatched double backticks",
+      markdown: "``literal then \\@room",
+      html: "<p>``literal then @room</p>",
+    },
+    {
       name: "restores escaped mentions in markdown link labels without linking them",
       markdown: "[\\@alice:example.org](https://example.com)",
       html: '<p><a href="https://example.com">@alice:example.org</a></p>',

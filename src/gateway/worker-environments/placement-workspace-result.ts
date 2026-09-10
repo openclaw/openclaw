@@ -12,7 +12,7 @@ import {
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import { getRequired } from "./placement-row-codec.js";
+import { fromRow, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 
@@ -122,6 +122,58 @@ export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: s
   executeSqliteQuerySync(
     db,
     query(db).deleteFrom("worker_workspace_pending_results").where("session_id", "=", sessionId),
+  );
+}
+
+export function readWorkerWorkspaceReconcilingSessionIds(
+  db: DatabaseSync,
+  sessionIds: readonly string[],
+): ReadonlySet<string> {
+  const placements = new Map<string, WorkerSessionPlacementRecord>();
+  const pendingResults: StateDatabase["worker_workspace_pending_results"][] = [];
+  for (let offset = 0; offset < sessionIds.length; offset += 250) {
+    const chunk = sessionIds.slice(offset, offset + 250);
+    for (const row of executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom("worker_session_placements")
+        .selectAll()
+        .where("session_id", "in", chunk),
+    ).rows) {
+      const placement = fromRow(row);
+      placements.set(placement.sessionId, placement);
+    }
+    for (const row of executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom("worker_workspace_pending_results")
+        .selectAll()
+        .where("session_id", "in", chunk),
+    ).rows) {
+      pendingResults.push(row);
+    }
+  }
+  return new Set(
+    pendingResults.flatMap((row) => {
+      const placement = placements.get(row.session_id);
+      const pending: WorkerWorkspacePendingResult = {
+        sessionId: row.session_id,
+        environmentId: row.environment_id,
+        ownerEpoch: row.owner_epoch,
+        placementGeneration: row.placement_generation,
+        claimId: row.claim_id,
+        runId: row.run_id,
+        gatewayInstanceId: row.gateway_instance_id,
+        recoveryRequestedAtMs: row.recovery_requested_at_ms,
+        workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
+        stagedResultRef: row.staged_result_ref,
+      };
+      const isPostTerminal =
+        placement?.turnClaim?.owner === "worker" || row.staged_result_ref !== null;
+      return isPostTerminal && isCurrentWorkerWorkspacePendingResultOwner(placement, pending)
+        ? [row.session_id]
+        : [];
+    }),
   );
 }
 

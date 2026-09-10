@@ -169,6 +169,7 @@ describe("AppSidebar new session navigation", () => {
     await sidebar.updateComplete;
 
     const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-session-catalog-new")!;
+    expect(sidebar.querySelector(".sidebar-session-catalog-new-spacer")).toBeNull();
     expect(link.getAttribute("aria-label")).toBe("New session — Claude Code");
     expect(link.getAttribute("href")).toBe("/new?agent=research&catalog=claude");
     const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
@@ -259,6 +260,36 @@ describe("AppSidebar agent chip", () => {
       pathname: "/chat/main/00000002",
       search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(taskKey)}`,
     });
+  });
+
+  it("switches the Skills owner without opening an agent conversation", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const onNavigate = vi.fn();
+    sidebar.activeRouteId = "skills";
+    sidebar.connected = true;
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
+    await sidebar.updateComplete;
+    sidebar
+      .querySelector<HTMLElement>('.sidebar-agent-menu wa-dropdown-item[value="agent:research"]')!
+      .click();
+    await sidebar.updateComplete;
+
+    expect(context.agentSelection.state).toEqual({
+      selectedId: "research",
+      scopeId: "research",
+    });
+    expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent).toContain("research");
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+    expect(onNavigate).not.toHaveBeenCalled();
   });
 
   it("keeps agent ids distinct from utility command values", async () => {

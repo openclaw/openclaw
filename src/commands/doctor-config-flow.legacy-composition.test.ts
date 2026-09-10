@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 async function repairConfig(configPath: string) {
   const ctx = await prepareDoctorContext(configPath);
@@ -27,8 +29,8 @@ describe("Doctor legacy config composition", () => {
     "list with config env",
     "list with included identity",
   ])("preserves memory search settings from %s", async (shape) => {
-    await withTempHome(async (home) => {
-      await withEnvOverride(
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync(
         {
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           DOCTOR_AGENT_ID: "research",
@@ -192,9 +194,9 @@ describe("Doctor legacy config composition", () => {
   it.each(["unnamed", "duplicate", "malformed"])(
     "repairs %s local agents beside an unrelated include",
     async (shape) => {
-      await withTempHome(async (home) => {
+      await withDoctorConfigPreflightHome(async (home) => {
         const workspace = path.join(home, "shared-agent-workspace");
-        await withEnvOverride(
+        await withEnvAsync(
           {
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             DOCTOR_TRUSTED_PROXY: "127.0.0.2",
@@ -276,8 +278,8 @@ describe("Doctor legacy config composition", () => {
   it.each(["duplicate ids", "whole-entry include"])(
     "refuses ambiguous legacy roster persistence for %s",
     async (shape) => {
-      await withTempHome(async (home) => {
-        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const identity = { name: "Second agent" };
           const includeRaw = `${JSON.stringify(
             shape === "duplicate ids" ? identity : { identity, memorySearch: { enabled: false } },
@@ -325,8 +327,8 @@ describe("Doctor legacy config composition", () => {
   );
 
   it.each(["root", "list", "entries"])("preserves message policy from %s", async (scope) => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const message = { allowCrossContextSend: true, broadcast: { enabled: false } };
         const agent = scope === "root" ? {} : { tools: { message } };
         const configPath = await writeOpenClawConfig(home, {
@@ -350,8 +352,8 @@ describe("Doctor legacy config composition", () => {
     });
   });
   it("preserves inherited message policy when an agent opts out of the legacy bypass", async () => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
           tools: { message: { allowCrossContextSend: true } },
           agents: {
@@ -380,8 +382,8 @@ describe("Doctor legacy config composition", () => {
   it.each(["${DOCTOR_MEMORY_KEY}", "$${DOCTOR_MEMORY_KEY}"])(
     "preserves migrated default memory references %s and explicit canonical values",
     async (apiKey) => {
-      await withTempHome(async (home) => {
-        await withEnvOverride(
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
           { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", DOCTOR_MEMORY_KEY: "memory-secret-canary" },
           async () => {
             const configPath = await writeOpenClawConfig(home, {
@@ -434,8 +436,8 @@ describe("Doctor legacy config composition", () => {
   it.each([true, false])(
     "preserves the shipped message bypass precedence for root %s",
     async (globalBypass) => {
-      await withTempHome(async (home) => {
-        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const denied = { allowWithinProvider: false, allowAcrossProviders: false };
           const configPath = await writeOpenClawConfig(home, {
             tools: { message: { allowCrossContextSend: globalBypass, crossContext: denied } },

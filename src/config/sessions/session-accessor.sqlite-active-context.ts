@@ -33,10 +33,12 @@ export type SessionTranscriptBoundedActiveContext = {
   opaqueParents: Map<string, string | null>;
   parents: Map<string, string | null>;
   firstKeptRanges: Map<string, { startIndex: number; endIndex: number }>;
+  persistedSuffixStartSeq: number;
   boundaryCount: number;
   events: TranscriptEvent[];
   serializedBytes: number;
   totalEvents: number;
+  transcriptMutationAt: number | null;
   truncated: boolean;
 };
 
@@ -99,7 +101,7 @@ function readBoundedRetentionRanges(
 /** Reads one byte-bounded active branch without materializing abandoned transcript history. */
 export function readSessionTranscriptBoundedActiveContextCore(
   scope: SessionTranscriptReadScope,
-  options: { maxBytes: number; maxEvents: number },
+  options: { maxBytes: number; maxEvents: number; ignoreReadFence?: boolean },
 ): SessionTranscriptBoundedActiveContext {
   const maxBytes = normalizeVisibleMessageLimit(
     options.maxBytes,
@@ -115,10 +117,12 @@ export function readSessionTranscriptBoundedActiveContextCore(
   );
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const db = getActiveTranscriptKysely(projection.database);
-    const fence = resolveSqliteSessionTranscriptReadFence({
-      database: projection.database,
-      ...projection.resolved,
-    });
+    const fence = options.ignoreReadFence
+      ? undefined
+      : resolveSqliteSessionTranscriptReadFence({
+          database: projection.database,
+          ...projection.resolved,
+        });
     const transcript = db
       .selectFrom("transcript_events")
       .where("session_id", "=", projection.resolved.sessionId);
@@ -321,19 +325,22 @@ export function readSessionTranscriptBoundedActiveContextCore(
     // Retention moves forward from a cut; append ancestry moves backward. Keep both
     // outside the byte-counted events so excluded payloads cannot change either boundary.
     const firstKeptRanges = readBoundedRetentionRanges(projection, rows, header ? 1 : 0);
+    const version = readTranscriptContextVersionInTransaction(
+      projection.database,
+      projection.resolved.sessionId,
+    );
     return {
-      version: readTranscriptContextVersionInTransaction(
-        projection.database,
-        projection.resolved.sessionId,
-      ),
+      version,
       activeLeafEntryId,
       opaqueParents,
       parents,
       firstKeptRanges,
+      persistedSuffixStartSeq: contextSequences[0] ?? (header ? header.seq + 1 : 0),
       boundaryCount: boundary?.boundary_count ?? 0,
       events,
       serializedBytes,
       totalEvents: projection.state.activeEventCount,
+      transcriptMutationAt: version.updatedAt,
       truncated: boundaryOmitted || metadata.length > selectedSequences.length,
     };
   });

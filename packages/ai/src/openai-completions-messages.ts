@@ -17,7 +17,11 @@ import {
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { Context, Model, ThinkingContent, ToolCall } from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
-import { stripSystemPromptCacheBoundary } from "./utils/system-prompt-cache-boundary.js";
+import {
+  splitSystemPromptRelocatableBoundary,
+  stripSystemPromptCacheBoundary,
+  stripSystemPromptRelocatableBoundary,
+} from "./utils/system-prompt-cache-boundary.js";
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 type ChatCompletionContentPartVideo = {
@@ -71,12 +75,25 @@ export function convertMessages(
     normalizeToolCallId(id),
   ) as ProviderMessage[];
 
+  // Local chat templates can place tools after system content. Move only the
+  // bounded Runtime facts so session identifiers do not split that prefix.
+  let relocatableSplit: { remainingPrompt: string; relocatable: string } | undefined;
+  let systemParamIndex: number | undefined;
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    const systemPrompt = options.preserveSystemPromptCacheBoundary
-      ? context.systemPrompt
-      : stripSystemPromptCacheBoundary(context.systemPrompt);
+    let systemPrompt: string;
+    if (options.preserveSystemPromptCacheBoundary) {
+      // Explicit message breakpoints retain the existing system layout.
+      systemPrompt = stripSystemPromptRelocatableBoundary(context.systemPrompt);
+    } else {
+      const split = splitSystemPromptRelocatableBoundary(context.systemPrompt);
+      if (split && split.relocatable.length > 0) {
+        relocatableSplit = split;
+      }
+      systemPrompt = stripSystemPromptCacheBoundary(context.systemPrompt);
+    }
+    systemParamIndex = params.length;
     params.push({ role, content: sanitizeSurrogates(systemPrompt) });
   }
 
@@ -288,5 +305,52 @@ export function convertMessages(
     lastRole = msg.role;
   }
 
+  if (relocatableSplit !== undefined && systemParamIndex !== undefined) {
+    relocateNonBehavioralRegion({
+      params,
+      systemParamIndex,
+      split: relocatableSplit,
+      cacheOptOutIndexes: options.cacheOptOutIndexes,
+    });
+  }
+
   return params;
+}
+
+/** Commit relocation only after finding an emitted carrier. */
+function relocateNonBehavioralRegion(args: {
+  params: ChatCompletionMessageParam[];
+  systemParamIndex: number;
+  split: { remainingPrompt: string; relocatable: string };
+  cacheOptOutIndexes?: Set<number>;
+}): void {
+  const text = sanitizeSurrogates(stripSystemPromptCacheBoundary(args.split.relocatable));
+  // A trailing carrier would rewrite the earlier user turn on every follow-up.
+  for (let index = args.systemParamIndex + 1; index < args.params.length; index++) {
+    const param = args.params[index];
+    if (!param || param.role !== "user") {
+      continue;
+    }
+    if (typeof param.content === "string") {
+      param.content = `${param.content}\n\n${text}`;
+    } else if (Array.isArray(param.content)) {
+      param.content = [
+        ...param.content,
+        { type: "text", text } satisfies ChatCompletionContentPartText,
+      ];
+    } else {
+      continue;
+    }
+    // Shrink the system message only once a carrier turn is secured, so a
+    // projected-away user turn leaves the region where it already is.
+    const systemParam = args.params[args.systemParamIndex];
+    if (systemParam) {
+      systemParam.content = sanitizeSurrogates(
+        stripSystemPromptCacheBoundary(args.split.remainingPrompt),
+      );
+    }
+    // The turn now carries volatile text, so it must not anchor a cache breakpoint.
+    args.cacheOptOutIndexes?.add(index);
+    return;
+  }
 }

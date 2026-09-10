@@ -36,7 +36,7 @@ openclaw plugins install ./path/to/local/line-plugin
 2. Create (or pick) a Provider and add a **Messaging API** channel.
 3. Copy the **Channel access token** and **Channel secret** from the channel settings.
 4. Enable **Use webhook** in the Messaging API settings.
-5. Set the webhook URL to your gateway endpoint (HTTPS required):
+5. Set the webhook URL to your Gateway endpoint (HTTPS required):
 
 ```text
 https://gateway-host/line/webhook
@@ -415,7 +415,7 @@ link-local, and private-network targets.
 - **Webhook verification fails:** ensure the webhook URL is HTTPS and the
   `channelSecret` matches the LINE console.
 - **No inbound events:** confirm the webhook path matches `channels.line.webhookPath`
-  and that the gateway is reachable from LINE.
+  and that the Gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
 - **Pushes refused with HTTP 429:** Run
@@ -458,5 +458,5 @@ link-local, and private-network targets.
 - [Channels Overview](/channels) — all supported channels
 - [Pairing](/channels/pairing) — DM authentication and pairing flow
 - [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
 - [Security](/gateway/security) — access model and hardening

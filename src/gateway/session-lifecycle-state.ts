@@ -401,14 +401,15 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         event: params.event,
       });
       if (
-        phase === "error" &&
-        params.event.data?.aborted !== true &&
+        (phase === "error" || phase === "end") &&
         eventRunId &&
         (patch.status === "failed" || patch.status === "timeout")
       ) {
         failedRun = {
           runId: eventRunId,
-          error: resolveTerminalOutcome(params.event).error,
+          error:
+            resolveTerminalOutcome(params.event).error ??
+            (patch.status === "timeout" ? "Run timed out" : undefined),
         };
       }
       const recoveryTerminalIsCurrent =

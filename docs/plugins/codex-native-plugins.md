@@ -105,6 +105,7 @@ exact marketplace-qualified identity:
 ```text
 /codex plugins available
 /codex plugins install security-review@company-tools
+/codex plugins status security-review@company-tools
 ```
 
 Codex discovers repository marketplaces from
@@ -153,6 +154,38 @@ plugin identity, detail identity, or app-readiness evidence. If a connector
 requires additional sign-in, complete that authorization before expecting the
 plugin's tools to become available.
 
+Installing the plugin bundle and configuring OpenClaw app access do not confirm
+hosted app connections. When installation returns apps that still need sign-in,
+OpenClaw provides **Open &lt;app&gt; in ChatGPT** links to the app pages returned by
+Codex. Sign in with the same ChatGPT account and workspace used by the Codex
+harness. Opening a link does not verify the connection or make its tools callable
+in the current conversation. If the browser shows a directory instead of the app,
+or no safe link is available, run `/apps` in Codex CLI and select the app there.
+Responses show up to five app links and explicitly report additional apps to
+review in Codex CLI. These links are for hosted ChatGPT apps; native MCP server
+setup remains separate.
+
+An app can also request sign-in when you first use one of its tools. In the
+Control UI, choose **Open link** to open the requested page in a separate tab.
+The question stays pending while you sign in. After completing the browser step,
+select **I've completed this step** and submit to let Codex refresh and retry.
+Opening the link alone does not resume the tool or confirm a connection. Clients
+without a link action still show the URL to open manually before answering.
+
+For setup completed outside an active Codex sign-in prompt, refresh hosted app
+inventory for the current Codex account/runtime:
+
+```text
+/codex plugins refresh
+```
+
+This refresh covers all hosted apps in that runtime; it is not a per-plugin
+backend refresh. A plugin's **Refresh hosted apps** button runs this command.
+The separate **Check status** button inspects only that plugin without refreshing
+hosted tools. Neither action changes authorization or the current conversation's
+app policy. Use `/new` or `/reset` after connecting, then inspect status in the new
+conversation.
+
 After a `codexPlugins` change, new Codex conversations pick up the updated
 app set automatically. Run `/new` or `/reset` to refresh the current
 conversation. A gateway restart is not required for plugin enable/disable
@@ -195,7 +228,11 @@ same chat where you operate the Codex harness:
 /codex plugins
 /codex plugins list
 /codex plugins available
+/codex plugins available security
+/codex plugins available --page 2
 /codex plugins install security-review@company-tools
+/codex plugins status security-review@company-tools
+/codex plugins refresh
 /codex plugins disable google-calendar
 /codex plugins enable google-calendar
 /codex plugins disable security-review@company-tools
@@ -205,10 +242,72 @@ same chat where you operate the Codex harness:
 configured plugin's key, on/off state, Codex plugin name, and marketplace
 from `plugins.entries.codex.config.codexPlugins.plugins`.
 
-`available` reads Codex's marketplace catalog using the bound workspace, so it
-can discover repository-local plugins without enabling them. The owner-scoped
-`codex_plugins` model tool is also read-only: it can recommend an exact install
-command but cannot install, enable, or add a marketplace.
+`available [query] [--page <n>]` requires an owner or `operator.admin`. It reads
+Codex's marketplace catalogs using the bound workspace, including repository-local
+plugins, without installing or enabling them. Search matches names, display titles, publishers, marketplaces,
+and descriptions case-insensitively across the full returned catalog before
+showing ten results per page. **Next page** and **Previous page** preserve your
+search; channels without buttons show the commands to send. Search text is limited
+to 100 characters. Use `--` before literal search text containing `--page`.
+
+Results show display titles, publishers, and descriptions when supplied by Codex,
+with explicit placeholders for missing publishers or descriptions. They retain
+marketplace-qualified identities and availability restrictions; display titles
+and publisher names do not change installation identity.
+This searches Codex catalogs, not OpenClaw's plugin registry or every ChatGPT
+connection. The owner-scoped `codex_plugins` model tool uses the same search
+matching and is also read-only: it can recommend an exact install command but
+cannot install, enable, or add a marketplace.
+
+`status <name>@<marketplace> [page]` inspects exactly one configured plugin and
+requires an owner or `operator.admin`. The qualified identity is required;
+bare `status` or an unqualified name returns usage guidance pointing to `list`.
+
+Status shows bundle installation, marketplace restrictions, Codex enablement, and
+shared OpenClaw app access separately. Changes to OpenClaw app access take effect
+on the next message; they do not install or enable the Codex bundle.
+
+App results show at most five apps per page. A ChatGPT app-page link requires
+confirmed hosted-app runtime support, an available plugin under its catalog
+policy, and matching authorized metadata from `app/read`. A plugin's app
+declaration or setup URL alone does not establish that access. OpenClaw app
+access can be disabled while an eligible ChatGPT page remains available;
+opening that page does not enable OpenClaw app access. Plugins without hosted
+apps receive no ChatGPT connection or setup guidance. Status does not assess
+their skills or native MCP server readiness.
+
+The selected agent, auth profile, conversation workspace, and account email/plan
+are shown when available. ChatGPT workspace identity remains unknown when
+Codex does not report it; use the same account and workspace in the browser
+when opening an eligible hosted app page.
+
+Status uses `app/read` for app metadata and displays the `enabled` and `callable`
+flags returned by `app/installed`. The runtime scope is the bound Codex thread
+when available, or the account otherwise. These flags reflect effective Codex
+configuration and the current runtime tool snapshot; they are separate from
+OpenClaw app access. Status does not infer a separate connection state. Missing
+app records and failed reads are reported explicitly instead of becoming false
+flags.
+
+`/codex plugins refresh` requires owner or `operator.admin` authority and confirmed
+hosted-app support in the selected Codex account/runtime. It works without a
+configured plugin. It invalidates that runtime's OpenClaw app cache, calls
+Codex `app/installed` with `forceRefresh: true` and no `threadId`, and reads
+metadata for the returned apps. It does not refresh marketplace catalogs,
+reinstall plugin bundles, or reload native MCP servers.
+
+After refreshing, use `/codex plugins status <name>@<marketplace>` to inspect
+one plugin. Status never forces a hosted refresh. Disabled or blocked plugins
+remain disabled or blocked, but do not prevent an otherwise permitted hosted
+refresh.
+
+A completed request does not prove that Codex replaced its snapshot or that a
+live tool call will succeed. Refresh never installs, enables, authenticates,
+or replaces a thread, and does not reload other conversations. After connecting,
+use `/new` or `/reset` and inspect status again. Browser setup does not change
+OpenClaw app access; local app-access changes take effect on the next message.
+Unsupported methods, cancellation, and refresh failures provide a retry action
+without treating the previous inventory as confirmed.
 
 `install`, `enable`, and `disable` require the owner or a gateway client with
 the `operator.admin` scope. OpenClaw's reserved `/codex` command is dispatched
@@ -485,9 +584,9 @@ account-wide default can become callable after OpenClaw starts and verifies
 its explicitly configured thread. Revoked auth, missing metadata, disabled
 workspace plugins, and Codex managed or workspace restrictions still block
 access. Reauthorize or repair those upstream conditions before starting a new
-thread. If you changed that state after the gateway cached app inventory, wait
-for the one-hour cache refresh or restart the gateway, then use `/new` or
-`/reset`. OpenClaw does not authenticate plugin apps on the owner's behalf.
+thread. If you changed that state after the gateway cached app inventory, run
+`/codex plugins refresh`, then use `/new` or `/reset`.
+OpenClaw does not authenticate plugin apps on the owner's behalf.
 
 For `plugin_detail_unavailable`, verify that the exact installed marketplace
 and plugin identity select a matching `plugin/read` result. OpenClaw keeps

@@ -181,6 +181,9 @@ function printStep(step: DisplayStep): void {
   // Build tools often report failures on stdout. Keep the final diagnostic from
   // each stream, so npm's stderr footer cannot hide the actual build error.
   const color = isAdvisoryStep(step) ? theme.warn : theme.error;
+  if (step.advisory) {
+    defaultRuntime.log(`    ${color(step.advisory.message)}`);
+  }
   for (const output of [step.stdoutTail, step.stderrTail]) {
     for (const line of (output ?? "").trimEnd().split("\n").slice(-10)) {
       if (line.trim()) {

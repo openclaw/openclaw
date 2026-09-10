@@ -1,5 +1,6 @@
 {
   "id": "device-pair",
+  "categories": ["tools"],
   "doctorContract": {
     "stateMigrations": [{ "id": "device-pair-notify-json-to-plugin-state" }]
   },

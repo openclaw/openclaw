@@ -24,6 +24,16 @@ const mocks = vi.hoisted(() => ({
 
 registerGetReplyRuntimeOverrides(mocks);
 
+vi.mock("../../agents/model-catalog.runtime.js", () => ({
+  loadManifestModelCatalog: vi.fn(() => []),
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
+    entries: [],
+    routeVariants: [],
+    authoritative: true,
+  })),
+}));
+
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
@@ -289,6 +299,46 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(runParams?.model).toBe("gpt-5.5");
     expect(runParams?.resolvedThinkLevel).toBe("medium");
     expect(runParams?.resolvedReasoningLevel).toBe("off");
+  });
+
+  it("uses the policy-selected model defaults when the primary probe is filtered out", async () => {
+    const { sessionKey } = mockAutoFallbackSession();
+    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+    const cfg = makeReasoningModelConfig();
+    cfg.agents = {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models: { "openai/gpt-5.5": { params: { thinking: "high" } } },
+        modelPolicy: { allow: ["anthropic/*"] },
+      },
+    };
+    const catalogRuntime = await import("../../agents/model-catalog.runtime.js");
+    const catalog = [
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
+      { provider: "anthropic", id: "claude-fallback", name: "Claude Fallback", reasoning: false },
+    ];
+    vi.mocked(catalogRuntime.loadPreparedModelCatalogSnapshot).mockResolvedValueOnce({
+      entries: catalog,
+      routeVariants: catalog,
+      authoritative: true,
+    });
+    await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
+      text: "ok",
+    });
+
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+    expect(runParams?.modelState).toMatchObject({
+      provider: "anthropic",
+      model: "claude-fallback",
+    });
+    expect(runParams).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+    });
   });
 
   it("does not re-enable default reasoning for per-agent thinking-off primary probes", async () => {

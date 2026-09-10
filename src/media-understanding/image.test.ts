@@ -5,6 +5,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   API_KEY_FIELD,
   SET_RUNTIME_API_KEY_FIELD,
@@ -503,19 +504,27 @@ describe("describeImageWithModelCore", () => {
       content: [{ type: "text", text: "workspace ok" }],
     });
 
-    const result = await describeImageWithModelCore({
-      cfg: {},
-      agentId: "vision-agent",
-      agentDir: "/tmp/openclaw-agent",
-      workspaceDir: "/tmp/openclaw-workspace",
-      provider: "google",
-      model: "gemini-2.5-flash",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
-      prompt: "Describe the image.",
-      timeoutMs: 1000,
-    });
+    const owner = new AsyncWorkScope();
+    let result: Awaited<ReturnType<typeof describeImageWithModelCore>>;
+    try {
+      result = await owner.track(() =>
+        describeImageWithModelCore({
+          cfg: {},
+          agentId: "vision-agent",
+          agentDir: "/tmp/openclaw-agent",
+          workspaceDir: "/tmp/openclaw-workspace",
+          provider: "google",
+          model: "gemini-2.5-flash",
+          buffer: Buffer.from("png-bytes"),
+          fileName: "image.png",
+          mime: "image/png",
+          prompt: "Describe the image.",
+          timeoutMs: 1000,
+        }),
+      );
+    } finally {
+      await owner.drain();
+    }
 
     expect(result.text).toBe("workspace ok");
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();

@@ -53,6 +53,7 @@ export async function runMigrationApply(params: {
   opts: MigrateApplyOptions;
   providerId: string;
   provider: MigrationProviderPlugin;
+  onApplyCompleted?: () => void;
 }): Promise<MigrationApplyResult> {
   const applyMigration = async (progress?: ProgressReporter) => {
     const total = (params.opts.preflightPlan ? 0 : 1) + (params.opts.noBackup ? 0 : 1) + 1;
@@ -119,6 +120,7 @@ export async function runMigrationApply(params: {
     });
     progress?.setLabel("Applying migration…");
     const result = await params.provider.apply(ctx, selectedPlan);
+    params.onApplyCompleted?.();
     tick();
     const withBackup = {
       ...result,

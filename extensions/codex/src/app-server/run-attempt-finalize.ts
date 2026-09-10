@@ -585,7 +585,7 @@ export async function finalizeCodexAttempt(
       !runAbortController.signal.aborted &&
       !finalAborted &&
       !finalPromptError;
-    if (state.shouldDelayNativeHookRelayUnregister) {
+    if (turnSucceeded && !runAbortController.signal.aborted) {
       try {
         // Only no-engine continuity prompts may calibrate their measured history.
         // Billing spans every model call; density needs only the latest full prompt.

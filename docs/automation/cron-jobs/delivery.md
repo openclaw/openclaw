@@ -80,7 +80,7 @@ Execution failures use one scheduler-owned threshold and cooldown policy. A job 
 Failure notification routes resolve in this order:
 
 1. Route fields in the job's `failureAlert` object.
-2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The retired `cron.failureDestination` block is merged into the global object by `openclaw doctor --fix`.
+2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). A `cron.failureDestination` block is no longer read directly; `openclaw doctor --fix` merges it into the global object.
 3. The job's primary announce target.
 
 - `job.failureAlert: false` disables execution and required-delivery failure alerts for that job. The auto-disable safety notification remains active.

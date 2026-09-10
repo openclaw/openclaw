@@ -26,7 +26,7 @@ Install a ClawHub plugin with an explicit source prefix:
 openclaw plugins install clawhub:<package-name>
 ```
 
-npm remains a supported direct-install path during the launch cutover:
+npm remains a supported direct-install path:
 
 ```bash
 openclaw plugins install npm:<package-name>

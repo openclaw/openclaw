@@ -1,5 +1,6 @@
 {
   "id": "brave",
+  "categories": ["web"],
   "name": "Brave",
   "description": "OpenClaw Brave Search provider plugin for web search.",
   "activation": {

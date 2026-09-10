@@ -72,6 +72,13 @@ function renderWorktreeFields(params: {
         )}
       </datalist>
     </label>
+    <div class="new-session-page__menu-note">
+      ${t(
+        params.branches?.branchesUnavailable
+          ? "newSession.worktreeBranchesUnavailable"
+          : "newSession.worktreeBranchesLimited",
+      )}
+    </div>
     ${
       params.repository
         ? nothing

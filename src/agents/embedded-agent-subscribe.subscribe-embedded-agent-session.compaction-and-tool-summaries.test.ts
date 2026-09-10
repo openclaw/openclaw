@@ -11,6 +11,7 @@ import {
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 type SessionEventHandler = (evt: unknown) => void;
@@ -217,10 +218,7 @@ describe("fenced output and compaction retries", () => {
       runId: "run-1",
     });
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "oops" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("oops") as AssistantMessage;
 
     for (const listener of listeners) {
       listener({ type: "message_end", message: assistantMessage });
@@ -524,10 +522,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-compaction-assistant",
     });
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "Reply before compaction" }],
-    } as AssistantMessage;
+    const assistant = textAssistant("Reply before compaction") as AssistantMessage;
 
     emit({ type: "message_end", message: assistant });
     expect(subscription.getCurrentAttemptAssistant()).toEqual(assistant);

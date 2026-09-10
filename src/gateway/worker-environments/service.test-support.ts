@@ -193,7 +193,9 @@ export function createService(
       | "projectNamespace"
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"
+      | "registerPreparedWorkspace"
       | "prepareNodeBootstrap"
+      | "prepareNodeArtifacts"
       | "prepareNodeRuntime"
       | "closeNodeRuntime"
       | "prepareNodeEnrollment"
@@ -538,6 +540,9 @@ export function placementHarness(
     .run(credentialHash, environmentId);
   identity.credentialHash = credentialHash;
   const placementStore = {
+    assertWorkerRuntimeRefresh: vi.fn(() => {
+      throw new Error("Cannot refresh a worker runtime while its turn is active");
+    }),
     readWorkerTurnClaim: vi.fn(() => claim),
     readWorkerTurnLiveAckCursor: vi.fn(() => 0),
     validateWorkerTurn: vi.fn(() => true),

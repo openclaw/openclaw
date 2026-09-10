@@ -42,6 +42,17 @@ function protectedIdentity(
 }
 
 describe("release tooling identity", () => {
+  it("rejects a raw commit SHA as the workflow transport ref", () => {
+    expect(() =>
+      resolveReleaseToolingIdentity({
+        workflowContract: "2",
+        workflowFullRef: `refs/heads/${SHA}`,
+        workflowRef: SHA,
+        workflowSha: SHA,
+      }),
+    ).toThrow("workflow ref is not a trusted direct, release-ci, or protected-tag route");
+  });
+
   it.each([
     ["1", "main", "refs/heads/main"],
     ["2", "release/2026.8.1", "refs/heads/release/2026.8.1"],
@@ -118,6 +129,40 @@ describe("release tooling identity", () => {
         workflowSha: SHA,
       }),
     ).toEqual({ ref: "main", fullRef: "refs/heads/main", sha: SHA });
+  });
+
+  it("rejects a release-ci transport whose prefix does not match the Tooling SHA", () => {
+    const releaseCiRef = `release-ci/${OTHER_SHA.slice(0, 12)}-123`;
+    expect(() =>
+      resolveReleaseToolingIdentity({
+        requestedIdentityJson: JSON.stringify({
+          fullRef: "refs/heads/main",
+          ref: "main",
+          sha: SHA,
+        }),
+        workflowContract: "2",
+        workflowFullRef: `refs/heads/${releaseCiRef}`,
+        workflowRef: releaseCiRef,
+        workflowSha: SHA,
+      }),
+    ).toThrow("release-ci workflow ref does not match the workflow SHA");
+  });
+
+  it("rejects a candidate SHA substituted for the release-ci Tooling SHA", () => {
+    const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
+    expect(() =>
+      resolveReleaseToolingIdentity({
+        requestedIdentityJson: JSON.stringify({
+          fullRef: "refs/heads/main",
+          ref: "main",
+          sha: OTHER_SHA,
+        }),
+        workflowContract: "2",
+        workflowFullRef: `refs/heads/${releaseCiRef}`,
+        workflowRef: releaseCiRef,
+        workflowSha: SHA,
+      }),
+    ).toThrow("release-ci workflow identity must be trusted main");
   });
 
   it("rejects explicit identity that does not match a direct workflow", () => {
@@ -784,7 +829,7 @@ describe.each([
     },
   );
 
-  it.each(["valid", "archive changed", "manifest changed"])(
+  it.each(["valid", "archive changed", "manifest changed", "deadline exceeded"])(
     "downloads only the exact qualified archive (%s)",
     async (outcome) => {
       const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
@@ -830,21 +875,27 @@ describe.each([
       if (outcome === "archive changed") {
         delivered.writeUInt8(delivered.readUInt8(0) ^ 1, 0);
       }
+      const requests: string[] = [];
       const fetchImpl: typeof fetch = async (url) => {
         const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        requests.push(requestUrl);
         return requestUrl.endsWith("/zip")
           ? new Response(new Uint8Array(delivered))
           : Response.json(metadata);
       };
-      const outputDir = join(tempDirs.make("qualified-npm-preflight-"), "qualified");
-      const download = downloadFullReleaseNpmPreflight({
+      const root = tempDirs.make("qualified-npm-preflight-");
+      const outputDir = join(root, "qualified");
+      const downloadOptions = {
         ...resolutionInput,
         manifest: selected,
         outputDir,
         token: "test-artifact-token",
         runGh: reader({}, metadata),
         fetchImpl,
-      });
+        archivePath: join(root, "555.zip"),
+        deadlineMs: Date.now() + (outcome === "deadline exceeded" ? -1 : 10_000),
+      };
+      const download = downloadFullReleaseNpmPreflight(downloadOptions);
       if (outcome === "valid") {
         await expect(download).resolves.toMatchObject({
           producer: { runId: RUN_ID, runAttempt: "1" },
@@ -857,6 +908,10 @@ describe.each([
             "utf8",
           ),
         ).toBe("{}");
+        const retriedDir = join(root, "retried");
+        await downloadFullReleaseNpmPreflight({ ...downloadOptions, outputDir: retriedDir });
+        expect(readFileSync(join(retriedDir, manifest.tarballName))).toEqual(tarballBytes);
+        expect(requests.filter((url) => url.endsWith("/zip"))).toHaveLength(1);
         expect(readFileSync(join(outputDir, "dependency-evidence/npm-package-locks.json"))).toEqual(
           npmLockBytes,
         );
@@ -865,9 +920,16 @@ describe.each([
         ).toBe("# npm package-lock mirrors\n");
       } else {
         await expect(download).rejects.toThrow(
-          outcome === "archive changed" ? "digest" : "qualified descriptor",
+          outcome === "archive changed"
+            ? "digest"
+            : outcome === "deadline exceeded"
+              ? "deadline exceeded"
+              : "qualified descriptor",
         );
         expect(existsSync(outputDir)).toBe(false);
+        if (outcome === "deadline exceeded") {
+          expect(requests).toHaveLength(0);
+        }
       }
     },
   );

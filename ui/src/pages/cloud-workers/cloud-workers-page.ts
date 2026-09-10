@@ -13,6 +13,7 @@ import {
   renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
+  renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsToggleRow,
   renderSettingsValue,
@@ -37,15 +38,20 @@ import {
   type CloudWorkerProfileDraft,
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
+import { renderCloudWorkerRepositories } from "./cloud-worker-repositories.ts";
+import "./cloud-worker-snapshots.ts";
 
 registerSettingsEnglish();
 
 const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
+type ProfileSummary = NonNullable<EnvironmentsListResult["profiles"]>[number];
 type EditorState = { kind: "add" } | { kind: "edit"; profileId: string } | null;
 
 function formControlValue(event: Event): string {
   const target = event.currentTarget;
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+  return target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
     ? target.value
     : "";
 }
@@ -54,7 +60,8 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @state() private advertisedProfileIds = new Set<string>();
+  @state() private view: "profiles" | "snapshots" = "profiles";
+  @state() private advertisedProfiles = new Map<string, ProfileSummary>();
   @state() private catalogLoaded = false;
   @state() private catalogLoading = false;
   @state() private catalogError: string | null = null;
@@ -89,7 +96,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
 
   private resetGatewayState() {
     this.busyProfileId = null;
-    this.advertisedProfileIds = new Set();
+    this.advertisedProfiles = new Map();
     this.catalogLoaded = false;
     this.catalogLoading = false;
     this.catalogError = null;
@@ -114,7 +121,9 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       if (!this.gateway.isCurrent(scope)) {
         return;
       }
-      this.advertisedProfileIds = new Set((result.profiles ?? []).map((profile) => profile.id));
+      this.advertisedProfiles = new Map(
+        (result.profiles ?? []).map((profile) => [profile.id, profile]),
+      );
       this.catalogLoaded = true;
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
@@ -326,6 +335,17 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     return [
       t("cloudWorkersPage.backendFact", { backend: profile.backend || t("common.unknown") }),
       t("cloudWorkersPage.classFact", { value: profile.machineClass || t("common.unknown") }),
+      ...(profile.target && profile.target !== "linux"
+        ? [
+            t("cloudWorkersPage.operatingSystemFact", {
+              value:
+                this.advertisedProfiles
+                  .get(profile.id)
+                  ?.operatingSystems?.find((system) => system.id === profile.target)?.label ??
+                profile.target,
+            }),
+          ]
+        : []),
       t("cloudWorkersPage.ttlFact", { value: profile.ttl || t("common.unknown") }),
       t("cloudWorkersPage.idleFact", { value: profile.idleTimeout || t("common.unknown") }),
       t("cloudWorkersPage.desktopFact", {
@@ -337,7 +357,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   private renderProfile(profile: ConfiguredCloudWorkerProfile) {
     const status = cloudWorkerProfileStatus(
       profile.id,
-      this.advertisedProfileIds,
+      this.advertisedProfiles,
       this.catalogLoaded,
     );
     const statusControl =
@@ -379,6 +399,11 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     const busy = this.busyProfileId !== null;
     const canSave = this.canManage();
     const editing = this.editor.kind === "edit";
+    const operatingSystems = editing
+      ? (this.advertisedProfiles.get(this.draft.id)?.operatingSystems ?? [])
+      : [];
+    const unadvertisedTarget =
+      this.draft.target && !operatingSystems.some((system) => system.id === this.draft.target);
     return renderSettingsSection(
       {
         title: editing ? t("cloudWorkersPage.editProfile") : t("cloudWorkersPage.addProfile"),
@@ -414,6 +439,48 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             @input=${(event: Event) => this.patchDraft({ backend: formControlValue(event) })}
           />`,
         }),
+        ...(operatingSystems.length >= 2 || unadvertisedTarget
+          ? [
+              renderSettingsRow({
+                title: t("cloudWorkersPage.fields.operatingSystem"),
+                description: t("cloudWorkersPage.fields.operatingSystemHelp"),
+                control: html`<select
+                  class="settings-select"
+                  aria-label=${t("cloudWorkersPage.fields.operatingSystem")}
+                  .value=${this.draft.target}
+                  ?disabled=${busy}
+                  @change=${(event: Event) => {
+                    const target = formControlValue(event);
+                    if (!operatingSystems.find((system) => system.id === target)?.disabledReason) {
+                      this.patchDraft({ target });
+                    }
+                  }}
+                >
+                  <option value="" ?selected=${!this.draft.target}>
+                    ${t("cloudWorkersPage.fields.providerDefault")}
+                  </option>
+                  ${operatingSystems.map(
+                    (system) => html`
+                      <option
+                        value=${system.id}
+                        ?selected=${this.draft.target === system.id}
+                        ?disabled=${Boolean(system.disabledReason)}
+                      >
+                        ${system.label}${system.disabledReason ? ` — ${system.disabledReason}` : ""}
+                      </option>
+                    `,
+                  )}
+                  ${
+                    unadvertisedTarget
+                      ? html`
+                          <option value=${this.draft.target} selected>${this.draft.target}</option>
+                        `
+                      : nothing
+                  }
+                </select>`,
+              }),
+            ]
+          : []),
         renderSettingsRow({
           title: t("cloudWorkersPage.fields.machineClass"),
           description: t("cloudWorkersPage.fields.machineClassHelp"),
@@ -491,6 +558,50 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             @input=${(event: Event) => this.patchDraft({ binary: formControlValue(event) })}
           />`,
         }),
+        renderSettingsSection({ title: t("cloudWorkersPage.advanced") }, [
+          renderSettingsRow({
+            title: t("cloudWorkersPage.fields.warmImage"),
+            description: t("cloudWorkersPage.fields.warmImageHelp"),
+            control: html`<select
+              class="settings-select"
+              aria-label=${t("cloudWorkersPage.fields.warmImage")}
+              .value=${this.draft.warmImage}
+              ?disabled=${busy}
+              @change=${(event: Event) => {
+                const value = formControlValue(event);
+                if (value === "auto" || value === "on" || value === "off") {
+                  this.patchDraft({ warmImage: value });
+                }
+              }}
+            >
+              ${(["auto", "on", "off"] as const).map(
+                (value) => html`
+                  <option value=${value} ?selected=${this.draft.warmImage === value}>
+                    ${t(`cloudWorkersPage.warmImage.${value}`)}
+                  </option>
+                `,
+              )}
+            </select>`,
+          }),
+          ...(["setupEnv", "readyWorkers", "suspendAfter"] as const).map((field) =>
+            renderSettingsRow({
+              title: t(`cloudWorkersPage.fields.${field}`),
+              description: t(`cloudWorkersPage.fields.${field}Help`),
+              control: html`<input
+                class="settings-input mono"
+                aria-label=${t(`cloudWorkersPage.fields.${field}`)}
+                type=${field === "readyWorkers" ? "number" : "text"}
+                min=${field === "readyWorkers" ? "0" : nothing}
+                step=${field === "readyWorkers" ? "1" : nothing}
+                autocomplete="off"
+                spellcheck="false"
+                .value=${this.draft[field]}
+                ?disabled=${busy}
+                @input=${(event: Event) => this.patchDraft({ [field]: formControlValue(event) })}
+              />`,
+            }),
+          ),
+        ]),
         ...(this.formError
           ? [
               renderSettingsRow({
@@ -565,14 +676,30 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         },
         rows,
       )}
-      ${this.renderEditor()}
+      ${this.renderEditor()} ${renderCloudWorkerRepositories(canManage)}
     `);
     return html`
       ${renderSettingsPageHeader({
         title: titleForRoute("cloud-workers"),
         subtitle: html`${t("cloudWorkersPage.intro")} ${renderLearnMoreLink(CLOUD_WORKERS_DOCS_URL)}`,
       })}
-      ${renderSettingsWorkspace(body)}
+      ${renderSettingsWorkspace(html`
+        ${renderSettingsPage(
+          renderSettingsSegmented({
+            mode: "buttons",
+            value: this.view,
+            ariaLabel: t("cloudWorkersPage.snapshots.viewLabel"),
+            options: [
+              { value: "profiles", label: t("cloudWorkersPage.sectionTitle") },
+              { value: "snapshots", label: t("cloudWorkersPage.snapshots.title") },
+            ],
+            onChange: (value) => {
+              this.view = value;
+            },
+          }),
+        )}
+        ${this.view === "profiles" ? body : html`<openclaw-cloud-worker-snapshots></openclaw-cloud-worker-snapshots>`}
+      `)}
     `;
   }
 }

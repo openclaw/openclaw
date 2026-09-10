@@ -74,141 +74,145 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
     reason: "source-changed",
   };
 
-  const publish = await runExclusiveSqliteSessionWrite(resolved, async () => {
-    return runOpenClawAgentWriteTransaction((database) => {
-      const source = resolveLifecyclePrimaryEntry(database, sourceTarget)?.entry as
-        | InternalSessionEntry
-        | undefined;
-      const recovery = source?.mainRestartRecovery;
-      const tombstone = recovery?.tombstone;
-      if (!source?.sessionId || !recovery || !tombstone) {
-        result = { status: "conflict", reason: "not-tombstoned" };
-        return undefined;
-      }
-
-      const recoveredSessionKey = tombstone.recoveredSessionKey;
-      const recoveredSessionId = tombstone.recoveredSessionId;
-      if (recoveredSessionKey || recoveredSessionId) {
-        if (!recoveredSessionKey || !recoveredSessionId) {
-          result = { status: "conflict", reason: "successor-missing" };
+  const publish = await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      return runOpenClawAgentWriteTransaction((database) => {
+        const source = resolveLifecyclePrimaryEntry(database, sourceTarget)?.entry as
+          | InternalSessionEntry
+          | undefined;
+        const recovery = source?.mainRestartRecovery;
+        const tombstone = recovery?.tombstone;
+        if (!source?.sessionId || !recovery || !tombstone) {
+          result = { status: "conflict", reason: "not-tombstoned" };
           return undefined;
         }
-        const linked = resolveLifecyclePrimaryEntry(
-          database,
-          normalizeLifecycleTarget({
-            canonicalKey: recoveredSessionKey,
-            storeKeys: [recoveredSessionKey],
-          }),
-        )?.entry;
-        if (!linked || linked.sessionId !== recoveredSessionId) {
-          result = { status: "conflict", reason: "successor-missing" };
-          return undefined;
-        }
-        result = {
-          status: "existing",
-          sourceEntry: cloneSessionEntry(source),
-          successorEntry: cloneSessionEntry(linked),
-          successorKey: recoveredSessionKey,
-        };
-        return undefined;
-      }
 
-      if (
-        source.sessionId !== params.expected.sessionId ||
-        source.lifecycleRevision !== params.expected.lifecycleRevision ||
-        recovery.cycleId !== params.expected.cycleId ||
-        recovery.revision !== params.expected.revision ||
-        source.pluginOwnerId !== params.expected.pluginOwnerId
-      ) {
-        result = { status: "conflict", reason: "source-changed" };
-        return undefined;
-      }
-      if (resolveLifecyclePrimaryEntry(database, successorTarget)?.entry) {
-        result = { status: "conflict", reason: "target-exists" };
-        return undefined;
-      }
-
-      const sourceEvents = loadTranscriptEventsFromDatabase(database, source.sessionId);
-      const header = findSessionTranscriptHeader(sourceEvents);
-      if (!header) {
-        result = { status: "conflict", reason: "transcript-missing" };
-        return undefined;
-      }
-
-      const successorSessionId = params.successorEntry.sessionId;
-      const parentSession = formatLegacySqliteSessionMarkerForScope({
-        ...resolved,
-        sessionId: source.sessionId,
-        sessionKey: normalizeSqliteSessionKey(sourceTarget.canonicalKey),
-      });
-      appendTranscriptEventsInTransaction(
-        database,
-        {
-          ...resolved,
-          sessionId: successorSessionId,
-          sessionKey: normalizeSqliteSessionKey(successorTarget.canonicalKey),
-        },
-        [
-          {
-            ...createSessionTranscriptHeader({
-              cwd: typeof header.cwd === "string" ? header.cwd : undefined,
-              sessionId: successorSessionId,
-              version: header.version ?? MIN_READABLE_SESSION_VERSION,
+        const recoveredSessionKey = tombstone.recoveredSessionKey;
+        const recoveredSessionId = tombstone.recoveredSessionId;
+        if (recoveredSessionKey || recoveredSessionId) {
+          if (!recoveredSessionKey || !recoveredSessionId) {
+            result = { status: "conflict", reason: "successor-missing" };
+            return undefined;
+          }
+          const linked = resolveLifecyclePrimaryEntry(
+            database,
+            normalizeLifecycleTarget({
+              canonicalKey: recoveredSessionKey,
+              storeKeys: [recoveredSessionKey],
             }),
-            parentSession,
-          },
-          ...sourceEvents.filter((event) => !(isRecord(event) && event.type === "session")),
-        ],
-      );
+          )?.entry;
+          if (!linked || linked.sessionId !== recoveredSessionId) {
+            result = { status: "conflict", reason: "successor-missing" };
+            return undefined;
+          }
+          result = {
+            status: "existing",
+            sourceEntry: cloneSessionEntry(source),
+            successorEntry: cloneSessionEntry(linked),
+            successorKey: recoveredSessionKey,
+          };
+          return undefined;
+        }
 
-      const now = Date.now();
-      const nextSource: InternalSessionEntry = {
-        ...source,
-        mainRestartRecovery: {
-          ...recovery,
-          revision: recovery.revision + 1,
-          tombstone: {
-            ...tombstone,
-            recoveredSessionId: successorSessionId,
-            recoveredSessionKey: successorTarget.canonicalKey,
+        if (
+          source.sessionId !== params.expected.sessionId ||
+          source.lifecycleRevision !== params.expected.lifecycleRevision ||
+          recovery.cycleId !== params.expected.cycleId ||
+          recovery.revision !== params.expected.revision ||
+          source.pluginOwnerId !== params.expected.pluginOwnerId
+        ) {
+          result = { status: "conflict", reason: "source-changed" };
+          return undefined;
+        }
+        if (resolveLifecyclePrimaryEntry(database, successorTarget)?.entry) {
+          result = { status: "conflict", reason: "target-exists" };
+          return undefined;
+        }
+
+        const sourceEvents = loadTranscriptEventsFromDatabase(database, source.sessionId);
+        const header = findSessionTranscriptHeader(sourceEvents);
+        if (!header) {
+          result = { status: "conflict", reason: "transcript-missing" };
+          return undefined;
+        }
+
+        const successorSessionId = params.successorEntry.sessionId;
+        const parentSession = formatLegacySqliteSessionMarkerForScope({
+          ...resolved,
+          sessionId: source.sessionId,
+          sessionKey: normalizeSqliteSessionKey(sourceTarget.canonicalKey),
+        });
+        appendTranscriptEventsInTransaction(
+          database,
+          {
+            ...resolved,
+            sessionId: successorSessionId,
+            sessionKey: normalizeSqliteSessionKey(successorTarget.canonicalKey),
           },
-        },
-        archivedAt: source.archivedAt ?? now,
-        ...(source.archiveReason
-          ? { archiveReason: source.archiveReason }
-          : source.archivedAt === undefined
-            ? { archiveReason: "restart-recovery" as const }
+          [
+            {
+              ...createSessionTranscriptHeader({
+                cwd: typeof header.cwd === "string" ? header.cwd : undefined,
+                sessionId: successorSessionId,
+                version: header.version ?? MIN_READABLE_SESSION_VERSION,
+              }),
+              parentSession,
+            },
+            ...sourceEvents.filter((event) => !(isRecord(event) && event.type === "session")),
+          ],
+        );
+
+        const now = Date.now();
+        const nextSource: InternalSessionEntry = {
+          ...source,
+          mainRestartRecovery: {
+            ...recovery,
+            revision: recovery.revision + 1,
+            tombstone: {
+              ...tombstone,
+              recoveredSessionId: successorSessionId,
+              recoveredSessionKey: successorTarget.canonicalKey,
+            },
+          },
+          archivedAt: source.archivedAt ?? now,
+          ...(source.archiveReason
+            ? { archiveReason: source.archiveReason }
+            : source.archivedAt === undefined
+              ? { archiveReason: "restart-recovery" as const }
+              : {}),
+          ...(source.archivedBy === undefined && params.archivedBy
+            ? { archivedBy: params.archivedBy }
             : {}),
-        ...(source.archivedBy === undefined && params.archivedBy
-          ? { archivedBy: params.archivedBy }
-          : {}),
-        updatedAt: Math.max(now, (source.updatedAt ?? 0) + 1),
-      };
-      delete nextSource.pinnedAt;
+          updatedAt: Math.max(now, (source.updatedAt ?? 0) + 1),
+        };
+        delete nextSource.pinnedAt;
 
-      params.commitGuard?.();
+        params.commitGuard?.();
 
-      const identityKeys = [sourceTarget.canonicalKey, successorTarget.canonicalKey];
-      const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      writeSessionEntry(database, successorTarget.canonicalKey, params.successorEntry);
-      writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
-        previousEntry: source,
-      });
-      const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      result = {
-        status: "created",
-        sourceEntry: cloneSessionEntry(nextSource),
-        successorEntry: cloneSessionEntry(params.successorEntry),
-        successorKey: successorTarget.canonicalKey,
-      };
-      return prepareSessionIdentityPublication(
-        database,
-        resolved.agentId,
-        previousIdentity,
-        currentIdentity,
-      );
-    }, toDatabaseOptions(resolved));
-  });
+        const identityKeys = [sourceTarget.canonicalKey, successorTarget.canonicalKey];
+        const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        writeSessionEntry(database, successorTarget.canonicalKey, params.successorEntry);
+        writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
+          previousEntry: source,
+        });
+        const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        result = {
+          status: "created",
+          sourceEntry: cloneSessionEntry(nextSource),
+          successorEntry: cloneSessionEntry(params.successorEntry),
+          successorKey: successorTarget.canonicalKey,
+        };
+        return prepareSessionIdentityPublication(
+          database,
+          resolved.agentId,
+          previousIdentity,
+          currentIdentity,
+        );
+      }, toDatabaseOptions(resolved));
+    },
+    "session.restart.recover",
+  );
 
   publish?.();
   return result;

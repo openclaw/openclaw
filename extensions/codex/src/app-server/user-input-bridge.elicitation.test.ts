@@ -289,7 +289,10 @@ describe("Codex ordinary MCP elicitation adapter", () => {
   });
 
   it("recognizes form, openai/form, URL, nullable turn, and exact scope envelopes", async () => {
-    const gateway = createAnsweringGateway([{ name: ["Ada"] }, { continue: ["Continue"] }]);
+    const gateway = createAnsweringGateway([
+      { name: ["Ada"] },
+      { continue: ["I've completed this step"] },
+    ]);
     const bridge = createBridge({ gatewayCall: gateway.call });
     await expect(
       bridge.handleElicitationRequest({ id: "nullable", params: formParams({ turnId: null }) }),
@@ -305,6 +308,9 @@ describe("Codex ordinary MCP elicitation adapter", () => {
         }),
       }),
     ).resolves.toEqual({ action: "accept", content: null, _meta: null });
+    expect(requestedQuestions(gateway.calls)[1]?.questions).toContainEqual(
+      expect.objectContaining({ url: "https://example.com/authorize" }),
+    );
     await expect(
       bridge.handleElicitationRequest({
         id: "wrong-turn",

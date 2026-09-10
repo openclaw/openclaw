@@ -15,6 +15,7 @@ import {
   type DiagnosticExporterHealthUpdate,
 } from "../logging/diagnostic-stability.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import {
@@ -260,20 +261,24 @@ export async function startPluginServices(params: {
     entry.stopping = true;
     try {
       const cleanup = () => {
-        if (entry.cleanup) {
-          return entry.cleanup;
+        if (!entry.cleanup) {
+          try {
+            // Deadlines bound observers; raw startup still owns the one final cleanup.
+            const ready = beforeStop ? beforeStop.then(() => entry.startup) : entry.startup;
+            const invokeStop = () =>
+              withPluginHttpRouteRegistry(params.registry, () => entry.stop?.(), entry.lease);
+            entry.cleanup = ready ? ready.then(invokeStop) : Promise.resolve(invokeStop());
+          } catch (error) {
+            const failure = createDeferredCore();
+            failure.reject(error);
+            entry.cleanup = failure.promise;
+          }
         }
-        try {
-          // Deadlines bound observers; raw startup still owns the one final cleanup.
-          const ready = beforeStop ? beforeStop.then(() => entry.startup) : entry.startup;
-          const invokeStop = () =>
-            withPluginHttpRouteRegistry(params.registry, () => entry.stop?.(), entry.lease);
-          return (entry.cleanup = ready ? ready.then(invokeStop) : Promise.resolve(invokeStop()));
-        } catch (error) {
-          const failure = createDeferredCore();
-          failure.reject(error);
-          return (entry.cleanup = failure.promise);
-        }
+        const cleanupPromise = entry.cleanup;
+        // Track custody separately: an async wrapper can change a zero-budget deadline race.
+        // The deadline path already reports the original cleanup rejection.
+        void trackAsyncWork(() => cleanupPromise).catch(() => {});
+        return cleanupPromise;
       };
       await runBeforeDeadline(
         cleanup,

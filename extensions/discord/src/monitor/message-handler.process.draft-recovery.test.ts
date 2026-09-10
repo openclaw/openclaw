@@ -126,6 +126,35 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the visible progress draft when final delivery fails without recovery", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+    const draftStream = createMockDraftStreamForTest();
+    deliverDiscordReply.mockRejectedValueOnce(new Error("send failed"));
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "checked the workspace" });
+      await elapseProgressDraftStartDelay();
+      await params?.dispatcher.sendFinalReply({ text: "complete answer" });
+      return {
+        queuedFinal: true,
+        counts: { final: 0, tool: 0, block: 0 },
+        failedCounts: { final: 1 },
+      };
+    });
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("uses root discord maxLinesPerMessage for fresh final delivery when runtime config omits it", async () => {
     const longReply = Array.from({ length: 20 }, (_value, index) => `Line ${index + 1}`).join("\n");
     const draftStream = await runFinalReplyScenario(

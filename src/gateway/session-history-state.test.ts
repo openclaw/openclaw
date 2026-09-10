@@ -2,8 +2,8 @@
  * Session history state hashing and metadata tests.
  */
 import { createHash } from "node:crypto";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { describe, expect, test, vi } from "vitest";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { projectChatDisplayMessagesWithState } from "./chat-display-projection.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";

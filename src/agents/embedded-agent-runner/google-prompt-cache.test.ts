@@ -1,6 +1,10 @@
 // Coverage for Google prompt-cache creation, reuse, and request rewriting.
 import crypto from "node:crypto";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
@@ -141,10 +145,10 @@ describe("google prompt cache", () => {
   });
 
   it.each([200, 503])(
-    "preserves the final assembled prompt when cache creation returns %s",
+    "strips markers from the cached prefix and preserves inline fallback when creation returns %s",
     async (statusCode) => {
       const stablePrompt = "hook-before\nbase";
-      const systemPrompt = `${stablePrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}hook-after`;
+      const systemPrompt = `hook-before${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}base${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}${SYSTEM_PROMPT_CACHE_BOUNDARY}hook-after`;
       const fetchMock = vi.fn(
         async () =>
           new Response(

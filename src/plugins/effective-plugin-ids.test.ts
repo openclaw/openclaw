@@ -108,8 +108,7 @@ describe("resolveEffectivePluginIds", () => {
     );
     const collect = (includePersistedAuthState = false) =>
       collectConfiguredStartupChannelIds({
-        config: {},
-        activationSourceConfig: {},
+        configs: [{}, {}],
         env: {},
         ...(includePersistedAuthState ? { includePersistedAuthState: true } : {}),
       });

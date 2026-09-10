@@ -21,6 +21,7 @@ export type PluginMetadataSnapshotPluginIdScope = {
 export type PluginProviderAuthAliasCandidate = {
   plugin: PluginManifestRecord;
   target: string;
+  baseUrls?: readonly string[];
   /** First eligible declaration owns public map order, even if a later candidate wins. */
   order: number;
 };
@@ -80,7 +81,10 @@ export type PluginMetadataRegistryView = Pick<
 > &
   Partial<Pick<PluginMetadataSnapshot, "declaredProviderOwners">>;
 
-export type PluginMetadataManifestView = Pick<PluginMetadataSnapshot, "index" | "plugins">;
+export type PluginMetadataManifestView = Pick<
+  PluginMetadataSnapshot,
+  "index" | "plugins" | "byPluginId"
+>;
 
 export type LoadPluginMetadataSnapshotParams = {
   config?: OpenClawConfig;

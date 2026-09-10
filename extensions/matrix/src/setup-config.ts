@@ -4,6 +4,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeSecretInputString,
+  patchTopLevelChannelConfigSection,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/setup";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -128,24 +129,17 @@ export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): Co
   for (const key of keysToMove) {
     nextAccount[key] = cloneIfObject(base[key]);
   }
-  const nextChannel = { ...base };
-  for (const key of keysToMove) {
-    delete nextChannel[key];
-  }
-
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      [channel]: {
-        ...nextChannel,
-        accounts: {
-          ...accounts,
-          [resolvedTargetAccountId]: nextAccount,
-        },
+  return patchTopLevelChannelConfigSection({
+    cfg,
+    channel,
+    clearFields: keysToMove,
+    patch: {
+      accounts: {
+        ...accounts,
+        [resolvedTargetAccountId]: nextAccount,
       },
     },
-  };
+  });
 }
 
 export function validateMatrixSetupInput(params: {

@@ -8,6 +8,7 @@ import type {
   WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createNoisyPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
@@ -19,8 +20,9 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { prepareAgentRunUserTurn } from "../agent-turn/agent-run-user-turn.js";
@@ -121,14 +123,7 @@ function createTurnMessages(userText = "Inspect the workspace"): WorkerTranscrip
       stopReason: "toolUse",
       timestamp: 200,
     },
-    {
-      role: "toolResult",
-      toolCallId: "call-read-1",
-      toolName: "read",
-      content: [{ type: "text", text: "Workspace ready." }],
-      isError: false,
-      timestamp: 300,
-    },
+    makeTextToolResult("call-read-1", "read", "Workspace ready.", false, 300),
   ];
 }
 
@@ -170,6 +165,7 @@ function requireAppendableWorkerMessage(
 describe("worker transcript commit application", () => {
   let root: string;
   let sessionsDir: string;
+  let stateDatabasePath: string;
   let storePath: string;
   let sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
   let cfg: OpenClawConfig;
@@ -179,6 +175,7 @@ describe("worker transcript commit application", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-turn-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
     sessionsDir = path.join(root, "agents", "main", "sessions");
     storePath = path.join(sessionsDir, "sessions.json");
     cfg = {
@@ -202,9 +199,8 @@ describe("worker transcript commit application", () => {
       sessionKey: SESSION_KEY,
       storePath,
     });
-    const database = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
-    });
+    const database = openOpenClawStateDatabase();
+    stateDatabasePath = database.path;
     ledgerStore = createWorkerTranscriptCommitStore({ database });
     committer = createWorkerTranscriptCommitter({
       getConfig: () => cfg,
@@ -215,8 +211,13 @@ describe("worker transcript commit application", () => {
   afterEach(async () => {
     unsubscribe?.();
     clearRuntimeConfigSnapshot();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
+    try {
+      await closeOpenClawAgentDatabasesAsync(root);
+      closeOpenClawStateDatabaseByPath(stateDatabasePath);
+      await fs.rm(root, { recursive: true, force: true });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("persists and reopens image-bearing worker results above the control-frame budget", async () => {

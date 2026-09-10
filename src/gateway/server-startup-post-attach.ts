@@ -423,7 +423,7 @@ async function waitForAcpRuntimeBackendReady(params: {
   const { getAcpRuntimeBackend } = await import("../acp/runtime/registry.js");
   const timeoutMs = params.timeoutMs ?? ACP_BACKEND_READY_TIMEOUT_MS;
   const pollMs = params.pollMs ?? ACP_BACKEND_READY_POLL_MS;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
 
   do {
     const backend = getAcpRuntimeBackend(params.backendId);
@@ -437,7 +437,7 @@ async function waitForAcpRuntimeBackendReady(params: {
       }
     }
     await sleep(pollMs, undefined, { ref: false });
-  } while (Date.now() < deadline);
+  } while (performance.now() < deadline);
 
   return false;
 }
@@ -968,7 +968,7 @@ export async function startGatewaySidecars(params: {
         run: async (isStopped) => {
           const [
             { DEFAULT_MODEL, DEFAULT_PROVIDER },
-            { loadPreparedModelCatalog },
+            { readPreparedModelCatalog },
             { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
           ] = await Promise.all([
             loadAgentDefaultsModule(),
@@ -989,11 +989,9 @@ export async function startGatewaySidecars(params: {
                 defaultProvider: DEFAULT_PROVIDER,
                 defaultModel: DEFAULT_MODEL,
               });
-            const catalog = await loadPreparedModelCatalog({
+            const catalog = await readPreparedModelCatalog({
               config: params.cfg,
               readOnly: true,
-              providerDiscoveryProviderIds: [hooksModelRef.provider],
-              scopedLiveProviderDiscovery: true,
             });
             if (isStopped()) {
               return;

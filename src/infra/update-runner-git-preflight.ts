@@ -4,7 +4,6 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { hasErrnoCode } from "./errno.js";
-import { trimLogTail } from "./restart-sentinel.js";
 import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
@@ -13,7 +12,8 @@ import {
   managerScriptArgs,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
-import { MAX_LOG_CHARS, runStep } from "./update-runner-command.js";
+import { runStep } from "./update-runner-command.js";
+import { cleanupGitPreflight } from "./update-runner-git-cleanup.js";
 import {
   gitCleanCheckArgs,
   prepareCandidateCommandEnv,
@@ -22,6 +22,7 @@ import {
   shouldInstallWithoutScriptsOnWindows,
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
+import { checkGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
 import type {
   CommandRunner,
   RunStepOptions,
@@ -34,7 +35,6 @@ const PREFLIGHT_MAX_COMMITS = 10;
 const PREFLIGHT_TEMP_PREFIX =
   process.platform === "win32" ? "ocu-pf-" : ".openclaw-update-preflight-";
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
-const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
 
 type StepFactory = (
@@ -114,12 +114,6 @@ async function createPreflightRoot(gitRoot: string) {
   return fs.mkdtemp(path.join(baseDir, PREFLIGHT_TEMP_PREFIX));
 }
 
-async function removePathRecursive(target: string) {
-  await fs
-    .rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
-    .catch(() => {});
-}
-
 async function resetPreflightCandidateWorktree(
   worktreeDir: string,
   shortSha: string,
@@ -139,16 +133,6 @@ async function resetPreflightCandidateWorktree(
     step(`preflight clean (${shortSha})`, ["git", "-C", worktreeDir, "clean", "-fdx"], worktreeDir),
   );
   return cleanStep.exitCode === 0;
-}
-
-async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string) {
-  try {
-    await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
-    await fs.rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function resolveExplicitTarget(params: {
@@ -313,7 +297,7 @@ async function resolveUpstreamCandidates(params: {
 type PreflightCandidateResult =
   | { status: "ok"; candidateSha: string }
   | { status: "manager-unavailable"; reason: string }
-  | { status: "failed" | "insufficient-space" };
+  | { status: "failed" | "insufficient-space" | "node-runtime-incompatible" };
 
 function classifyPreflightFailure(step: UpdateStepResult): "failed" | "insufficient-space" {
   // pnpm reports filesystem errors on stdout by default. Require the storage
@@ -404,6 +388,11 @@ async function testPreflightCandidate(params: {
   const candidateSha = candidateHead.stdout.trim();
   // A local rebase can change package metadata from the fetched base revision.
   await params.beforeCandidate?.(candidateSha);
+  const nodeRuntimeStep = await checkGitCandidateNodeRuntime(params.worktreeDir, shortSha);
+  if (nodeRuntimeStep) {
+    params.steps.push(nodeRuntimeStep);
+    return { status: "node-runtime-incompatible" };
+  }
   const manager = await resolveUpdateBuildManager(
     params.runCommand,
     params.worktreeDir,
@@ -630,7 +619,6 @@ export async function runGitCandidatePreflight(params: {
   }
   const worktreeDir = resolvePreflightWorktreeDir(preflightRoot);
   let tested: PreflightCandidateResult | undefined;
-  let cleanupFailed: boolean;
   try {
     const worktreeStep = await runStep(
       params.step(
@@ -663,49 +651,29 @@ export async function runGitCandidatePreflight(params: {
         rebaseFrom,
         runLint: !params.targetRevision && shouldRunDevPreflightLint(),
       });
+      // Node requirements and package managers can differ across older revisions.
       if (candidate.status === "ok" || candidate.status === "insufficient-space") {
         tested = candidate;
         break;
       }
-      // A missing manager must not hide another candidate's checkout/build failure.
-      if (tested?.status !== "failed") {
+      // Preserve build failures over manager failures, and manager failures over
+      // runtime-only rejection when a compatible candidate was attempted.
+      const runtimeMismatch = candidate.status === "node-runtime-incompatible";
+      if (tested?.status !== "failed" && (!runtimeMismatch || !tested)) {
         tested = candidate;
       }
     }
   } finally {
-    // Cancellation ends candidate work, not cleanup of the worktree and its Git metadata.
-    // Keep cleanup commands in the owned process tree with their existing bounded budget.
-    const cleanupSignal = new AbortController().signal;
-    const cleanupTimeoutMs = Math.min(params.timeoutMs, PREFLIGHT_CLEANUP_TIMEOUT_MS);
-    const runCleanupCommand: CommandRunner = (argv, options) =>
-      params.runCommand(argv, { ...options, signal: cleanupSignal, timeoutMs: cleanupTimeoutMs });
-    // Interrupted creation can retain Git's initialization lock. This exact temporary
-    // worktree is owned here, so force twice instead of leaving a stale registration.
-    const removeStep = await runStep({
-      ...params.step(
-        "preflight cleanup",
-        ["git", "-C", params.gitRoot, "worktree", "remove", "--force", "--force", worktreeDir],
-        params.gitRoot,
-      ),
-      runCommand: runCleanupCommand,
-      timeoutMs: cleanupTimeoutMs,
-    });
-    if (removeStep.exitCode !== 0 && (await repairPreflightCleanup(worktreeDir, preflightRoot))) {
-      removeStep.exitCode = 0;
-      const message =
-        process.platform === "win32"
-          ? "windows fallback cleanup removed preflight tree"
-          : "fallback cleanup removed preflight tree";
-      removeStep.stderrTail = trimLogTail(
-        [removeStep.stderrTail, message].filter(Boolean).join("\n"),
-        MAX_LOG_CHARS,
-      );
-    }
-    cleanupFailed = removeStep.exitCode !== 0;
-    await runCleanupCommand(["git", "-C", params.gitRoot, "worktree", "prune"], {
-      cwd: params.gitRoot,
-    }).catch(() => null);
-    await removePathRecursive(preflightRoot);
+    const cleanupOptions = params.step(
+      "preflight cleanup",
+      ["git", "-C", params.gitRoot, "worktree", "remove", "--force", "--force", worktreeDir],
+      params.gitRoot,
+    );
+    await cleanupGitPreflight(
+      { ...cleanupOptions, runCommand: params.runCommand },
+      worktreeDir,
+      preflightRoot,
+    );
   }
   if (tested?.status !== "ok") {
     return {
@@ -715,11 +683,10 @@ export async function runGitCandidatePreflight(params: {
           ? "preflight-insufficient-space"
           : tested?.status === "manager-unavailable"
             ? tested.reason
-            : "preflight-no-good-commit",
+            : tested?.status === "node-runtime-incompatible"
+              ? "preflight-node-runtime-incompatible"
+              : "preflight-no-good-commit",
     };
-  }
-  if (cleanupFailed) {
-    return { status: "error", reason: "preflight-cleanup-failed" };
   }
   return {
     status: "ok",

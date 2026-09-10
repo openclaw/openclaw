@@ -3,7 +3,8 @@
  *
  * Registers provider-specific stream functions and rewrites models that need OpenClaw-managed transport semantics.
  */
-import type { Api, Model, StreamFn } from "@openclaw/llm-core";
+import { randomUUID } from "node:crypto";
+import type { Api, Model, StreamFn, StreamOptions } from "@openclaw/llm-core";
 import type { ApiRegistry } from "../api-registry.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import {
@@ -13,6 +14,20 @@ import {
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
+
+/** Standalone completions have no durable session, but may require routing identity. */
+export function prepareHeadersForSimpleCompletion(
+  model: Pick<Model, "baseUrl" | "headers">,
+  options?: Pick<StreamOptions, "sessionId" | "headers">,
+): Record<string, string> | undefined {
+  // Keep the synthetic identity in the required header only: a stream sessionId
+  // would also enable unrelated cache and WebSocket session ownership.
+  return resolveOpencodeSessionHeaders(model, {
+    ...options,
+    sessionId: options?.sessionId || randomUUID(),
+  });
+}
 
 const PROVIDER_SIMPLE_COMPLETION_API_PREFIX = "openclaw-provider-simple:";
 const PROVIDER_STREAM_API_PREFIX = "openclaw-provider-stream:";

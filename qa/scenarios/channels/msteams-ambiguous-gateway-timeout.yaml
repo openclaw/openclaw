@@ -33,10 +33,10 @@ scenario:
     channel: msteams
     suiteIsolation: isolated
     isolationReason: Injects an accepted-then-504 Connector response for one outbound marker.
-    summary: Run a real Gateway and Microsoft Teams plugin against the loopback Bot Framework Connector while the mock provider produces one exact final reply.
+    summary: Call the real Gateway send RPC through the Microsoft Teams plugin while the loopback Bot Framework Connector accepts the activity and returns HTTP 504.
     config:
       expectedMarker: QA-MSTEAMS-AMBIGUOUS-504
-      finalMarker: QA-MSTEAMS-AMBIGUOUS-FINAL
+      seedMarker: QA-MSTEAMS-CONVERSATION-READY
 
 flow:
   steps:
@@ -52,17 +52,19 @@ flow:
             senderId: driver
             senderName: Teams QA Driver
             text:
-              expr: '`qa msteams ambiguous gateway timeout. exact marker: \`${config.expectedMarker}\``'
+              expr: "`qa msteams seed proactive conversation reference. reply with only this exact marker: ${config.seedMarker}`"
         - waitForOutbound:
             conversation: { id: ambiguous-timeout, kind: direct }
-            textIncludes: { ref: config.expectedMarker }
+            textIncludes: { ref: config.seedMarker }
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
-        - waitForOutbound:
-            conversation: { id: ambiguous-timeout, kind: direct }
-            textIncludes: { ref: config.finalMarker }
-            timeoutMs:
-              expr: liveTurnTimeoutMs(env, 60000)
+        - set: sendError
+          value:
+            expr: "await (async () => { try { await env.gateway.call('send', { accountId: 'default', agentId: 'qa', channel: 'msteams', idempotencyKey: randomUUID(), message: config.expectedMarker, to: 'conversation:19:ambiguous-timeout@thread.tacv2' }, { timeoutMs: liveTurnTimeoutMs(env, 60000) }); return null; } catch (error) { return String(error); } })()"
+        - assert:
+            expr: "typeof sendError === 'string' && sendError.includes('504')"
+            message:
+              expr: "`expected the accepted Teams send to surface HTTP 504; got ${String(sendError)}`"
         - set: matchingOutbound
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === 'ambiguous-timeout' && String(message.text ?? '').includes(config.expectedMarker))"
@@ -70,4 +72,4 @@ flow:
             expr: matchingOutbound.length === 1
             message:
               expr: "`expected one ambiguous Teams POST, saw ${matchingOutbound.length}; transcript=${formatTransportTranscript(state, { conversationId: 'ambiguous-timeout' })}`"
-      detailsExpr: "`accepted ambiguous Teams POST count=${matchingOutbound.length}`"
+      detailsExpr: "`accepted ambiguous Teams POST count=${matchingOutbound.length}; Gateway surfaced the Connector 504 without replay`"

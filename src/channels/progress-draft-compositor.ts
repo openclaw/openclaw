@@ -20,10 +20,11 @@ import {
   createChannelProgressDraftGate,
   type AgentPlanStep,
   type ChannelProgressDraftLine,
-  formatChannelProgressDraftText,
+  formatChannelProgressDraftTextForStreaming,
   isChannelProgressAttentionLine,
+  isChannelProgressPriorityLine,
   isChannelProgressDraftWorkToolName,
-  mergeChannelProgressDraftLine,
+  mergeChannelProgressDraftLineForStreaming,
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLineChars,
@@ -123,6 +124,7 @@ export function createChannelProgressDraftCompositor(params: {
     });
   let progressSuppressed = false;
   let lines: ChannelProgressDraftCompositorLine[] = [];
+  let renderGeneration = 0;
   let lastRenderedText = "";
   let lastRenderedLines = lines;
   let lastRenderedDiffStatKey = "";
@@ -186,7 +188,8 @@ export function createChannelProgressDraftCompositor(params: {
     // `lines`) would print them twice if they also appeared in this text.
     const linesRenderedByChannel =
       params.rendersRollingLinesNatively === true && Boolean(narration || planSteps?.length);
-    return formatChannelProgressDraftText({
+    return formatChannelProgressDraftTextForStreaming({
+      toolProgress: !quietProgress,
       presentation: params.presentation,
       entry: params.entry,
       lines: linesRenderedByChannel ? [] : draftLines,
@@ -222,6 +225,7 @@ export function createChannelProgressDraftCompositor(params: {
     clearPreambleExpiryTimer();
     progressSuppressed = suppressed;
     lines = [];
+    renderGeneration += 1;
     lastRenderedText = "";
     lastRenderedLines = lines;
     lastRenderedDiffStatKey = "";
@@ -251,17 +255,17 @@ export function createChannelProgressDraftCompositor(params: {
     if (!text || (text === lastRenderedText && !structuredStateChanged)) {
       return false;
     }
+    const generation = renderGeneration;
     const observed = await settleProgressVisibilityCallbackResult(
       params.update(text, { ...options, lines: [...lines], snapshot: getSnapshot() }),
     );
-    if (!observed.visible) {
-      return false;
+    // A retired publication can finish after its replacement; it no longer owns dedupe state.
+    if (observed.visible && generation === renderGeneration) {
+      lastRenderedText = text;
+      lastRenderedLines = lines;
+      lastRenderedDiffStatKey = diffStatKey;
     }
-    // Only accepted renders become the dedupe baseline; pending sends remain retryable.
-    lastRenderedText = text;
-    lastRenderedLines = lines;
-    lastRenderedDiffStatKey = diffStatKey;
-    return true;
+    return observed.visible;
   };
 
   const render = async (options?: { flush?: boolean }): Promise<boolean> => {
@@ -339,8 +343,10 @@ export function createChannelProgressDraftCompositor(params: {
       // Transports without deletion replace an existing preview with its neutral label.
       return lastRenderedText ? await publish() : false;
     }
-    await params.deleteCurrent();
+    // Release the retiring baseline before an identical replacement can publish.
+    renderGeneration += 1;
     lastRenderedText = "";
+    await params.deleteCurrent();
     return true;
   };
 
@@ -404,10 +410,14 @@ export function createChannelProgressDraftCompositor(params: {
     }
     const progressLine = typeof line === "object" && line !== undefined ? line : normalized;
     // Approvals and failures stay visible even when the rolling tool log is off.
-    const needsAttention = isChannelProgressAttentionLine(progressLine);
-    const shouldStoreLine = !quietProgress || needsAttention;
+    const needsAttention = quietProgress
+      ? isChannelProgressAttentionLine(progressLine)
+      : isChannelProgressPriorityLine(progressLine);
+    const shouldStartImmediately = isChannelProgressAttentionLine(progressLine);
+    const shouldStoreLine = !quietProgress || isChannelProgressAttentionLine(progressLine);
     const nextLines = shouldStoreLine
-      ? mergeChannelProgressDraftLine(lines, progressLine, {
+      ? mergeChannelProgressDraftLineForStreaming(lines, progressLine, {
+          toolProgress: !quietProgress,
           maxLines: resolveChannelProgressDraftMaxLines(params.entry),
         })
       : typeof line === "object" && line.id
@@ -442,7 +452,7 @@ export function createChannelProgressDraftCompositor(params: {
       return shouldStoreLine ? await publish() : false;
     }
     // Attention bypasses startup delay and adapter batching even with the tool log enabled.
-    if (options?.startImmediately || params.shouldStartNow?.(line) || needsAttention) {
+    if (options?.startImmediately || params.shouldStartNow?.(line) || shouldStartImmediately) {
       const flush = options?.flush === true || needsAttention;
       return await startAndRender(flush ? { flush: true } : undefined);
     }
@@ -685,7 +695,7 @@ export function createChannelProgressDraftCompositor(params: {
       const priorIndex =
         lastReasoningLine === undefined ? -1 : lines.lastIndexOf(lastReasoningLine);
       if (params.presentation === "summary") {
-        lines = mergeChannelProgressDraftLine(
+        lines = mergeChannelProgressDraftLineForStreaming(
           lines,
           {
             id: "reasoning",
@@ -694,13 +704,17 @@ export function createChannelProgressDraftCompositor(params: {
             label: "Reasoning",
             prefix: false,
           },
-          { maxLines: resolveChannelProgressDraftMaxLines(params.entry) },
+          {
+            maxLines: resolveChannelProgressDraftMaxLines(params.entry),
+            toolProgress: !quietProgress,
+          },
         );
       } else if (priorIndex >= 0) {
         lines = [...lines];
         lines[priorIndex] = displayLine;
       } else {
-        lines = mergeChannelProgressDraftLine(lines, displayLine, {
+        lines = mergeChannelProgressDraftLineForStreaming(lines, displayLine, {
+          toolProgress: !quietProgress,
           maxLines: resolveChannelProgressDraftMaxLines(params.entry),
         });
       }
@@ -744,7 +758,8 @@ export function createChannelProgressDraftCompositor(params: {
         label: "Commentary",
         prefix: false,
       };
-      lines = mergeChannelProgressDraftLine(lines, line, {
+      lines = mergeChannelProgressDraftLineForStreaming(lines, line, {
+        toolProgress: !quietProgress,
         maxLines: resolveChannelProgressDraftMaxLines(params.entry),
       });
       if (!itemId) {

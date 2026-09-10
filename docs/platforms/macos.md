@@ -257,10 +257,12 @@ own docs.
 | Inspect Mac node commands and app IPC    | [macOS IPC](/platforms/mac/xpc)                                                             |
 | Capture logs                             | [macOS logging](/platforms/mac/logging)                                                     |
 | Build from source                        | [macOS dev setup](/platforms/mac/dev-setup)                                                 |
+| Browse and install skills from the app   | [Skills in the macOS app](/platforms/mac/skills)                                            |
 
 ## Related
 
 - [Platforms](/platforms)
 - [Getting started](/start/getting-started)
+- [Onboarding](/start/onboarding) - the macOS app's first-run flow: where the Gateway runs, runtime install, and connecting a provider
 - [Gateway](/gateway)
 - [Exec approvals](/tools/exec-approvals)

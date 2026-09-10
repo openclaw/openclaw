@@ -1,7 +1,12 @@
 // Channels remove tests cover config mutation, plugin catalog repair hints, and account removal behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "../channels/plugins/config-helpers.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -64,6 +69,14 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: gatewayMocks.callGateway,
 }));
 
+const prompterMocks = vi.hoisted(() => ({
+  confirm: vi.fn(async () => true),
+}));
+
+vi.mock("../wizard/clack-prompter.js", () => ({
+  createClackPrompter: () => prompterMocks,
+}));
+
 const runtime = createTestRuntime();
 
 function firstWrittenChannelsConfig() {
@@ -103,6 +116,7 @@ describe("channelsRemoveCommand", () => {
     );
     registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
     gatewayMocks.callGateway.mockClear();
+    prompterMocks.confirm.mockClear();
     gatewayMocks.callGateway.mockResolvedValue({ stopped: true });
     setActivePluginRegistry(createTestRegistry());
   });
@@ -287,6 +301,128 @@ describe("channelsRemoveCommand", () => {
     expect(scopedPlugin.config.deleteAccount).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  function installWorkAccountChannel() {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            accounts: { work: { enabled: true, token: "token-1" } },
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    const sectionKey = "external-chat";
+    const scopedPlugin: ChannelPlugin = {
+      ...createExternalChatDeletePlugin(),
+      config: {
+        listAccountIds: (cfg: OpenClawConfig) => {
+          const accounts = (cfg.channels?.[sectionKey] as { accounts?: Record<string, unknown> })
+            ?.accounts;
+          const ids = accounts ? Object.keys(accounts) : [];
+          return ids.length ? ids : ["default"];
+        },
+        resolveAccount: () => ({}),
+        deleteAccount: vi.fn((params: { cfg: OpenClawConfig; accountId: string }) =>
+          deleteAccountFromConfigSection({ ...params, sectionKey }),
+        ),
+        setAccountEnabled: vi.fn(
+          (params: { cfg: OpenClawConfig; accountId: string; enabled: boolean }) =>
+            setAccountEnabledInConfigSection({ ...params, sectionKey, allowTopLevel: true }),
+        ),
+      },
+    };
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: scopedPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    return scopedPlugin;
+  }
+
+  function expectNoRemoval(message: string) {
+    expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(message));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  }
+
+  it.each([
+    { deleteConfig: true, label: "delete" },
+    { deleteConfig: false, label: "disable" },
+  ])("rejects an unknown --account before $label mutates config", async ({ deleteConfig }) => {
+    installWorkAccountChannel();
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "ghost", delete: deleteConfig },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expectNoRemoval('external-chat has no account "ghost" to remove.');
+  });
+
+  it("rejects an omitted --account when the channel has no default account", async () => {
+    installWorkAccountChannel();
+
+    await channelsRemoveCommand({ channel: "external-chat" }, runtime, { hasFlags: true });
+
+    expectNoRemoval("external-chat has no default account to remove.");
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Known accounts: work."));
+  });
+
+  it("rejects an unknown --account on a channel that cannot delete accounts", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            accounts: { work: { enabled: true, token: "token-1" } },
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    const setAccountEnabled = vi.fn(
+      (params: { cfg: OpenClawConfig; accountId: string; enabled: boolean }) =>
+        setAccountEnabledInConfigSection({
+          ...params,
+          sectionKey: "external-chat",
+          allowTopLevel: true,
+        }),
+    );
+    const scopedPlugin: ChannelPlugin = {
+      ...createExternalChatDeletePlugin(),
+      config: {
+        listAccountIds: () => ["work"],
+        resolveAccount: () => ({}),
+        setAccountEnabled,
+      },
+    };
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        { pluginId: "@vendor/external-chat-plugin", plugin: scopedPlugin, source: "test" },
+      ]),
+    );
+
+    await channelsRemoveCommand({ channel: "external-chat", account: "ghost" }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(setAccountEnabled).not.toHaveBeenCalled();
+    expectNoRemoval('external-chat has no account "ghost" to remove.');
   });
 
   it("stops an active gateway channel runtime before deleting a runtime-backed account", async () => {

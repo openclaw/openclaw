@@ -125,6 +125,7 @@ type WorkerRepositoryWorkspaceSource = {
 
 export type WorkerWorkspaceSyncRequest = {
   sessionId: string;
+  sessionKey?: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
   source: { kind: "local"; path: string; projectKey?: string } | WorkerRepositoryWorkspaceSource;

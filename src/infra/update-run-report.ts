@@ -2,7 +2,8 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
-import { summarizeUpdateStepFailure, type UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
+import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
@@ -137,6 +138,9 @@ export function renderUpdateRunReport(
   for (const step of run.steps.filter((item) => item.status === "failed").slice(-3)) {
     lines.push(bounded(`Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`, 300));
   }
+  for (const message of updateRunWarningMessages(run.steps).slice(-3)) {
+    lines.push(`Warning: ${bounded(message, 500)}`);
+  }
   const verification: string[] = [];
   const facts = run.verification;
   if (facts.booted) {
@@ -216,13 +220,7 @@ export function updateRunReportInputFromResult(result: UpdateRunResult): ReportI
     verification: {},
     repair: [],
     downtimeMs: null,
-    steps: result.steps.map((step) => ({
-      step: step.name,
-      status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
-      ...(step.exitCode !== 0
-        ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-        : {}),
-    })),
+    steps: result.steps.flatMap(updateRunStepsFromResultStep),
   };
 }
 

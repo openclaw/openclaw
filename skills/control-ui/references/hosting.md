@@ -117,4 +117,4 @@ Source documentation:
 - `docs/web/dashboards.md`
 - `docs/web/dashboard-architecture.md`
 - `docs/gateway/tailscale.md`
-- `docs/cli/mcp.md` (MCP Apps sandbox listener)
+- `docs/cli/mcp/apps.md` (MCP Apps sandbox listener)

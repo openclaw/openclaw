@@ -1,5 +1,6 @@
 {
   "id": "searxng",
+  "categories": ["web"],
   "activation": {
     "onStartup": false
   },

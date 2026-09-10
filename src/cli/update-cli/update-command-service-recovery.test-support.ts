@@ -75,7 +75,8 @@ export function readyRecoveryHealth(
   return {
     healthy: true,
     staleGatewayPids: [],
-    runtime: { status: running ? "running" : "stopped" },
+    runtime: { status: running ? "running" : "stopped", pid: running ? 4242 : undefined },
+    gatewayBootId: "service-boot",
     portUsage: { port, status: "busy", listeners: [], hints: [] },
   };
 }
@@ -198,6 +199,7 @@ export function registerRecoveryTests(params: {
         refreshServiceEnv: true,
         serviceInstallEnv: process.env,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
         gatewayPort: 19305,
         requireRunningServiceAfterRestart: true,

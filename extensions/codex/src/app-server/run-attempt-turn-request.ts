@@ -11,6 +11,8 @@ import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { prepareCodexWorkspaceReferences } from "./client-runtime.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
+import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
+import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
@@ -24,6 +26,7 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
+import { buildCodexParentLocalInstructions } from "./turn-params.js";
 
 export async function prepareCodexAttemptTurnRequest(
   resources: CodexAttemptResources,
@@ -130,6 +133,9 @@ export async function prepareCodexAttemptTurnRequest(
     const referencesRetained = turnState.codexTurnPromptText.includes(
       workspaceBootstrapContext.promptContext ?? "",
     );
+    const inferenceRoute = usesSupervisionConnection
+      ? undefined
+      : getCodexInferenceThread(resourceState.client, resourceState.thread.threadId);
     const turnStartParams = buildTurnStartParams(
       {
         ...runtimeParams,
@@ -154,6 +160,7 @@ export async function prepareCodexAttemptTurnRequest(
         skillsCollaborationInstructions: context.skillsCollaborationInstructions,
         memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
         preserveNativeTurnSettings: usesSupervisionConnection,
+        parentLocalEgress: inferenceRoute !== undefined,
         messageToolAvailable: toolBridge.availableTools.some((tool) => tool.name === "message"),
         requireExplicitMessageTarget: attemptTools.requireExplicitMessageTarget,
         sessionStatusAvailable: toolBridge.availableTools.some(
@@ -161,6 +168,56 @@ export async function prepareCodexAttemptTurnRequest(
         ),
       },
     );
+    if (inferenceRoute) {
+      prompt.setParentLocalEgress();
+      resourceState.releaseInferenceContext?.();
+      const inferenceThread = resourceState.thread;
+      const registration = inferenceRoute.context.register({
+        threadId: resourceState.thread.threadId,
+        text:
+          buildCodexParentLocalInstructions(runtimeParams, {
+            turnScopedDeveloperInstructions:
+              workspaceBootstrapContext.turnScopedDeveloperInstructions,
+            skillsCollaborationInstructions: context.skillsCollaborationInstructions,
+            memoryCollaborationInstructions:
+              workspaceBootstrapContext.memoryCollaborationInstructions,
+          }) ?? "",
+        signal: runAbortController.signal,
+        assertCurrent: () => {
+          params.hostCapabilities.assertActive();
+          connection.assertCurrent();
+          if (
+            resourceState.thread !== inferenceThread ||
+            getCodexInferenceThread(resourceState.client, inferenceThread.threadId) !==
+              inferenceRoute
+          ) {
+            throw new Error("Codex inference thread ownership changed");
+          }
+          inferenceThread.liveThreadOwnership?.assertCurrent();
+        },
+      });
+      resourceState.releaseInferenceContext = registration.release;
+      turnStartParams.responsesapiClientMetadata = {
+        ...turnStartParams.responsesapiClientMetadata,
+        [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+      };
+    } else if (!usesSupervisionConnection) {
+      embeddedAgentLog.warn(
+        "Codex parent-local egress workaround is unavailable for this connection or native network profile; legacy collaboration delivery is not guaranteed.",
+      );
+      prompt.systemPromptReport.source = "estimate";
+      prompt.systemPromptReport.injectedWorkspaceFiles =
+        prompt.systemPromptReport.injectedWorkspaceFiles.map((file) =>
+          ["SOUL.MD", "IDENTITY.MD", "USER.MD"].includes(file.name.toUpperCase())
+            ? {
+                ...file,
+                injectionStatus: "native_unverified",
+                injectedChars: null,
+                truncated: null,
+              }
+            : file,
+        );
+    }
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     recordCodexTrajectoryContext(resources.trajectoryRecorder, {
       attempt: params,

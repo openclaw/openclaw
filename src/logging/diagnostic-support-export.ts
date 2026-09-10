@@ -12,6 +12,7 @@ import { buildConfigSchemaCore } from "../config/schema.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
 import {
@@ -329,6 +330,7 @@ function readConfigExport(options: {
   const redactedConfigPath = redactPathForSupport(options.configPath, options);
   let stat: fs.Stats | undefined;
   try {
+    assertNotUpdateCapturePath(options.configPath, options.stateDir);
     stat = fs.statSync(options.configPath);
     const { buffer } = readRegularFileSync({
       filePath: options.configPath,
@@ -411,10 +413,21 @@ function readStabilityBundle(
   if (target === false) {
     return { status: "missing", dir: "$OPENCLAW_STATE_DIR/logs/stability" };
   }
-  if (target === undefined || target === "latest") {
-    return readLatestDiagnosticStabilityBundleSync({ stateDir });
+  try {
+    if (target !== undefined && target !== "latest") {
+      assertNotUpdateCapturePath(target, stateDir);
+    }
+    const result =
+      target === undefined || target === "latest"
+        ? readLatestDiagnosticStabilityBundleSync({ stateDir })
+        : readDiagnosticStabilityBundleFileSync(target);
+    if (result.status === "found") {
+      assertNotUpdateCapturePath(result.path, stateDir);
+    }
+    return result;
+  } catch (error) {
+    return { status: "failed", error };
   }
-  return readDiagnosticStabilityBundleFileSync(target);
 }
 
 function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext): SanitizedLogTail {
@@ -528,6 +541,7 @@ async function collectSupportLogTail(params: {
       limit: params.limit,
       maxBytes: params.maxBytes,
     });
+    assertNotUpdateCapturePath(tail.file, params.redaction.stateDir);
     return sanitizeLogTail(tail, params.redaction);
   } catch (error) {
     return failedLogTail(error, params.redaction);

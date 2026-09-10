@@ -10,6 +10,10 @@ import {
   resolveOxfmtInvocation,
   runOxfmt,
 } from "../../scripts/format-docs.mts";
+import {
+  checkMintlifyAccordionIndentation,
+  repairMintlifyAccordionIndentation,
+} from "../../scripts/lib/mintlify-accordion.mjs";
 import { outputTail } from "../../scripts/lib/output-tail.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -22,6 +26,34 @@ function writeDocsFixture(root: string): void {
 }
 
 describe("format-docs", () => {
+  it.each([
+    ["backtick fence", "```md", null, "```"],
+    ["tilde fence", "~~~md", null, "~~~"],
+    ["shorter nested fence", "````md", "```json", "````"],
+    ["different fence marker", "```md", "~~~", "```"],
+    ["suffixed closing marker", "~~~md", "~~~json", "~~~"],
+    ["nonbreaking-space suffix", "```md", "```\u00a0", "```"],
+    ["longer closing marker", "~~~md", null, "~~~~~\t"],
+    ["unclosed fence", "```md", null, null],
+  ])("preserves examples in a %s while repairing real components", (_label, open, inner, close) => {
+    const literal = [open, inner, "<Note>", "- literal item", "  </Note>", close]
+      .filter((line) => line !== null)
+      .join("\n");
+    const component =
+      "<Note>\n- real item\n  </Note>\n\n  <ParamField>\n  field body\n  </ParamField>";
+    const repairedComponent =
+      "<Note>\n- real item\n\n</Note>\n\n<ParamField>\n  field body\n</ParamField>";
+    const source = `${component}\n\n${literal}\n${close ? `\n${component}\n` : ""}`;
+    const expected = `${repairedComponent}\n\n${literal}\n${close ? `\n${repairedComponent}\n` : ""}`;
+
+    const repaired = repairMintlifyAccordionIndentation(source);
+
+    expect(repaired).toBe(expected);
+    expect(checkMintlifyAccordionIndentation(literal)).toEqual([]);
+    expect(checkMintlifyAccordionIndentation(repaired)).toEqual([]);
+    expect(repairMintlifyAccordionIndentation(repaired)).toBe(repaired);
+  });
+
   it("wraps the Windows oxfmt.cmd shim through cmd.exe", () => {
     const invocation = resolveOxfmtInvocation(["--write", "docs\\guide.mdx"], {
       comSpec: "C:\\Windows\\System32\\cmd.exe",

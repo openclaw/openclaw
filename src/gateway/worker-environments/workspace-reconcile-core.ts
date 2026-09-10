@@ -185,6 +185,7 @@ export async function readActualWorkspaceManifest(params: {
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
+  signal?: AbortSignal;
 }): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
   return await readActualWorkspaceManifestImpl(params);
 }
@@ -535,19 +536,4 @@ export function retainedConflictPaths(
   return [...conflicts]
     .filter((entryPath) => !hasPathAncestor(blockingConflicts, entryPath))
     .toSorted();
-}
-
-export async function assertWorkspaceResultStable(params: {
-  root: string;
-  base: WorkerWorkspaceManifest;
-  current: WorkerWorkspaceManifest;
-}): Promise<void> {
-  await assertWorkspaceMatchesManifest({ root: params.root, manifest: params.current });
-  const preflight = await preflightWorkspaceApply(params);
-  const unstablePath = preflight.conflictPaths[0] ?? preflight.applyPaths.values().next().value;
-  if (unstablePath) {
-    throw new ConcurrentWorkspacePathError(
-      `Gateway workspace changed after cloud dispatch: ${unstablePath}`,
-    );
-  }
 }

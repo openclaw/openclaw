@@ -15,6 +15,7 @@ import {
   modelSupportsVision,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import type { ModelRegistry } from "./sessions/index.js";
 
 type AugmentModelCatalogWithProviderPlugins =
@@ -660,6 +661,66 @@ describe("prepared model catalog builder", () => {
     },
   );
 
+  it.each([
+    { accepted: false, pinned: false },
+    { accepted: true, pinned: false },
+    { accepted: true, pinned: true },
+  ])(
+    "preserves captured routes unless the model pins them (accepted=$accepted, pinned=$pinned)",
+    async ({ accepted, pinned }) => {
+      const defaults = {
+        api: "openai-completions",
+        baseUrl: "https://provider.example.test/v1",
+      } as const;
+      const captured = {
+        api: "openai-responses",
+        baseUrl: "https://account.example.test/v1",
+      } as const;
+      const configured: ModelDefinitionConfig = {
+        id: "demo",
+        name: "Configured Demo",
+        contextWindow: 32_000,
+        maxTokens: 4096,
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        ...(pinned ? defaults : {}),
+      };
+      const config: OpenClawConfig = {
+        plugins: { enabled: false },
+        models: { providers: { custom: { ...defaults, models: [configured] } } },
+      };
+      const snapshot = await build({
+        config,
+        entries: accepted
+          ? [{ provider: "custom", id: "demo", name: "Captured Demo", ...captured }]
+          : [],
+      });
+      const expectedRoute = accepted && !pinned ? captured : defaults;
+      const policy = createModelVisibilityPolicy({
+        cfg: config,
+        catalog: snapshot.entries,
+        defaultProvider: "custom",
+        manifestPlugins: metadataSnapshot,
+      });
+
+      for (const catalog of [snapshot.entries, policy.configuredCatalog]) {
+        expect(catalog).toEqual([
+          expect.objectContaining({
+            provider: "custom",
+            id: "demo",
+            ...expectedRoute,
+            contextWindow: 32_000,
+            reasoning: true,
+            input: ["text", "image"],
+          }),
+        ]);
+      }
+      expect(snapshot.routeVariants).toContainEqual(expect.objectContaining(expectedRoute));
+      expect(snapshot.routeVariants).toHaveLength(accepted && pinned ? 2 : 1);
+    },
+  );
+
   it.each([false, true])(
     "keeps the first matching catalog route with borrowed-row retargeting %s",
     async (retarget) => {
@@ -731,6 +792,7 @@ describe("prepared model catalog builder", () => {
       });
 
       const selectedRoute = {
+        name: retarget ? "Earlier Route A" : "Route A",
         api: "openai-responses",
         baseUrl: "https://route-a.example.test/v1",
         thinkingLevelMap: retarget ? { xhigh: "high", max: "max" } : { xhigh: null, max: null },

@@ -1,5 +1,5 @@
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { describe, expect, it } from "vitest";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 

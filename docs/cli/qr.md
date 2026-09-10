@@ -10,6 +10,8 @@ title: "QR"
 
 Generate a mobile pairing QR and setup code from your current Gateway configuration.
 
+The legacy [`openclaw clawbot qr`](/cli/clawbot) alias accepts every flag below.
+
 ```bash
 openclaw qr
 openclaw qr --setup-code-only

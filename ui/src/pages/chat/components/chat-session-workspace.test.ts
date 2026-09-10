@@ -56,6 +56,30 @@ describe("session workspace state", () => {
     expect(state.settings?.chatWorkspaceDock).toBe("right");
   });
 
+  it("keeps filter changes in the current session and resets them for a new session", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      client: null,
+      connected: false,
+      connectionEpoch: 1,
+      handleOpenSidebar: vi.fn(),
+      hello: null,
+      requestUpdate,
+      sessionKey: "agent:main:current",
+      sidebarContent: null,
+      sessions: {},
+    } as unknown as SessionWorkspaceHost;
+
+    const workspace = createSessionWorkspaceProps(state);
+    expect(workspace.filter).toBe("all");
+    workspace.onSetFilter("read");
+    expect(createSessionWorkspaceProps(state).filter).toBe("read");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+
+    state.sessionKey = "agent:main:next";
+    expect(createSessionWorkspaceProps(state).filter).toBe("all");
+  });
+
   it("shows the Files skeleton only while a slow cloud workspace request is pending", async () => {
     let resolveList!: (value: {
       sessionKey: string;

@@ -122,6 +122,7 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),
   readSystemdServiceExecStart: mocks.command,
   readSystemdServiceRuntime: async () => ({
+    systemd: { managerUid: 2001 },
     status: mocks.running ? "running" : "stopped",
     ...(mocks.running ? { pid: 4242 } : {}),
   }),
@@ -198,11 +199,19 @@ beforeEach(async () => {
   run = { runId: createUpdateRun({ trigger: "cli" }, { env: runEnv }).runId, env: runEnv };
   mocks.ports.mockImplementation(async (port) => ({
     port,
-    status: "free",
-    listeners: [],
+    status: process.platform === "linux" && mocks.running ? "busy" : "free",
+    listeners:
+      process.platform === "linux" && mocks.running
+        ? [{ pid: 4242, command: "openclaw-gateway" }]
+        : [],
     hints: [],
   }));
   mocks.call.mockReset();
+  mocks.call.mockImplementation(
+    gatewayHealthResponse({
+      server: { version: VERSION, buildId: "target-build", bootId: "service-boot" },
+    }),
+  );
   mocks.running = true;
   mocks.loaded = true;
   mocks.inLaunchd = false;
@@ -419,6 +428,7 @@ describe("preserved update activation with real version guards", () => {
         opts: { json, run },
         refreshServiceEnv: late,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
         gatewayPort: late ? 19001 : 19305,
         requireRunningServiceAfterRestart: true,
@@ -540,6 +550,7 @@ describe("preserved update activation with real version guards", () => {
       opts: { json: true, run },
       refreshServiceEnv: false,
       serviceUpdateVerdict: before.serviceUpdateVerdict,
+      serviceManagerUid: before.serviceManagerUid,
       serviceEnv: before.serviceEnv,
       gatewayPort: 19305,
       requireRunningServiceAfterRestart: true,

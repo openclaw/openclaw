@@ -1,7 +1,11 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
-import { WorkerMachineOptionsSchema } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import {
+  WorkerMachineOptionsSchema,
+  WorkerOperatingSystemSchema,
+} from "../../../packages/gateway-protocol/src/schema/environments.js";
+import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
@@ -9,11 +13,25 @@ import {
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
+  type WorkerProfile,
   type WorkerMachineOption,
+  type WorkerOperatingSystem,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+
+export function requireWorkerProfile(
+  value: unknown,
+  serviceError: (code: "invalid_profile", message: string) => Error,
+): WorkerProfile {
+  const error = validateCloudWorkerProfileSettings(value);
+  if (error) {
+    throw serviceError("invalid_profile", error);
+  }
+  // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
+  return value as WorkerProfile;
+}
 
 export function requireInheritedWorkerProfileAuthorization(
   profileId: string,
@@ -64,11 +82,49 @@ export function normalizeWorkerMachineOptions(
     return undefined;
   }
   const ids = new Set<string>();
-  let hasDefault = false;
+  const defaultSystems = new Set<string | undefined>();
   for (const option of value) {
+    const key = JSON.stringify([option.os, option.id]);
     if (
       option.id.trim() !== option.id ||
       option.label.trim() !== option.label ||
+      (option.os !== undefined && option.os.trim() !== option.os) ||
+      ids.has(key) ||
+      (option.default === true && defaultSystems.has(option.os))
+    ) {
+      return undefined;
+    }
+    ids.add(key);
+    if (option.default === true) {
+      defaultSystems.add(option.os);
+    }
+  }
+  return value.map((option) => ({
+    id: option.id,
+    label: option.label,
+    ...(option.os === undefined ? {} : { os: option.os }),
+    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
+    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
+    ...(option.default === undefined ? {} : { default: option.default }),
+  }));
+}
+
+export function normalizeWorkerOperatingSystems(
+  value: unknown,
+): readonly WorkerOperatingSystem[] | undefined {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 8) {
+    return undefined;
+  }
+  const systems: WorkerOperatingSystem[] = [];
+  const ids = new Set<string>();
+  let hasDefault = false;
+  for (const option of value) {
+    if (
+      !Value.Check(WorkerOperatingSystemSchema, option) ||
+      option.id.trim() !== option.id ||
+      option.label.trim() !== option.label ||
+      (option.disabledReason !== undefined &&
+        option.disabledReason.trim() !== option.disabledReason) ||
       ids.has(option.id) ||
       (option.default === true && hasDefault)
     ) {
@@ -76,14 +132,14 @@ export function normalizeWorkerMachineOptions(
     }
     ids.add(option.id);
     hasDefault ||= option.default === true;
+    systems.push({
+      id: option.id,
+      label: option.label,
+      ...(option.default === undefined ? {} : { default: option.default }),
+      ...(option.disabledReason === undefined ? {} : { disabledReason: option.disabledReason }),
+    });
   }
-  return value.map((option) => ({
-    id: option.id,
-    label: option.label,
-    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
-    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
-    ...(option.default === undefined ? {} : { default: option.default }),
-  }));
+  return systems;
 }
 
 export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
@@ -168,7 +224,7 @@ export function requireWorkerLease(value: unknown): WorkerLease {
   }
   const common = {
     leaseId: value.leaseId.trim(),
-    ...(value.sharedHost === true ? { sharedHost: true } : {}),
+    ...(value.sharedHost === undefined ? {} : { sharedHost: value.sharedHost }),
     ...(value.desktop === undefined
       ? {}
       : { desktop: normalizeWorkerDesktopEndpoint(value.desktop as WorkerDesktopEndpoint) }),

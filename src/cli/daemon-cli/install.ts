@@ -1,5 +1,8 @@
 // Gateway service installer: writes config defaults, resolves credentials, and installs service definitions.
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SUPPORTED_NODE_VERSIONS } from "../../../node-version.mjs";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
@@ -15,6 +18,8 @@ import { resolveGatewayPort } from "../../config/paths.js";
 import type { GatewayBindMode } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
+import { isNodeRuntime } from "../../daemon/runtime-binary.js";
+import { resolveNodeRuntimeInfo, resolvePreferredNodePath } from "../../daemon/runtime-paths.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
@@ -29,6 +34,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
+import { hasErrnoCode, isMissingPathError } from "../../infra/errno.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -38,6 +44,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { waitForGatewayServiceLoad } from "./install-load.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import {
   createDaemonInstallActionContext,
@@ -123,6 +130,7 @@ export function mergeInstallInvocationEnv(params: {
       upper === "HOME" ||
       upper === "PATH" ||
       upper === "TMPDIR" ||
+      upper === "HOMEBREW_PREFIX" ||
       upper.startsWith("OPENCLAW_")
     ) {
       continue;
@@ -163,6 +171,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
 
+  if (
+    opts.deferActivation &&
+    (process.platform !== "linux" || !process.send || !process.connected)
+  ) {
+    fail("Deferred service load requires Linux and the updater IPC channel.");
+    return;
+  }
   const service = resolveGatewayService();
   let loaded;
   try {
@@ -269,8 +284,54 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
   let autoRefreshMessage: string | undefined;
+  let runtimePath: string | undefined;
+  const recordedNode = existingManagedCommand?.programArguments[0];
+  if (runtimeRaw === "node" && !wrapperPath && recordedNode && isNodeRuntime(recordedNode)) {
+    const recordedRuntime = await resolveNodeRuntimeInfo(recordedNode, installEnv);
+    if (recordedRuntime.status !== "probe-failed") {
+      const diagnostic = recordedRuntime.capabilityError ?? recordedRuntime.note;
+      if (diagnostic) {
+        warn(diagnostic);
+      }
+    }
+    const missingRuntime =
+      recordedRuntime.status === "probe-failed" &&
+      (await fs.access(recordedNode, fsConstants.X_OK).then(
+        () => false,
+        (error: unknown) => isMissingPathError(error) || hasErrnoCode(error, "EACCES"),
+      ));
+    const replacement = missingRuntime
+      ? `missing Gateway service Node (${recordedNode})`
+      : recordedRuntime.status === "unsupported"
+        ? `unsupported Gateway service Node ${recordedRuntime.version} (${recordedNode})`
+        : undefined;
+    if (replacement) {
+      try {
+        runtimePath = await resolvePreferredNodePath({
+          env: installEnv,
+          runtime: "node",
+          preferCurrentExecPath: true,
+        });
+        if (!runtimePath) {
+          fail(
+            `No supported Node runtime is available. Install Node ${SUPPORTED_NODE_VERSIONS}, then rerun openclaw gateway install.`,
+          );
+          return;
+        }
+      } catch (error) {
+        fail(`Gateway runtime selection failed: ${String(error)}`);
+        return;
+      }
+      autoRefreshMessage = `Replacing ${replacement} with ${runtimePath}; refreshing the install.`;
+    } else if (recordedRuntime.status === "probe-failed" && !opts.force) {
+      fail(
+        `${recordedRuntime.error.message} Reinstall with: ${formatCliCommand("openclaw gateway install --force")}.`,
+      );
+      return;
+    }
+  }
   if (loaded && !opts.force) {
-    autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
+    autoRefreshMessage ??= await getGatewayServiceAutoRefreshMessage({
       currentCommand: existingServiceCommand,
       env: process.env,
       installEnv,
@@ -285,10 +346,18 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       if (!(await assertWritable())) {
         return;
       }
-      warn(autoRefreshMessage);
     }
   }
+  if (autoRefreshMessage) {
+    warn(autoRefreshMessage);
+  }
 
+  // Native staging cannot attribute unrelated config writes. Require prior
+  // config preparation; do not generate defaults or credentials in this phase.
+  if (opts.deferActivation && (!configSnapshot.valid || cfg.gateway?.mode === undefined)) {
+    fail("Deferred service load requires valid, prepared gateway configuration.");
+    return;
+  }
   if (configSnapshot.valid && cfg.gateway?.mode === undefined) {
     const baseConfig = configSnapshot.sourceConfig ?? configSnapshot.config;
     await replaceConfigFile({
@@ -308,7 +377,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn("No gateway.mode found. Set gateway.mode=local for managed gateway install.");
   }
 
-  if (loaded && !opts.force && !autoRefreshMessage) {
+  if (loaded && !opts.force && !autoRefreshMessage && !opts.deferActivation) {
     emit({
       ok: true,
       result: "already-installed",
@@ -326,7 +395,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     config: cfg,
     env: installEnv,
     explicitToken: opts.token,
-    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
+    requireExisting: opts.deferActivation,
+    ...(opts.deferActivation
+      ? {}
+      : { generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions } }),
   });
   if (tokenResolution.unavailableReason) {
     fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);
@@ -341,6 +413,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       env: installEnv,
       port,
       runtime: runtimeRaw,
+      runtimePath,
       wrapperPath,
       existingCommand: existingServiceCommand,
       existingEnvironment: existingServiceEnv,
@@ -363,6 +436,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         workingDirectory,
         environment,
         environmentValueSources,
+        ...(opts.deferActivation ? { beforeLoad: waitForGatewayServiceLoad } : {}),
       });
     },
   });

@@ -5,7 +5,7 @@ import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
-import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
+import { resolveProviderSimpleCompletionHeaders } from "../transports/provider-transport-turn-state.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveCacheRetention } from "./cache-retention.js";
@@ -73,7 +73,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
         model,
         context,
         apiKey,
-        resolveOpencodeSessionHeaders(model, options),
+        resolveProviderSimpleCompletionHeaders(model, options),
         cacheSessionId,
       );
     },

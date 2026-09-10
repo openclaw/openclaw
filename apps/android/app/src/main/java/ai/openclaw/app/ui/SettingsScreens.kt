@@ -1632,6 +1632,7 @@ private fun GatewaySettingsScreen(
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
+  val uriHandler = LocalUriHandler.current
   val isNodeConnected by viewModel.isNodeConnected.collectAsState()
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
@@ -1817,6 +1818,18 @@ private fun GatewaySettingsScreen(
             style = ClawTheme.type.body,
             color = ClawTheme.colors.textMuted,
           )
+        }
+      }
+    }
+    gatewayConnectionDisplay.problem?.takeIf { it.isNetworkFailure }?.let { problem ->
+      Text(
+        text = recoveryGatewayAuthDetail(problem),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+      )
+      gatewayNetworkRecoveryHelpUrl(problem)?.let { url ->
+        TextButton(onClick = { uriHandler.openUri(url) }) {
+          Text(nativeString("Set up Tailscale"))
         }
       }
     }

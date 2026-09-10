@@ -46,6 +46,7 @@ import {
   writeSessionStore,
 } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
+import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
@@ -455,6 +456,47 @@ describe("ordinary browser input admission", () => {
       await fixture.cleanup();
     }
   });
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "holds an idle %s browser input in custody while its workspace is syncing",
+    async (executionMode) => {
+      const fixture = await createBrowserFollowupFixture({ active: false });
+      const placements = createWorkerSessionPlacementStore();
+      const requested = placements.startDispatch({ ...fixture.scope, executionMode });
+      const provisioning = placements.transition({
+        sessionId: fixture.scope.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: requested.generation,
+        patch: { environmentId: "setup-environment" },
+      });
+      placements.transition({
+        sessionId: fixture.scope.sessionId,
+        from: "provisioning",
+        to: "syncing",
+        expectedGeneration: provisioning.generation,
+        patch: { workerBundleHash: "a".repeat(64) },
+      });
+      fixture.context.workerSessionPlacementService = placements;
+      try {
+        const respond = await fixture.send();
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "started" }),
+          undefined,
+          expect.anything(),
+        );
+        expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
+        expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+        expect(listSessionPendingInputs(fixture.scope)).toMatchObject({
+          total: 1,
+          items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
+        });
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+  );
 
   it("retries a failed custody write with the same request identity without acknowledging lost input", async () => {
     const fixture = await createBrowserFollowupFixture();

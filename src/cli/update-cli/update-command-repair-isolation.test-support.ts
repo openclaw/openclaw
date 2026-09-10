@@ -138,7 +138,14 @@ export function repairIsolationProvider() {
 export async function writeRepairCandidate(candidate: string, configChange: boolean) {
   await fs.mkdir(candidate, { recursive: true });
   await fs.symlink(path.join(process.cwd(), "dist"), path.join(candidate, "dist"), "dir");
-  for (const file of ["openclaw.mjs", "node-version.mjs", "package.json"]) {
+  for (const file of [
+    "openclaw.mjs",
+    "node-version.mjs",
+    "node-sqlite.mjs",
+    "node-runtime-update.mjs",
+    "node-runtime-recovery.mjs",
+    "package.json",
+  ]) {
     await fs.copyFile(path.join(process.cwd(), file), path.join(candidate, file));
   }
   await fs.writeFile(

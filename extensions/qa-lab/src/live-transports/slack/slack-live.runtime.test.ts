@@ -642,7 +642,7 @@ describe("Slack live QA runtime helpers", () => {
         ?.streaming,
     ).toEqual({ mode: "off" });
     const omitted = progressConfig("slack-progress-commentary-omitted");
-    expect(omitted).toMatchObject({ toolProgress: true });
+    expect(omitted).toMatchObject({ style: "compact", toolProgress: true });
     expect(Object.hasOwn(omitted ?? {}, "commentary")).toBe(false);
     expect(
       buildScenarioConfig("slack-progress-commentary-verbose-dedupe").agents?.defaults
@@ -734,7 +734,12 @@ describe("Slack live QA runtime helpers", () => {
                     ? "🛠️ Exec"
                     : testCase.toolProgress === "standalone"
                       ? `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``
-                      : `🛠️ Exec ${toolMarker}`,
+                      : testCase.id === "slack-progress-commentary-omitted"
+                        ? commentaryMarker
+                        : `🛠️ Exec ${toolMarker}`,
+                ...(testCase.id === "slack-progress-commentary-omitted"
+                  ? { blockText: [`• *Exec* — sleep 5`] }
+                  : {}),
                 ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
               },
             ]),

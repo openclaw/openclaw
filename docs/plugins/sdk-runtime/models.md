@@ -138,3 +138,29 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
 
   </Accordion>
 </AccordionGroup>
+
+## Prepared completion SDK compatibility
+
+Prefer `api.runtime.llm.complete` for new plugin code. Existing callers of
+`openclaw/plugin-sdk/simple-completion-runtime` can continue to prepare a model
+with `prepareSimpleCompletionModelForAgent` and execute it with
+`completeWithPreparedSimpleCompletionModel`.
+
+The executor accepts optional `options.headers` and `options.sessionId` fields.
+Calls that omit them keep the same call shape. For HTTPS OpenCode endpoints,
+a standalone completion gets a fresh opaque `x-opencode-session` routing header
+for each invocation. An explicit model or caller routing header suppresses
+generation, regardless of header name casing. Caller headers take precedence
+over model headers.
+
+A supplied `sessionId` retains its existing provider session and cache behavior.
+It also supplies the OpenCode routing header unless an explicit header overrides
+it. A generated routing value stays in the header only: it does not create
+conversation, transcript, prompt-cache, or WebSocket session ownership. Existing
+transport retries reuse the invocation's header; the executor adds no retry policy.
+
+These prepared results have no release method. Their original Gateway or CLI
+host retains the model resources until shutdown; standalone callers retain them
+for the process lifetime. A closed host rejects new preparation and execution.
+Shutdown waits for accepted provider callbacks and cancellation work before
+releasing the prepared resources, even when the completion has already returned.

@@ -1,5 +1,6 @@
 {
   "id": "teams-meetings",
+  "categories": ["voice", "tools"],
   "name": "Microsoft Teams meetings",
   "description": "Join Microsoft Teams meetings as a Chrome browser guest.",
   "cliCommands": [

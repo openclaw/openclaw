@@ -166,6 +166,14 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
         : undefined;
     return includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
   }
+  if (method === "environments.list") {
+    const runtimeId =
+      params && typeof params === "object" && !Array.isArray(params) && "runtimeId" in params
+        ? params.runtimeId
+        : undefined;
+    // Match the handler: every nonempty runtime ID needs command eligibility access.
+    return typeof runtimeId === "string" && runtimeId ? [WRITE_SCOPE] : [READ_SCOPE];
+  }
   if (method === "channels.pairing.approve") {
     const bootstrapCommandOwner =
       params && typeof params === "object" && !Array.isArray(params)
