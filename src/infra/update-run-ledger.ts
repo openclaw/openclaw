@@ -629,9 +629,8 @@ export function finishInterruptedUpdateBeforeActivation(
   ) {
     throw new Error("Update interruption requires its live pre-activation transaction");
   }
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS config_machine_state (",
-  );
+  const recoveryTable = "config_machine_state";
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${recoveryTable} (`);
   const marker = ") STRICT;";
   const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
   if (start < 0 || end < 0) {
@@ -645,9 +644,13 @@ export function finishInterruptedUpdateBeforeActivation(
       // Older targets can omit recovery storage and predate STRICT metadata.
       // The existing writer validates metadata ownership/version; present recovery
       // storage must still match its canonical shape before excluding recovery.
-      const recoveryObject = db
-        .prepare("SELECT 1 FROM main.sqlite_schema WHERE name = ?")
-        .get("config_machine_state");
+      const recoveryObject = executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<{ "main.sqlite_schema": { name: string } }>(db)
+          .selectFrom("main.sqlite_schema")
+          .select("name")
+          .where("name", "=", recoveryTable),
+      );
       if (recoveryObject) {
         assertSqliteSchemaContains(db, pathname, recoverySchema);
       }

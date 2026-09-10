@@ -277,10 +277,9 @@ export async function reportUnreportedUpdateAdmissionOutcome(error: unknown): Pr
   if (!cleanupFailed && outcome.skipped) {
     return exitCliAfterOutput(defaultRuntime, outcome.skipped.exitCode);
   }
-  throw new UpdateCommandFailure(
-    result,
+  return exitCliAfterOutput(
+    defaultRuntime,
     cleanupFailed ? 1 : resolveManagedServiceUpdateFailureExitCode(result),
-    params.message,
   );
 }
 

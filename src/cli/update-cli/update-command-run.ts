@@ -5,6 +5,7 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
@@ -77,6 +78,7 @@ import {
 } from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
+  assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
   isGatewayServiceManagementAllowedForUpdate,
   resolveManagedServicePackageUpdatePlan,
@@ -131,6 +133,10 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
           serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment,
           invocationCwd: params.invocationCwd,
         });
+        // Contradictory native identity must refuse before database or target selection.
+        if (resolveGatewayNativeServiceIdentityConflict(env)) {
+          assertGatewayServiceManagementAllowedForUpdate(env);
+        }
       }
     }
   }

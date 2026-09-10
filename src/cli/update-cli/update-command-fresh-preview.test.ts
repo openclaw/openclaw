@@ -196,8 +196,11 @@ describe("update command admission with fresh state", () => {
     });
     await expect(
       updateCommand({ tag: "2026.9.2", yes: true, json: true, restart: false }),
-    ).rejects.toMatchObject({ result: { reason: "invalid-dev-target" } });
+    ).rejects.toMatchObject({ code: 1 });
     expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "error", reason: "invalid-dev-target" }),
+    );
     expectFreshStatePreserved();
   });
 
@@ -290,9 +293,13 @@ describe("update command admission with fresh state", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({ status: "error", reason }),
     );
-    expect(failure).toMatchObject({ result: { reason } });
+    expect(failure).toMatchObject({ code: 1 });
     if (cleanup !== "healthy") {
-      expect(failure).toMatchObject({ result: { recovery: { serviceRestartSafe: false } } });
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        }),
+      );
     }
     expect(fs.existsSync(databasePath)).toBe(false);
     expect(staged.run).not.toHaveBeenCalled();
@@ -503,7 +510,7 @@ describe("update command admission with fresh state", () => {
 
       await expect(
         updateCommand({ ...target, yes: true, json: true, restart: false }),
-      ).rejects.toMatchObject({ result: { reason: "target-metadata-preflight" } });
+      ).rejects.toMatchObject({ code: 1 });
 
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({ status: "error", reason: "target-metadata-preflight" }),
@@ -522,7 +529,7 @@ describe("update command admission with fresh state", () => {
 
     await expect(
       updateCommand({ tag: "2026.9.2", yes: true, json: true, restart: false }),
-    ).rejects.toMatchObject({ result: { reason: "target-metadata-preflight" } });
+    ).rejects.toMatchObject({ code: 1 });
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({ status: "error", reason: "target-metadata-preflight" }),
@@ -549,7 +556,7 @@ describe("update command admission with fresh state", () => {
 
       await expect(
         updateCommand({ tag: "2026.9.2", yes: true, json: true, restart }),
-      ).rejects.toMatchObject({ result: { reason: "node-runtime-preflight" } });
+      ).rejects.toMatchObject({ code: 1 });
 
       expect(
         runtimePreflight.mock.calls.map(([params]) => ({
@@ -592,7 +599,7 @@ describe("update command admission with fresh state", () => {
     });
 
     await expect(updateCommand({ yes: true, json: true, restart: false })).rejects.toMatchObject({
-      result: { reason: "node-runtime-preflight" },
+      code: 1,
     });
 
     expect(
@@ -600,6 +607,9 @@ describe("update command admission with fresh state", () => {
     ).toEqual(["beta"]);
     expect(fs.existsSync(resolveOpenClawStateSqlitePath(serviceEnv))).toBe(false);
     expect(process.env.OPENCLAW_CONFIG_PATH).toBe(shellConfigPath);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "error", reason: "node-runtime-preflight" }),
+    );
     expectFreshStatePreserved();
   });
 
@@ -621,14 +631,15 @@ describe("update command admission with fresh state", () => {
 
       await expect(
         updateCommand({ channel, yes: true, json: true, restart: false }),
-      ).rejects.toMatchObject({
-        result: { reason },
-      });
+      ).rejects.toMatchObject({ code: 1 });
 
       expect(
         vi.mocked(updateCheck.resolveNpmChannelTag).mock.calls.map(([params]) => params.channel),
       ).toEqual(["stable"]);
       expect(runtime).toHaveBeenCalledTimes(channel ? 1 : 0);
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "error", reason }),
+      );
       expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({
         update: { channel: "beta" },
       });
@@ -652,9 +663,12 @@ describe("update command admission with fresh state", () => {
       .mockRejectedValue(new Error("Unexpected target Doctor"));
 
     await expect(updateCommand({ yes: true, json: true, restart: false })).rejects.toMatchObject({
-      result: { reason: "update-channel-changed" },
+      code: 1,
     });
 
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "error", reason: "update-channel-changed" }),
+    );
     expect(doctor).not.toHaveBeenCalled();
     expect(staged.run).not.toHaveBeenCalled();
     expect(staged.close).toHaveBeenCalledOnce();
