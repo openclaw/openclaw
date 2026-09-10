@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
@@ -111,7 +112,8 @@ const stubs = new Map<string, string>([
   // place that URL in a shared chunk. Workers still execute their real compiled code.
   [
     sourceUrl("../infra/runtime-process-entrypoints.ts"),
-    `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};`,
+    `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};
+export const SQLITE_READONLY_CHILD_ARG = ${JSON.stringify(SQLITE_READONLY_CHILD_ARG)};`,
   ],
   [sourceUrl("../commands/doctor.ts"), doctorSource],
   [sourceUrl("../config/config.ts"), snapshotSource],
