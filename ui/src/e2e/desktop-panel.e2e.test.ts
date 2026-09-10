@@ -139,7 +139,7 @@ suite.define(() => {
   });
 
   it.each(["local", "active"] as const)(
-    "opens the global desktop picker on a %s chat session",
+    "opens only the assigned desktop on a %s chat session",
     async (placement) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         const inventory = {
@@ -153,6 +153,8 @@ suite.define(() => {
           methodResponses: {
             "sessions.list": sessionsList(placement),
             "environments.list": inventory,
+            "environments.status":
+              placement === "local" ? inventory.environments[0] : workerDesktopEnvironment,
             "desktop.observe": {
               transport: "rfb",
               wsPath: "/desktop/observe?token=palette-session",
@@ -166,15 +168,26 @@ suite.define(() => {
         await openPalette(page);
         expect(await page.getByRole("option", { name: "Desktop", exact: true }).count()).toBe(1);
 
+        await gateway.deferNext("environments.status");
         await page.getByRole("option", { name: "Desktop", exact: true }).click();
         const panel = page.locator("openclaw-desktop-panel");
         await panel.locator("section[aria-label='Desktop']").waitFor();
-        await panel.getByText("Desktop sources", { exact: true }).waitFor();
-        await gateway.waitForRequest("environments.list");
+        const target = await gateway.waitForRequest("environments.status");
+        expect(target.params).toEqual({
+          environmentId: placement === "local" ? "gateway" : workerDesktopEnvironment.id,
+        });
+        expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+        expect(await panel.getByRole("button", { name: "Connect", exact: true }).count()).toBe(0);
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
-
-        await activateChatHeaderPanelAction(page, "Desktop");
-        await activateChatHeaderPanelAction(page, "Desktop");
+        if (placement === "active") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "session-desktop-connecting.png"),
+          });
+        }
+        await gateway.resolveDeferred(
+          "environments.status",
+          placement === "local" ? inventory.environments[0] : workerDesktopEnvironment,
+        );
         await panel.getByLabel("VNC password", { exact: true }).waitFor();
         const observation = await gateway.waitForRequest("desktop.observe");
         expect(observation.params).toEqual({
@@ -185,7 +198,7 @@ suite.define(() => {
           control: false,
         });
 
-        await gateway.setMethodResponse("environments.list", {
+        await gateway.setMethodResponse("environments.status", {
           __mockError: {
             code: "UNAVAILABLE",
             message: "desktop inventory temporarily unavailable",
@@ -194,10 +207,19 @@ suite.define(() => {
         await openPalette(page);
         await page.getByRole("option", { name: "Desktop", exact: true }).click();
         await panel.getByRole("alert").filter({ hasText: "inventory" }).waitFor();
-        await gateway.setMethodResponse("environments.list", inventory);
+        await gateway.setMethodResponse(
+          "environments.status",
+          placement === "local" ? inventory.environments[0] : workerDesktopEnvironment,
+        );
         await panel.getByRole("button", { name: "Retry", exact: true }).click();
-        await panel.getByText("Desktop sources", { exact: true }).waitFor();
-        expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+        await panel.getByLabel("VNC password", { exact: true }).waitFor();
+        expect(await gateway.getRequests("desktop.observe")).toHaveLength(2);
+        expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+
+        await activateChatHeaderPanelAction(page, "Desktop");
+        await activateChatHeaderPanelAction(page, "Desktop");
+        await panel.getByLabel("VNC password", { exact: true }).waitFor();
+        expect(await gateway.getRequests("desktop.observe")).toHaveLength(3);
       });
     },
   );
