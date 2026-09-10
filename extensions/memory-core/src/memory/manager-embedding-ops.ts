@@ -20,12 +20,14 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
   remapChunkLines,
   retryTransientMemoryRead,
   runWithConcurrency,
   stripMemoryAnnotationCarriers,
   type MemoryChunk,
   type MemoryEntryProvenance,
+  type MemorySearchDeadlineControl,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -190,6 +192,8 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
   message: string;
   /** Caller-owned cancellation, merged with the per-call watchdog abort. */
   signal?: AbortSignal;
+  /** Managed readiness pauses this watchdog, while caller cancellation stays active. */
+  deadlineControl?: MemorySearchDeadlineControl;
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   const controller = new AbortController();
@@ -201,25 +205,58 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
   }
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   const timeoutError = new Error(params.message);
-  const deadlineStartedAt = Date.now();
+  let remainingMs = timeoutMs;
+  let segmentStartedAt = Date.now();
+  let paused = false;
   let timer: NodeJS.Timeout | null = null;
+  let rejectTimeout!: (error: Error) => void;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(timeoutError);
-      controller.abort(timeoutError);
-    }, timeoutMs);
+    rejectTimeout = reject;
   });
+  const armWatchdog = () => {
+    segmentStartedAt = Date.now();
+    timer = setTimeout(() => {
+      timer = null;
+      rejectTimeout(timeoutError);
+      controller.abort(timeoutError);
+    }, remainingMs);
+  };
+  const unsubscribe = params.deadlineControl?.subscribe((action) => {
+    if (action === "pause") {
+      paused = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      remainingMs = Math.max(0, remainingMs - (Date.now() - segmentStartedAt));
+      if (remainingMs === 0) {
+        // Budget already consumed before the owned phase; do not let the
+        // exemption extend work that had no time left.
+        rejectTimeout(timeoutError);
+        controller.abort(timeoutError);
+      }
+      return;
+    }
+    paused = false;
+    if (!signal.aborted) {
+      armWatchdog();
+    }
+  });
+  if (!paused) {
+    armWatchdog();
+  }
   try {
     const operation = params.run(signal);
     const result = (await Promise.race([operation, timeoutPromise])) as T;
     params.signal?.throwIfAborted();
     // An overdue watchdog can run after provider success following an event-loop stall.
-    if (Date.now() - deadlineStartedAt >= timeoutMs) {
+    if (!paused && Date.now() - segmentStartedAt >= remainingMs) {
       controller.abort(timeoutError);
       throw timeoutError;
     }
     return result;
   } finally {
+    unsubscribe?.();
     if (timer) {
       clearTimeout(timer);
     }
@@ -589,6 +626,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     providerOverride?: EmbeddingProvider,
     markDegraded = true,
     providerRuntimeOverride?: MemoryEmbeddingProviderRuntime,
+    deadlineControl?: MemorySearchDeadlineControl,
   ): Promise<number[]> {
     const provider = providerOverride ?? this.provider;
     const providerRuntime = providerOverride ? providerRuntimeOverride : this.providerRuntime;
@@ -608,8 +646,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
                 timeoutMs,
                 message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
                 signal,
+                deadlineControl,
                 run: async (opSignal) =>
-                  await provider.embed(text, { signal: opSignal, inputType: "query" }),
+                  await provider.embed(text, {
+                    signal: opSignal,
+                    inputType: "query",
+                    ...(deadlineControl
+                      ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl }
+                      : {}),
+                  }),
               });
             },
             signal,

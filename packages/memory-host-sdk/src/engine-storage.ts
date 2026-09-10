@@ -46,6 +46,13 @@ export {
   resolveMemorySearchStaleness,
 } from "./host/types.js";
 export type { ResolvedMemoryBackendConfig } from "./host/backend-config.js";
+export {
+  createMemorySearchDeadlineControl,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemorySearchDeadlineControl,
+  type MemorySearchDeadlineControlAction,
+  type MemorySearchDeadlineControlOptions,
+} from "./host/search-deadline-control.js";
 export type {
   MemoryEmbeddingProbeResult,
   MemoryEntryProvenance,
