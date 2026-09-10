@@ -7,7 +7,7 @@ import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-prof
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import {
   type ProviderAuthChoiceMetadata,
@@ -231,7 +231,7 @@ export async function detectSetupInference(
       },
       (error: unknown) => {
         clearTimeout(timer);
-        reject(error);
+        reject(toErrorObject(error, "Setup inference discovery failed"));
       },
     );
   });

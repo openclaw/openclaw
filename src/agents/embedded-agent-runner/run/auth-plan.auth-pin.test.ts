@@ -262,7 +262,12 @@ describe("embedded run auth plan provider pin", () => {
         },
       };
       const stores = modelRuntime.createEmptyAgentDiscoveryStores();
-      vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({ ...stores, model });
+      const resolution = {
+        ...stores,
+        model,
+        logicalRef: { provider: model.provider, model: model.id },
+      };
+      vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue(resolution);
       const prepared = await withPluginRuntimeGenerationScope(
         { metadataSnapshot: createPluginMetadataSnapshotFixture() },
         () =>

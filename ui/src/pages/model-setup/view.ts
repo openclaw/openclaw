@@ -83,12 +83,13 @@ function candidateStatus(candidate: Candidate): string {
 }
 
 function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
-  // The current connection owns verification and recovery for the configured
-  // route, including provider-auto candidates returned by newer Gateways.
+  // Saved credentials can replace the current connection for the same model.
   const candidates = result.configuredModel
     ? result.candidates.filter(
         (candidate) =>
-          candidate.kind !== "existing-model" && candidate.modelRef !== result.configuredModel,
+          candidate.kind !== "existing-model" &&
+          (candidate.kind.startsWith("saved-auth:") ||
+            candidate.modelRef !== result.configuredModel),
       )
     : result.candidates;
   if (candidates.length === 0) {
