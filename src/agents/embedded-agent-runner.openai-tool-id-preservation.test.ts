@@ -11,6 +11,7 @@ import {
   type SanitizeSessionHistoryHarness,
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
 vi.mock("./embedded-agent-helpers.js", async () => await createSanitizeSessionHistoryHelpersMock());
 
@@ -75,13 +76,7 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
         { type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} },
       ],
     }),
-    castAgentMessage({
-      role: "toolResult",
-      toolCallId: "call_123|fc_123",
-      toolName: "noop",
-      content: [{ type: "text", text: "ok" }],
-      isError: false,
-    }),
+    castAgentMessage(textToolResult("call_123|fc_123", "noop", "ok", { isError: false })),
   ];
 
   it.each([
@@ -128,13 +123,7 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
           role: "user",
           content: [{ type: "text", text: "still waiting" }],
         }),
-        castAgentMessage({
-          role: "toolResult",
-          toolCallId: "call_123|fc_123",
-          toolName: "noop",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-        }),
+        castAgentMessage(textToolResult("call_123|fc_123", "noop", "ok", { isError: false })),
       ],
       modelApi: "openai-responses",
       provider: "openai",

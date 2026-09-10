@@ -22,6 +22,7 @@ Related docs:
 openclaw channels list
 openclaw channels list --all
 openclaw channels status
+openclaw channels status --probe
 openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
 openclaw channels resolve --channel slack "#general" "@jane"
@@ -44,15 +45,28 @@ For `add`, `login`, `logout`, `remove`, and `resolve`, or `capabilities --channe
 use `--agent <id>` to select the workspace used for channel plugin discovery.
 The option works before or after the subcommand; a subcommand value takes precedence.
 Without it, discovery uses the configured System Agent or the existing sole/legacy owner.
-An explicit fleet with no such owner requires `--agent`. Selecting a workspace
-does not create account routing bindings; guided setup asks about routing separately.
+In an interactive guided `channels add`, an explicit fleet with no such owner
+prompts for the setup owner before workspace-scoped discovery; flag-driven or
+non-interactive setup still requires `--agent`. Selecting a workspace does not
+create account routing bindings; guided setup asks about routing separately.
+
+`add`, `login`, `logout`, and `remove` also take `--account <id>`. Omitting it selects the
+default account. A blank value is rejected instead of falling back to the default, as with
+the dead-letter commands, so an unset shell variable cannot silently select an account you
+did not name.
 
 ## Status / capabilities / resolve / logs
+
+`capabilities` and `resolve` reject explicitly empty or whitespace-only `--account`
+values. Omit the option to keep each command's default or broader account scope;
+do not pass an empty shell variable to request that scope.
 
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
+
+`channels logs --lines` requires a positive integer. Omit `--lines` to use the default of `200`; explicitly empty values are rejected.
 
 `channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
 or `gateway/channels/<name>`, including slash-separated descendants. Similar names
@@ -64,6 +78,8 @@ state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit 
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
 
+`channels status` does not support `--deep`; use `openclaw channels status --probe` for channel checks. The separate top-level `openclaw status --deep` command provides a broader status probe.
+
 ## Inbound dead letters
 
 Inbound events that exhaust their retry policy remain in the shared state database for the queue's existing failed-entry retention period. Inspect one channel account with:
@@ -74,6 +90,8 @@ openclaw channels dead-letters list --channel telegram --account default --json
 ```
 
 The text view shows event ids, failure reasons, attempt counts, and failure ages. JSON output also includes the retained payload, metadata, lane, and attempt timestamps for diagnostics.
+
+Omitting `--account` inspects the `default` account. Both dead-letter commands reject a blank value instead of falling back to `default`, so an unset shell variable cannot silently select an account you did not name. You can place `--account` before or after `list` or `resubmit`; a value after the leaf command takes precedence.
 
 After correcting the underlying problem, re-enqueue one event with its original event id:
 
@@ -236,6 +254,7 @@ Notes:
 
 - `--channel` is optional; omit it to list every channel (including plugin-provided channels).
 - `--account` is only valid with `--channel`.
+- Each account probe and diagnostics step has its own timeout. A stalled step is reported in both text and JSON output, and the command continues with the remaining accounts.
 - `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord. For Discord voice channels, the permission check flags missing `ViewChannel`, `Connect`, `Speak`, `SendMessages`, and `ReadMessageHistory`.
 - Probes are provider-specific: Discord bot identity + intents plus optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
 

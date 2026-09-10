@@ -7,7 +7,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
@@ -40,11 +39,9 @@ import { planOpenClawModelsJson, type PreparedModelsConfigContext } from "./mode
 import { repairPluginModelCatalogTransportMetadata } from "./plugin-model-catalog-repair.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
-  isGeneratedPluginModelCatalog,
   loadPersistedPluginModelCatalogs,
   loadPersistedPluginModelCatalogsReadOnly,
   replacePersistedPluginModelCatalogs,
-  resolvePluginModelCatalogOwnerPluginId,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
 
@@ -182,48 +179,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
-  agentDir: string;
-  existingParsed: unknown;
-  pluginCatalogs?: readonly PersistedPluginModelCatalog[];
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
-}): Promise<unknown> {
-  const root = isRecord(params.existingParsed) ? params.existingParsed : {};
-  const providers = isRecord(root.providers) ? { ...root.providers } : {};
-  let changed = false;
-  const pluginCatalogs = params.pluginCatalogs ?? listPreparedPluginModelCatalogs(params.agentDir);
-  for (const { pluginId: catalogPluginId, contents } of pluginCatalogs) {
-    let catalog: unknown;
-    try {
-      catalog = JSON.parse(contents) as unknown;
-    } catch {
-      continue;
-    }
-    if (
-      !isGeneratedPluginModelCatalog(catalog) ||
-      !isRecord(catalog) ||
-      !isRecord(catalog.providers)
-    ) {
-      continue;
-    }
-    for (const [providerId, provider] of Object.entries(catalog.providers)) {
-      const currentOwnerPluginId = resolvePluginModelCatalogOwnerPluginId({
-        providerId,
-        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-      });
-      if (currentOwnerPluginId !== catalogPluginId) {
-        continue;
-      }
-      providers[providerId] = provider;
-      changed = true;
-    }
-  }
-  if (!changed) {
-    return params.existingParsed;
-  }
-  return { ...root, providers };
-}
-
 function materializePlannedPluginCatalogs(
   pluginCatalogWrites: Readonly<Record<string, string>>,
 ): PersistedPluginModelCatalog[] {
@@ -314,6 +269,8 @@ function prepareModelsConfigContext(
   return {
     cfg,
     discoveryAuthConfig: resolved.discoveryAuthConfig,
+    // Native readiness belongs to the captured auth inputs, not the catalog's env clone.
+    discoveryAuthEnv: options.env ?? process.env,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
     env,
@@ -349,7 +306,7 @@ async function prepareOpenClawModelsJsonSource(
   options: EnsureOpenClawModelsJsonOptions = {},
 ): Promise<PreparedOpenClawModelsJsonSource> {
   const context = prepareModelsConfigContext(config, agentDirOverride, options);
-  const { agentDir, pluginMetadataSnapshot, workspaceDir } = context;
+  const { agentDir, workspaceDir } = context;
   const targetPath = path.join(agentDir, "models.json");
   const fingerprint = await buildModelsJsonFingerprint(context);
   const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
@@ -368,15 +325,11 @@ async function prepareOpenClawModelsJsonSource(
     // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
     // are available to provider discovery without mutating process.env.
     const existingModelsFile = await readExistingModelsFile(targetPath);
-    const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
-      agentDir,
-      existingParsed: existingModelsFile.parsed,
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-    });
     const plan = await planOpenClawModelsJson({
       context,
       existingRaw: existingModelsFile.raw,
-      existingParsed: existingParsedForMerge,
+      existingParsed: existingModelsFile.parsed,
+      pluginCatalogs: listPreparedPluginModelCatalogs(agentDir),
     });
 
     if (plan.action === "skip") {
@@ -444,20 +397,15 @@ export async function planOpenClawModelsJsonSource(
   options: PlanOpenClawModelsJsonSourceOptions = {},
 ): Promise<PlannedOpenClawModelsJsonSource> {
   const context = prepareModelsConfigContext(config, agentDirOverride, options);
-  const { agentDir, pluginMetadataSnapshot } = context;
+  const { agentDir } = context;
   const existingModelsFile = await readExistingModelsFile(path.join(agentDir, "models.json"));
   const existingPluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(agentDir);
-  const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
-    agentDir,
-    existingParsed: existingModelsFile.parsed,
-    pluginCatalogs: existingPluginCatalogs,
-    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-  });
   const plan = await planOpenClawModelsJson({
     context,
     ...(options.authStore ? { authStore: options.authStore } : {}),
     existingRaw: existingModelsFile.raw,
-    existingParsed: existingParsedForMerge,
+    existingParsed: existingModelsFile.parsed,
+    pluginCatalogs: existingPluginCatalogs,
   });
   return {
     agentDir,

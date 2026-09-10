@@ -8,7 +8,10 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import {
+  resolveCollapsedSessionAuthPinSource,
+  resolveSessionAuthProfileOverrideSource,
+} from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -62,14 +65,15 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
       delete fallbackRun.hasSessionModelOverride;
       delete fallbackRun.hasAutoFallbackProvenance;
     }
-    if (hasEntryModelOverride && params.entry?.modelOverrideSource) {
-      fallbackRun.modelOverrideSource = params.entry.modelOverrideSource;
+    const modelOverrideSource = params.entry?.modelOverrideSource;
+    if (hasEntryModelOverride && modelOverrideSource && modelOverrideSource !== "default") {
+      fallbackRun.modelOverrideSource = modelOverrideSource;
     } else {
       delete fallbackRun.modelOverrideSource;
     }
     if (hasEntryModelOverride && authProfileId) {
       fallbackRun.authProfileId = authProfileId;
-      const authProfileIdSource = resolveSessionAuthProfileOverrideSource(params.entry);
+      const authProfileIdSource = resolveCollapsedSessionAuthPinSource(params.entry);
       if (authProfileIdSource) {
         fallbackRun.authProfileIdSource = authProfileIdSource;
       } else {

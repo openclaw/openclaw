@@ -109,7 +109,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
         if (argv[2] === "create") {
           const checkpointId = refreshing ? replacementId : CHECKPOINT_ID;
           providerCheckpoints.add(checkpointId);
-          return checkpointResult(checkpointId, argv[argv.indexOf("--id") + 1]!, "pending");
+          return checkpointResult(checkpointId, argv[argv.indexOf("--id") + 1]!, "completed");
         }
         if (argv[2] === "delete") {
           const checkpointId = argv[3];
@@ -352,14 +352,17 @@ describe("Crabbox warm-image lifecycle ownership", () => {
     const now = Date.now();
     for (let index = 0; index < 128; index += 1) {
       store.register(`image-${index}`, {
-        version: 2,
+        version: 3,
         allocations: {},
         image: {
           checkpointId: `chk_image_${index}`,
           kind: "aws-ebs-snapshot",
           state: "available",
           createdAtMs: now,
-          lastUsedAtMs: now - (index === 42 ? 1_000 : 0),
+          preparationKey: null,
+          cacheKey: null,
+          purpose: null,
+          lastDemandAtMs: now - (index === 42 ? 1_000 : 0),
         },
       });
     }
@@ -384,7 +387,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
       throw new Error("Expected a captured warm image");
     }
     store.register(image.key, {
-      version: 2,
+      version: 3,
       allocations: {},
       operation: {
         type: "capture",

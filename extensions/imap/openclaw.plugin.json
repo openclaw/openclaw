@@ -1,5 +1,6 @@
 {
   "id": "imap",
+  "categories": ["tools"],
   "name": "IMAP email trigger",
   "description": "Watch IMAP mailboxes and dispatch authenticated incoming email to isolated agent sessions.",
   "activation": { "onStartup": true },

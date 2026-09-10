@@ -1,12 +1,23 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test } from "vitest";
 import {
   createQaGatewayChild,
   startQaMockOpenAiServer,
@@ -347,6 +358,33 @@ async function installAndConfigure(params: {
 }
 
 describe("managed diagnostics-otel install runtime", () => {
+  let seedDir: string | undefined;
+  let packedPlugin: ReturnType<typeof packPlugin> | undefined;
+
+  afterAll(async () => {
+    await runQaGatewayFixture(
+      async () => await packedPlugin,
+      async () => {
+        if (seedDir) {
+          await rm(seedDir, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
+  async function copyPackedPlugin(repoRoot: string, scratch: string) {
+    packedPlugin ??= (async () => {
+      seedDir = await mkdtemp(path.join(tmpdir(), "openclaw-otel-install-seed-"));
+      return await packPlugin(repoRoot, seedDir);
+    })();
+    const packed = await packedPlugin;
+    const outputDir = path.join(scratch, "pack");
+    await mkdir(outputDir, { recursive: true });
+    const tarball = path.join(outputDir, path.basename(packed.tarball));
+    await copyFile(packed.tarball, tarball);
+    return { tarball, version: packed.version };
+  }
+
   test("installs the exact package and exports with config precedence, sampling, and flush", async () => {
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
     const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-otel-install-"));
@@ -357,7 +395,7 @@ describe("managed diagnostics-otel install runtime", () => {
     const gatewayOwner = createQaGatewayChild();
     let gateway: QaGatewayChild | undefined;
     const runProof = async () => {
-      const packed = await packPlugin(repoRoot, scratch);
+      const packed = await copyPackedPlugin(repoRoot, scratch);
       registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
       mock = await startQaMockOpenAiServer();
       gateway = await startInstallGateway({
@@ -449,17 +487,22 @@ describe("managed diagnostics-otel install runtime", () => {
     const gatewayOwner = createQaGatewayChild();
     let gateway: QaGatewayChild | undefined;
     const runProof = async () => {
-      const packed = await packPlugin(repoRoot, scratch);
+      const packed = await copyPackedPlugin(repoRoot, scratch);
       registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
       mock = await startQaMockOpenAiServer();
       const preloadRoot = path.join(scratch, `otel-preload-${randomUUID()}`);
       const preloadModules = path.join(preloadRoot, "node_modules", "@opentelemetry");
       await mkdir(preloadModules, { recursive: true });
-      // The otherwise-empty preload root resolves the exact root-owned test SDK.
+      const requireFromSdk = createRequire(
+        createRequire(path.join(repoRoot, "package.json")).resolve(
+          "@opentelemetry/sdk-node/package.json",
+        ),
+      );
+      // Resolve through the root-owned SDK without relying on dependency hoisting.
       // The installed plugin remains independently packed without sdk-node.
       for (const packageName of ["sdk-node", "exporter-trace-otlp-proto"]) {
         await symlink(
-          path.join(repoRoot, "node_modules", "@opentelemetry", packageName),
+          path.dirname(requireFromSdk.resolve(`@opentelemetry/${packageName}/package.json`)),
           path.join(preloadModules, packageName),
           process.platform === "win32" ? "junction" : "dir",
         );

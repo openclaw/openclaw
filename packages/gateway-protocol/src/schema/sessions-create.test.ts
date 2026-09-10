@@ -6,6 +6,41 @@ import {
 } from "../index.js";
 
 describe("sessions.create schema", () => {
+  it.each([undefined, 0, 1800000])("accepts initial run timeout %s", (timeoutMs) => {
+    expect(
+      validateSessionsCreateParams({
+        agentId: "main",
+        task: "review",
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      }),
+    ).toBe(true);
+  });
+
+  it.each([-1, 1.5, "1800000", null, Number.NaN, Infinity])(
+    "rejects invalid initial run timeout %s",
+    (timeoutMs) => {
+      expect(validateSessionsCreateParams({ agentId: "main", task: "review", timeoutMs })).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each([
+    { url: "https://github.com/openclaw/openclaw.git" },
+    { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" },
+  ])("accepts a repository source without a Gateway checkout: %j", (repository) => {
+    expect(validateSessionsCreateParams({ agentId: "main", repository })).toBe(true);
+  });
+
+  it.each([
+    { url: "" },
+    { url: "x".repeat(2049) },
+    { url: "https://github.com/openclaw/openclaw.git", ref: "" },
+    { url: "https://github.com/openclaw/openclaw.git", ref: "x".repeat(1025) },
+    { url: "https://github.com/openclaw/openclaw.git", path: "/gateway/repo" },
+  ])("rejects malformed repository source %#", (repository) => {
+    expect(validateSessionsCreateParams({ agentId: "main", repository })).toBe(false);
+  });
   it("retains successful creates beyond the client's bounded retry window", () => {
     expect(SESSION_CREATE_RETRY_WINDOW_MS).toBe(4 * 60_000);
     expect(SESSION_CREATE_IDEMPOTENCY_RETENTION_MS).toBeGreaterThan(SESSION_CREATE_RETRY_WINDOW_MS);

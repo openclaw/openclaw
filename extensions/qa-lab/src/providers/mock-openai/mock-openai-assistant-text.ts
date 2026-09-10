@@ -11,9 +11,6 @@ import {
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
   QA_IMAGE_GENERATION_PROMPT_RE,
   QA_SKILL_WORKSHOP_GIF_PROMPT_RE,
-  QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
-  QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
-  buildSlackMpimHistoryBotReply,
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
 } from "./mock-openai-contracts.js";
@@ -37,8 +34,9 @@ import {
   splitMockConversationContext,
   extractToolOutput,
   extractLatestToolOutput,
-  extractSlackMpimRetainedBotNonce,
+  buildSlackMpimHistoryReply,
   extractAllUserTexts,
+  extractUserTurnTexts,
   extractAllRequestTexts,
   extractCurrentImageRequest,
   parseToolOutputJson,
@@ -126,7 +124,7 @@ export function readForkedContextCompletion(input: ResponsesInputItem[]) {
     /(?:^|\n)\d+\. qa-fork-context\nstatus: ([^\n]+)\nChild result[^\n]*\n<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/.exec(
       current,
     );
-  if (settled && current.includes("sourceTool=subagent_announce")) {
+  if (settled && current.includes("sourceTool=subagent_settle")) {
     const result = settled[2];
     return settled[1] === "ok" &&
       result &&
@@ -173,7 +171,7 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
         .filter((value): value is string => typeof value === "string")
         .join("\n")
     : "";
-  const userTexts = extractAllUserTexts(input);
+  const userTexts = extractUserTurnTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
@@ -218,17 +216,9 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     toolJson,
   });
 
-  const slackMpimHistoryRecall = QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE.exec(prompt);
-  if (slackMpimHistoryRecall) {
-    const [, botReplyPrefix, recalledMarker, missingMarker] = slackMpimHistoryRecall;
-    const nonce = botReplyPrefix
-      ? extractSlackMpimRetainedBotNonce(prompt, botReplyPrefix)
-      : undefined;
-    return nonce && recalledMarker ? `${recalledMarker}_${nonce}` : (missingMarker ?? "");
-  }
-  const slackMpimHistorySeed = QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE.exec(prompt)?.[1];
-  if (slackMpimHistorySeed) {
-    return buildSlackMpimHistoryBotReply(slackMpimHistorySeed);
+  const slackMpimHistoryReply = buildSlackMpimHistoryReply(prompt);
+  if (slackMpimHistoryReply !== undefined) {
+    return slackMpimHistoryReply;
   }
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;

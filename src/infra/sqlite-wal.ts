@@ -10,7 +10,8 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasErrnoCode } from "./errno.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
-import { isSqliteLockError } from "./sqlite-transaction.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
+import { isSqliteLockError, runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
@@ -79,6 +80,8 @@ export type SqliteWalMaintenanceOptions = {
   databaseLabel?: string;
   databasePath?: string;
   onCheckpointError?: (error: unknown) => void;
+  /** Owner-held synchronous exclusion around maintenance writes, including periodic vacuum. */
+  runMaintenance?: (operation: () => boolean) => boolean;
 };
 
 export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
@@ -463,8 +466,9 @@ function terminateForSqliteWalSplitBrain(
   databaseLabel: string | undefined,
 ): never {
   try {
+    // Worker stderr has no fd; write to the process sink before fatal containment.
     fs.writeSync(
-      process.stderr.fd,
+      2,
       `${JSON.stringify({
         level: "fatal",
         subsystem: "infra/sqlite-wal",
@@ -640,13 +644,33 @@ export function configureSqliteWalMaintenance(
   // the event loop have starved channel sockets in production (#83712).
   const runIncrementalVacuum = (): void => {
     try {
-      db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`);
+      // Page limits do not bound lock waits; service worker commit requests before taking the lock.
+      runSqliteImmediateTransactionSync(
+        db,
+        () => db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`),
+        {
+          busyTimeoutMs: options.busyTimeoutMs,
+          databaseLabel: options.databaseLabel ?? options.databasePath,
+          operationLabel: "incremental-vacuum",
+        },
+      );
     } catch (error) {
       options.onCheckpointError?.(error);
     }
   };
 
-  const checkpoint = (): boolean => !invalidated && runCheckpoint(checkpointMode);
+  const runMaintenance = (operation: () => boolean): boolean => {
+    if (invalidated) {
+      return false;
+    }
+    try {
+      return options.runMaintenance ? options.runMaintenance(operation) : operation();
+    } catch (error) {
+      options.onCheckpointError?.(error);
+      return false;
+    }
+  };
+  const checkpoint = (): boolean => runMaintenance(() => runCheckpoint(checkpointMode));
 
   let timer: IntervalHandle | null = null;
   if (timerIntervalMs > 0) {
@@ -677,8 +701,11 @@ export function configureSqliteWalMaintenance(
               terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
             }
           }
-          runCheckpoint(periodicCheckpointMode);
-          runIncrementalVacuum();
+          runMaintenance(() => {
+            const checkpointed = runCheckpoint(periodicCheckpointMode);
+            runIncrementalVacuum();
+            return checkpointed;
+          });
         }, timerIntervalMs) as IntervalHandle,
     );
     timer.unref?.();
@@ -697,7 +724,7 @@ export function configureSqliteWalMaintenance(
       // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
       // readers and has starved the event loop for seconds under fleet churn.
       // Orderly dispose/delete keeps TRUNCATE so sidecars are flushed for unlink.
-      return runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode);
+      return runMaintenance(() => runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode));
     },
   };
 }
@@ -728,11 +755,25 @@ export function configureSqliteConnectionPragmas(
 ): SqliteWalMaintenance {
   const { foreignKeys, synchronous, ...walOptions } = options;
   const maintenance = configureSqliteWalMaintenance(db, walOptions);
-  if (synchronous) {
-    db.exec(`PRAGMA synchronous = ${synchronous};`);
+  try {
+    if (synchronous) {
+      db.exec(`PRAGMA synchronous = ${synchronous};`);
+    }
+    if (foreignKeys) {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
+    return maintenance;
+  } catch (error) {
+    // The caller cannot dispose maintenance until this function returns it.
+    try {
+      maintenance.close();
+    } catch (closeError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, closeError],
+        "SQLite connection pragma configuration and WAL maintenance cleanup both failed.",
+        error,
+      );
+    }
+    throw error;
   }
-  if (foreignKeys) {
-    db.exec("PRAGMA foreign_keys = ON;");
-  }
-  return maintenance;
 }

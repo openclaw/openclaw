@@ -1,36 +1,46 @@
 // Built-in OpenClaw harness tests cover logical thinking-mode boundaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 
 const runEmbeddedAttempt = vi.hoisted(() => vi.fn());
 const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
 
 vi.mock("../embedded-agent-runner/run/attempt.js", () => ({ runEmbeddedAttempt }));
-vi.mock("../simple-completion-runtime.js", () => ({ completeWithPreparedSimpleCompletionModel }));
+vi.mock("../simple-completion-execution.js", () => ({ completeWithPreparedSimpleCompletionModel }));
 
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 
 describe("createOpenClawAgentHarness", () => {
   beforeEach(() => {
     runEmbeddedAttempt.mockReset();
-    runEmbeddedAttempt.mockResolvedValue({
-      terminal: { kind: "ok" },
-      sessionIdUsed: "session-1",
-      messagesSnapshot: [],
-      assistantTexts: ["done"],
-      toolMetas: [],
-      lastAssistant: undefined,
-      currentAttemptCompletedAssistant: {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        stopReason: "stop",
-      },
-      didSendViaMessagingTool: false,
-      messagingToolSentTexts: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSentTargets: [],
-      cloudCodeAssistFormatError: false,
-      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+    runEmbeddedAttempt.mockImplementation(async (params: EmbeddedRunAttemptParams) => {
+      params.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: 123_456 });
+      params.onAttemptTimeoutArmed?.();
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: params.deferTerminalLifecycle ? "finishing" : "end" },
+      });
+      return {
+        terminal: { kind: "ok" },
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [],
+        assistantTexts: ["done"],
+        toolMetas: [],
+        lastAssistant: undefined,
+        currentAttemptCompletedAssistant: {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          stopReason: "stop",
+        },
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        cloudCodeAssistFormatError: false,
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+      };
     });
     completeWithPreparedSimpleCompletionModel.mockReset();
     completeWithPreparedSimpleCompletionModel.mockResolvedValue({
@@ -62,8 +72,11 @@ describe("createOpenClawAgentHarness", () => {
     expect(runEmbeddedAttempt).toHaveBeenCalledWith(params);
   });
 
-  it("enforces a tool-free settled-turn finalization", async () => {
+  it("enforces tool-free finalization while forwarding execution and lifecycle notifications", async () => {
     const prepareAssistantTranscriptMessage = vi.fn();
+    const onAttemptDeadlineChanged = vi.fn();
+    const onAttemptTimeoutArmed = vi.fn();
+    const onAgentEvent = vi.fn<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>();
     const attempt = {
       prompt: "finalize",
       disableTools: false,
@@ -73,12 +86,25 @@ describe("createOpenClawAgentHarness", () => {
       internalEvents: [{ type: "ambient-event" }],
       trigger: "heartbeat",
       onPartialReply: vi.fn(),
+      onAttemptDeadlineChanged,
+      onAttemptTimeoutArmed,
+      onAgentEvent,
+      deferTerminalLifecycle: true,
       prepareAssistantTranscriptMessage,
     } as never;
     const harness = createOpenClawAgentHarness();
 
     await harness.finalizeSettledTurn?.({ attempt, settledAttempt: {} as never });
 
+    expect(onAttemptDeadlineChanged).toHaveBeenCalledExactlyOnceWith({
+      kind: "bounded",
+      deadlineAtMs: 123_456,
+    });
+    expect(onAttemptTimeoutArmed).toHaveBeenCalledOnce();
+    expect(onAgentEvent.mock.calls).toEqual([
+      [{ stream: "lifecycle", data: { phase: "start" } }],
+      [{ stream: "lifecycle", data: { phase: "finishing" } }],
+    ]);
     expect(runEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: "finalize",

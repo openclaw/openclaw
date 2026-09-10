@@ -1,11 +1,21 @@
 // Workshop frontmatter helpers parse generated skill metadata before saving drafts.
 import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
+import type { SkillProposalRecord } from "./types.js";
 
 type ProposalFrontmatter = {
   name: string;
   description: string;
 };
+
+export function resolveSkillProposalName(
+  kind: SkillProposalRecord["kind"],
+  target: Pick<SkillProposalRecord["target"], "skillName" | "skillKey">,
+): string {
+  // New skills use the normalized key as their name; updates retain the live
+  // frontmatter name, which may differ from the metadata key.
+  return kind === "create" ? target.skillKey : target.skillName;
+}
 
 // JSON strings are valid YAML scalars and avoid ad hoc escaping.
 function yamlScalar(value: string): string {
@@ -15,6 +25,7 @@ function yamlScalar(value: string): string {
 /** Renders proposal markdown while preserving allowed original frontmatter fields. */
 export function renderProposalMarkdown(params: {
   name: string;
+  /** Description apply writes into SKILL.md frontmatter — not the listing label. */
   description: string;
   content: string;
   fallbackFrontmatterContent?: string;
@@ -102,6 +113,45 @@ function filterFrontmatterBlock(block: string, keysToDrop: readonly string[]): s
   }
 
   return kept.join("\n").trim();
+}
+
+function extractFrontmatterDescription(content: string | undefined): string | undefined {
+  if (!content) {
+    return undefined;
+  }
+  try {
+    const description = parseSkillFrontmatter(content).description;
+    const trimmed = description?.trim();
+    return trimmed ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolves the description that apply writes into SKILL.md frontmatter.
+ *
+ * The proposal listing label never replaces the skill description: the drafted
+ * content (or the current live skill, when the draft is body-only) stays
+ * authoritative, and the label is only proposal listing metadata.
+ */
+export function resolveDraftedSkillDescription(params: {
+  content: string;
+  fallbackContent?: string;
+  label: string;
+  /**
+   * A description the caller explicitly supplied for this revision. It wins over
+   * any description still carried by previously rendered content, so an explicit
+   * description-only revision reaches the applied skill file.
+   */
+  explicitDescription?: string;
+}): string {
+  return (
+    params.explicitDescription ??
+    extractFrontmatterDescription(params.content) ??
+    extractFrontmatterDescription(params.fallbackContent) ??
+    params.label
+  );
 }
 
 function normalizeNewlines(content: string): string {

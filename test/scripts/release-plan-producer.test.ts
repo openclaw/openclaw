@@ -47,6 +47,7 @@ const TOOLING_CLOSURE = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/string-coerce.ts",
   "packages/plugin-package-contract/src/index.ts",
+  "scripts/lib/bounded-response.mjs",
   "scripts/lib/canonical-json.mjs",
   "scripts/release-plan-producer.mts",
   "scripts/release-plan-producer-core.mts",
@@ -57,6 +58,7 @@ const TOOLING_CLOSURE = [
   "scripts/lib/npm-core-release-packages.json",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
+  "scripts/lib/plugin-publication-target.mjs",
   "scripts/lib/pnpm-lockfile-documents.mjs",
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-version.mjs",
@@ -1019,12 +1021,29 @@ produceReleasePlan({
     expect(result.stderr).toContain("verified yaml retained tree digest mismatch");
   });
 
-  it("accepts the complete installed yaml package tree", () => {
-    const { result, tempRoot } = runYamlPackageSubprocess();
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    expect(yamlTempEntries(tempRoot)).toEqual([]);
-  });
+  it.each([false, true])(
+    "accepts pinned yaml package bytes (installer metadata=%s)",
+    (installerMetadata) => {
+      const { result, tempRoot, sentinelPath } = runYamlPackageSubprocess({
+        mutate: ({ packageRoot, sentinelPath: installerSentinelPath }) => {
+          const installedDependencies = join(packageRoot, "node_modules");
+          rmSync(installedDependencies, { recursive: true, force: true });
+          if (installerMetadata) {
+            mkdirSync(join(installedDependencies, ".bin"), { recursive: true });
+            writeFileSync(
+              join(installedDependencies, ".bin/yaml"),
+              `require("node:fs").writeFileSync(${JSON.stringify(installerSentinelPath)}, "executed");\n`,
+            );
+            symlinkSync("must-not-be-read", join(installedDependencies, "foreign-package"));
+          }
+        },
+      });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(yamlTempEntries(tempRoot)).toEqual([]);
+      expect(existsSync(sentinelPath)).toBe(false);
+    },
+  );
 
   it("rejects a changed yaml entry before executing it", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({
@@ -1282,7 +1301,7 @@ mutateModule.syncBuiltinESMExports();
     );
   });
 
-  it("matches the exact current publisher inventory: 93 npm and 89 ClawHub packages", () => {
+  it("matches the exact current publisher inventory: 94 npm and 90 ClawHub packages", () => {
     const root = tempDirs.make("openclaw-release-plan-current-");
     const candidateSha = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: resolve("."),
@@ -1335,8 +1354,8 @@ mutateModule.syncBuiltinESMExports();
     const clawHubPackages = plan.inventory.packages.filter((entry) =>
       entry.targets.includes("clawhub"),
     );
-    expect(npmPackages).toHaveLength(93);
-    expect(clawHubPackages).toHaveLength(89);
+    expect(npmPackages).toHaveLength(94);
+    expect(clawHubPackages).toHaveLength(90);
     const coreNpmPackages = new Set([
       "@openclaw/ai",
       "@openclaw/gateway-client",

@@ -292,6 +292,50 @@ describe("createEmbeddingProvider", () => {
     },
   );
 
+  it.each([
+    { name: "fallback that serves its own model", fallbackDefaultModel: "nomic-embed-text" },
+    { name: "fallback without a default model", fallbackDefaultModel: undefined },
+  ])("hands the creation fallback the model it serves: $name", async ({ fallbackDefaultModel }) => {
+    const primaryModel = "text-embedding-3-small";
+    const fallbackCreate = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async ({ model }) => ({
+      provider: {
+        id: "ollama",
+        model,
+        embed: async () => [1],
+        embedBatch: async (texts) => texts.map(() => [1]),
+      },
+    }));
+    registerTestMemoryAdapter({
+      id: "openai",
+      defaultModel: primaryModel,
+      create: async () => {
+        throw new Error("synthetic primary provider unavailable");
+      },
+    });
+    registerTestMemoryAdapter({
+      id: "ollama",
+      ...(fallbackDefaultModel ? { defaultModel: fallbackDefaultModel } : {}),
+      create: fallbackCreate,
+    });
+
+    const options = { ...createOptions("openai"), model: primaryModel, fallback: "ollama" };
+    const result = await createEmbeddingProvider(options);
+
+    // The configured model names the primary provider. Both fallback entry points must
+    // agree on what the fallback is asked to serve.
+    const runtimeActivationModel = resolveEmbeddingProviderFallbackModel(
+      "ollama",
+      primaryModel,
+      options.config,
+    );
+    const expectedModel = fallbackDefaultModel ?? primaryModel;
+    expect(runtimeActivationModel).toBe(expectedModel);
+    expect(fallbackCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "ollama", model: expectedModel }),
+    );
+    expect(result.provider?.model).toBe(expectedModel);
+  });
+
   it("does not run priority-based auto-selection after a skippable setup failure", async () => {
     registerTestMemoryAdapter(createMissingCredentialsAdapter({ autoSelectPriority: 10 }));
     registerTestMemoryAdapter({

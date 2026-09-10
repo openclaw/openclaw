@@ -7,7 +7,7 @@ import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
-import type { SkillCommandSpec } from "../../skills/types.js";
+import type { ExplicitSkillSelection, SkillCommandSpec } from "../../skills/types.js";
 import type { MsgContext } from "../templating.js";
 import type {
   ElevatedLevel,
@@ -19,6 +19,7 @@ import type {
 import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import type { ReplyModelLevelResolver } from "./reply-model-levels.js";
 import type { TypingController } from "./typing.js";
 
 /** Normalized command metadata derived from an inbound message. */
@@ -89,6 +90,7 @@ export type HandleCommandsParams = {
   isGroup: boolean;
   skillCommands?: SkillCommandSpec[];
   loadSkillCommands?: () => Promise<SkillCommandSpec[]>;
+  loadBundledSkillCommand?: (skillName: string) => Promise<SkillCommandSpec | undefined>;
   typing?: TypingController;
   /** Invocation authority for host-bound plugin command capabilities. */
   commandInvocationSignal?: AbortSignal;
@@ -96,9 +98,17 @@ export type HandleCommandsParams = {
   compactionSessionEntry?: SessionEntry;
 };
 
+/** Dispatch can handle reset before asking for model-derived command settings. */
+export type CommandDispatchParams = Omit<
+  HandleCommandsParams,
+  "resolvedThinkLevel" | "resolvedReasoningLevel"
+> & { resolveModelLevels: ReplyModelLevelResolver };
+
 /** Result returned by a command handler. */
 export type CommandHandlerResult = {
   reply?: ReplyPayload;
+  /** Exact skill files deliberately selected by a continuing command. */
+  explicitSkillSelections?: ExplicitSkillSelection[];
   /** Turn-local queue override requested by an authorized continuation command. */
   queueModeOverride?: QueueMode;
   sessionCompaction?: Awaited<

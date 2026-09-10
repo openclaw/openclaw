@@ -9,11 +9,13 @@ import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
+import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
+const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
 const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
 const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
@@ -215,6 +217,9 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
   const forwardedSignals = ["SIGTERM", "SIGHUP"] as const;
   let forwardedSignal: (typeof forwardedSignals)[number] | null = null;
   let forwardedSignalPids: number[] = [];
+  let forwardedSignalTreeComplete = false;
+  let childExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  let forcedSignalCleanup = false;
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
   let forwardedSignalDrainTimer: ReturnType<typeof setInterval> | null = null;
   const clearForwardedSignalTimers = () => {
@@ -228,13 +233,23 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
     }
   };
   const finishForwardedSignal = () => {
-    cleanupSignalHandlers();
-    if (forwardedSignal) {
-      process.kill(process.pid, forwardedSignal);
+    if (!forwardedSignal || !childExit) {
+      return;
     }
+    cleanupSignalHandlers();
+    const interrupted =
+      childExit.signal ??
+      (forcedSignalCleanup ? "SIGKILL" : !forwardedSignalTreeComplete ? forwardedSignal : null);
+    if (interrupted) {
+      process.kill(process.pid, interrupted);
+      return;
+    }
+    // A returned child and quiescent captured tree acknowledge this stop.
+    // Raw signal death and forced cleanup cannot make that same promise.
+    process.exit(forwardedSignal === "SIGTERM" ? 143 : 129);
   };
   const waitForForwardedSignalChildren = () => {
-    if (!forwardedSignal || processTreeIsAlive(forwardedSignalPids)) {
+    if (!forwardedSignal || !childExit || processTreeIsAlive(forwardedSignalPids)) {
       return;
     }
     finishForwardedSignal();
@@ -248,11 +263,16 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
       () => {
         if (!forwardedSignal) {
           forwardedSignal = signal;
-          forwardedSignalPids = collectChildProcessTreePids(child);
+          const tree = collectChildProcessTreePids(child);
+          forwardedSignalPids = tree.pids;
+          forwardedSignalTreeComplete = tree.complete;
           signalProcessTree(child, signal, forwardedSignalPids);
           forwardedSignalDrainTimer = setInterval(waitForForwardedSignalChildren, 25);
           forceKillTimer = setTimeout(() => {
-            signalProcessTree(child, "SIGKILL", forwardedSignalPids);
+            if (processTreeIsAlive(forwardedSignalPids)) {
+              forcedSignalCleanup = true;
+              signalProcessTree(child, "SIGKILL", forwardedSignalPids);
+            }
           }, FORWARDED_SIGNAL_KILL_GRACE_MS);
           forceKillTimer.unref?.();
         }
@@ -275,6 +295,7 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
     process.exit(1);
   });
   child.on("exit", (code, signal) => {
+    childExit = { code, signal };
     if (forwardedSignal) {
       waitForForwardedSignalChildren();
       return;
@@ -290,22 +311,28 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
   });
 }
 
-function collectChildProcessTreePids(child: ChildProcess): number[] {
+function collectChildProcessTreePids(child: ChildProcess): { pids: number[]; complete: boolean } {
   if (process.platform === "win32" || typeof child.pid !== "number") {
-    return typeof child.pid === "number" ? [child.pid] : [];
+    return { pids: typeof child.pid === "number" ? [child.pid] : [], complete: false };
   }
   const ps = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
   if (ps.status !== 0) {
-    return [child.pid];
+    return { pids: [child.pid], complete: false };
   }
   const childrenByParent = new Map<number, number[]>();
+  let complete = true;
+  let childFound = false;
   for (const line of ps.stdout.split("\n")) {
     const match = line.trim().match(/^(\d+)\s+(\d+)$/u);
     if (!match) {
+      if (line.trim()) {
+        complete = false;
+      }
       continue;
     }
     const pid = Number(match[1]);
     const ppid = Number(match[2]);
+    childFound ||= pid === child.pid;
     const siblings = childrenByParent.get(ppid) ?? [];
     siblings.push(pid);
     childrenByParent.set(ppid, siblings);
@@ -316,7 +343,7 @@ function collectChildProcessTreePids(child: ChildProcess): number[] {
       pids.push(pid);
     }
   }
-  return [...new Set(pids)];
+  return { pids: [...new Set(pids)], complete: complete && childFound };
 }
 
 function processTreeIsAlive(pids: number[]): boolean {
@@ -350,10 +377,6 @@ function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals, pids: nu
   }
 }
 
-function runPnpm(args: string[], envOverride?: NodeJS.ProcessEnv): void {
-  runSpawnCall(resolvePnpmSpawnCall(args, envOverride), "pnpm");
-}
-
 function runSpawnCallSync(spawnCall: UiSpawnCall, label: string): void {
   const { command, args: spawnArgs, options } = spawnCall;
   let result;
@@ -373,19 +396,14 @@ function runSpawnCallSync(spawnCall: UiSpawnCall, label: string): void {
   }
 }
 
-function runPnpmSync(args: string[], envOverride?: NodeJS.ProcessEnv): void {
-  runSpawnCallSync(resolvePnpmSpawnCall(args, envOverride), "pnpm");
-}
-
 function depsInstalled(kind: "build" | "test"): boolean {
   try {
-    const require = createRequire(path.join(uiDir, "package.json"));
-    require.resolve("vite");
-    require.resolve("dompurify");
+    requireFromUi.resolve("vite");
+    requireFromUi.resolve("dompurify");
     if (kind === "test") {
-      require.resolve("vitest");
-      require.resolve("@vitest/browser-playwright");
-      require.resolve("playwright");
+      requireFromUi.resolve("vitest");
+      requireFromUi.resolve("@vitest/browser-playwright");
+      requireFromUi.resolve("playwright");
     }
     return true;
   } catch {
@@ -393,18 +411,15 @@ function depsInstalled(kind: "build" | "test"): boolean {
   }
 }
 
-function resolveScriptAction(action: string): "dev" | "build" | "test" | null {
-  if (action === "install") {
-    return null;
-  }
+function resolveScriptAction(action: string): [tool: "vite" | "vitest", ...args: string[]] | null {
   if (action === "dev") {
-    return "dev";
+    return ["vite"];
   }
   if (action === "build") {
-    return "build";
+    return ["vite", "build"];
   }
   if (action === "test") {
-    return "test";
+    return ["vitest", "run", "--config", "vitest.config.ts"];
   }
   return null;
 }
@@ -423,10 +438,11 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
   }
   if (action === "build") {
     assertRealOutputRoot(path.join(repoRoot, "dist"));
+    assertRealOutputRoot(path.join(repoRoot, "dist/control-ui"));
   }
 
   if (action === "install") {
-    runPnpm(["install", ...rest]);
+    runSpawnCall(resolvePnpmSpawnCall(["install", ...rest]), "pnpm");
     return;
   }
   if (!script) {
@@ -435,33 +451,35 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
 
   const noPnpmBuild = action === "build" && process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1";
   if (!noPnpmBuild && !depsInstalled(action === "test" ? "test" : "build")) {
-    const installEnv = process.env;
-    const installArgs = ["install"];
-    runPnpmSync(installArgs, installEnv);
+    runSpawnCallSync(resolvePnpmSpawnCall(["install"]), "pnpm");
   }
 
+  const [tool, ...args] = script;
+  const env = action === "build" ? resolveUiBuildEnvironment() : process.env;
+  const toolCall = resolveSpawnCall(
+    process.execPath,
+    [resolveNodePackageBin(tool, requireFromUi), ...args, ...rest],
+    env,
+  );
   if (action === "build") {
-    const buildEnv = resolveUiBuildEnvironment();
-    const buildCall = noPnpmBuild
-      ? resolveSpawnCall(
-          process.execPath,
-          [path.join(repoRoot, "node_modules/vite/bin/vite.js"), "build", ...rest],
-          buildEnv,
-        )
-      : resolvePnpmSpawnCall(["run", "build", ...rest], buildEnv);
-    runSpawnCallSync(buildCall, "Control UI build");
+    runSpawnCallSync(toolCall, "Control UI build");
     if (rest.some((arg) => arg === "--help" || arg === "-h")) {
       return;
     }
-    for (const validator of [
-      "check-control-ui-precompressed-assets.mts",
-      "check-control-ui-performance.mts",
-    ]) {
+    for (const [validator, ...validatorArgs] of [
+      ["check-control-ui-precompressed-assets.mts"],
+      ["check-control-ui-performance.mts", "--report-only"],
+    ] as const) {
       runSpawnCallSync(
         resolveSpawnCall(
           process.execPath,
-          ["--import", new URL("./tsx.mjs", import.meta.url).href, path.join(here, validator)],
-          buildEnv,
+          [
+            "--import",
+            new URL("./tsx.mjs", import.meta.url).href,
+            path.join(here, validator),
+            ...validatorArgs,
+          ],
+          env,
           { cwd: repoRoot },
         ),
         validator,
@@ -470,7 +488,7 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
     return;
   }
 
-  runPnpm(["run", script, ...rest]);
+  runSpawnCall(toolCall, tool);
 }
 
 function resolveDirectExecutionPath(

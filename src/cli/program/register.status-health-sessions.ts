@@ -63,7 +63,7 @@ function addSessionsListOptions(command: Command): Command {
   return command
     .option("--json", "Output as JSON", false)
     .option("--verbose", "Verbose logging", false)
-    .option("--store <path>", "Path to physical .sqlite session store")
+    .option("--store <path>", "Legacy session store selector path")
     .option("--agent <id>", "Agent id to inspect (required for multiple explicit agents)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .option("--active <minutes>", "Only show sessions updated within the past N minutes")
@@ -143,7 +143,7 @@ function registerSessionsLifecycleCommand(
     .command(`${operation} <keys...>`)
     .description(
       destructive
-        ? "Delete stored sessions and their live artifacts via the running gateway"
+        ? "Delete stored sessions and their live artifacts via the running gateway. Retained archives can remain searchable."
         : "Archive stored sessions via the running gateway",
     )
     .option(`--dry-run`, `Preview ${operation} actions without writing`, false);
@@ -157,7 +157,7 @@ function registerSessionsLifecycleCommand(
         `\n${theme.heading("Examples:")}\n${formatHelpExamples(examples)}${
           destructive
             ? `\n\n${theme.muted(
-                "Deletion uses the Control UI lifecycle operation, including transcript archival and runtime cleanup.",
+                "Deletion uses the Control UI lifecycle operation, including transcript archival and runtime cleanup. Retained deleted-session archives can remain eligible for memory search. To remove indexed memories, run `openclaw memory forget --agent <agent-id> --session <id-or-key>` on the Gateway host or container using its state and configuration. Use the agent that owned the deleted session, including for global keys. Memory cleanup runs locally; --url does not forward it to a remote Gateway.",
               )}`
             : ""
         }`,
@@ -327,7 +327,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
   sessionsCmd
     .command("cleanup")
     .description("Run session-store maintenance now")
-    .option("--store <path>", "Path to physical .sqlite session store")
+    .option("--store <path>", "Legacy session store selector path")
     .option("--agent <id>", "Agent id to maintain (required for multiple explicit agents)")
     .option("--all-agents", "Run maintenance across all configured agents", false)
     .option("--dry-run", "Preview maintenance actions without writing", false)
@@ -399,7 +399,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--session-key <key>", "Session key to tail (default: active sessions or latest)")
     .option("--tail <count>", "Number of existing trajectory events to show", "80")
     .option("--follow", "Continue following for new trajectory events", false)
-    .option("--store <path>", "Path to physical .sqlite session store")
+    .option("--store <path>", "Legacy session store selector path")
     .option("--agent <id>", "Agent id to inspect (required for multiple explicit agents)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .action(async (opts, command) => {
@@ -432,7 +432,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--session-key <key>", "Session key to export")
     .option("--output <path>", "Output directory name inside .openclaw/trajectory-exports")
     .option("--workspace <path>", "Workspace root for the export (default: current directory)")
-    .option("--store <path>", "Path to physical .sqlite session store")
+    .option("--store <path>", "Legacy session store selector path")
     .option("--agent <id>", "Agent id for resolving the default session store")
     .option("--request-json-base64 <payload>", "Base64url-encoded export request")
     .option("--json", "Output JSON", false)

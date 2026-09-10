@@ -1,3 +1,4 @@
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
   boundStructuredInputText as boundText,
@@ -26,7 +27,7 @@ const MAX_SCHEMA_KEYS = 24;
 const MAX_FIELD_NAME = 256;
 const MAX_MESSAGE_TEXT = 1_024;
 const MAX_URL_TEXT = 2_048;
-const MAX_URL_QUESTION_TEXT = 3_200;
+export const STRUCTURED_INPUT_URL_COMPLETED_LABEL = "I've completed this step";
 
 export { isStructuredInputRecord, snapshotStructuredInput };
 export type {
@@ -158,7 +159,7 @@ export function compileStructuredInputForm(params: {
   return { kind: "ready", plan: { kind: "form", intro, fields } };
 }
 
-/** Compiles a literal, non-fetching HTTP(S) confirmation question. */
+/** Keeps browser navigation separate from confirmation that the external step is complete. */
 export function compileStructuredInputUrl(params: {
   url: unknown;
   elicitationId: unknown;
@@ -174,6 +175,7 @@ export function compileStructuredInputUrl(params: {
   );
   if (
     !url ||
+    !hasHttpUrlPrefix(url) ||
     url.length > MAX_URL_TEXT ||
     url.trim() !== url ||
     hasUnsafeVisibleCharacters(url) ||
@@ -206,14 +208,13 @@ export function compileStructuredInputUrl(params: {
       kind: "url",
       question: {
         id: "continue",
-        header: "Continue",
-        question: boundText(
-          `${message}\n\n${url}\n\nContinue with this URL?`,
-          MAX_URL_QUESTION_TEXT,
-        ),
+        header: "Browser step",
+        // Native clients without URL actions still need the literal destination.
+        question: `${message}\n\n${url}\n\nOpen the link and complete the step in your browser. Then select "${STRUCTURED_INPUT_URL_COMPLETED_LABEL}".`,
+        url,
         isOther: false,
         isSecret: false,
-        options: [{ label: "Continue" }, { label: "Decline" }],
+        options: [{ label: STRUCTURED_INPUT_URL_COMPLETED_LABEL }, { label: "Decline" }],
       },
     },
   };

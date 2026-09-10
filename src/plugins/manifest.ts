@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
@@ -49,6 +50,37 @@ function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
     }
   }
   return kinds.length === 0 ? undefined : kinds.length === 1 ? kinds[0] : kinds;
+}
+
+function parseDoctorStateMigrationDescriptors(
+  raw: unknown,
+): PluginManifestDoctorContract["stateMigrations"] {
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  return raw.flatMap((value) => {
+    if (!isRecord(value)) {
+      return [];
+    }
+    const id = normalizeOptionalString(value.id);
+    if (!id || seen.has(id)) {
+      return [];
+    }
+    seen.add(id);
+    return [
+      {
+        id,
+        ...(value.doctorOnly === true ? { doctorOnly: true as const } : {}),
+        ...(value.phase === "after-session-repair"
+          ? { phase: "after-session-repair" as const }
+          : {}),
+      },
+    ];
+  });
 }
 
 function parseManifestBackupResources(
@@ -176,6 +208,14 @@ export function loadPluginManifest(
       diagnosticCode: "backup-resource-declaration-invalid",
     });
   }
+  const categories = validatePluginCategories(raw.categories);
+  if (!categories.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest categories: ${categories.error}`,
+      manifestPath,
+    });
+  }
 
   const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
   const enabledByDefaultOnPlatforms = setupNormalizers.normalizeManifestDefaultPlatforms(
@@ -186,23 +226,25 @@ export function loadPluginManifest(
     raw.autoEnableWhenConfiguredProviders,
   );
   const providers = normalizeTrimmedStringList(raw.providers);
+  const contracts = capabilityNormalizers.normalizeManifestContracts(raw.contracts);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const rawDoctorContract = isRecord(raw.doctorContract) ? raw.doctorContract : undefined;
+  const stateMigrations = parseDoctorStateMigrationDescriptors(rawDoctorContract?.stateMigrations);
   const doctorContract = rawDoctorContract
-    ? (Object.fromEntries(
-        [
-          "configRepair",
-          "resolveSessionStoreAgentIds",
-          "sessionRouteStateOwners",
-          "stateMigrations",
-        ].flatMap((key) =>
-          typeof rawDoctorContract[key] === "boolean" ? [[key, rawDoctorContract[key]]] : [],
+    ? ({
+        ...Object.fromEntries(
+          ["configRepair", "resolveSessionStoreAgentIds", "sessionRouteStateOwners"].flatMap(
+            (key) =>
+              typeof rawDoctorContract[key] === "boolean" ? [[key, rawDoctorContract[key]]] : [],
+          ),
         ),
-      ) as PluginManifestDoctorContract)
+        ...(stateMigrations !== undefined ? { stateMigrations } : {}),
+      } as PluginManifestDoctorContract)
     : undefined;
   const manifestBeforeDashboard = {
     id,
     configSchema,
+    ...("categories" in categories ? { categories: categories.categories } : {}),
     ...(backupResources.resources !== undefined
       ? { backupResources: backupResources.resources }
       : {}),
@@ -215,6 +257,10 @@ export function loadPluginManifest(
     channels: normalizeTrimmedStringList(raw.channels),
     providers,
     providerCatalogEntry: normalizeOptionalString(raw.providerCatalogEntry),
+    capabilityCatalogEntry:
+      raw.capabilityCatalogEntry === undefined
+        ? undefined
+        : (normalizeOptionalString(raw.capabilityCatalogEntry) ?? ""),
     modelSupport: modelProviderNormalizers.normalizeManifestModelSupport(raw.modelSupport),
     modelCatalog: normalizeModelCatalog(raw.modelCatalog, {
       ownedProviders: new Set([...providers, ...cliBackends]),
@@ -245,7 +291,7 @@ export function loadPluginManifest(
     providerUsageAuthEnvVars: capabilityNormalizers.normalizeStringListRecord(
       raw.providerUsageAuthEnvVars,
     ),
-    providerAuthAliases: capabilityNormalizers.normalizeManifestStringRecord(
+    providerAuthAliases: capabilityNormalizers.normalizeManifestProviderAuthAliases(
       raw.providerAuthAliases,
     ),
     providerAuthChoices: setupNormalizers.normalizeProviderAuthChoices(raw.providerAuthChoices),
@@ -267,21 +313,33 @@ export function loadPluginManifest(
       manifestPath,
     });
   }
+  const controlUiResult = setupNormalizers.normalizeManifestControlUi(raw.controlUi);
+  if (!controlUiResult.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest controlUi: ${controlUiResult.error}`,
+      manifestPath,
+    });
+  }
 
   return cacheResult({
     ok: true,
     manifest: {
       ...manifestBeforeDashboard,
       dashboard: dashboardResult.dashboard,
+      controlUi: controlUiResult.value,
       mcpServers: capabilityNormalizers.normalizeManifestMcpServers(raw.mcpServers),
       skills: normalizeTrimmedStringList(raw.skills),
       name: normalizeOptionalString(raw.name),
       description: normalizeOptionalString(raw.description),
       catalog: capabilityNormalizers.normalizeManifestCatalog(raw.catalog),
-      icon: normalizeOptionalString(raw.icon),
       version: normalizeOptionalString(raw.version),
       uiHints: setupNormalizers.normalizeConfigUiHints(raw.uiHints),
-      contracts: capabilityNormalizers.normalizeManifestContracts(raw.contracts),
+      contracts,
+      transcriptSources: capabilityNormalizers.normalizeManifestTranscriptSources(
+        raw.transcriptSources,
+        contracts?.transcriptSourceProviders,
+      ),
       mediaUnderstandingProviderMetadata:
         capabilityNormalizers.normalizeMediaUnderstandingProviderMetadata(
           raw.mediaUnderstandingProviderMetadata,

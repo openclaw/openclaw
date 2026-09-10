@@ -9,6 +9,7 @@ import io
 import json
 import os
 import runpy
+import stat
 import subprocess
 import sys
 import tempfile
@@ -51,6 +52,38 @@ DRAFT_REPORT = {
 
 
 class AutoreviewCursorTests(unittest.TestCase):
+    def test_parser_resource_errors_are_invalid_reports(self) -> None:
+        args = argparse.Namespace(engine="codex", max_priority="P2")
+        for raw in ("[" * 2000 + "]" * 2000, '{"findings":[],"number":' + "9" * 10000 + "}"):
+            with self.subTest(length=len(raw)), mock.patch.object(
+                AUTOREVIEW, "run_engine", return_value=raw,
+            ):
+                with self.assertRaises(AUTOREVIEW.ReviewerUnavailable) as caught:
+                    AUTOREVIEW.run_reviewer(args, Path.cwd(), "synthetic", set(), [])
+                self.assertEqual(caught.exception.reason, "invalid_report")
+
+    def test_container_valued_report_enums_are_invalid_reports(self) -> None:
+        args = argparse.Namespace(engine="codex", max_priority="P2")
+        finding = copy.deepcopy(DRAFT_REPORT["findings"][0])
+        finding["source_attribution"] = {
+            "target": "index", "record_id": "record", "source_id": "source",
+            "side": "present", "column": 1, "excerpt": "text",
+        }
+        for field in ("overall_correctness", "priority", "category", "target", "side"):
+            for value in ([], {}, None, 42, False):
+                report = copy.deepcopy(FINAL_REPORT)
+                report["findings"] = [copy.deepcopy(finding)]
+                owner = report if field == "overall_correctness" else report["findings"][0]
+                if field in {"target", "side"}:
+                    owner = owner["source_attribution"]
+                owner[field] = value
+                with self.subTest(field=field, value=value), mock.patch.object(
+                    AUTOREVIEW, "run_engine", return_value=json.dumps(report),
+                ):
+                    with self.assertRaises(AUTOREVIEW.ReviewerUnavailable) as caught:
+                        AUTOREVIEW.run_reviewer(args, Path.cwd(), "synthetic", {"draft.js"}, [])
+                    self.assertEqual(caught.exception.reason, "invalid_report")
+
     def test_extract_json_prefers_terminal_result_event(self) -> None:
         stream = "\n".join(
             [
@@ -157,11 +190,9 @@ class AutoreviewResultScopeTests(unittest.TestCase):
     def test_required_finding_must_survive_priority_filter_for_every_pass_count(self) -> None:
         args = argparse.Namespace(engine="codex", max_priority="P0", require_finding=["Draft finding"])
         for count in (1, 2):
-            with self.subTest(count=count), mock.patch.object(
-                AUTOREVIEW, "run_engine", return_value=json.dumps(DRAFT_REPORT)
-            ):
+            with self.subTest(count=count), mock.patch.object(AUTOREVIEW, "run_engine", return_value=json.dumps(DRAFT_REPORT)):
                 reports = AUTOREVIEW.run_review_passes(
-                    args, [args], Path.cwd(), ["pack"] * count, {"draft.js"}, False
+                    args, [args], Path.cwd(), ["pack"] * count, {"draft.js"}
                 )
             report = reports[0][1] if count == 1 else AUTOREVIEW.merge_chunk_reports(reports)
             self.assertEqual(
@@ -185,6 +216,194 @@ class AutoreviewResultScopeTests(unittest.TestCase):
         self.assertEqual(len(merged["findings"]), 1)
         self.assertEqual(AUTOREVIEW.missing_required_findings(merged, ["required tail"]), [])
 
+
+class AutoreviewTargetResultTests(unittest.TestCase):
+    def setUp(self):
+        source = AUTOREVIEW.SourceVersion
+        self.record = AUTOREVIEW.MixedPath(
+            "src/migrate.py", "synthetic-record",
+            source("base-source", "100644", "original()\nkeep()\n"),
+            source("index-source", "100644", "obsolete()\nkeep()\n"),
+            source("working-source", "100644", "corrected()\nkeep()\nbroken()\n"),
+            "synthetic staged delta", "synthetic unstaged delta",
+            ((1, "original()"),), ((1, "obsolete()"),), (),
+        )
+
+    def finding(self, target="index", side="present", line=1, excerpt=None, **changes):
+        source = ((self.record.base if target == "index" else self.record.index)
+                  if side == "removed" else getattr(self.record, target))
+        if excerpt is None:
+            excerpt = source.content.splitlines()[line - 1]
+        finding = {
+            "title": "Synthetic defect", "body": "A concrete synthetic claim.",
+            "priority": "P0", "confidence": 0.8, "category": "bug",
+            "code_location": {"file_path": self.record.path, "line": line},
+            "source_attribution": {"target": target, "record_id": self.record.identity,
+                                   "source_id": source.identity, "side": side,
+                                   "column": 1, "excerpt": excerpt},
+        }
+        finding.update(changes)
+        return finding
+
+    def validate(self, findings, available=True):
+        report = copy.deepcopy(FINAL_REPORT)
+        report["findings"] = copy.deepcopy(findings)
+        AUTOREVIEW.validate_report(report, Path.cwd(), {self.record.path}, [], (self.record,),
+                                   {self.record.identity} if available else set())
+        return report
+
+    def test_explicit_targets_anchors_and_pass_availability(self):
+        accepted = [self.finding(), self.finding("working_tree", line=3),
+                    self.finding("working_tree", line=2), self.finding(side="removed"),
+                    self.finding("working_tree", side="removed")]
+        self.assertEqual(self.validate(accepted)["findings"], accepted)
+        cases = []
+        missing = self.finding()
+        missing.pop("source_attribution")
+        cases.append((missing, "requires explicit"))
+        null = self.finding(source_attribution=None)
+        cases.append((null, "requires explicit"))
+        for field, value, reason in (
+            ("record_id", "wrong", "record identity"),
+            ("source_id", "wrong", "source identity"),
+            ("column", 1000, "excerpt"),
+            ("excerpt", "invented()", "excerpt"),
+        ):
+            finding = self.finding()
+            finding["source_attribution"][field] = value
+            cases.append((finding, reason))
+        cases.extend([
+            (self.finding("working_tree", excerpt="obsolete()"), "excerpt"),
+            (self.finding("working_tree", line=900, excerpt="broken()"), "out of range"),
+            (self.finding("working_tree", side="removed", line=2), "genuinely removed"),
+        ])
+        for finding, reason in cases:
+            with self.subTest(reason=reason, finding=finding):
+                report = self.validate([finding])
+                self.assertEqual(report["findings"], [])
+                self.assertIn(reason, report["attribution_rejected_findings"][0]["attribution_rejection_reason"])
+                self.assertEqual(AUTOREVIEW.review_status(report), "incomplete")
+                self.assertEqual(report["overall_correctness"], "patch is correct")
+        report = self.validate([self.finding()], available=False)
+        self.assertIn("not available", report["attribution_rejected_findings"][0]["attribution_rejection_reason"])
+        original = self.record
+        for path in (" src/migrate.py", "src/migrate.py ", " "):
+            with self.subTest(path=path):
+                self.record = original._replace(path=path)
+                finding = self.finding()
+                self.assertEqual(self.validate([finding])["findings"], [finding])
+            self.record = original
+
+    def test_absence_readd_and_removed_side_are_distinct(self):
+        absent = AUTOREVIEW.SourceVersion("absent", None, None)
+        for target in ("index", "working_tree"):
+            with self.subTest(target=target):
+                original = self.record
+                if target == "index":
+                    self.record = original._replace(index=absent, working_tree_removed=())
+                else:
+                    self.record = original._replace(working_tree=absent)
+                present = self.finding(target, excerpt="obsolete()")
+                removed = self.finding(target, side="removed")
+                report = self.validate([present, removed])
+                self.assertEqual(report["findings"], [removed])
+                self.assertIn("absent", report["attribution_rejected_findings"][0]["attribution_rejection_reason"])
+                self.record = original
+
+        original = self.record
+        for target, side, content, line in (
+            ("index", "present", "", 1), ("working_tree", "present", "", 1),
+            ("index", "present", "before()\n\n", 2), ("working_tree", "present", "before()\n\n", 2),
+            ("index", "removed", "\n", 1), ("working_tree", "removed", "\n", 1),
+        ):
+            with self.subTest(target=target, side=side, content=content):
+                owner = ("base" if target == "index" else "index") if side == "removed" else target
+                self.record = original._replace(**{owner: getattr(original, owner)._replace(content=content)})
+                if side == "removed":
+                    self.record = self.record._replace(**{target + "_removed": ((line, ""),)})
+                valid = self.finding(target, side=side, line=line, excerpt="")
+                self.assertEqual(self.validate([valid])["findings"], [valid])
+                invalid = []
+                for key, value in (("record_id", "wrong"), ("source_id", "wrong"),
+                                   ("column", 2), ("excerpt", "invented")):
+                    bad = copy.deepcopy(valid)
+                    bad["source_attribution"][key] = value
+                    invalid.append(bad)
+                bad = copy.deepcopy(valid)
+                bad["code_location"]["line"] = 2 if not content else 900
+                invalid.append(bad)
+                if side == "present" and content:
+                    bad = copy.deepcopy(valid)
+                    bad["code_location"]["line"] = 1
+                    invalid.append(bad)
+                for bad in invalid:
+                    report = self.validate([bad])
+                    self.assertEqual(report["findings"], [])
+                    self.assertEqual(AUTOREVIEW.review_status(report), "incomplete")
+                self.record = original
+        for target in ("index", "working_tree"):
+            for side in ("present", "removed"):
+                report = self.validate([self.finding(target, side=side, excerpt="")])
+                self.assertEqual(report["findings"], [])
+            self.record = original._replace(**{target: absent})
+            report = self.validate([self.finding(target, excerpt="")])
+            self.assertIn("absent", report["attribution_rejected_findings"][0]["attribution_rejection_reason"])
+            self.record = original
+
+    def test_title_independent_groups_keep_variants_targets_and_observations(self):
+        reports = []
+        for index in range(8):
+            finding = self.finding(title=f"Index title {index}")
+            findings = [finding]
+            if index == 7:
+                findings += [self.finding(body="Distinct consequence requiring a different fix."),
+                             self.finding("working_tree")]
+            reports.append((f"pass {index}", self.validate(findings)))
+        for selected in (reports, [("single", self.validate([
+            finding for _, report in reports for finding in report["findings"]
+        ]))]):
+            with self.subTest(passes=len(selected)):
+                result = AUTOREVIEW.merge_chunk_reports(selected)
+                self.assertEqual(len(result["findings"]), 2)
+                grouped = result["findings"][0]
+                self.assertEqual(len(grouped["claim_variants"]), 2)
+                self.assertEqual(len(grouped["claim_variants"][0]["observations"]), 8)
+                self.assertEqual(AUTOREVIEW.missing_required_findings(result, ["Index title 7", "different fix"]), [])
+                self.assertEqual(len(result["pass_reports"]), len(selected))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    AUTOREVIEW.print_report(result)
+                for text in ("INDEX-only", "WORKING_TREE", "Index title 7", "different fix"):
+                    self.assertIn(text, output.getvalue())
+
+    def test_all_engines_keep_raw_reports_before_normalization_and_filters(self):
+        captured = AUTOREVIEW.CapturedBundle("delta", {self.record.path}, (self.record,), ())
+        prompt = AUTOREVIEW.ReviewPass("synthetic pack", AUTOREVIEW.ReviewChunk("delta", sources=(self.record,)))
+        valid = self.finding()
+        valid["code_location"]["file_path"] = r".\src\migrate.py"
+        stale = self.finding("working_tree", excerpt="obsolete()")
+        outside = self.finding(code_location={"file_path": "outside.py", "line": 1})
+        provider = {**FINAL_REPORT, "findings": [valid, stale, outside],
+                    "overall_correctness": "patch is incorrect", "overall_confidence": 0.43}
+        for engine in AUTOREVIEW.ENGINES:
+            with self.subTest(engine=engine), mock.patch.object(AUTOREVIEW, "run_engine", return_value=json.dumps(provider)), \
+                    mock.patch.object(AUTOREVIEW, "verify_mixed_sources"), contextlib.redirect_stderr(io.StringIO()):
+                report = AUTOREVIEW.run_reviewer(argparse.Namespace(engine=engine, max_priority="P0"),
+                                                 Path.cwd(), prompt, captured, [])
+            self.assertEqual(report["provider_report"], provider)
+            self.assertEqual(report["overall_confidence"], 0.43)
+            self.assertEqual(len(report["findings"]), 1)
+            self.assertEqual(len(report["scope_rejected_findings"]), 1)
+            self.assertEqual(len(report["attribution_rejected_findings"]), 1)
+            self.assertEqual(AUTOREVIEW.review_status(report), "incomplete")
+            self.assertEqual(report["available_source_records"], [self.record.identity])
+        low = self.validate([self.finding(priority="P2")])
+        AUTOREVIEW.filter_findings_by_priority(low, "P0")
+        self.assertEqual(AUTOREVIEW.missing_required_findings(low, ["Synthetic defect"]), ["Synthetic defect"])
+        self.assertEqual(AUTOREVIEW.review_status(low), "filtered")
+        for bad in ({}, {**self.finding()["source_attribution"], "column": True}):
+            with self.assertRaisesRegex(SystemExit, "source_attribution"):
+                self.validate([self.finding(source_attribution=bad)])
 
 def amp_test_stream(
     cwd: Path,
@@ -655,6 +874,27 @@ class AutoreviewAmpTests(unittest.TestCase):
         self.assertIn("amp engine timed out after 0.01s", message)
         attest.assert_not_called()
 
+    def test_amp_failed_process_and_invalid_artifact_keep_runtime_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cases = (
+                (subprocess.CompletedProcess([], 7, "", "provider failed"), "expected exactly one leading"),
+                (subprocess.CompletedProcess([], 7, '{"type":"system","subtype":"init"}\n', ""), "unexpected adapter event sequence"),
+                (subprocess.CompletedProcess([], 0, amp_test_stream(root, tools=["shell_command"]), ""), "exposed tools"),
+                (subprocess.CompletedProcess([], 0, amp_test_stream(root), ""), "produced no result file"),
+                (subprocess.CompletedProcess([], 0, '{"type":[]}\n', ""), "unexpected stream event type"),
+            )
+            for result, diagnostic in cases:
+                with self.subTest(diagnostic=diagnostic), self.assertRaises(AUTOREVIEW.ReviewerUnavailable) as caught:
+                    AUTOREVIEW.amp_review_result(result, root, root / "error", root / "result")
+                self.assertEqual(caught.exception.reason, "runtime_validation_failed")
+                self.assertIn(diagnostic, str(caught.exception))
+                self.assertEqual(caught.exception.returncode, result.returncode)
+            for raw in ("[" * 2000 + "]" * 2000, '{"number":' + "9" * 10000 + "}"):
+                with self.subTest(length=len(raw)), self.assertRaises(AUTOREVIEW.ReviewerUnavailable) as caught:
+                    AUTOREVIEW.amp_review_result(subprocess.CompletedProcess([], 0, raw, ""), root, root / "error", root / "result")
+                self.assertEqual(caught.exception.reason, "runtime_validation_failed")
+
     def test_amp_plugin_inventory_attestation_fails_closed(self) -> None:
         cwd = Path("/tmp/amp-review-empty")
         plugin_path = cwd.parent / "config" / "amp" / "plugins" / "autoreview-token.ts"
@@ -744,6 +984,34 @@ class AutoreviewAmpTests(unittest.TestCase):
                     AUTOREVIEW.run_amp(args, repo, "review")
 
 
+class AutoreviewInputTests(unittest.TestCase):
+
+
+    def test_every_provider_reviews_each_pack_without_a_scanner(self) -> None:
+        for engine in ("codex", "claude", "amp", "pi", "kimi"):
+            with self.subTest(engine=engine), tempfile.TemporaryDirectory() as tempdir:
+                args = argparse.Namespace(engine=engine, max_priority="P0")
+                prompts = [f"complete pack {index}: unicode π\r\n-context\n+change\n" for index in range(2)]
+                with mock.patch.object(AUTOREVIEW, "find_command", side_effect=AssertionError("unexpected scanner lookup")), \
+                        mock.patch.object(AUTOREVIEW, "run", side_effect=AssertionError("unexpected scanner process")), \
+                        mock.patch.object(AUTOREVIEW, f"run_{engine}", return_value=json.dumps(FINAL_REPORT)) as provider:
+                    for prompt in prompts:
+                        report = AUTOREVIEW.run_reviewer(args, Path(tempdir), prompt, set(), [])
+                        self.assertEqual(report["findings"], [])
+                self.assertEqual([call.args[2] for call in provider.call_args_list], prompts)
+
+    def test_binary_stdin_preserves_utf8_and_crlf_bytes(self) -> None:
+        payload = "unicode \u03c0\r\nnext\n".encode("utf-8")
+        with tempfile.TemporaryDirectory() as tempdir, tempfile.TemporaryFile() as source:
+            source.write(payload)
+            source.seek(0)
+            result = AUTOREVIEW.run(
+                [sys.executable, "-c", "import sys; print(sys.stdin.buffer.read().hex())"],
+                Path(tempdir), stdin=source,
+            )
+        self.assertEqual(result.stdout.strip(), payload.hex())
+
+
 class AutoreviewCompatibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -831,6 +1099,24 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 AUTOREVIEW.ensure_kimi_isolation_supported(args, Path(tmpdir)),
                 "/usr/bin/kimi",
             )
+
+    def test_kimi_invalid_streams_are_unavailable_after_launch(self) -> None:
+        args = argparse.Namespace(engine="kimi", kimi_bin="kimi", model="kimi-model",
+                                  stream_engine_output=False, thinking="on", max_priority="P2")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir) / "repo"
+            repo.mkdir()
+            for stream in ("malformed JSON", '{"role":"meta"}\n', '{"role":"assistant","content":"{}"}'):
+                with self.subTest(stream=stream), mock.patch.object(
+                    AUTOREVIEW, "ensure_kimi_isolation_supported", return_value="/usr/bin/kimi",
+                ), mock.patch.object(
+                    AUTOREVIEW, "load_kimi_review_config", return_value=({"telemetry": False}, None),
+                ), mock.patch.object(
+                    AUTOREVIEW, "run_with_heartbeat", return_value=subprocess.CompletedProcess([], 0, stream, ""),
+                ):
+                    with self.assertRaises(AUTOREVIEW.ReviewerUnavailable) as caught:
+                        AUTOREVIEW.run_reviewer(args, repo, "synthetic pack", set(), [])
+                    self.assertEqual(caught.exception.reason, "invalid_report")
 
     def test_kimi_runs_with_empty_tools_skills_and_mcp(self) -> None:
         args = argparse.Namespace(
@@ -929,7 +1215,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         )
         prompt = "complete retry pack: unicode \u03c0\r\n-deleted line\n unchanged context\n"
         with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir:
-            events: list[str] = []
+            events = []
 
             def fake_run(command, _cwd, **kwargs):
                 self.assertEqual(kwargs["input_text"], prompt)
@@ -948,6 +1234,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                     mock.patch.object(AUTOREVIEW, "ensure_codex_isolation_supported", return_value="/usr/bin/codex"), \
                     mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), \
                     mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=None), \
+                    mock.patch.object(AUTOREVIEW, "find_command", side_effect=AssertionError("unexpected scanner lookup")), \
                     mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=fake_run):
                 report = AUTOREVIEW.run_reviewer(args, Path(tmpdir), prompt, set(), [])
                 self.assertEqual(report["findings"], [])

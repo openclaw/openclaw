@@ -333,6 +333,54 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it.each([
+    { name: "bare sessions", args: ["sessions", "--store", ""], owner: sessionsCommand },
+    { name: "list leaf", args: ["sessions", "list", "--store", ""], owner: sessionsCommand },
+    { name: "list parent", args: ["sessions", "--store", "", "list"], owner: sessionsCommand },
+    {
+      name: "cleanup leaf",
+      args: ["sessions", "cleanup", "--store", ""],
+      owner: sessionsCleanupCommand,
+    },
+    {
+      name: "cleanup parent",
+      args: ["sessions", "--store", "", "cleanup"],
+      owner: sessionsCleanupCommand,
+    },
+    { name: "tail leaf", args: ["sessions", "tail", "--store", ""], owner: sessionsTailCommand },
+    { name: "tail parent", args: ["sessions", "--store", "", "tail"], owner: sessionsTailCommand },
+    {
+      name: "trajectory export leaf",
+      args: ["sessions", "export-trajectory", "--store", ""],
+      owner: exportTrajectoryCommand,
+    },
+    {
+      name: "trajectory export parent",
+      args: ["sessions", "--store", "", "export-trajectory"],
+      owner: exportTrajectoryCommand,
+    },
+  ])("preserves an explicit blank store at the $name boundary", async ({ args, owner }) => {
+    await runCli(args);
+
+    expectCommandOptions(owner, { store: "" });
+  });
+
+  it.each([
+    { name: "bare sessions", args: ["sessions"], owner: sessionsCommand },
+    { name: "list", args: ["sessions", "list"], owner: sessionsCommand },
+    { name: "cleanup", args: ["sessions", "cleanup"], owner: sessionsCleanupCommand },
+    { name: "tail", args: ["sessions", "tail"], owner: sessionsTailCommand },
+    {
+      name: "trajectory export",
+      args: ["sessions", "export-trajectory"],
+      owner: exportTrajectoryCommand,
+    },
+  ])("preserves omitted store at the $name boundary", async ({ args, owner }) => {
+    await runCli(args);
+
+    expectCommandOptions(owner, { store: undefined });
+  });
+
   it("dispatches sessions list as an alias for bare sessions (regression for #81139)", async () => {
     await runCli(["sessions", "list"]);
 
@@ -469,6 +517,21 @@ describe("registerStatusHealthSessionsCommands", () => {
       yes: true,
       json: true,
     });
+  });
+
+  it("documents retained delete archives in sessions delete help", () => {
+    const sessions = createProgram().commands.find((command) => command.name() === "sessions");
+    const deleteCommand = sessions?.commands.find((command) => command.name() === "delete");
+
+    let help = "";
+    deleteCommand?.configureOutput({ writeOut: (text) => (help += text) }).outputHelp();
+
+    expect(help).toContain(
+      "Retained deleted-session archives can remain eligible for memory search",
+    );
+    expect(help).toContain("openclaw memory forget --agent <agent-id> --session <id-or-key>");
+    expect(help).toContain("on the Gateway host or container using its state and configuration");
+    expect(help).toContain("including for global keys");
   });
 
   it("rejects inherited session-list filters for lifecycle mutations", async () => {

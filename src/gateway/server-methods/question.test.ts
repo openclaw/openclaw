@@ -22,6 +22,7 @@ import {
 } from "../chat-abort.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { canReceiveSessionEvent } from "../session-sharing.js";
 import {
@@ -58,6 +59,7 @@ function mockReferencedStoreSnapshot() {
     config: {},
     authStores: [],
     authStoreCredentialsRevision: 0,
+    authStoreSnapshotsRevision: 0,
     warnings: [],
     webTools: {
       search: { providerSource: "none", diagnostics: [] },
@@ -246,7 +248,11 @@ describe("question gateway methods", () => {
       const viewerClient = makeQuestionClient(viewer, "question-viewer");
       const guestClient = makeQuestionClient(guest, "question-guest");
       const gatewayBroadcaster = createGatewayBroadcaster({
-        clients: new Set([ownerClient.client, viewerClient.client, guestClient.client]),
+        clients: new GatewayClientRegistry([
+          ownerClient.client,
+          viewerClient.client,
+          guestClient.client,
+        ]),
         canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
           canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
       });
@@ -282,34 +288,64 @@ describe("question gateway methods", () => {
     });
   });
 
-  it("requests questions, then gets and lists them", async () => {
-    const requested = await call("question.request", {
-      ...requestParams,
-      id: "client-question-id",
-    });
-    expect(requested[0]).toBe(true);
-    const id = (requested[1] as { id: string }).id;
-    expect(id).toBe("client-question-id");
-    expect(broadcast).toHaveBeenCalledWith(
-      "question.requested",
-      expect.objectContaining({
-        id,
-        runId: "run-main",
-        questions: [expect.objectContaining({ header: "Destination" })],
-        status: "pending",
-      }),
-    );
+  it.each([undefined, "https://example.test/connect", "http://localhost:8080/connect"])(
+    "requests questions with browser URL %s, then gets and lists them",
+    async (url) => {
+      const questions = [{ ...requestParams.questions[0], ...(url ? { url } : {}) }];
+      const requested = await call("question.request", {
+        ...requestParams,
+        id: "client-question-id",
+        questions,
+      });
+      expect(requested[0]).toBe(true);
+      const id = (requested[1] as { id: string }).id;
+      expect(id).toBe("client-question-id");
+      expect(broadcast).toHaveBeenCalledWith(
+        "question.requested",
+        expect.objectContaining({
+          id,
+          runId: "run-main",
+          questions,
+          status: "pending",
+        }),
+      );
 
-    expect(await call("question.get", { id })).toEqual([
-      true,
-      { question: expect.objectContaining({ id, runId: "run-main", status: "pending" }) },
-      undefined,
-    ]);
-    expect(await call("question.list", {})).toEqual([
-      true,
-      { questions: [expect.objectContaining({ id, runId: "run-main" })] },
-      undefined,
-    ]);
+      expect(await call("question.get", { id })).toEqual([
+        true,
+        {
+          question: expect.objectContaining({
+            id,
+            questions,
+            runId: "run-main",
+            status: "pending",
+          }),
+        },
+        undefined,
+      ]);
+      expect(await call("question.list", {})).toEqual([
+        true,
+        { questions: [expect.objectContaining({ id, questions, runId: "run-main" })] },
+        undefined,
+      ]);
+    },
+  );
+
+  it.each([
+    ["script", "javascript:alert(1)"],
+    ["data", "data:text/html,hello"],
+    ["relative", "/connect"],
+    ["ambiguous scheme", "https:example.test/connect"],
+    ["credentials", "https://fixture-user:fixture-password@example.test/connect"],
+    ["over-limit", "https://example.test/" + "x".repeat(2048)],
+  ])("rejects a %s browser URL before publishing", async (_name, url) => {
+    expect(
+      await call("question.request", {
+        ...requestParams,
+        questions: [{ ...requestParams.questions[0], url }],
+      }),
+    ).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+    expect(manager.list()).toEqual([]);
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("broadcasts answered and expired terminal states", async () => {
@@ -335,6 +371,30 @@ describe("question gateway methods", () => {
       id: expiringId,
       status: "expired",
     });
+  });
+
+  it("returns committed resolution receipts only to opted-in question waiters", async () => {
+    const requested = await call("question.request", requestParams);
+    const id = (requested[1] as { id: string }).id;
+    const legacy = call("question.waitAnswer", { id });
+    const tracked = call("question.waitAnswer", { id, includeResolutionId: true });
+    const answers = { answers: { destination: ["Home"] } };
+    const resolutionId = "plain-text-submission";
+
+    expect(await call("question.resolve", { id, answers, resolutionId })).toEqual([
+      true,
+      { status: "answered", answers },
+      undefined,
+    ]);
+    expect(await legacy).toEqual([true, { status: "answered", answers }, undefined]);
+    expect(await tracked).toEqual([true, { status: "answered", answers, resolutionId }, undefined]);
+    expect(broadcast).toHaveBeenCalledWith("question.resolved", {
+      id,
+      status: "answered",
+      answers,
+    });
+    expect((await call("question.get", { id }))[1]).toEqual({ question: manager.get(id) });
+    expect(manager.get(id)).not.toHaveProperty("resolutionId");
   });
 
   it("rejects duplicate ids and one-option questions at the request boundary", async () => {
@@ -829,9 +889,11 @@ describe("question gateway methods", () => {
       reloadSecrets.mockRejectedValue(new Error("synthetic refresh failure"));
       const id = await requestSecretQuestion();
       const value = "test-secret-refresh-failed";
+      const resolutionId = "committed-before-refresh";
       const result = await call("question.resolve", {
         id,
         answers: { answers: { secret_value: [value] } },
+        resolutionId,
       });
       expect(result).toMatchObject([
         false,
@@ -839,10 +901,15 @@ describe("question gateway methods", () => {
         { code: "UNAVAILABLE", message: expect.stringContaining("was saved") },
       ]);
       expect(manager.get(id)?.status).toBe("answered");
-      expect(await manager.waitAnswer(id)).toMatchObject({
+      expect(await manager.waitAnswer(id)).toEqual({
         status: "answered",
         answers: { answers: { secret_value: ["stored"] } },
       });
+      expect(await call("question.waitAnswer", { id, includeResolutionId: true })).toEqual([
+        true,
+        { status: "answered", answers: { answers: { secret_value: ["stored"] } }, resolutionId },
+        undefined,
+      ]);
       expect(
         (
           await call("question.resolve", {

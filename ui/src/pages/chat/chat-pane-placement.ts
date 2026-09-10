@@ -29,12 +29,20 @@ function resolvePlacementComposerState(params: {
   reclaimingKey: string | null;
   restartingKey: string | null;
   row: GatewaySessionRow | undefined;
+  workspaceResultReconciling: boolean;
+  moving: boolean;
 }): ChatPanePlacementComposerState {
   if (params.restartingKey === params.row?.key) {
     return { kind: "busy", message: t("sessionsView.restartingSession") };
   }
   if (params.reclaimingKey === params.row?.key) {
     return { kind: "busy", message: t("sessionsView.stoppingSession") };
+  }
+  if (params.moving) {
+    return { kind: "busy", message: t("sessionsView.finishingSessionMove") };
+  }
+  if (params.workspaceResultReconciling) {
+    return { kind: "busy", message: t("sessionsView.syncingCloudFilesComposer") };
   }
   switch (params.row?.placement?.state) {
     case "requested":
@@ -68,11 +76,31 @@ export function resolvePlacementComposer(params: {
   restartingKey: string | null;
   row: GatewaySessionRow | undefined;
   startupPending: boolean;
+  workspaceResultReconciling: boolean;
   onRestart: () => void;
   onReclaim: () => void;
 }): PlacementComposerPresentation {
-  const state = resolvePlacementComposerState(params);
   const controls = resolveChatPanePlacement(params);
+  // Sync status does not reopen admission closed by Stop, Restart, or a local/durable Move.
+  const canSendDuringWorkspaceSync =
+    params.workspaceResultReconciling &&
+    params.row?.placement?.state === "active" &&
+    !controls.moving &&
+    !controls.restarting &&
+    params.reclaimingKey !== params.row.key;
+  const canSendDuringSetup =
+    ["requested", "provisioning", "syncing", "starting"].includes(
+      params.row?.placement?.state ?? "",
+    ) &&
+    !params.startupPending &&
+    !controls.moving &&
+    !controls.restarting &&
+    params.reclaimingKey !== params.row?.key;
+  const state = resolvePlacementComposerState({
+    ...params,
+    moving: controls.moving,
+    workspaceResultReconciling: canSendDuringWorkspaceSync,
+  });
   const busyMessage = !params.startupPending && state.kind === "busy" ? state.message : null;
   const placement = params.row?.placement;
   const terminalReason =
@@ -80,7 +108,7 @@ export function resolvePlacementComposer(params: {
   const failureReason = placement?.state === "failed" ? placement.recoveryError : terminalReason;
   const common = {
     state,
-    blocksSend: state.kind !== "ready",
+    blocksSend: state.kind !== "ready" && !canSendDuringWorkspaceSync && !canSendDuringSetup,
     busyMessage,
     diskSpace: placement?.state === "active" ? placement.diskSpace : undefined,
     runError: failureReason
@@ -112,38 +140,41 @@ export function resolvePlacementComposer(params: {
 }
 
 export function resolveChatPaneWorkerPresentation(
-  placement: GatewaySessionRow["placement"],
+  session: GatewaySessionRow,
   startup: Pick<ApplicationPlacementStartupStatus, "phase" | "targetKind"> | null | undefined,
 ) {
+  const placement = session.placement;
   // Active ownership wins even when cloud placements omit runner. Failed startup
   // intent is retained for retry, not evidence of a later placement's target;
   // only a live initial handoff can identify a not-yet-active worker.
-  const targetKind =
-    placement?.state === "active"
-      ? placement.runner?.kind === "device"
-        ? "device"
-        : "profile"
-      : startup?.phase !== "failed"
-        ? startup?.targetKind
+  let targetKind = startup?.phase !== "failed" ? startup?.targetKind : undefined;
+  if (placement?.state === "active") {
+    targetKind = placement.runner?.kind === "device" ? "device" : "profile";
+  }
+  let label: string;
+  let stopKey: string;
+  if (targetKind === "device" || targetKind === "auto-device") {
+    label = t("sessionsView.runsOnDevice");
+    stopKey = "sessionsView.stopDeviceWorker";
+  } else if (targetKind === "profile") {
+    const worker =
+      placement && placement.state !== "local" && placement.state !== "requested"
+        ? placement
         : undefined;
-  const device = targetKind === "device" || targetKind === "auto-device";
-  const worker =
-    placement && placement.state !== "local" && placement.state !== "requested"
-      ? placement
-      : undefined;
+    label =
+      worker?.providerId && worker.profileId
+        ? `${worker.providerId} · ${worker.profileId}`
+        : t("newSession.runsOn", { place: t("newSession.cloud") });
+    stopKey = "sessionsView.stopCloudWorker";
+  } else {
+    label = t("sessionsView.runsOnWorker");
+    stopKey = "sessionsView.stopWorker";
+  }
   return {
-    label: device
-      ? t("sessionsView.runsOnDevice")
-      : targetKind === "profile"
-        ? worker?.providerId && worker.profileId
-          ? `${worker.providerId} · ${worker.profileId}`
-          : t("newSession.runsOn", { place: t("newSession.cloud") })
-        : t("sessionsView.runsOnWorker"),
-    stopKey: device
-      ? "sessionsView.stopDeviceWorker"
-      : targetKind === "profile"
-        ? "sessionsView.stopCloudWorker"
-        : "sessionsView.stopWorker",
+    label,
+    stopLabel: t(stopKey),
+    confirmMessage: t(`${stopKey}Confirm`, { session: session.label || session.key }),
+    confirmLabel: t(`${stopKey}ConfirmAction`),
   };
 }
 

@@ -33,6 +33,29 @@ export const DEFAULT_SESSION_LIST_QUERY = {
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
 
+export function dashboardSessionListQuery(agentId?: string | null): SessionListOptions {
+  const normalizedAgentId = agentId?.trim();
+  return {
+    ...DEFAULT_SESSION_LIST_QUERY,
+    hasBoard: true,
+    archivedFilter: "all",
+    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
+  };
+}
+
+/** Progress cards resolve an explicit cross-session target independently of
+ *  dashboard gallery membership: the Gateway filters hasBoard against each
+ *  session's own board inventory, so a running target without its own board
+ *  would disappear from a gallery-filtered roster and render as paused. */
+export function sessionProgressTargetQuery(agentId?: string | null): SessionListOptions {
+  const normalizedAgentId = agentId?.trim();
+  return {
+    ...DEFAULT_SESSION_LIST_QUERY,
+    archivedFilter: "all",
+    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
+  };
+}
+
 /** Starting page size for the Sessions page's explicit, user-editable limit
  *  field, kept separate from the roster page so tuning one never moves the other. */
 export const SESSIONS_PAGE_DEFAULT_LIMIT = 50;
@@ -116,6 +139,9 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   if (options.boardFace) {
     params.boardFace = options.boardFace;
   }
+  if (options.hasBoard !== undefined) {
+    params.hasBoard = options.hasBoard;
+  }
   if (agentId) {
     params.agentId = agentId;
   }
@@ -132,6 +158,17 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
     params.offset = Math.floor(options.offset);
   }
   return params;
+}
+
+export function normalizeManagedSessionListQuery(
+  options: SessionListOptions,
+): Readonly<Record<string, unknown>> & { readonly limit: number } {
+  const { offset: _offset, append: _append, ...queryOptions } = options;
+  const limit =
+    typeof options.limit === "number" && options.limit > 0
+      ? Math.floor(options.limit)
+      : DEFAULT_SESSION_LIST_QUERY.limit;
+  return Object.freeze({ ...buildSessionListParams({ ...queryOptions, limit }), limit });
 }
 
 export async function requestSessionList(

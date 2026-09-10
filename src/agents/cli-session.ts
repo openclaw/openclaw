@@ -1,7 +1,7 @@
 /**
  * CLI session persistence helpers.
- * Keeps provider-keyed session bindings, reuse fingerprints, and legacy
- * Claude CLI state in one normalized session-store contract.
+ * Keeps provider-keyed session bindings and reuse fingerprints in one
+ * normalized session-store contract.
  */
 import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -14,7 +14,6 @@ import type { FailoverReason } from "./failover/signal.js";
 export {
   clearAllCliSessions,
   getCliSessionBinding,
-  getCliSessionId,
 } from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
@@ -35,12 +34,40 @@ export function hashCliSessionText(value: string | undefined): string | undefine
   return crypto.createHash("sha256").update(trimmed).digest("hex");
 }
 
-/** Store a reusable CLI session ID without extra reuse guards. */
-export function setCliSessionId(entry: SessionEntry, provider: string, sessionId: string): void {
-  setCliSessionBinding(entry, provider, { sessionId });
+/** Projects explicit native continuity; diagnostic sessionId can name the local session. */
+export function applyCliSessionBindingResult(
+  entry: SessionEntry,
+  provider: string,
+  meta?: {
+    cliSessionBinding?: CliSessionBinding;
+    clearCliSessionBinding?: boolean;
+  },
+): boolean {
+  if (meta?.clearCliSessionBinding === true) {
+    clearCliSession(entry, provider);
+  } else if (meta?.cliSessionBinding?.sessionId.trim()) {
+    setCliSessionBinding(entry, provider, meta.cliSessionBinding);
+  } else {
+    return false;
+  }
+  return true;
 }
 
-/** Store a CLI session binding and mirror it to legacy/simple session-id fields. */
+/** Revalidates the exact turn owner at native continuity's synchronous commit edge. */
+export function assertCliSessionBindingResultCommitAllowed(
+  meta: { clearCliSessionBinding?: boolean } | undefined,
+  assertSettlementCurrent: () => void,
+  abortSignal?: AbortSignal,
+): void {
+  assertSettlementCurrent();
+  // Explicit invalidation is owner cleanup: abort may clear an unusable
+  // handle, but never through a closed, released, or replaced turn.
+  if (meta?.clearCliSessionBinding !== true) {
+    abortSignal?.throwIfAborted();
+  }
+}
+
+/** Store a CLI session binding and mirror it to the provider-keyed session-id map. */
 export function setCliSessionBinding(
   entry: SessionEntry,
   provider: string,
@@ -97,9 +124,6 @@ export function setCliSessionBinding(
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    entry.claudeCliSessionId = trimmed;
-  }
 }
 
 /** Remove the stored CLI session binding for one provider. */

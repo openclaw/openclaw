@@ -15,6 +15,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as harnessRuntimes from "./harness-runtimes.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
@@ -36,7 +37,7 @@ let state: OpenClawTestState;
 describe("prepared model runtime snapshots", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
   });
 
   it("materializes Claude CLI thinking capabilities on the prepared logical row", async () => {
@@ -179,7 +180,9 @@ describe("prepared model runtime snapshots", () => {
     expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
       "codex",
     ]);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map(([params]) => params),
+    ).toContainEqual(
       expect.objectContaining({
         selections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
       }),
@@ -187,24 +190,26 @@ describe("prepared model runtime snapshots", () => {
     lease.release();
   });
 
-  it("loads provider runtime for an isolated native-harness probe", () => {
+  it("loads provider runtime for an isolated native-harness probe", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
 
     expect(
-      prepareWorkspacePluginRegistries(
-        {
-          config: {},
-          agentDir: "/tmp/native-provider-probe",
-          readOnly: true,
-          loadRuntimePlugins: true,
-        },
-        mocks.pluginMetadataSnapshot as never,
+      (
+        await prepareWorkspacePluginRegistries(
+          {
+            config: {},
+            agentDir: "/tmp/native-provider-probe",
+            readOnly: true,
+            loadRuntimePlugins: true,
+          },
+          mocks.pluginMetadataSnapshot as never,
+        )
       ).runtimePluginRegistry,
     ).toBe(pluginRegistry);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({ selections: undefined }),
-    );
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map(([params]) => params),
+    ).toContainEqual(expect.objectContaining({ selections: undefined }));
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {
@@ -267,8 +272,11 @@ describe("prepared model runtime snapshots", () => {
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
     });
 
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map(([params]) => params),
+    ).toContainEqual({
       config: {},
+      configuredHarnessRuntimes: [],
       env: process.env,
       metadataSnapshot: mocks.pluginMetadataSnapshot,
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
@@ -722,6 +730,10 @@ describe("prepared model runtime snapshots", () => {
 
   it("allows a read-only draft owner while the gateway lifecycle is active", async () => {
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const collectHarnessRuntimes = vi.spyOn(
+      harnessRuntimes,
+      "collectConfiguredAgentHarnessRuntimes",
+    );
     const draftConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
 
     await expect(
@@ -739,6 +751,7 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.planOpenClawModelsJsonSource).not.toHaveBeenCalled();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+    expect(collectHarnessRuntimes).not.toHaveBeenCalled();
   });
 
   it("builds credential-free command owners separately from runtime owners", async () => {
@@ -1070,5 +1083,6 @@ describe("prepared model runtime snapshots", () => {
 });
 
 afterEach(async ({ task }) => {
+  vi.restoreAllMocks();
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

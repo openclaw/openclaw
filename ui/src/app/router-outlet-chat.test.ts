@@ -8,6 +8,7 @@ import {
 import { html, nothing, type LitElement } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../src/shared/deferred.js";
 import {
   SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
@@ -18,28 +19,24 @@ import { pages as chatPages } from "../pages/chat/route.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./router-outlet.ts";
 
-type RouteId = "chat" | "dashboard";
+type RouteId = "chat" | "dashboard" | "home" | "settings";
 type TestContext = Record<string, never>;
 type OwnerMatch = Pick<RouteMatch<string, unknown, ChatRouteData>, "data" | "location">;
 type TestModule = {
-  render: (data: ChatRouteData | undefined) => unknown;
+  render: (
+    data: ChatRouteData | undefined,
+    loaderPending?: boolean,
+    presented?: boolean,
+  ) => unknown;
+  retainOnNavigate?: boolean;
   renderOwnerKey?: (match: OwnerMatch, settled: OwnerMatch | undefined) => string | undefined;
 };
 type TestRouter = Router<RouteId, TestContext, TestModule, ChatRouteData>;
-type RouterOutletElement = LitElement & { router?: TestRouter };
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
+type RouterOutletElement = LitElement & {
+  router?: TestRouter;
+  retryContext?: TestContext;
+  retentionScope?: object;
 };
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
 
 function location(pathname: string, search = ""): RouteLocation {
   return { pathname, search, hash: "" };
@@ -52,6 +49,7 @@ function sessionData(sessionKey: string, face: "chat" | "dashboard"): ChatRouteD
 function createOutlet(router: TestRouter): RouterOutletElement {
   const outlet = document.createElement("openclaw-router-outlet") as RouterOutletElement;
   outlet.router = router;
+  outlet.retryContext = {};
   document.body.append(outlet);
   return outlet;
 }
@@ -61,8 +59,9 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
 }
 
 function ownedRenderer(teardown: () => Promise<void>) {
-  return (data: ChatRouteData | undefined) =>
-    data
+  return (data: ChatRouteData | undefined, _loaderPending = false, presented = true) => {
+    const value = data?.kind === "session" ? data.face : "chooser";
+    return data
       ? html`
           <mcp-app-view
             ${ref((element) => {
@@ -72,9 +71,11 @@ function ownedRenderer(teardown: () => Promise<void>) {
               }
             })}
           ></mcp-app-view>
-          <div data-testid="route-value">${data.kind === "session" ? data.face : "chooser"}</div>
+          <div data-testid="route-value" data-presented=${presented}>${value}</div>
+          <textarea data-testid="route-draft"></textarea>
         `
       : nothing;
+  };
 }
 
 async function routeModule(
@@ -82,7 +83,11 @@ async function routeModule(
   render: TestModule["render"],
 ): Promise<TestModule> {
   const declared = await chatPages[face === "chat" ? 0 : 1].component();
-  return { renderOwnerKey: declared.renderOwnerKey, render };
+  return {
+    renderOwnerKey: declared.renderOwnerKey,
+    retainOnNavigate: declared.retainOnNavigate,
+    render,
+  };
 }
 
 afterEach(() => {
@@ -91,6 +96,355 @@ afterEach(() => {
 });
 
 describe("openclaw-router-outlet chat ownership", () => {
+  it("keeps the loaded session connected and inert across Home and Settings, then restores its draft", async () => {
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const teardown = vi.fn(async () => undefined);
+    const module = await routeModule("chat", ownedRenderer(teardown));
+    const refreshed = createDeferredCore<ChatRouteData>();
+    const loader = vi
+      .fn()
+      .mockResolvedValueOnce(sessionData(sessionKey, "chat"))
+      .mockImplementation(() => refreshed.promise);
+    const router = createRouter<RouteId, TestContext, TestModule, ChatRouteData>({
+      routes: [
+        definePage({
+          id: "chat",
+          path: "/chat",
+          component: () => module,
+          loader,
+        }),
+        ...(["home", "settings"] as const).map((id) =>
+          definePage<RouteId, TestContext, TestModule, ChatRouteData>({
+            id,
+            path: `/${id}`,
+            component: () => ({
+              render: () => html`<div data-testid="ordinary-route">${id}</div>`,
+            }),
+          }),
+        ),
+      ],
+    });
+    const outlet = createOutlet(router);
+    await router.navigate("chat", {});
+    await settleOutlet(outlet);
+    const appView = outlet.querySelector("mcp-app-view")!;
+    const draft = outlet.querySelector<HTMLTextAreaElement>('[data-testid="route-draft"]')!;
+    draft.value = "Keep this unfinished message";
+
+    for (const id of ["home", "settings"] as const) {
+      await router.navigate(id, {});
+      await settleOutlet(outlet);
+      expect(outlet.querySelector('[data-testid="ordinary-route"]')?.textContent).toBe(id);
+      expect(appView.isConnected).toBe(true);
+      expect(appView.closest("[inert]")).not.toBeNull();
+      expect(
+        outlet.querySelector('[data-testid="route-value"]')?.getAttribute("data-presented"),
+      ).toBe("false");
+      expect(teardown).not.toHaveBeenCalled();
+    }
+
+    const navigation = router.navigate("chat", {});
+    await settleOutlet(outlet);
+    expect(
+      outlet.querySelector('[data-testid="route-value"]')?.getAttribute("data-presented"),
+    ).toBe("true");
+    refreshed.resolve(sessionData(sessionKey, "chat"));
+    await navigation;
+    await settleOutlet(outlet);
+    expect(outlet.querySelector("mcp-app-view")).toBe(appView);
+    expect(outlet.querySelector('[data-testid="route-draft"]')).toBe(draft);
+    expect(draft.value).toBe("Keep this unfinished message");
+    expect(appView.closest("[inert]")).toBeNull();
+    expect(
+      outlet.querySelector('[data-testid="route-value"]')?.getAttribute("data-presented"),
+    ).toBe("true");
+    expect(outlet.querySelector('[data-testid="ordinary-route"]')).toBeNull();
+    expect(teardown).not.toHaveBeenCalled();
+    router.stop();
+  });
+
+  it("keeps a parked session hidden until the requested session resolves", async () => {
+    const firstKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const nextKey = "agent:main:dashboard:abcdef12-3456-7890-abcd-ef1234567890";
+    const nextData = createDeferredCore<ChatRouteData>();
+    const teardown = vi.fn(async () => undefined);
+    const render = ownedRenderer(teardown);
+    const chatModule = await routeModule("chat", render);
+    const dashboardModule = await routeModule("dashboard", render);
+    const router = createRouter<RouteId, TestContext, TestModule, ChatRouteData>({
+      routes: [
+        definePage({
+          id: "chat",
+          path: "/chat",
+          component: () => chatModule,
+          loader: () => sessionData(firstKey, "chat"),
+        }),
+        definePage({
+          id: "home",
+          path: "/home",
+          component: () => ({ render: () => html`<div>Home</div>` }),
+        }),
+        definePage({
+          id: "dashboard",
+          path: "/dashboard",
+          component: () => dashboardModule,
+          loader: () => nextData.promise,
+        }),
+      ],
+    });
+    const outlet = createOutlet(router);
+    await router.navigate("chat", {});
+    await settleOutlet(outlet);
+    const appView = outlet.querySelector("mcp-app-view")!;
+    await router.navigate("home", {});
+    await settleOutlet(outlet);
+
+    const navigation = router.navigate("dashboard", {});
+    await settleOutlet(outlet);
+    expect(appView.isConnected).toBe(true);
+    expect(appView.closest("[inert]")).not.toBeNull();
+    expect(outlet.querySelector('[data-testid="route-value"][data-presented="true"]')).toBeNull();
+    expect(teardown).not.toHaveBeenCalled();
+
+    nextData.resolve(sessionData(nextKey, "dashboard"));
+    await navigation;
+    await settleOutlet(outlet);
+    expect(outlet.querySelector("mcp-app-view")).toBe(appView);
+    expect(appView.closest("[inert]")).toBeNull();
+    expect(outlet.querySelector('[data-testid="route-value"]')?.textContent).toBe("dashboard");
+    router.stop();
+  });
+
+  it("retires parked views and uses the replacement scope's route data", async () => {
+    let scope = { key: 1 };
+    const oldKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const newKey = "agent:main:dashboard:abcdef12-3456-7890-abcd-ef1234567890";
+    const teardownDone = createDeferredCore();
+    const teardown = vi.fn(() => teardownDone.promise);
+    const nextData = createDeferredCore<ChatRouteData>();
+    const loader = vi
+      .fn()
+      .mockResolvedValueOnce(sessionData(oldKey, "chat"))
+      .mockImplementation(() => nextData.promise);
+    const module = await routeModule("chat", ownedRenderer(teardown));
+    const router = createRouter<RouteId, TestContext, TestModule, ChatRouteData>({
+      routes: [
+        definePage({
+          id: "chat",
+          path: "/chat",
+          component: () => module,
+          loaderDeps: () => String(scope.key),
+          loader,
+        }),
+        definePage({
+          id: "home",
+          path: "/home",
+          component: () => ({ render: () => html`<div>Home</div>` }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router);
+    outlet.retentionScope = scope;
+    await router.navigate("chat", {});
+    await settleOutlet(outlet);
+    const appView = outlet.querySelector("mcp-app-view")!;
+    await router.navigate("home", {});
+    await settleOutlet(outlet);
+
+    scope = { key: 2 };
+    outlet.retentionScope = scope;
+    await settleOutlet(outlet);
+    expect(teardown).toHaveBeenCalledOnce();
+    expect(appView.isConnected).toBe(true);
+    expect(appView.closest("[inert]")).not.toBeNull();
+    expect(
+      outlet.querySelector('[data-testid="route-value"]')?.getAttribute("data-presented"),
+    ).toBe("false");
+
+    const navigation = router.navigate("chat", {});
+    await settleOutlet(outlet);
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(appView.closest("[inert]")).not.toBeNull();
+    nextData.resolve(sessionData(newKey, "chat"));
+    await navigation;
+    await settleOutlet(outlet);
+    expect(appView.isConnected).toBe(true);
+    expect(appView.closest("[inert]")).not.toBeNull();
+
+    teardownDone.resolve(undefined);
+    await expect.poll(() => outlet.querySelector("mcp-app-view") !== appView).toBe(true);
+    await settleOutlet(outlet);
+    expect(appView.isConnected).toBe(false);
+    expect(outlet.querySelector("mcp-app-view")).not.toBeNull();
+    expect(outlet.querySelector("mcp-app-view")?.closest("[inert]")).toBeNull();
+    router.stop();
+  });
+
+  it("keeps a pending destination and ignores its retired scope's late result", async () => {
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    let scope = { key: 1 };
+    const oldResult = createDeferredCore<ChatRouteData>();
+    const newResult = createDeferredCore<ChatRouteData>();
+    const loader = vi
+      .fn()
+      .mockImplementationOnce(() => oldResult.promise)
+      .mockImplementation(() => newResult.promise);
+    const module = await routeModule(
+      "dashboard",
+      ownedRenderer(async () => undefined),
+    );
+    const router = createRouter<RouteId, TestContext, TestModule, ChatRouteData>({
+      routes: [
+        definePage({
+          id: "dashboard",
+          path: "/dashboard",
+          component: () => module,
+          loaderDeps: (_context, routeLocation) =>
+            JSON.stringify([scope.key, routeLocation.pathname]),
+          loader,
+        }),
+      ],
+    });
+    const outlet = createOutlet(router);
+    outlet.retentionScope = scope;
+    const destination = location("/dashboard/main/pending-story-12345678");
+    const navigation = router.navigate("dashboard", {}, undefined, destination);
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
+    scope = { key: 2 };
+    outlet.retentionScope = scope;
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(2));
+    expect(loader.mock.calls[1]?.[1].location).toEqual(destination);
+    oldResult.resolve(sessionData(sessionKey, "chat"));
+    await navigation;
+    await settleOutlet(outlet);
+    expect(outlet.querySelector('[data-testid="route-value"]')).toBeNull();
+    newResult.resolve(sessionData(sessionKey, "dashboard"));
+    await vi.waitFor(() =>
+      expect(outlet.querySelector('[data-testid="route-value"]')?.textContent).toBe("dashboard"),
+    );
+    expect(router.getState().location).toEqual(destination);
+    router.stop();
+  });
+
+  it("does not revive a retired session when cold navigation supersedes its scope refresh", async () => {
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    let scope = { key: 1 };
+    const render = ownedRenderer(async () => undefined);
+    const chatModule = await routeModule("chat", render);
+    const dashboardModule = createDeferredCore<TestModule>();
+    const homeModule = createDeferredCore<TestModule>();
+    const router = createRouter<RouteId, TestContext, TestModule, ChatRouteData>({
+      routes: [
+        definePage({
+          id: "chat",
+          path: "/chat",
+          component: () => chatModule,
+          loaderDeps: () => String(scope.key),
+          loader: () => sessionData(sessionKey, "chat"),
+        }),
+        definePage({
+          id: "dashboard",
+          path: "/dashboard",
+          component: () => dashboardModule.promise,
+          loaderDeps: () => String(scope.key),
+          loader: () => sessionData(sessionKey, "dashboard"),
+        }),
+        definePage({ id: "home", path: "/home", component: () => homeModule.promise }),
+      ],
+    });
+    const outlet = createOutlet(router);
+    outlet.retentionScope = scope;
+    await router.navigate("chat", {});
+    await settleOutlet(outlet);
+    const dashboardNavigation = router.navigate("dashboard", {});
+    await settleOutlet(outlet);
+    scope = { key: 2 };
+    outlet.retentionScope = scope;
+    await settleOutlet(outlet);
+    const homeNavigation = router.navigate("home", {});
+    dashboardModule.resolve(await routeModule("dashboard", render));
+    await dashboardNavigation;
+    await settleOutlet(outlet);
+    expect(outlet.querySelector('[data-testid="route-value"][data-presented="true"]')).toBeNull();
+    homeModule.resolve({ render: () => html`<div data-testid="ordinary-route">Home</div>` });
+    await homeNavigation;
+    await settleOutlet(outlet);
+    expect(outlet.querySelector('[data-testid="ordinary-route"]')?.textContent).toBe("Home");
+    router.stop();
+  });
+
+  it("keeps a returning session inert until its pending MCP teardown completes", async () => {
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const done = createDeferredCore();
+    const teardown = vi.fn(() => done.promise);
+    const render = ownedRenderer(teardown);
+    const module = await routeModule("chat", render);
+    const router = createRouter<RouteId, TestContext, TestModule, ChatRouteData>({
+      routes: [
+        definePage({
+          id: "chat",
+          path: "/chat",
+          component: () => module,
+          loader: () => sessionData(sessionKey, "chat"),
+        }),
+        definePage({
+          id: "dashboard",
+          path: "/dashboard",
+          component: () => ({ ...module, render: () => html`<p>Session not found</p>` }),
+          loader: (): ChatRouteData => ({
+            kind: "missing-session",
+            face: "dashboard",
+            currentSessionHref: "/chat/main",
+            sessionsHref: "/sessions",
+          }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router);
+    await router.navigate("chat", {});
+    await settleOutlet(outlet);
+    const appView = outlet.querySelector("mcp-app-view");
+    await router.navigate("dashboard", {});
+    await settleOutlet(outlet);
+    expect(teardown).toHaveBeenCalledOnce();
+    await router.navigate("chat", {});
+    await settleOutlet(outlet);
+    expect(appView?.isConnected).toBe(true);
+    expect(appView?.closest("[inert]")).not.toBeNull();
+    expect(outlet.querySelector('[data-testid="route-value"][data-presented="true"]')).toBeNull();
+    done.resolve(undefined);
+    await vi.waitFor(() => expect(appView?.closest("[inert]")).toBeNull());
+    expect(outlet.querySelector("mcp-app-view")).toBe(appView);
+    expect(teardown).toHaveBeenCalledOnce();
+    router.stop();
+  });
+
+  it("retires the old page without reloading a replacement router's current result", async () => {
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const teardown = vi.fn(async () => undefined);
+    const module = await routeModule("chat", ownedRenderer(teardown));
+    const loader = vi.fn(() => sessionData(sessionKey, "chat"));
+    const create = () =>
+      createRouter<RouteId, TestContext, TestModule, ChatRouteData>({
+        routes: [definePage({ id: "chat", path: "/chat", component: () => module, loader })],
+      });
+    const first = create();
+    const second = create();
+    const outlet = createOutlet(first);
+    await first.navigate("chat", {});
+    await settleOutlet(outlet);
+    const appView = outlet.querySelector("mcp-app-view");
+    await second.navigate("chat", {});
+    outlet.router = second;
+    await settleOutlet(outlet);
+    expect(outlet.querySelector("mcp-app-view")).not.toBe(appView);
+    expect(outlet.querySelector("mcp-app-view")).not.toBeNull();
+    expect(teardown).toHaveBeenCalledOnce();
+    expect(loader).toHaveBeenCalledTimes(2);
+    first.stop();
+    second.stop();
+  });
+
   it("retains the exact subtree across session and presentation switches", async () => {
     const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
     const nextSessionKey = "agent:main:dashboard:abcdef12-3456-7890-abcd-ef1234567890";
@@ -107,7 +461,7 @@ describe("openclaw-router-outlet chat ownership", () => {
       fallbackAgentId: "main",
       row: { key: nextSessionKey, displayName: "Next retained board" },
     });
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferredCore<ChatRouteData>();
     const teardown = vi.fn(async () => undefined);
     const render = ownedRenderer(teardown);
     const chatModule = await routeModule("chat", render);
@@ -167,7 +521,7 @@ describe("openclaw-router-outlet chat ownership", () => {
       `?${new URLSearchParams({ draft: "ship it", [SESSION_COMPOSER_FOCUS_PARAM]: "1" })}`,
     );
     const initial = { ...sessionData(sessionKey, "chat"), canonicalLocation: canonical };
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferredCore<ChatRouteData>();
     let loadCount = 0;
     const teardown = vi.fn(async () => undefined);
     const module = await routeModule("chat", ownedRenderer(teardown));
@@ -205,7 +559,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     const firstKey = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
     const secondKey = "agent:main:dashboard:12345678-0bbb-4000-8000-000000000002";
     const pathname = "/chat/main/deploy-monitor-12345678";
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferredCore<ChatRouteData>();
     let loadCount = 0;
     const teardown = vi.fn(async () => undefined);
     const module = await routeModule("chat", ownedRenderer(teardown));
@@ -270,7 +624,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     },
   ])("retains an unresolved route until $label replaces it", async ({ result }) => {
     const sessionKey = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferredCore<ChatRouteData>();
     let loadCount = 0;
     const teardown = vi.fn(async () => undefined);
     const module = await routeModule("chat", ownedRenderer(teardown));

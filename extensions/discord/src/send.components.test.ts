@@ -1,5 +1,10 @@
 // Discord tests cover send.components plugin behavior.
-import { ChannelType, ComponentType, MessageFlags } from "discord-api-types/v10";
+import {
+  ChannelType,
+  ComponentType,
+  MessageFlags,
+  type APIContainerComponent,
+} from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiscordLoopbackRest, makeDiscordRest } from "./send.test-harness.js";
 
@@ -280,6 +285,70 @@ describe("sendDiscordComponentMessage", () => {
     }
   });
 
+  it.each(["send", "edit"] as const)(
+    "preserves link-button emoji in rows and sections during %s",
+    async (operation) => {
+      const loopback = await createDiscordLoopbackRest();
+      try {
+        const spec: Parameters<typeof sendDiscordComponentMessage>[1] = {
+          blocks: [
+            {
+              type: "actions",
+              buttons: [
+                {
+                  label: "Docs",
+                  url: "https://example.test/docs",
+                  emoji: { name: "📖" },
+                  disabled: true,
+                },
+              ],
+            },
+            {
+              type: "section",
+              text: "Read the guide",
+              accessory: {
+                type: "button",
+                button: {
+                  label: "Guide",
+                  style: "link",
+                  url: "https://example.test/guide",
+                  emoji: { id: "123456789012345678", name: "guide", animated: true },
+                },
+              },
+            },
+          ],
+        };
+        const opts = { cfg: DISCORD_TEST_CFG, rest: loopback.rest, token: "test-token" };
+        if (operation === "send") {
+          await sendDiscordComponentMessage("channel:789", spec, opts);
+        } else {
+          await editDiscordComponentMessage("channel:789", "message-1", spec, opts);
+        }
+        const request = loopback.requests.find(
+          (entry) => entry.method === (operation === "send" ? "POST" : "PATCH"),
+        );
+        const body = JSON.parse(request?.body ?? "{}") as { components?: APIContainerComponent[] };
+        const components = body.components?.[0]?.components;
+        const row = components?.find((entry) => entry.type === ComponentType.ActionRow);
+        const section = components?.find((entry) => entry.type === ComponentType.Section);
+        expect(row?.components[0]).toMatchObject({
+          url: "https://example.test/docs",
+          emoji: { name: "📖" },
+          disabled: true,
+        });
+        expect(section?.accessory).toMatchObject({
+          url: "https://example.test/guide",
+          emoji: { id: "123456789012345678", name: "guide", animated: true },
+        });
+        expect(registerDiscordComponentEntries).toHaveBeenCalledWith(
+          expect.objectContaining({ entries: [], modals: [] }),
+        );
+      } finally {
+        await loopback.close();
+      }
+    },
+  );
+
   it("treats bare numeric component edit targets as channels", async () => {
     const { rest, patchMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({
@@ -410,6 +479,42 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
         onDeliveryResult,
       },
     ]);
+  });
+
+  it.each([
+    {
+      label: "indented top-level text",
+      spec: { text: "    body  " },
+      expected: "    body  ",
+    },
+    {
+      label: "distinct Markdown after exact duplicate removal",
+      spec: {
+        text: "    code",
+        blocks: [
+          { type: "text", text: "    code" },
+          { type: "text", text: "code" },
+        ],
+      },
+      expected: "    code\n\ncode",
+    },
+    {
+      label: "blank-only text",
+      spec: { text: " \n\t " },
+      expected: "",
+    },
+  ] satisfies Array<{
+    label: string;
+    spec: Parameters<typeof sendDiscordComponentMessage>[1];
+    expected: string;
+  }>)("preserves $label through the classic file downgrade", async ({ spec, expected }) => {
+    await sendDiscordComponentMessage("channel:chan-1", spec, {
+      cfg: DISCORD_TEST_CFG,
+      token: "t",
+      mediaUrl: "https://example.com/report.pdf",
+    });
+    expect(sendMessageDiscordMock).toHaveBeenCalledOnce();
+    expect(readMockCall(sendMessageDiscordMock, 0)[1]).toBe(expected);
   });
 
   it("forwards first-chunk reply fanout through classic media downgrades", async () => {
@@ -678,7 +783,22 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     expect(readMockCall(postMock, 0)[0]).toContain("/channels/273512430271856640/messages");
   });
 
-  it("keeps spoiler file blocks on the component path", async () => {
+  it.each([
+    {
+      label: "spoiler",
+      blocks: [{ type: "file", file: "attachment://report.pdf", spoiler: true }],
+    },
+    {
+      label: "multiple",
+      blocks: [
+        { type: "file", file: "attachment://report.pdf" },
+        { type: "file", file: "attachment://report.pdf" },
+      ],
+    },
+  ] satisfies Array<{
+    label: string;
+    blocks: NonNullable<Parameters<typeof sendDiscordComponentMessage>[1]["blocks"]>;
+  }>)("keeps $label file blocks on the component path", async ({ blocks }) => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({
       type: ChannelType.GuildText,
@@ -690,7 +810,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       "channel:chan-1",
       {
         text: "report",
-        blocks: [{ type: "file", file: "attachment://report.pdf", spoiler: true }],
+        blocks,
       },
       {
         cfg: DISCORD_TEST_CFG,

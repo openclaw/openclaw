@@ -43,7 +43,7 @@ For declarative MCP tools, add the normal MCP server shape under
 node host. The node declares the approval-gated `mcp.tools.call.v1` command
 family and publishes listed tools after connecting; changing the server list
 later does not require re-pairing. See
-[Node-hosted MCP servers](/nodes#node-hosted-mcp-servers).
+[Node-hosted MCP servers](/nodes/mcp-and-skills#node-hosted-mcp-servers).
 
 ## Browser proxy (zero-config)
 
@@ -103,10 +103,15 @@ Options:
 ## Gateway auth for node host
 
 `--pair` uses a 10-minute single-use bootstrap token for the first connection.
-After pairing, reconnects use the durable device credential. The setup link
-does not pre-approve `system.run`; normal node approval and SSH verification
-remain in force. `node install --pair` is intentionally unavailable because a
-short-lived bearer setup link must not be persisted in service arguments.
+After pairing, reconnects use the durable device credential. Administrator-minted
+bootstrap enrollment approves the device and its first declared command surface,
+including `system.run` when declared. Later command, capability, or permission
+expansion still requires `openclaw nodes approve`. Gateway command policy and
+the node host's [exec approvals](/tools/exec-approvals) remain separate gates.
+Local exec approvals default to `full` with `ask: "off"`; configure them before
+using a setup link if that access is too broad. `node install --pair` is
+intentionally unavailable because a short-lived bearer setup link must not be
+persisted in service arguments.
 
 `openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
 
@@ -125,7 +130,7 @@ keys. Installed services keep the values in the managed service environment
 file, not in service arguments or inline supervisor definitions. Access
 credentials require HTTPS/WSS; plaintext HTTP/WS fails before SecretRef
 resolution while credential-free plaintext node routes remain unchanged. See
-[Gateway deployments that cannot host nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
+[Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
 
 For a node connecting to a plaintext `ws://` Gateway, loopback, private IP
 literals, `.local`, and Tailnet `*.ts.net` hosts are accepted. For other
@@ -214,8 +219,26 @@ Otherwise approve manually via:
 
 ```bash
 openclaw devices list
-openclaw devices approve <requestId>
+openclaw devices approve <deviceRequestId>
 ```
+
+Device approval admits the connection, not its command surface. Restart an
+installed node with `openclaw node restart`, or stop and rerun the foreground
+`openclaw node run` command. A node paused on `PAIRING_REQUIRED` does not resume
+automatically after manual approval. This reconnect creates a separate
+command-surface request on the Gateway:
+
+```bash
+openclaw nodes pending
+openclaw nodes approve <nodeRequestId>
+openclaw nodes describe --node <idOrNameOrIp>
+```
+
+The device and node request IDs are distinct. An initial unapproved surface has
+no effective commands. SSH-verified and bootstrap enrollment can approve the
+first surface automatically; later expansions require approval. Previously
+approved commands that remain declared and allowed stay effective while an
+expansion waits.
 
 Inspect the local node identity the Gateway verifies against:
 
@@ -246,6 +269,9 @@ fresh `role: node` pairing with no requested scopes, from a client IP the
 Gateway trusts. Operator/browser clients, Control UI, WebChat, and role,
 scope, metadata, or public-key upgrades still require manual approval.
 
+Trusted-network device approval does not approve the node's command surface.
+Inspect `openclaw nodes pending` and approve the separate surface request.
+
 If the node retries pairing with changed auth details (role/scopes/public key),
 the previous pending request is superseded and a new `requestId` is created.
 Run `openclaw devices list` again before approval.
@@ -262,6 +288,11 @@ when set):
 | `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`) | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
 | `state/openclaw.sqlite` (`device_identities`, `primary`)                | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
 | `state/openclaw.sqlite` (`device_auth_tokens`)                          | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
+
+`gatewayLocal` in `node.list` and `node.describe` marks an exact match with the
+primary device identity in the Gateway's state directory. Overriding `--node-id`
+does not change it. A node with its own state directory and key is separate, even
+on the same machine. Listing or describing nodes does not create identity credentials.
 
 `--node-id` changes only the client instance ID in shared SQLite state. It does
 not change the cryptographic device ID or clear pairing auth. Migrating a retired

@@ -43,6 +43,7 @@ type PluginReleasePlanItem = PublishablePluginPackage & {
 
 type PluginReleasePlan = {
   all: PluginReleasePlanItem[];
+  warnings: string[];
   candidates: PluginReleasePlanItem[];
   bootstrapCandidates: PluginReleasePlanItem[];
   missingTrustedPublisher: PluginReleasePlanItem[];
@@ -91,6 +92,7 @@ const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
   "scripts/openclaw-npm-release-check.ts",
+  "scripts/clawhub-prepared-artifact.mjs",
   "scripts/plugin-clawhub-publish.sh",
   "scripts/plugin-clawhub-release-check.ts",
   "scripts/plugin-clawhub-release-plan.ts",
@@ -557,7 +559,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
   if (explicitPublishSelection) {
     assertPluginReleaseVersionFloors(selectedPublishable, "Plugin ClawHub release plan");
   }
-  assertPluginReleaseDependencyFreshness(
+  const warnings = assertPluginReleaseDependencyFreshness(
     selectedPublishable,
     "Plugin ClawHub release plan",
     params?.resolveLatestVersion,
@@ -604,6 +606,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
 
   return {
     all,
+    warnings,
     candidates: planned
       .filter(
         (plugin) => plugin.packageExists && plugin.hasTrustedPublisher && !plugin.alreadyPublished,

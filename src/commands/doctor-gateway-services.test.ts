@@ -108,7 +108,9 @@ vi.mock("../daemon/service-audit.js", () => ({
     gatewayRuntimeProbeFailed: "gateway-runtime-probe-failed",
     gatewayTokenDrift: "gateway-token-drift",
     gatewayTokenEmbedded: "gateway-token-embedded",
+    gatewayPasswordEmbedded: "gateway-password-embedded",
     gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
+    systemdUnitBackupUnsafe: "systemd-unit-backup-unsafe",
   },
 }));
 
@@ -510,6 +512,23 @@ describe("maybeRepairGatewayServiceConfig", () => {
     },
   );
 
+  it("reports a passing vendor runtime note without rewriting the service", async () => {
+    const command = createGatewayCommand("/opt/openclaw/dist/index.js");
+    mocks.readCommand.mockResolvedValue(command);
+    mocks.buildGatewayInstallPlan.mockResolvedValue(command);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+      runtimeNote: "Node 24.15.0: unsupported version, capability probe passed.",
+    });
+
+    await runRepair({ gateway: {} });
+
+    expectNoteContaining("unsupported version, capability probe passed", "Gateway runtime");
+    expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
   it("skips service audit and rewrite for a non-default install identity", async () => {
     mocks.isDefaultInstallIdentity.mockReturnValue(false);
 
@@ -523,6 +542,33 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "service management skipped: non-default state dir or config path",
       "Gateway",
     );
+  });
+
+  it("reports an orphaned unsafe systemd backup without an active service command", async () => {
+    mocks.readCommand.mockResolvedValue(null);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "systemd-unit-backup-unsafe",
+          message: "Systemd service backup exposes gateway credentials.",
+          detail: "/home/test/.config/systemd/user/openclaw-gateway.service.bak",
+          level: "recommended",
+        },
+      ],
+    });
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ command: null, platform: process.platform }),
+    );
+    expectNoteContaining(
+      "Systemd service backup exposes gateway credentials",
+      "Gateway service config",
+    );
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
   });
 
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
@@ -578,14 +624,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {
-    const nvmNode = "/home/test/.nvm/versions/node/v22.22.3/bin/node";
+    const nvmNode = "/home/test/.nvm/versions/node/v24.16.0/bin/node";
     mocks.readCommand.mockResolvedValue({
       programArguments: [nvmNode, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
     mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
       warn?.(
-        "System Node 20.20.2 at /usr/bin/node is outside the supported range. Using /home/test/.nvm/versions/node/v22.22.3/bin/node for the daemon.",
+        "System Node 20.20.2 at /usr/bin/node is outside the supported range. Using /home/test/.nvm/versions/node/v24.16.0/bin/node for the daemon.",
         "Gateway runtime",
       );
       return {
@@ -613,7 +659,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(runtimeMessages).not.toContain("duplicate doctor runtime warning");
     expect(runtimeMessages.map((message) => String(message)).join("\n")).not.toContain("not found");
     expect(runtimeMessages.map((message) => String(message)).join("\n")).toContain(
-      "Using /home/test/.nvm/versions/node/v22.22.3/bin/node",
+      "Using /home/test/.nvm/versions/node/v24.16.0/bin/node",
     );
   });
 
@@ -709,7 +755,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.needsNodeRuntimeMigration.mockReturnValue(true);
     mocks.resolveSystemNodeInfo.mockResolvedValue({
       path: systemNodePath,
-      version: "24.15.0",
+      version: "24.16.0",
       status: "supported",
     });
 
@@ -1921,6 +1967,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
         await runRepair({ gateway: {} });
 
         expectNoteContaining("resolves to a source checkout", "Gateway service config");
+        expectNoteContaining(
+          "Run `openclaw gateway install --force` from the intended package install to replace the gateway service definition.",
+          "Gateway service config",
+        );
+        expectNoNoteContaining("openclaw doctor --fix", "Gateway service config");
         expect(mocks.install).not.toHaveBeenCalled();
       } finally {
         await fs.rm(root, { recursive: true, force: true });
@@ -2152,7 +2203,7 @@ describe("maybeScanExtraGatewayServices", () => {
     );
   });
 
-  it("keeps legacy gateway services warning-level", () => {
+  it("keeps legacy gateway services warning-level with guided cleanup advice", () => {
     expect(
       extraGatewayServiceToHealthFinding({
         platform: "linux",
@@ -2167,6 +2218,8 @@ describe("maybeScanExtraGatewayServices", () => {
         severity: "warning",
         source: "linux",
         target: "openclaw-gateway.service",
+        fixHint:
+          "Run `openclaw doctor` interactively to review legacy gateway services and confirm supported cleanup.",
       }),
     );
   });
@@ -2222,23 +2275,8 @@ describe("maybeScanExtraGatewayServices", () => {
       },
     ]);
 
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const prompter = {
-      confirm: vi.fn(),
-      confirmAutoFix: vi.fn(),
-      confirmAggressiveAutoFix: vi.fn(),
-      confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
-      select: vi.fn(),
-      shouldRepair: false,
-      shouldForce: false,
-      repairMode: {
-        shouldRepair: false,
-        shouldForce: false,
-        nonInteractive: false,
-        canPrompt: true,
-        updateInProgress: false,
-      },
-    };
+    const runtime = makeDoctorIo();
+    const prompter = makeDoctorPrompts();
 
     await maybeScanExtraGatewayServices({ deep: false }, runtime, prompter);
 
@@ -2248,8 +2286,8 @@ describe("maybeScanExtraGatewayServices", () => {
       stdout: process.stdout,
     });
     expectNoteContaining("clawdbot-gateway.service", "Legacy gateway removed");
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Legacy gateway services removed. Installing OpenClaw gateway next.",
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("Installing OpenClaw gateway next."),
     );
   });
 
@@ -2269,8 +2307,8 @@ describe("maybeScanExtraGatewayServices", () => {
       expect(rename).toHaveBeenCalledTimes(1);
       expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
       expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
-      expect(runtime.log).toHaveBeenCalledWith(
-        "Legacy gateway services removed. Installing OpenClaw gateway next.",
+      expect(runtime.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("Installing OpenClaw gateway next."),
       );
     },
   );

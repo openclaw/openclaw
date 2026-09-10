@@ -187,12 +187,15 @@ describe("runGlobalPackageUpdateSteps", () => {
     await withTestDir({ prefix: "openclaw-package-update-direct-root-" }, async (base) => {
       const managedRoot = path.join(base, ".openclaw", "npm", "node_modules");
       const packageRoot = path.join(managedRoot, "openclaw");
+      const staleRenameDir = path.join(managedRoot, ".openclaw-stale");
       await writePackageRoot(packageRoot, "1.0.0");
+      await fs.mkdir(staleRenameDir);
 
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
         if (name !== "global update") {
           throw new Error(`unexpected step ${name}`);
         }
+        await expectPathMissing(staleRenameDir);
         const prefixIndex = argv.indexOf("--prefix");
         expect(prefixIndex).toBeGreaterThan(0);
         const stagePrefix = argv[prefixIndex + 1];
@@ -229,7 +232,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       });
 
       expect(result.failedStep).toBeNull();
-      expect(result.verifiedPackageRoot).toBe(packageRoot);
+      expect(result.activePackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("2.0.0");
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
         '"version":"2.0.0"',
@@ -400,7 +403,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           "npm",
           "i",
           "-g",
-          "--allow-scripts=./openclaw-2.0.0.tgz",
+          `--allow-scripts=${path.join(packDir, "openclaw-2.0.0.tgz")}`,
           "--prefix",
           stagePrefix,
           path.join(packDir, "openclaw-2.0.0.tgz"),
@@ -544,16 +547,15 @@ describe("runGlobalPackageUpdateSteps", () => {
       const packageRoot = path.join(globalRoot, "openclaw");
 
       const realRename = fs.rename.bind(fs);
+      let stagedPackageRoot: string | undefined;
       let exdevMoves = 0;
       const renameSpy = vi
         .spyOn(fs, "rename")
         .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
           const [from, to] = args;
-          const fromPath = String(from);
           if (
             exdevMoves === 0 &&
-            fromPath.includes(`${path.sep}.openclaw-update-stage-`) &&
-            path.basename(fromPath) === "openclaw" &&
+            String(from) === stagedPackageRoot &&
             String(to) === packageRoot
           ) {
             exdevMoves += 1;
@@ -576,7 +578,8 @@ describe("runGlobalPackageUpdateSteps", () => {
               throw new Error("missing staged prefix");
             }
             const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
-            await writePackageRoot(path.join(stageLayout.globalRoot, "openclaw"), "2.0.0");
+            stagedPackageRoot = path.join(stageLayout.globalRoot, "openclaw");
+            await writePackageRoot(stagedPackageRoot, "2.0.0");
             return {
               name,
               command: argv.join(" "),
@@ -828,7 +831,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         "expected installed version 2.0.0, found 1.5.0",
       );
       // Staged tree never reached live swap — do not exempt the future-config guard.
-      expect(result.verifiedPackageRoot).toBe(packageRoot);
+      expect(result.activePackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("1.0.0");
       expect(postVerifyStep).not.toHaveBeenCalled();
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
@@ -865,12 +868,16 @@ describe("runGlobalPackageUpdateSteps", () => {
 
       await fs.chmod(targetShim, 0o755);
       let stagedShimForFailure: string | undefined;
+      let restoringShim: string | undefined;
+      const isLauncherStage = (entry: string) =>
+        path.dirname(path.dirname(entry)) === path.dirname(targetShim) &&
+        path.basename(path.dirname(entry)).startsWith(".openclaw-shim-stage-");
       const realCopyFile = fs.copyFile.bind(fs);
       const realSymlink = fs.symlink.bind(fs);
       const realRename = fs.rename.bind(fs);
       const realChmod = fs.chmod.bind(fs);
       const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (...args) => {
-        if (failure === "mode restore" && String(args[0]) === targetShim) {
+        if (failure === "mode restore" && String(args[0]) === restoringShim) {
           throw createFsError("EACCES", "shim mode restoration failed");
         }
         return await realChmod(...args);
@@ -879,10 +886,16 @@ describe("runGlobalPackageUpdateSteps", () => {
         const source = String(args[0]);
         const destination = String(args[1]);
         if (
+          isLauncherStage(destination) &&
+          path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-")
+        ) {
+          restoringShim = destination;
+        }
+        if (
           (failure === "backup copy" && source === targetShim) ||
           (failure !== "backup copy" && source === stagedShimForFailure) ||
           (failure === "shim restore" &&
-            destination === targetShim &&
+            isLauncherStage(destination) &&
             path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-"))
         ) {
           throw createFsError("EACCES", `${failure} failed`);
@@ -890,7 +903,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         return await realCopyFile(...args);
       });
       const symlinkSpy = vi.spyOn(fs, "symlink").mockImplementation(async (...args) => {
-        if (failure === "symlink copy" && args[0] === newLink && String(args[1]) === targetShim) {
+        if (failure === "symlink copy" && args[0] === newLink && isLauncherStage(String(args[1]))) {
           throw createFsError("EACCES", "staged symlink creation failed");
         }
         return await realSymlink(...args);
@@ -905,6 +918,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         }
         return await realRename(...args);
       });
+      const beforeActivate = vi.fn(async () => {});
 
       let result: Awaited<ReturnType<typeof runGlobalPackageUpdateSteps>>;
       try {
@@ -914,6 +928,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageName: "openclaw",
           packageRoot,
           runCommand: createRootRunner(globalRoot),
+          beforeActivate,
           runStep: async ({ name, argv, cwd }) => {
             const stagePrefix = argv[argv.indexOf("--prefix") + 1];
             if (!stagePrefix) {
@@ -959,9 +974,8 @@ describe("runGlobalPackageUpdateSteps", () => {
         ).resolves.toContain('"version":"1.0.0"');
       }
       if (failure === "shim restore" || failure === "mode restore") {
-        if (failure === "shim restore") {
-          await expectPathMissing(targetShim);
-        }
+        // Atomic replacement preserves the old entry if restoration cannot stage or set its mode.
+        await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
         const backups = (await fs.readdir(globalRoot)).filter((entry) =>
           entry.startsWith(".openclaw.shim-backup-"),
         );
@@ -1003,8 +1017,15 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(retry.failedStep).not.toBeNull();
         expect(await fs.readdir(globalRoot)).toEqual(expect.arrayContaining(backups));
       }
-      // Package and launcher rollback does not reverse possible lifecycle state changes.
-      expect(result.recovery?.serviceRestartSafe).toBe(false);
+      if (failure === "backup copy") {
+        // Launcher backup failed before activation; the original runtime was verified again.
+        expect(beforeActivate).not.toHaveBeenCalled();
+        expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
+      } else {
+        // After activation, package rollback alone cannot reverse lifecycle state changes.
+        expect(beforeActivate).toHaveBeenCalledOnce();
+        expect(result.recovery?.serviceRestartSafe).toBe(false);
+      }
     });
   });
 
@@ -1032,7 +1053,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         }),
       ).resolves.toMatchObject({
         failedStep: { stderrTail: "install crashed", exitCode: 1 },
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        recovery: { serviceRestartSafe: true, version: "1.0.0" },
       });
 
       if (stagePrefix === undefined) {

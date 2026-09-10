@@ -2,11 +2,11 @@ import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
 import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
-import { toolPosturePolicyShapeFinding } from "./agent-tool-shapes.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import { KNOWN_RISK_LEVELS, KNOWN_SENSITIVITY_LEVELS } from "./policy-constants.js";
 import { policyEvidenceFinding as toolPostureFinding } from "./policy-evidence-finding.js";
 import { agentScopedPolicyTargets, scopedToolAgentMatches } from "./policy-scope.js";
+import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
@@ -20,7 +20,7 @@ export function toolPostureFindings(
   if (
     isRecord(policy) &&
     isRecord(policy.tools) &&
-    toolPosturePolicyShapeFinding(policy.tools, { policyDocName, policyPath }) === undefined
+    posturePolicyShapeFinding("tools", policy.tools, { policyDocName, policyPath }) === undefined
   ) {
     findings.push(
       ...toolPostureFindingsForRule(policy.tools, policyDocName, "tools", evidence, () => true),
@@ -35,7 +35,7 @@ export function toolPostureFindings(
     }
     const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/tools`;
     if (
-      toolPosturePolicyShapeFinding(target.overlay.tools, {
+      posturePolicyShapeFinding("tools", target.overlay.tools, {
         policyDocName,
         policyPath,
         targetPrefix: requirementBase,

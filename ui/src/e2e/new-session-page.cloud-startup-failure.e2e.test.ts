@@ -5,10 +5,11 @@ import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-pl
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  WORKSPACE,
   controlUiSessionPath,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
+  expectPastedPngImage,
   installMockGateway,
   pastePng,
   ONE_PIXEL_PNG_B64,
@@ -60,20 +61,7 @@ suite.define(() => {
         featureMethods: ["sessions.create", "sessions.dispatch", "chat.startup"],
         workspaceGit: true,
         methodResponses: {
-          "agents.list": {
-            agents: [
-              {
-                id: "cloud",
-                identity: { name: "Cloud" },
-                name: "Cloud",
-                workspace: WORKSPACE,
-                workspaceGit: true,
-              },
-            ],
-            defaultId: "cloud",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createCloudAgentsListResponse(),
           "environments.list": {
             environments: [],
             profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -149,9 +137,7 @@ suite.define(() => {
         const failedGroup = page.locator(".chat-group.user", { hasText: message });
         await failedGroup.waitFor({ state: "visible" });
         expect(await failedGroup.locator(".chat-send-status").textContent()).toContain("Not sent");
-        await failedGroup
-          .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)
-          .waitFor({ state: "visible" });
+        await expectPastedPngImage(failedGroup.locator("img.chat-message-image"));
         if (disconnect) {
           await gateway.setOnline(false);
           if (replaceClient) {
@@ -232,9 +218,7 @@ suite.define(() => {
         }
         await failedGroup.waitFor({ state: "visible" });
         expect(await failedGroup.locator(".chat-send-status").textContent()).toContain("Not sent");
-        await failedGroup
-          .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)
-          .waitFor({ state: "visible" });
+        await expectPastedPngImage(failedGroup.locator("img.chat-message-image"));
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(disconnect ? 1 : 0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
         if (disconnect) {

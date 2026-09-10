@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ENV_SECRET_REF_ID_RE, type SecretRef } from "../../config/types.secrets.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { resolveDefaultSecretProviderAlias } from "../../secrets/ref-contract.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel-normalize.js";
+import { resolveAgentQuestionGatewayCall } from "../harness/gateway-question-dispatch.js";
 import { stringEnum } from "../schema/string-enum.js";
 import { describeSecretsTool } from "../tool-description-presets.js";
 import { normalizeQuestionTimeoutSeconds } from "./ask-user-tool-normalization.js";
@@ -18,9 +20,11 @@ import { type AnyAgentTool, readToolStringParam, ToolInputError } from "./common
 import {
   awaitGatewayQuestionAnswer,
   createGatewayQuestionCanceller,
+  createQuestionPromptLifetime,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool } from "./gateway.js";
+import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
 import { jsonResult, textResult } from "./tool-results.js";
 
 type SecretStoreKind = "secret";
@@ -230,9 +234,18 @@ export function createSecretsTool(params: {
   sessionKey?: string;
   runId?: string;
   gatewayCall?: GatewayQuestionCall;
+  /** How this run shows a prompt when its harness does not reserve one. */
+  questionPrompt?: QuestionPromptDelivery;
 }): AnyAgentTool {
   const gatewayCall: GatewayQuestionCall = params.gatewayCall ?? callGatewayTool;
+  const questionGatewayCall = params.gatewayCall ?? resolveAgentQuestionGatewayCall();
   const storeProvider = resolveDefaultSecretProviderAlias(params.config ?? {}, "store");
+  // Native credential cards arrive through question.requested, not a public link, so a
+  // channel that cannot carry a Control UI link gets no chat prompt here either.
+  const publishOwnPrompt =
+    params.questionPrompt && isDeliverableMessageChannel(params.questionPrompt.messageChannel ?? "")
+      ? params.questionPrompt.send
+      : undefined;
   return {
     label: "Secrets",
     name: "secrets",
@@ -261,6 +274,7 @@ export function createSecretsTool(params: {
         throw new ToolInputError(`Unknown secrets action: ${action}`);
       }
       const request = normalizeSecretsRequestParams(input);
+      using prompt = createQuestionPromptLifetime(signal);
       const delivery = beginAskUserPromptDelivery({
         toolCallId,
         sessionKey: params.sessionKey,
@@ -268,21 +282,36 @@ export function createSecretsTool(params: {
         agentId: params.agentId,
         questions: request.questions,
         timeoutSeconds: request.timeoutSeconds,
+        ...(publishOwnPrompt
+          ? {
+              deliverPrompt: (questionId: string) =>
+                sendQuestionToolPrompt({
+                  toolName: "secrets",
+                  questionId,
+                  questions: request.questions,
+                  config: params.config,
+                  send: publishOwnPrompt,
+                  signal: prompt.signal,
+                }),
+            }
+          : {}),
       });
       const timeoutMs = request.timeoutSeconds * 1_000;
       let registered = false;
       const cancelPendingQuestion = createGatewayQuestionCanceller({
-        gatewayCall,
+        gatewayCall: questionGatewayCall,
         questionId: delivery.questionId,
+        beforeCancel: prompt.close,
       });
       const cancelOnAbort = () => {
+        prompt.close();
         delivery.release();
         void cancelPendingQuestion("run-abort");
       };
       try {
         signal?.throwIfAborted();
         const registration = asNullableRecord(
-          await gatewayCall(
+          await questionGatewayCall(
             "question.request",
             {},
             {
@@ -312,11 +341,11 @@ export function createSecretsTool(params: {
           signal.throwIfAborted();
         }
         const answerPromise = awaitGatewayQuestionAnswer({
-          gatewayCall,
+          gatewayCall: questionGatewayCall,
           questionId: delivery.questionId,
           timeoutMs,
           ...(signal ? { signal } : {}),
-        });
+        }).finally(prompt.close);
         delivery.markReady();
         let questionResult: QuestionWaitAnswerResult | undefined;
         if (delivery.hasSubscriber) {

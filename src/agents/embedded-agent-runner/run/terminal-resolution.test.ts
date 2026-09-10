@@ -600,6 +600,42 @@ describe("terminal resolution", () => {
     expect(resolved.result.meta.terminalReplyKind).toBe("silent-empty");
   });
 
+  it.each([
+    { label: "empty", rawText: undefined, expectedKind: undefined },
+    { label: "explicit silence", rawText: "NO_REPLY", expectedKind: "silent-empty" },
+  ])(
+    "keeps reply-optional subagent $label distinct at the terminal producer",
+    async ({ rawText, expectedKind }) => {
+      const assistant = emptyAssistant();
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: rawText ? [rawText] : [],
+        toolMetas: [{ toolName: "write", replaySafe: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+      });
+      const input = makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        finalAssistantRawText: rawText,
+        replayState: { ...attempt.replayMetadata, replayInvalid: false },
+        runParams: {
+          lane: "subagent",
+          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation: "optional",
+        },
+      });
+
+      const resolved = await resolveEmbeddedRunTerminal(input);
+
+      expect(resolved.action).toBe("complete");
+      if (resolved.action !== "complete") {
+        return;
+      }
+      expect(resolved.result.meta.terminalReplyKind).toBe(expectedKind);
+    },
+  );
+
   it("retries reasoning-only output and surfaces a retained presentation after exhaustion", async () => {
     const assistant = buildEmbeddedRunnerAssistant({
       content: [
@@ -653,6 +689,49 @@ describe("terminal resolution", () => {
       fallbackSafe: true,
       terminalPresentation: true,
     });
+  });
+
+  it("settles a heartbeat reasoning-only stop from the prepared silence contract", async () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning",
+          thinkingSignature: JSON.stringify({ id: "rs_heartbeat", type: "reasoning" }),
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+
+    const prepared = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      runParams: {
+        trigger: "heartbeat",
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+      },
+    });
+    const settled = await resolveEmbeddedRunTerminal(prepared);
+    expect(settled).toMatchObject({
+      action: "complete",
+      result: { payloads: [{ text: SILENT_REPLY_TOKEN }] },
+    });
+    if (settled.action === "complete") {
+      expect(settled.result.meta.error).toBeUndefined();
+    }
+
+    const undeclared = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      runParams: { trigger: "heartbeat", allowEmptyAssistantReplyAsSilent: false },
+    });
+    await expect(resolveEmbeddedRunTerminal(undeclared)).resolves.toEqual({ action: "retry" });
   });
 
   it("does not surface a read-only presentation after a sibling side effect", async () => {
@@ -719,6 +798,40 @@ describe("terminal resolution", () => {
       expect(activateInternalPrompt).not.toHaveBeenCalled();
     },
   );
+
+  it("activates the prompt owner for an OpenAI Responses compaction checkpoint", async () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "length",
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id: "cmp-terminal-retry",
+        data: "opaque-compaction",
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "base-url-hash",
+      },
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const activateCompactionContinuation = vi.fn();
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      activateCompactionContinuation,
+    });
+
+    await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
+    expect(activateCompactionContinuation).toHaveBeenCalledWith(
+      expect.stringContaining("Continue from the compacted transcript"),
+    );
+    expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { expectation: "required" as const, expectedError: true },

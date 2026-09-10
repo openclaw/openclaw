@@ -1,11 +1,12 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import type { AssistantMessage } from "@openclaw/ai";
 import * as ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertControlUiGeneratedArtifactsIsolated,
   resolveAllowedGeneratedMixBranch,
@@ -24,12 +25,312 @@ import {
   filterPlaceholderCompatibleTranslations,
   parseTranslationBatchReply,
   runProcess,
+  translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
+import { loadControlUiSourceCatalog } from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
+import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
+import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
+vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
+const llm = vi.hoisted(() => ({ completeSimple: vi.fn() }));
+vi.mock("@openclaw/ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/ai")>();
+  return {
+    ...actual,
+    createLlmRuntime: () => ({ ...actual.createLlmRuntime(), completeSimple: llm.completeSimple }),
+  };
+});
+
+describe("translation provider privacy and fallback", () => {
+  const primary = "private-primary-fixture";
+  const fallback = "private-fallback-fixture";
+  const entries = Array.from({ length: 21 }, (_, index) => ({
+    id: `label${index}`,
+    source: "Open",
+    sourcePath: "fixture.ts",
+  }));
+  const response = (overrides: Partial<AssistantMessage> = {}): AssistantMessage => ({
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(Object.fromEntries(entries.map((entry) => [entry.id, "Ouvrir"]))),
+      },
+    ],
+    api: "openai-responses",
+    provider: "openai",
+    model: primary,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+    ...overrides,
+  });
+  beforeEach(() => {
+    llm.completeSimple.mockReset();
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_PROVIDER", "openai");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_MODEL", primary);
+    vi.stubEnv("OPENCLAW_I18N_FALLBACK_MODEL", fallback);
+    vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("reports CLI failures without disclosing configured model or key values", async () => {
+    const result = await runProcess(process.execPath, [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/control-ui-i18n.ts",
+      "sync",
+      "--locale",
+      `${primary.toUpperCase()}/${fallback}/test-key`,
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
+  });
+
+  it.each([
+    { args: ["sync", "--refresh-key"], error: "requires a catalog key" },
+    {
+      args: ["sync", "--locale", "pl", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["sync", "--write", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["check", "--locale", "pl", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["sync", "--write", "--locale", "pl", "--force", "--refresh-key", "chat.parentSession"],
+      error: "cannot be combined with --force",
+    },
+    {
+      args: [
+        "sync",
+        "--write",
+        "--locale",
+        "pl",
+        ...Array.from({ length: 65 }, (_, i) => ["--refresh-key", `key${i}`]).flat(),
+      ],
+      error: "at most 64 distinct keys",
+    },
+    {
+      args: ["sync", "--write", "--locale", "pl", "--refresh-key", "missing.fixture.key"],
+      error: "unknown refresh key: missing.fixture.key",
+    },
+  ])("rejects invalid targeted refresh: $error", async ({ args, error }) => {
+    const result = await runProcess(process.execPath, [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/control-ui-i18n.ts",
+      ...args,
+    ]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(error);
+  });
+
+  it("requires provider authentication for targeted refresh even when auth is optional", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL", "1");
+    const result = await runProcess(process.execPath, [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/control-ui-i18n.ts",
+      "sync",
+      "--write",
+      "--locale",
+      "pl",
+      "--refresh-key",
+      "chat.parentSession",
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--refresh-key requires a configured translation provider");
+  });
+
+  it("translates outside the Gateway runtime without state access or model diagnostics", async () => {
+    const temp = createTempDirTracker();
+    const stateDir = path.join(temp.make("openclaw-translation-runtime-"), "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const scriptUrl = pathToFileURL(path.resolve("scripts/control-ui-i18n.ts")).href;
+      const code = `
+        import assert from "node:assert/strict";
+        import net from "node:net";
+        import { syncBuiltinESMExports } from "node:module";
+        const rejectNetwork = () => { throw new Error("Unexpected network connection"); };
+        net.connect = net.createConnection = net.Socket.prototype.connect = rejectNetwork;
+        syncBuiltinESMExports();
+        let requests = 0;
+        globalThis.fetch = async (input, init) => {
+          requests += 1;
+          const request = new Request(input, init);
+          const payload = await request.json();
+          assert.ok(JSON.stringify(payload.input).includes("apps/android/wear/src/main/res/values/strings.xml"), "native owner context must reach the serialized provider request");
+          assert.ok(JSON.stringify(payload.input).includes("VoiceGestureLabel(onHold: startDictate)"), "native owner excerpt must reach the serialized provider request");
+          assert.ok(JSON.stringify(payload.input).includes("unnumbered printf"), "native formatting must retain source argument roles");
+          const item = { id: "message", type: "message", role: "assistant", content: [] };
+          const text = JSON.stringify({ connect: "Connecter" });
+          const events = [
+            { type: "response.created", response: { id: "response" } },
+            { type: "response.output_item.added", output_index: 0, item },
+            { type: "response.content_part.added", output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } },
+            { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: text },
+            { type: "response.output_item.done", output_index: 0, item: { ...item, content: [{ type: "output_text", text, annotations: [] }] } },
+            { type: "response.completed", response: { id: "response", status: "completed" } },
+          ];
+          return new Response(events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join(""), { headers: { "Content-Type": "text/event-stream" } });
+        };
+        const { translateNativeEntries } = await import(${JSON.stringify(scriptUrl)});
+        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "apps/android/wear/src/main/res/values/strings.xml", sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], "fr");
+        assert.equal(result.get("connect"), "Connecter");
+        assert.equal(requests, 1);
+        console.log("isolated-runtime-ok");
+      `;
+      const result = await runProcess(process.execPath, [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "-e",
+        code,
+      ]);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("isolated-runtime-ok");
+      expect(result.stdout + result.stderr).not.toContain(primary);
+      expect(result.stdout + result.stderr).not.toContain("[model-fetch]");
+      expect(existsSync(stateDir)).toBe(false);
+    } finally {
+      temp.cleanup();
+    }
+  });
+
+  it("switches only an unavailable model and keeps the fallback for later batches", async () => {
+    const complete = vi
+      .spyOn(llm, "completeSimple")
+      .mockResolvedValueOnce(
+        response({
+          stopReason: "error",
+          errorCode: "model_not_found",
+          errorMessage: `Cannot use ${primary}`,
+        }),
+      )
+      .mockResolvedValue(response());
+    expect((await translateNativeEntries(entries, "fr")).size).toBe(entries.length);
+    expect(complete.mock.calls.map(([model]) => model.id)).toEqual([primary, fallback, fallback]);
+    const log = vi.mocked(process.stdout).write.mock.calls.flat().join("");
+    expect(log).toContain("primary model unavailable");
+    expect(log).not.toContain(primary);
+    expect(log).not.toContain(fallback);
+  });
+
+  it("includes native owner context in the translation batch budget", async () => {
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET", "500");
+    llm.completeSimple.mockResolvedValue(response());
+    const contextualEntries = entries.slice(0, 2).map((entry) => ({
+      id: entry.id,
+      source: entry.source,
+      sourcePath: "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
+      sourceContext: "Button(enabled = !runPending) ".repeat(6),
+    }));
+
+    expect((await translateNativeEntries(contextualEntries, "fr")).size).toBe(2);
+    expect(llm.completeSimple).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["401", "403", "404", "429", "insufficient_quota", "ECONNRESET"])(
+    "keeps %s failures private without changing models",
+    async (errorCode) => {
+      const complete = vi.spyOn(llm, "completeSimple").mockResolvedValue(
+        response({
+          stopReason: "error",
+          errorCode,
+          errorMessage: `${errorCode}: ${primary} unavailable; try ${fallback}`,
+        }),
+      );
+      await expect(translateNativeEntries(entries.slice(0, 1), "fr")).rejects.toThrow(
+        "translation provider failed",
+      );
+      expect(complete.mock.calls.every(([model]) => model.id === primary)).toBe(true);
+      const log = vi.mocked(process.stdout).write.mock.calls.flat().join("");
+      expect(log).not.toContain(primary);
+      expect(log).not.toContain(fallback);
+    },
+  );
+
+  it("does not expose rejected provider errors or escaped model echoes", async () => {
+    const complete = vi
+      .spyOn(llm, "completeSimple")
+      .mockRejectedValue(new Error(`Transport for ${primary}`));
+    await expect(translateNativeEntries(entries.slice(0, 1), "fr")).rejects.toThrow(
+      "provider_error",
+    );
+    complete.mockResolvedValue(
+      response({ content: [{ type: "text", text: '{"label0":"private-\\u0070rimary-fixture"}' }] }),
+    );
+    await expect(translateNativeEntries(entries.slice(0, 1), "fr")).rejects.toThrow(
+      "provider_error",
+    );
+    expect(vi.mocked(process.stdout).write.mock.calls.flat().join("")).not.toContain(primary);
+  });
+});
+
+describe("control-ui config hint source catalog", () => {
+  it("includes core config labels and help under collision-safe keys", () => {
+    const source = flattenTranslations(loadControlUiSourceCatalog());
+
+    const label = "Gateway Token";
+    expect(source.get(configHintTranslationKey("gateway.auth.token", "label", label))).toBe(label);
+    const helpEntry = [...source].find(([key]) =>
+      key.startsWith("configHints.gateway%2Eauth%2Etoken.help."),
+    );
+    expect(helpEntry?.[1]).toBeTypeOf("string");
+  });
+});
+
 describe("control-ui-i18n generated ownership", () => {
+  it("includes lazy transcript copy and shared search labels in the generator catalog", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "--eval",
+        [
+          'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";',
+          "const catalog = loadControlUiSourceCatalog();",
+          "console.log(JSON.stringify(catalog));",
+        ].join("\n"),
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const catalog: unknown = JSON.parse(result.stdout);
+    const source = flattenControlUiCatalog(catalog, "en");
+    const lazyCopy = flattenControlUiCatalog(registerTranscriptsEnglish.catalog, "transcripts");
+    for (const [key, value] of lazyCopy) {
+      expect(source.get(key), key).toBe(value);
+    }
+    expect(source.get("meetingCapture.title")).toBe("Meeting capture");
+    expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");
+  });
+
   it("keeps generated locale snapshots out of source PRs", () => {
     expect(() =>
       assertControlUiGeneratedArtifactsIsolated([
@@ -97,6 +398,7 @@ describe("control-ui-i18n generated ownership", () => {
       "scripts/control-ui-i18n.ts",
       "scripts/control-ui-i18n-verify.ts",
       "scripts/lib/control-ui-i18n-catalog.ts",
+      "scripts/lib/control-ui-i18n-catalog-values.ts",
       "scripts/lib/control-ui-i18n-sync-plan.ts",
       "ui/AGENTS.md",
       "ui/config/control-ui-locales.ts",
@@ -181,21 +483,6 @@ async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void>
     });
   }
   throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
-}
-
-async function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 2_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
 }
 
 describe("control-ui-i18n process runner", () => {
@@ -348,6 +635,30 @@ describe("control-ui-i18n process runner", () => {
         "ar",
       ),
     ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
+  });
+
+  it("runs an optional result validator before accepting a batch reply", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "native.apple.progress",
+        text: "Processed %lld of %@",
+        textHash: "text-hash",
+      },
+    ];
+
+    expect(() =>
+      parseTranslationBatchReply(
+        JSON.stringify({ "native.apple.progress": "Bearbetade %@" }),
+        items,
+        "sv",
+        (source, translated, key, locale) => {
+          if (source.includes("%lld") && !translated.includes("%lld")) {
+            throw new Error(`invalid structural tokens for ${locale}:${key}`);
+          }
+        },
+      ),
+    ).toThrow("invalid structural tokens for sv:native.apple.progress");
   });
 
   it("makes placeholder-incompatible existing copy pending for bot repair", () => {
@@ -582,7 +893,7 @@ describe("control-ui-i18n process runner", () => {
 
           runner.kill("SIGTERM");
 
-          await expect(waitForChildClose(runner)).resolves.toEqual({
+          await expect(waitForChildClose(runner, 2_000)).resolves.toEqual({
             code: null,
             signal: "SIGTERM",
           });

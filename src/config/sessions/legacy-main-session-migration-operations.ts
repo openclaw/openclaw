@@ -129,7 +129,10 @@ function mutateLegacySessionClaims<T>(
     store: PhysicalStore;
     env: NodeJS.ProcessEnv;
     claims: readonly SessionClaim[];
-    operationLabel: string;
+    operationLabel:
+      | "session-migration.legacy-main-in-place"
+      | "session-migration.legacy-main-quarantine";
+    beforePersistentApply?: () => void;
   },
   commit: (database: OpenClawAgentDatabase) => T,
 ): Promise<T> {
@@ -142,16 +145,23 @@ function mutateLegacySessionClaims<T>(
   return withSqliteSessionDeletions(
     scope,
     params.claims.map(({ key: sessionKey, entry }) => ({ sessionKey, entry })),
-    async () =>
-      runExclusiveSqliteSessionWrite(scope, async () =>
-        runSqliteSessionDeletionTransaction(commit, scope, {
-          operationLabel: params.operationLabel,
-        }),
+    async (assertCurrent) =>
+      runExclusiveSqliteSessionWrite(
+        scope,
+        async () => {
+          assertCurrent();
+          params.beforePersistentApply?.();
+          return runSqliteSessionDeletionTransaction(commit, scope, {
+            operationLabel: params.operationLabel,
+          });
+        },
+        params.operationLabel,
       ),
   );
 }
 
 function migrateClaimsInPlace(params: {
+  beforePersistentApply?: () => void;
   aliases: readonly SessionClaim[];
   canonical?: SessionClaim;
   canonicalKey: string;
@@ -204,12 +214,14 @@ function migrateClaimsInPlace(params: {
 }
 
 async function copyClaimCrossStore(params: {
+  beforePersistentApply?: () => void;
   canonicalKey: string;
   destination: PhysicalStore;
   env: NodeJS.ProcessEnv;
   source: SessionClaim;
 }): Promise<SessionClaim | undefined> {
   await importSqliteSessionRows({
+    beforePersistentApply: params.beforePersistentApply,
     agentId: params.destination.databaseAgentId,
     defaultAgentId: params.destination.databaseAgentId,
     env: params.env,
@@ -234,8 +246,12 @@ async function copyClaimCrossStore(params: {
   return destination.found ? destination.value : undefined;
 }
 
-async function deleteExpectedClaim(claim: SessionClaim): Promise<boolean> {
+async function deleteExpectedClaim(
+  claim: SessionClaim,
+  commitGuard?: () => void,
+): Promise<boolean> {
   const result = await deleteSessionEntryLifecycle({
+    commitGuard,
     agentId: claim.store.databaseAgentId,
     archiveTranscript: false,
     deleteTranscriptWithoutArchive: true,
@@ -252,12 +268,14 @@ async function deleteExpectedClaim(claim: SessionClaim): Promise<boolean> {
 }
 
 function quarantineClaim(params: {
+  beforePersistentApply?: () => void;
   claim: SessionClaim;
   env: NodeJS.ProcessEnv;
   ownerAgentId: string;
 }): Promise<string | undefined> {
   return mutateLegacySessionClaims(
     {
+      beforePersistentApply: params.beforePersistentApply,
       store: params.claim.store,
       env: params.env,
       claims: [params.claim],
@@ -292,6 +310,7 @@ function quarantineClaim(params: {
 }
 
 export async function processIdenticalClaims(params: {
+  beforePersistentApply?: () => void;
   aliases: SessionClaim[];
   canonical?: SessionClaim;
   canonicalKey: string;
@@ -324,6 +343,7 @@ export async function processIdenticalClaims(params: {
     const inPlaceWinner = freshestClaim(destinationAliases);
     if (
       !(await migrateClaimsInPlace({
+        beforePersistentApply: params.beforePersistentApply,
         aliases: destinationAliases,
         canonicalKey: params.canonicalKey,
         env: params.env,
@@ -351,6 +371,7 @@ export async function processIdenticalClaims(params: {
   if (!canonical) {
     const sourceBefore = winner;
     const copied = await copyClaimCrossStore({
+      beforePersistentApply: params.beforePersistentApply,
       canonicalKey: params.canonicalKey,
       destination: params.destination,
       env: params.env,
@@ -393,7 +414,7 @@ export async function processIdenticalClaims(params: {
     if (samePhysicalStore(claim.store, params.destination)) {
       continue;
     }
-    if (!(await deleteExpectedClaim(claim))) {
+    if (!(await deleteExpectedClaim(claim, params.beforePersistentApply))) {
       return {
         kind: "divergent-canonical",
         canonicalKey: params.canonicalKey,
@@ -404,6 +425,7 @@ export async function processIdenticalClaims(params: {
   if (params.canonical && destinationAliases.length > 0) {
     if (
       !(await migrateClaimsInPlace({
+        beforePersistentApply: params.beforePersistentApply,
         aliases: destinationAliases,
         canonical: params.canonical,
         canonicalKey: params.canonicalKey,
@@ -432,6 +454,7 @@ export async function processIdenticalClaims(params: {
 }
 
 export async function repairDivergentClaims(params: {
+  beforePersistentApply?: () => void;
   canonicalKey: string;
   claims: SessionClaim[];
   destination: PhysicalStore;
@@ -442,6 +465,7 @@ export async function repairDivergentClaims(params: {
   const winner = params.destinationCanonical ?? freshestClaim(params.claims);
   if (!params.destinationCanonical) {
     const migrated = await processIdenticalClaims({
+      beforePersistentApply: params.beforePersistentApply,
       aliases: [winner],
       canonicalKey: params.canonicalKey,
       destination: params.destination,
@@ -473,6 +497,7 @@ export async function repairDivergentClaims(params: {
     if (claimsMatch(claim, canonical)) {
       const cleaned = samePhysicalStore(claim.store, params.destination)
         ? await migrateClaimsInPlace({
+            beforePersistentApply: params.beforePersistentApply,
             aliases: [claim],
             canonical,
             canonicalKey: params.canonicalKey,
@@ -480,13 +505,14 @@ export async function repairDivergentClaims(params: {
             store: params.destination,
             winner: canonical,
           })
-        : await deleteExpectedClaim(claim);
+        : await deleteExpectedClaim(claim, params.beforePersistentApply);
       if (!cleaned) {
         return { quarantinedKeys, resolved: false };
       }
       continue;
     }
     const quarantineKey = await quarantineClaim({
+      beforePersistentApply: params.beforePersistentApply,
       claim,
       env: params.env,
       ownerAgentId: params.ownerAgentId,

@@ -1,0 +1,667 @@
+/* Adapted from openclaw/carapace at 6c38d2a9b558104957d581033bce5a127632d60e.
+ * MIT License, Copyright (c) 2026 openclaw.
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ * Control UI owns theme selection; Carapace owns the semantic component roles.
+ * Keeping this bridge pointed at the resolved Control UI tokens makes every
+ * shipped theme family, mode, and imported custom theme work without a
+ * Carapace-side copy of the product theme catalog. */
+:root {
+  --oc-bg-page: var(--bg);
+  --oc-bg-surface: var(--card);
+  --oc-bg-elevated: var(--bg-elevated);
+  --oc-bg-recessed: var(--bg-accent);
+  --oc-bg-contrast: var(--text-strong);
+
+  --oc-accent-primary: var(--accent);
+  --oc-accent-primary-hover: var(--accent-hover);
+  --oc-accent-primary-deep: var(--primary-hover);
+  --oc-accent-secondary: var(--accent-2);
+  --oc-accent-secondary-deep: var(--accent-2-muted);
+
+  --oc-text-primary: var(--text-strong);
+  --oc-text-secondary: var(--text);
+  --oc-text-muted: var(--muted);
+  --oc-text-inactive: color-mix(in srgb, var(--muted) 62%, transparent);
+  --oc-text-inverse: var(--accent-foreground);
+  --oc-text-link: var(--link);
+  --oc-text-on-accent: var(--primary-foreground);
+
+  --oc-border-subtle: var(--border);
+  --oc-border-strong: var(--border-strong);
+  --oc-border-accent: color-mix(in srgb, var(--accent) 42%, transparent);
+
+  --oc-surface-card: var(--card);
+  --oc-surface-card-strong: var(--popover);
+  --oc-surface-overlay: var(--popover);
+  --oc-surface-modal-backdrop: color-mix(in srgb, var(--bg) 66%, transparent);
+  --oc-surface-interactive: var(--bg-elevated);
+  --oc-surface-interactive-hover: var(--bg-hover);
+  --oc-control-bg: var(--input);
+  --oc-control-bg-hover: var(--bg-hover);
+  --oc-surface-accent-soft: var(--accent-subtle);
+  --oc-surface-secondary-soft: var(--accent-2-subtle);
+  --oc-chart-line: var(--grid-line);
+  --oc-selection-bg: var(--selection-bg);
+  --oc-focus-ring: var(--ring);
+
+  --oc-status-success-bg: var(--ok-subtle);
+  --oc-status-success-fg: var(--ok);
+  --oc-status-warning-bg: var(--warn-subtle);
+  --oc-status-warning-fg: var(--warn);
+  --oc-status-error-bg: var(--danger-subtle);
+  --oc-status-error-fg: var(--danger);
+  --oc-status-info-bg: var(--info-subtle);
+  --oc-status-info-fg: var(--info);
+
+  --oc-input-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  --oc-input-border: var(--input);
+  --oc-input-placeholder: var(--muted);
+  --oc-input-focus-border: var(--ring);
+  --oc-input-focus-ring: var(--focus);
+
+  --oc-font-body: var(--font-body);
+  --oc-font-display: var(--font-display);
+  --oc-font-mono: var(--mono);
+  --oc-font-size-xs: var(--control-ui-text-xs);
+  --oc-font-size-sm: var(--control-ui-text-sm);
+  --oc-font-size-base: var(--control-ui-text-md);
+  --oc-font-size-md: var(--control-ui-text-md);
+  --oc-font-size-lg: var(--control-ui-text-lg);
+
+  --oc-space-1: var(--space-1);
+  --oc-space-2: var(--space-2);
+  --oc-space-3: var(--space-3);
+  --oc-space-4: var(--space-4);
+  --oc-space-5: var(--space-5);
+  --oc-space-6: var(--space-6);
+  --oc-space-7: var(--space-7);
+  --oc-space-8: var(--space-8);
+
+  --oc-radius-sm: var(--radius-sm);
+  --oc-radius-md: var(--radius-md);
+  --oc-radius-lg: var(--radius-lg);
+  --oc-radius-xl: var(--radius-xl);
+  --oc-radius-full: var(--radius-full);
+  --oc-radius-surface: var(--radius-lg);
+  --oc-radius-control: var(--radius-md);
+  --oc-radius-inset: var(--radius-sm);
+  --oc-radius-round: var(--radius-full);
+
+  --oc-shadow-sm: var(--shadow-sm);
+  --oc-shadow-md: var(--shadow-md);
+  --oc-shadow-lg: var(--shadow-lg);
+  --oc-layer-popover: var(--z-dropdown);
+  --oc-layer-notification: var(--z-toast);
+  --oc-duration-fast: var(--duration-fast);
+  --oc-duration-ui: var(--duration-normal);
+  --oc-ease-out: var(--ease-out);
+  --oc-control-min-height: var(--settings-control-height, 2.75rem);
+}
+
+.oc-app-surface {
+  --oc-component-surface: var(--oc-surface-card);
+  --oc-component-surface-strong: var(--oc-surface-card-strong);
+  --oc-component-surface-hover: var(--oc-surface-interactive);
+  --oc-component-border: var(--oc-border-subtle);
+  --oc-component-border-hover: color-mix(
+    in srgb,
+    var(--oc-text-primary) 28%,
+    var(--oc-border-subtle)
+  );
+  --oc-component-shadow: var(--oc-shadow-sm);
+  --oc-component-shadow-hover: var(--oc-shadow-md);
+  min-width: 0;
+  min-height: 100%;
+  background: var(--oc-bg-page);
+  color: var(--oc-text-primary);
+  font-family: var(--oc-font-body);
+}
+
+.oc-section {
+  width: 100%;
+  color: var(--oc-text-primary);
+}
+
+.oc-card {
+  border: 1px solid var(--oc-component-border);
+  border-radius: var(--oc-radius-surface);
+  background: var(--oc-component-surface);
+  color: var(--oc-text-primary);
+  box-shadow: var(--oc-component-shadow);
+}
+
+.oc-card-interactive {
+  transition:
+    background var(--oc-duration-ui) var(--oc-ease-out),
+    border-color var(--oc-duration-ui) var(--oc-ease-out),
+    box-shadow var(--oc-duration-ui) var(--oc-ease-out),
+    transform var(--oc-duration-ui) var(--oc-ease-out);
+}
+
+.oc-card-interactive:hover,
+.oc-card-interactive:focus-visible {
+  border-color: var(--oc-component-border-hover);
+  background: var(--oc-component-surface-hover);
+  box-shadow: var(--oc-component-shadow-hover);
+  transform: translateY(-1px);
+}
+
+.oc-card-interactive:focus-visible {
+  outline: 2px solid var(--oc-focus-ring);
+  outline-offset: 3px;
+}
+
+.oc-card-interactive:active {
+  transform: translateY(0) scale(0.995);
+}
+
+.oc-action {
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  gap: var(--oc-space-2);
+  padding: var(--oc-space-2) var(--oc-space-4);
+  border: 1px solid transparent;
+  border-radius: var(--oc-radius-control);
+  font: inherit;
+  font-size: var(--oc-font-size-base);
+  font-weight: 700;
+  line-height: 1.2;
+  text-decoration: none;
+  touch-action: manipulation;
+  cursor: var(--cursor-action);
+  transition:
+    background var(--oc-duration-fast) var(--oc-ease-out),
+    border-color var(--oc-duration-fast) var(--oc-ease-out),
+    color var(--oc-duration-fast) var(--oc-ease-out),
+    transform var(--oc-duration-fast) var(--oc-ease-out);
+}
+
+.oc-action:hover {
+  text-decoration: none;
+}
+
+.oc-action:focus-visible {
+  outline: 2px solid var(--oc-focus-ring);
+  outline-offset: 3px;
+}
+
+.oc-action:active:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(0.98);
+}
+
+.oc-action:disabled,
+.oc-action[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.oc-action[aria-disabled="true"] {
+  pointer-events: none;
+}
+
+.oc-action-primary {
+  border-color: var(--oc-accent-primary);
+  background: var(--oc-accent-primary);
+  color: var(--oc-text-on-accent);
+}
+
+.oc-action-primary:hover {
+  border-color: var(--oc-accent-primary-hover);
+  background: var(--oc-accent-primary-hover);
+  color: var(--oc-text-on-accent);
+}
+
+.oc-action-primary:active:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--oc-accent-primary-deep);
+  background: var(--oc-accent-primary-deep);
+}
+
+.oc-action-secondary {
+  border-color: var(--oc-border-accent);
+  background: var(--oc-surface-accent-soft);
+  color: var(--oc-accent-primary);
+}
+
+.oc-action-secondary:hover {
+  border-color: var(--oc-accent-primary);
+  background: color-mix(in srgb, var(--oc-surface-accent-soft) 72%, var(--oc-accent-primary));
+  color: var(--oc-text-primary);
+}
+
+html[data-theme="light"] .oc-action-secondary,
+html[data-theme-resolved="light"] .oc-action-secondary {
+  border-color: var(--oc-border-strong);
+  background: var(--oc-bg-elevated);
+  color: var(--oc-text-primary);
+}
+
+html[data-theme="light"] .oc-action-secondary:hover,
+html[data-theme-resolved="light"] .oc-action-secondary:hover {
+  border-color: var(--oc-border-strong);
+  background: var(--oc-surface-interactive-hover);
+  color: var(--oc-text-primary);
+}
+
+.oc-action-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--oc-text-secondary);
+}
+
+.oc-action-ghost:hover {
+  background: var(--oc-surface-interactive);
+  color: var(--oc-text-primary);
+}
+
+.oc-action-icon {
+  width: 2.5rem;
+  padding: 0;
+}
+
+.oc-segmented {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--oc-space-1);
+  overflow-x: auto;
+  padding: var(--oc-space-1);
+  border: 1px solid var(--oc-border-subtle);
+  border-radius: var(--oc-radius-control);
+  background: var(--oc-surface-card);
+}
+
+.oc-segmented-item {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  gap: var(--oc-space-2);
+  padding: var(--oc-space-1) var(--oc-space-3);
+  border: 0;
+  border-radius: var(--oc-radius-inset);
+  background: transparent;
+  color: var(--oc-text-secondary);
+  font: inherit;
+  font-size: var(--oc-font-size-base);
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  touch-action: manipulation;
+  cursor: var(--cursor-action);
+  transition:
+    background var(--oc-duration-fast) var(--oc-ease-out),
+    color var(--oc-duration-fast) var(--oc-ease-out),
+    transform var(--oc-duration-fast) var(--oc-ease-out);
+}
+
+.oc-segmented-item:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.oc-segmented-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.oc-segmented-item:hover {
+  color: var(--oc-text-primary);
+}
+
+.oc-segmented-item[aria-selected="true"],
+.oc-segmented-item[aria-pressed="true"],
+.oc-segmented-item.is-active {
+  background: var(--oc-surface-interactive-hover);
+  color: var(--oc-text-primary);
+}
+
+.oc-segmented-item:focus-visible {
+  outline: 2px solid var(--oc-focus-ring);
+  outline-offset: 2px;
+}
+
+.oc-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--oc-control-min-height);
+  padding: var(--oc-space-2) var(--oc-space-3);
+  border: 1px solid var(--oc-input-border);
+  border-radius: var(--oc-radius-control);
+  outline: none;
+  background: var(--oc-input-bg);
+  color: var(--oc-text-primary);
+  font: inherit;
+  font-size: var(--oc-font-size-base);
+  line-height: 1.4;
+  touch-action: manipulation;
+  transition:
+    border-color var(--oc-duration-fast) var(--oc-ease-out),
+    box-shadow var(--oc-duration-fast) var(--oc-ease-out);
+}
+
+.oc-input::placeholder {
+  color: var(--oc-input-placeholder);
+}
+
+.oc-input:hover:not(:disabled) {
+  border-color: var(--oc-border-strong);
+}
+
+.oc-input:focus-visible {
+  border-color: var(--oc-input-focus-border);
+  box-shadow: 0 0 0 3px var(--oc-input-focus-ring);
+}
+
+.oc-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.oc-input[aria-invalid="true"] {
+  border-color: var(--oc-status-error-fg);
+}
+
+.oc-banner {
+  display: grid;
+  box-sizing: border-box;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--oc-space-3);
+  padding: var(--oc-space-4);
+  border: 1px solid var(--oc-border-subtle);
+  border-radius: var(--oc-radius-surface);
+  background: var(--oc-surface-card-strong);
+  color: var(--oc-text-secondary);
+  font-size: var(--oc-font-size-sm);
+  line-height: 1.45;
+}
+
+.oc-banner-action {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.oc-empty {
+  display: grid;
+  box-sizing: border-box;
+  min-height: 12rem;
+  place-items: center;
+  padding: var(--oc-space-5);
+  text-align: center;
+}
+
+.oc-empty-content {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  max-width: 24rem;
+  justify-items: center;
+  gap: var(--oc-space-2);
+}
+
+.oc-empty-description {
+  max-width: 42ch;
+  margin: 0;
+  color: var(--oc-text-secondary);
+  font-size: var(--oc-font-size-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.oc-skeleton-line {
+  display: block;
+  width: 100%;
+  height: 0.75rem;
+  overflow: hidden;
+  border-radius: var(--oc-radius-control);
+  background: var(--oc-surface-interactive);
+}
+
+.oc-skeleton-line::after {
+  display: block;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--oc-border-subtle), transparent);
+  content: "";
+  animation: oc-skeleton-sweep 1.2s linear infinite;
+}
+
+.oc-skeleton-line-short {
+  width: 55%;
+}
+
+@keyframes oc-skeleton-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(225%);
+  }
+}
+
+.oc-status {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--oc-space-2);
+  color: var(--oc-text-secondary);
+  font-size: var(--oc-font-size-xs);
+  line-height: 1.4;
+}
+
+.oc-status-indicator {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-radius: var(--oc-radius-round);
+  background: var(--oc-text-muted);
+  box-shadow: 0 0 0 2px var(--oc-bg-surface);
+}
+
+.oc-status-success .oc-status-indicator {
+  background: var(--oc-status-success-fg);
+}
+
+.oc-status-warning .oc-status-indicator {
+  background: var(--oc-status-warning-fg);
+}
+
+.oc-status-error .oc-status-indicator {
+  background: var(--oc-status-error-fg);
+}
+
+.oc-status-info .oc-status-indicator {
+  background: var(--oc-status-info-fg);
+}
+
+.oc-status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-card-interactive {
+    transition: none;
+  }
+
+  .oc-skeleton-line::after {
+    animation: none;
+  }
+}
+
+/* Carapace's settings primitives assume a two-child grid row. Control UI's
+ * established settings row also supports a leading artwork slot, so the
+ * adapter retains that flex contract while sourcing its visual values from
+ * Carapace semantic tokens. */
+.settings-page.oc-app-surface {
+  background: transparent;
+}
+
+.settings-section.oc-settings-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--oc-space-3);
+}
+
+.settings-section__header.oc-settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--oc-space-3);
+  padding: 0;
+}
+
+.settings-section__copy.oc-settings-section-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--oc-space-1);
+}
+
+.settings-section__heading.oc-settings-section-title {
+  color: var(--oc-text-muted);
+  font-family: var(--oc-font-body);
+  font-size: var(--oc-font-size-xs);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.settings-group.oc-settings-group {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--oc-border-subtle) 85%, transparent);
+  border-radius: var(--oc-radius-surface);
+  background: var(--oc-bg-surface);
+  box-shadow: none;
+}
+
+.settings-row.oc-settings-row {
+  display: flex;
+  min-width: 0;
+  min-height: 3rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--oc-space-4);
+  padding: calc(var(--oc-space-3) - 2px) var(--oc-space-4);
+}
+
+.settings-row__text.oc-settings-row-content {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-row__title.oc-settings-row-title {
+  color: var(--oc-text-primary);
+  font-size: var(--oc-font-size-base);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.settings-row__desc.oc-settings-row-description {
+  color: var(--oc-text-muted);
+  font-size: var(--oc-font-size-sm);
+  line-height: 1.45;
+}
+
+.settings-row__control.oc-settings-row-control {
+  display: flex;
+  width: auto;
+  min-width: 0;
+  max-width: 60%;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--oc-space-2);
+}
+
+.settings-row--stacked.oc-settings-row,
+.settings-row--stacked-on-narrow.oc-settings-row {
+  align-items: stretch;
+  flex-direction: column;
+  gap: var(--oc-space-2);
+}
+
+.settings-row--stacked.oc-settings-row .oc-settings-row-control,
+.settings-row--stacked-on-narrow.oc-settings-row .oc-settings-row-control {
+  width: 100%;
+  max-width: none;
+  justify-content: flex-start;
+}
+
+.settings-page.oc-app-surface .btn.oc-action {
+  min-height: 0;
+  gap: 6px;
+  padding: 8px 14px;
+  border-color: var(--oc-border-subtle);
+  border-radius: var(--oc-radius-control);
+  background: var(--oc-bg-elevated);
+  color: var(--oc-text-primary);
+  font-size: var(--oc-font-size-sm);
+  font-weight: 500;
+  line-height: normal;
+}
+
+.settings-page.oc-app-surface .btn.oc-action.oc-action-primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.settings-page.oc-app-surface .btn.oc-action.oc-action-primary:hover:not(:disabled) {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.settings-page.oc-app-surface .btn.btn--sm.oc-action {
+  padding: 6px 10px;
+  font-size: var(--oc-font-size-xs);
+}
+
+.settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled) {
+  border-color: var(--oc-border-strong);
+  background: var(--oc-surface-interactive-hover);
+  color: var(--oc-text-primary);
+}
+
+.settings-page.oc-app-surface .btn.oc-action-icon {
+  width: 30px;
+  height: 30px;
+  padding: 7px;
+}
+
+/* The Control UI radio carries selection as a class while Carapace's generic
+ * item waits for aria-selected/is-active. Keep the shared helper's state
+ * contract and apply Carapace's interactive surface at that adapter seam. */
+.settings-segmented__btn.oc-segmented-item.settings-segmented__btn--active {
+  background: var(--oc-surface-interactive);
+}

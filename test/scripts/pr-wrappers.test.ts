@@ -126,15 +126,14 @@ function makeMismatchedWrapperRepo({
   git(linked, ["commit", "-m", "test: local wrapper"]);
   const localRevision = git(linked, ["rev-parse", "HEAD"]).stdout.trim();
 
-  if (realModules) {
-    mkdirSync(join(canonical, "node_modules"));
-    // Use installed third-party packages only, never workspace source or loader mocks.
-    for (const dependency of ["tsx", "zod", "minimatch", "yaml"]) {
-      symlinkSync(
-        realpathSync(join("node_modules", dependency)),
-        join(canonical, "node_modules", dependency),
-      );
-    }
+  mkdirSync(join(canonical, "node_modules"));
+  // Use installed third-party packages only, never workspace source or loader mocks.
+  for (const dependency of ["tsx", "zod", "minimatch", "yaml"]) {
+    symlinkSync(
+      realpathSync(join("node_modules", dependency)),
+      join(canonical, "node_modules", dependency),
+      process.platform === "win32" ? "junction" : "dir",
+    );
   }
 
   return {
@@ -214,7 +213,7 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain('review_init "$pr"');
     expect(script).toContain('prepare_run "$pr"');
     expect(script).toContain('ci_dispatch "$pr"');
-    expect(script).toContain('merge_run "$pr" "$auto_merge"');
+    expect(script).toContain('merge_run "$merge_pr" "$auto_merge"');
     expect(script).toContain('require_main_target_pr "${1-}"');
     expect(script).toContain("only support PRs targeting main");
   });
@@ -253,16 +252,20 @@ describe("scripts/pr wrappers", () => {
     const review = readScript("scripts/pr-lib/review.sh");
     const push = readScript("scripts/pr-lib/push.sh");
     const merge = readScript("scripts/pr-lib/merge.sh");
+    const mergeOutcome = readScript("scripts/pr-lib/merge-outcome.sh");
 
     expect(script).toContain('base_json=$(read_pr_view_json "$pr" "baseRefName")');
     expect(common).toContain('gh pr view "$pr" --json "$fields"');
     expect(worktree).toContain('metadata=$(read_pr_view_json "$pr"');
     expect(review).toContain('gh_plain pr edit "$pr" --add-assignee "$reviewer"');
-    expect(push).toContain('gh_plain api graphql --input - <<< "$payload"');
+    expect(push).toContain('gh_plain api graphql --input "$payload_file"');
+    expect(push).not.toContain("gh_plain api graphql --input -");
     expect(merge).toContain('gh_plain pr merge "$pr"');
-    expect(merge).toContain('"repos/$repo_nwo/issues/$pr/comments"');
-    expect(merge).toContain("--jq '.html_url // empty'");
-    expect(merge).toContain('git push --force-with-lease="refs/heads/$head_ref:$PREP_HEAD_SHA"');
+    expect(mergeOutcome).toContain('gh_plain api --hostname "$MERGE_REPO_HOST" --method POST');
+    expect(mergeOutcome).toContain("--jq '.html_url // empty'");
+    expect(merge).toContain(
+      'git push --force-with-lease="refs/heads/$MERGE_HEAD_REF:$PREP_HEAD_SHA"',
+    );
   });
 
   itPosix("fails loudly at preflight when ripgrep is unavailable", () => {
@@ -350,6 +353,81 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
+  itPosix("resolves an explicit merge body from the caller before supervisor cwd changes", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    const caller = join(fixture.canonical, "nested");
+    mkdirSync(caller);
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    const result = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      ["merge-run", "123", "--body-file", "operator body.md"],
+      { cwd: caller, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toBe(`<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n`);
+  });
+
+  itPosix(
+    "requires an exact receipt and explicit confirmation for completion-only dispatch",
+    () => {
+      const fixture = makeMismatchedWrapperRepo();
+      writeFileSync(
+        join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+        `merge_complete() { printf '<%s>\\n' "$@"; }\nmerge_run() { exit 99; }\n`,
+      );
+      const oid = "a".repeat(40);
+      for (const args of [
+        ["123", oid],
+        ["123", "HEAD", "--confirmed-operator-completion"],
+        ["0123", oid, "--confirmed-operator-completion"],
+        ["123", oid, "--confirmed-operator-recovery"],
+        ["123", oid, "--confirmed-operator-completion", "--auto-merge"],
+      ]) {
+        const result = spawnSync(
+          join(fixture.canonical, "scripts/pr"),
+          ["merge-complete", ...args],
+          {
+            cwd: fixture.canonical,
+            encoding: "utf8",
+            env: fixture.env,
+          },
+        );
+        expect(result.status, result.stdout + result.stderr).toBe(2);
+        expect(result.stdout).toContain("Usage:");
+      }
+      const result = spawnSync(
+        join(fixture.canonical, "scripts/pr"),
+        ["merge-complete", "123", oid, "--confirmed-operator-completion"],
+        { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toBe(`<123>\n<${oid}>\n`);
+    },
+  );
+
+  itPosix("rejects ambiguous body flags and keeps recovery confirmation mandatory", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    for (const args of [
+      ["merge-run", "123", "--body-file"],
+      ["merge-run", "123", "--body-file", ""],
+      ["merge-run", "123", "--body-file", "one", "--body-file", "two"],
+      ["merge-run", "123", "--auto-merge", "--auto-merge"],
+      ["merge-recover", "123", "a".repeat(40), "--body-file", "one"],
+      ["merge-recover", "123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
+    ]) {
+      const result = spawnSync(join(fixture.canonical, "scripts/pr"), args, {
+        cwd: fixture.canonical,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(2);
+      expect(result.stdout).toContain("Usage:");
+    }
+  });
+
   itPosix("dispatches explicit replacement arguments through the same merge owner", () => {
     const fixture = makeMismatchedWrapperRepo();
     writeFileSync(join(fixture.bin, "gh"), `#!/bin/sh\nprintf '{"baseRefName":"main"}\\n'\n`);
@@ -358,15 +436,24 @@ describe("scripts/pr wrappers", () => {
       `merge_run() { printf '<%s>\\n' "$@"; }\n`,
     );
     for (const replacement of [[], ["--replacement-head", "b".repeat(40)]]) {
-      const result = spawnSync(
-        join(fixture.canonical, "scripts/pr"),
-        ["merge-recover", "123", "a".repeat(40), "--confirmed-operator-recovery", ...replacement],
-        { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
-      );
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(result.stdout).toBe(
-        `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n`,
-      );
+      for (const body of [[], ["--body-file", "message.md"]]) {
+        const result = spawnSync(
+          join(fixture.canonical, "scripts/pr"),
+          [
+            "merge-recover",
+            "123",
+            "a".repeat(40),
+            "--confirmed-operator-recovery",
+            ...body,
+            ...replacement,
+          ],
+          { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+        );
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toBe(
+          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n`,
+        );
+      }
     }
   });
 
@@ -541,6 +628,92 @@ describe("scripts/pr wrappers", () => {
     expect(result.stderr).not.toContain("Refusing to silently substitute");
   });
 
+  itPosix("materializes the anchor when tar stops before the producer's trailing padding", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    parkCanonicalOffAnchor(fixture);
+    const git = join(fixture.bin, "git");
+    writeFileSync(
+      git,
+      `#!/bin/sh
+"$OPENCLAW_TEST_GIT" "$@" || exit
+if [ "$3" = archive ]; then
+  # Valid zero padding exceeds a pipe buffer even when tar has read every entry.
+  dd if=/dev/zero bs=65536 count=32 2>/dev/null
+fi
+`,
+    );
+    chmodSync(git, 0o755);
+    const result = spawnSync(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
+      cwd: fixture.linked,
+      encoding: "utf8",
+      env: { ...fixture.env, OPENCLAW_TEST_GIT: resolveCommand("git") },
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
+    expect(result.stderr).toContain("running wrapper code materialized from");
+    expect(result.stdout).toContain("Usage:");
+    expect(result.stderr).not.toContain("Refusing to silently substitute");
+  });
+
+  itPosix.each(["producer failure", "truncated archive", "reader failure"])(
+    "refuses anchor extraction on %s",
+    (failure) => {
+      const fixture = makeMismatchedWrapperRepo();
+      parkCanonicalOffAnchor(fixture);
+      const git = join(fixture.bin, "git");
+      writeFileSync(
+        git,
+        `#!/bin/sh
+if [ "$3" = archive ]; then
+  if [ "$OPENCLAW_TEST_FAILURE" = 'truncated archive' ]; then
+    "$OPENCLAW_TEST_GIT" "$@" > "$OPENCLAW_TEST_ARCHIVE" || exit
+    dd if="$OPENCLAW_TEST_ARCHIVE" bs=512 count=3 2>/dev/null
+    exit
+  fi
+  "$OPENCLAW_TEST_GIT" "$@" || exit
+  if [ "$OPENCLAW_TEST_FAILURE" = 'producer failure' ]; then
+    exit 42
+  fi
+  exit 0
+fi
+exec "$OPENCLAW_TEST_GIT" "$@"
+`,
+      );
+      chmodSync(git, 0o755);
+      const tar = join(fixture.bin, "tar");
+      writeFileSync(
+        tar,
+        `#!/bin/sh
+printf 'started\\n' >> "$OPENCLAW_TEST_READER_LOG"
+"$OPENCLAW_TEST_TAR" "$@" || exit
+if [ "$OPENCLAW_TEST_FAILURE" = 'reader failure' ]; then
+  exit 42
+fi
+`,
+      );
+      chmodSync(tar, 0o755);
+      const readerLog = join(fixture.root, "reader.log");
+      const result = spawnSync(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: {
+          ...fixture.env,
+          OPENCLAW_TEST_GIT: resolveCommand("git"),
+          OPENCLAW_TEST_TAR: resolveCommand("tar"),
+          OPENCLAW_TEST_FAILURE: failure,
+          OPENCLAW_TEST_ARCHIVE: join(fixture.root, "complete.tar"),
+          OPENCLAW_TEST_READER_LOG: readerLog,
+        },
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(result.stderr).toContain("Refusing to silently substitute");
+      expect(result.stderr).not.toContain("running wrapper code materialized from");
+      expect(existsSync(readerLog)).toBe(failure !== "producer failure");
+      expect(
+        readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+      ).toEqual([]);
+    },
+  );
+
   itPosix("executes extracted helpers through a symlinked temporary root", () => {
     const fixture = makeMismatchedWrapperRepo({ realModules: true });
     // Exercise the wrapper's own helper path, not a physical path reconstructed by the test.
@@ -641,6 +814,28 @@ describe("scripts/pr wrappers", () => {
         expect.soft(result.status, `${entry}\n${result.stdout}\n${result.stderr}`).toBe(exitCode);
         expect.soft(result.stderr, entry).toContain(message);
       }
+      // A later install may remove or redirect the canonical package aliases.
+      // The materialized owner must keep its original installed dependency.
+      const canonicalYaml = join(fixture.canonical, "node_modules/yaml");
+      rmSync(canonicalYaml);
+      const replacementYaml = join(fixture.root, "replacement-yaml");
+      mkdirSync(replacementYaml);
+      writeFileSync(join(replacementYaml, "package.json"), '{"main":"index.js"}');
+      writeFileSync(
+        join(replacementYaml, "index.js"),
+        'throw new Error("replacement yaml executed");\n',
+      );
+      for (const state of ["removed", "redirected"]) {
+        if (state === "redirected") {
+          symlinkSync(replacementYaml, canonicalYaml, "dir");
+        }
+        const verified = run(["scripts/verify-pr-hosted-gates.mjs"]);
+        expect.soft(verified.status, `${state}\n${verified.stderr}`).toBe(1);
+        expect
+          .soft(verified.stderr, state)
+          .toContain("Usage: node scripts/verify-pr-hosted-gates.mjs");
+      }
+
       const attribution = run([
         "scripts/check-changelog-attributions.mjs",
         "--is-forbidden-handle",
@@ -710,38 +905,49 @@ describe("scripts/pr wrappers", () => {
     },
   );
 
-  itPosix("refuses an extracted anchor with a tampered dependency", () => {
-    const fixture = makeMismatchedWrapperRepo({ realModules: true });
-    advanceAnchorReviewDependency(fixture);
-    parkCanonicalOffAnchor(fixture);
-    const tar = join(fixture.bin, "tar");
-    writeFileSync(
-      tar,
-      `#!/bin/sh
+  itPosix.each(["tampered", "missing"])(
+    "refuses an extracted anchor with a %s dependency",
+    (fault) => {
+      const fixture = makeMismatchedWrapperRepo({ realModules: true });
+      advanceAnchorReviewDependency(fixture);
+      parkCanonicalOffAnchor(fixture);
+      const tar = join(fixture.bin, "tar");
+      writeFileSync(
+        tar,
+        `#!/bin/sh
 "$OPENCLAW_TEST_TAR" "$@" || exit
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-C" ]; then
-    printf '\\n// tampered\\n' >> "$2/scripts/lib/anchor-review-record.mjs"
+    if [ "$OPENCLAW_TEST_FAULT" = missing ]; then
+      rm "$2/scripts/lib/anchor-review-record.mjs"
+    else
+      printf '\\n// tampered\\n' >> "$2/scripts/lib/anchor-review-record.mjs"
+    fi
     exit
   fi
   shift
 done
 exit 99
 `,
-    );
-    chmodSync(tar, 0o755);
-    const result = spawnSync(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
-      cwd: fixture.linked,
-      encoding: "utf8",
-      env: { ...fixture.env, OPENCLAW_TEST_TAR: resolveCommand("tar") },
-    });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-    expect(result.stderr).toContain("Refusing to silently substitute");
-    expect(result.stderr).not.toContain("running wrapper code materialized from");
-    expect(
-      readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
-    ).toEqual([]);
-  });
+      );
+      chmodSync(tar, 0o755);
+      const result = spawnSync(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: {
+          ...fixture.env,
+          OPENCLAW_TEST_TAR: resolveCommand("tar"),
+          OPENCLAW_TEST_FAULT: fault,
+        },
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(result.stderr).toContain("Refusing to silently substitute");
+      expect(result.stderr).not.toContain("running wrapper code materialized from");
+      expect(
+        readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+      ).toEqual([]);
+    },
+  );
 
   it("routes a mismatched landing subcommand through the materialized anchor", () => {
     const fixture = makeMismatchedWrapperRepo();
@@ -769,7 +975,7 @@ exit 99
       join(fixture.bin, "gh"),
       `#!/bin/sh
 if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
-  printf 'fixture-user\\n'
+  printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'
   exit 0
 fi
 echo "Unexpected gh call: $*" >&2
@@ -843,11 +1049,6 @@ exit 99
         dispatchBody: `node "$script_parent_dir/${script}" ${args};`,
       });
       if (dependency) {
-        symlinkSync(
-          realpathSync("node_modules"),
-          join(fixture.canonical, "node_modules"),
-          process.platform === "win32" ? "junction" : "dir",
-        );
         writeFileSync(
           join(fixture.linked, "caller-dependency.mts"),
           `export const ${binding} = null;\nthrow new Error("caller workspace dependency executed");\n`,
@@ -892,15 +1093,12 @@ exit 99
     },
   );
 
-  it.each([
-    { script: "watch-pr-ci.mjs", dependency: "zod" },
-    { script: "verify-pr-hosted-gates.mjs", dependency: "minimatch" },
-  ])(
-    "reports the missing $dependency toolchain without installing dependencies",
-    ({ script, dependency }) => {
-      const fixture = makeMismatchedWrapperRepo({
-        dispatchBody: `node "$script_parent_dir/${script}" --help;`,
-      });
+  it.each(["tsx", "zod", "minimatch", "yaml"])(
+    "refuses the missing %s toolchain before handoff without installing dependencies",
+    (dependency) => {
+      const fixture = makeMismatchedWrapperRepo();
+      const installedDependency = join(fixture.canonical, "node_modules", dependency);
+      rmSync(installedDependency);
       writeFileSync(
         join(fixture.bin, "pnpm"),
         `#!/bin/sh\ntouch "${join(fixture.root, "installed")}"\nexit 1\n`,
@@ -912,9 +1110,19 @@ exit 99
         env: { ...fixture.env, TMPDIR: fixture.root },
       });
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain(`Cannot find package '${dependency}'`);
+      expect(result.stderr).toContain(
+        `Cannot resolve installed scripts/pr dependency '${dependency}'`,
+      );
+      expect(result.stderr).toContain(
+        "Restore frozen dependencies in a clean trusted-main checkout",
+      );
+      expect(result.stderr).not.toContain("running wrapper code materialized from");
       expect(existsSync(join(fixture.root, "installed"))).toBe(false);
-      expect(existsSync(join(fixture.canonical, "node_modules"))).toBe(false);
+      expect(existsSync(installedDependency)).toBe(false);
+      expect(fixture.git(fixture.canonical, ["for-each-ref", "refs/openclaw"]).stdout).toBe("");
+      expect(
+        readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+      ).toEqual([]);
     },
   );
 
@@ -956,18 +1164,6 @@ exit 99
     expect(script).toContain('exec "$base" merge-verify "$1"');
     expect(script).toContain('exec "$base" merge-verify "$pr"');
     expect(script).toContain('exec "$base" merge-run "$pr"');
-  });
-
-  it("defaults to squash and allows commit-preserving merge methods", () => {
-    const script = readScript("scripts/pr-lib/merge.sh");
-
-    expect(script).toContain("OPENCLAW_PR_MERGE_METHOD:-squash");
-    expect(script).toContain("--squash");
-    expect(script).toContain("--merge");
-    expect(script).toContain("--rebase");
-    expect(script).toContain("'Merged via %s.");
-    expect(script).toContain("--auto");
-    expect(script).toContain('--match-head-commit "$PREP_HEAD_SHA"');
   });
 
   it("keeps prepare wrapper modes delegated to the main PR helper", () => {
@@ -1123,36 +1319,275 @@ exit 99
     );
   });
 
-  it("verifies local GitHub auth through GraphQL when REST quota is unavailable", () => {
-    const dir = tempDirs.make("openclaw-pr-auth-");
-    const gh = join(dir, "gh");
-    writeFileSync(
-      gh,
-      `#!/bin/sh
-if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
-  printf 'monalisa\\n'
-  exit 0
-fi
-exit 1
-`,
-    );
-    chmodSync(gh, 0o755);
+  const viewer = { data: { viewer: { login: "fixture-user" } } };
+  const quota = {
+    "X-RateLimit-Resource": "graphql",
+    "X-RateLimit-Limit": "5000",
+    "X-RateLimit-Remaining": "0",
+    "X-RateLimit-Reset": "1893456000",
+  };
+  const rateError = { errors: [{ type: "RATE_LIMITED", message: "synthetic-private-detail" }] };
+  const preflightCases: {
+    name: string;
+    status?: number;
+    code: number;
+    body?: unknown;
+    rawBody?: string;
+    headers?: Record<string, string>;
+    diagnostic?: string;
+    details?: string[];
+    absent?: string[];
+  }[] = [
+    ...[{ type: "RATE_LIMITED" }, { type: "RATE_LIMIT", code: "graphql_rate_limit" }].map(
+      (error) => ({
+        name: `primary GraphQL quota exhaustion (${error.type})`,
+        status: 200,
+        code: 1,
+        body: { errors: [{ ...error, message: "synthetic-private-detail" }] },
+        headers: quota,
+        diagnostic: "rate limited",
+        details: [
+          "resource=graphql; remaining=0; limit=5000",
+          "reset=2030-01-01T00:00:00Z",
+          "Wait until 2030-01-01T00:00:00Z (UTC), then retry manually.",
+        ],
+      }),
+    ),
+    {
+      name: "primary HTTP 403 exhaustion",
+      status: 403,
+      code: 1,
+      body: { message: "API rate limit exceeded for synthetic-private-detail" },
+      headers: quota,
+      diagnostic: "rate limited",
+      details: ["remaining=0", "Wait"],
+    },
+    {
+      name: "HTTP 429 throttle",
+      status: 429,
+      code: 1,
+      body: {},
+      diagnostic: "rate limited",
+      details: ["reset=unknown", "reset time is unknown", "Wait"],
+    },
+    ...[200, 403].map((status) => ({
+      name: `secondary HTTP ${status} throttle`,
+      status,
+      code: 1,
+      body: { message: "You have exceeded a secondary rate limit. synthetic-private-detail" },
+      headers: { ...quota, "Retry-After": "60", "X-RateLimit-Remaining": "50" },
+      diagnostic: "rate limited",
+      details: [
+        "remaining=50",
+        "reset=2030-01-01T00:00:00Z",
+        "retry-after=60s",
+        "Wait at least 60 seconds",
+      ],
+      absent: ["until 2030-01-01T00:00:00Z"],
+    })),
+    {
+      name: "secondary throttle without retry header",
+      status: 403,
+      code: 1,
+      body: { message: "You have exceeded a secondary rate limit." },
+      diagnostic: "rate limited",
+      details: ["reset=unknown", "Wait"],
+    },
+    {
+      name: "invalid quota metadata",
+      status: 200,
+      code: 1,
+      body: rateError,
+      headers: {
+        "X-RateLimit-Resource": "synthetic-private-detail",
+        "X-RateLimit-Remaining": "no",
+        "X-RateLimit-Limit": "5000synthetic-private-detail",
+        "X-RateLimit-Reset": "999999999999999",
+        "Retry-After": "synthetic-private-detail",
+      },
+      diagnostic: "rate limited",
+      details: ["resource=unknown; remaining=unknown; limit=unknown; reset=unknown"],
+    },
+    {
+      name: "rejected authentication",
+      status: 401,
+      code: 1,
+      body: { message: "Bad credentials synthetic-private-detail" },
+      diagnostic: "authentication unavailable",
+    },
+    { name: "missing authentication", code: 4, diagnostic: "authentication unavailable" },
+    ...[403, 500, 503].map((status) => ({
+      name: `HTTP ${status} failure`,
+      status,
+      code: 1,
+      body: { message: "synthetic-private-detail" },
+      diagnostic: "failed",
+    })),
+    { name: "transport failure", code: 1, diagnostic: "failed" },
+    {
+      name: "unknown GraphQL error",
+      status: 200,
+      code: 1,
+      body: { errors: [{ type: "SYNTHETIC_UNKNOWN", message: "synthetic-private-detail" }] },
+      headers: quota,
+      diagnostic: "failed",
+      details: [
+        "Observed exhausted primary quota",
+        "remaining=0",
+        "failure cause remains unverified",
+      ],
+    },
+    {
+      name: "malformed body",
+      status: 200,
+      code: 1,
+      rawBody: "{synthetic-private-detail",
+      headers: quota,
+      diagnostic: "failed",
+      details: [
+        "Observed exhausted primary quota",
+        "remaining=0",
+        "failure cause remains unverified",
+      ],
+    },
+    {
+      name: "successful process without viewer",
+      status: 200,
+      code: 0,
+      body: { data: { viewer: null } },
+      headers: quota,
+      diagnostic: "failed",
+      details: [
+        "Observed exhausted primary quota",
+        "remaining=0",
+        "failure cause remains unverified",
+      ],
+    },
+    {
+      name: "empty viewer",
+      status: 200,
+      code: 0,
+      body: { data: { viewer: { login: "  " } } },
+      diagnostic: "failed",
+    },
+    {
+      name: "wrong viewer type",
+      status: 200,
+      code: 0,
+      body: { data: { viewer: { login: 42 } } },
+      diagnostic: "failed",
+    },
+    {
+      name: "partial viewer with errors",
+      status: 200,
+      code: 0,
+      body: { ...viewer, errors: [{ type: "FORBIDDEN" }] },
+      diagnostic: "failed",
+    },
+    {
+      name: "viewer with failed process",
+      status: 200,
+      code: 1,
+      body: viewer,
+      diagnostic: "failed",
+    },
+    { name: "missing HTTP framing", code: 0, body: viewer, diagnostic: "failed" },
+    { name: "valid viewer", status: 200, code: 0, body: viewer },
+    { name: "successful last quota request", status: 200, code: 0, body: viewer, headers: quota },
+  ];
 
+  it.each([
+    ...preflightCases.map((scenario) => ({ ...scenario, route: "default" })),
+    { ...preflightCases[0]!, route: "override" },
+  ])("GitHub API preflight: $name ($route)", ({ route, ...scenario }) => {
+    const dir = tempDirs.make("openclaw-pr-auth-");
+    const env = isolatedWrapperEnv(dir);
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    const pathGh = join(bin, "gh");
+    const gh = route === "default" ? pathGh : join(dir, "selected-gh");
+    const calls = join(dir, "calls.jsonl");
+    const headers =
+      scenario.status === undefined
+        ? ""
+        : `HTTP/2.0 ${scenario.status} Synthetic\nContent-Type: application/json\r\n` +
+          Object.entries(scenario.headers ?? {})
+            .map(([name, value]) => `${name}: ${value}\r\n`)
+            .join("") +
+          "X-Request-Id: synthetic-private-detail\r\n\r\n";
+    const body =
+      scenario.rawBody ?? (scenario.body === undefined ? "" : JSON.stringify(scenario.body));
+    const fakeGh = `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+if (args.includes("--include")) process.stdout.write(${JSON.stringify(headers)});
+process.stdout.write(${JSON.stringify(body)});
+console.error("gh: synthetic-private-detail");
+process.exit(${scenario.code});
+`;
+    writeFileSync(
+      pathGh,
+      route === "default" ? fakeGh : "#!/bin/sh\necho UNEXPECTED_ROUTE >&2\nexit 99\n",
+      { mode: 0o755 },
+    );
+    if (route === "override") {
+      writeFileSync(gh, fakeGh, { mode: 0o755 });
+    }
     const result = spawnSync(
       "bash",
       [
         "-c",
-        "source scripts/lib/plain-gh.sh; source scripts/pr-lib/worktree.sh; ensure_gh_api_auth",
+        [
+          "set -euo pipefail",
+          "source scripts/lib/plain-gh.sh",
+          'source "$PWD/scripts/pr-lib/worktree.sh"',
+          'repo_root() { printf "%s\\n" "$HOME"; }',
+          "mark_pr_operation_side_effects_started() { echo UNEXPECTED_SIDE_EFFECT; return 99; }",
+          scenario.diagnostic ? "enter_worktree 42 false || exit 1" : "ensure_gh_api_auth",
+        ].join("\n"),
       ],
       {
         cwd: process.cwd(),
-        env: { ...isolatedWrapperEnv(dir), OPENCLAW_GH_BIN: gh, GH_TOKEN: "synthetic-token" },
         encoding: "utf8",
+        env: {
+          ...env,
+          OPENCLAW_GH_BIN: route === "override" ? gh : "",
+          GH_TOKEN: "synthetic-token",
+        },
       },
     );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result.status, result.stderr).toBe(scenario.diagnostic ? 1 : 0);
+    expect(result.stdout).not.toContain("UNEXPECTED");
+    expect(result.stdout + result.stderr).not.toMatch(/synthetic-private-detail|UNEXPECTED_ROUTE/);
+    if (scenario.diagnostic) {
+      expect(result.stderr).toContain(`GitHub API preflight ${scenario.diagnostic}`);
+      for (const detail of scenario.details ?? []) {
+        expect(result.stderr).toContain(detail);
+      }
+      for (const detail of scenario.absent ?? []) {
+        expect(result.stderr).not.toContain(detail);
+      }
+      if (scenario.diagnostic === "failed") {
+        expect(result.stderr).not.toContain("preflight rate limited");
+      }
+      if (scenario.diagnostic === "authentication unavailable") {
+        expect(result.stderr).toContain(
+          "Configure or refresh the intended active credential manually",
+        );
+      } else {
+        expect(result.stderr).not.toMatch(/login|refresh|invalid credentials/i);
+      }
+    } else {
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe("");
+    }
+    expect(
+      readFileSync(calls, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([["api", "graphql", "-f", "query=query { viewer { login } }", "--include"]]);
   });
 
   it.each(["default", "override"])(

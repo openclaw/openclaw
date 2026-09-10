@@ -1,6 +1,7 @@
 // Context accounting excludes display-only activity without changing durable history.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -16,6 +17,7 @@ import {
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
   readSessionTranscriptMessageEventPage,
+  withRecentSessionTranscriptActiveEvents,
 } from "./session-accessor.sqlite-active-events.js";
 import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcile.js";
 
@@ -95,7 +97,118 @@ describe("SQLite transcript context accounting", () => {
       const tail = readRecentSessionTranscriptActiveEvents(scope, 2);
       expect(tail.map((event) => (event as { id: string }).id)).toEqual(["bootstrap", "usage"]);
       expect(tail[1]).toMatchObject({ message: { usage: { input: 86_000, output: 2_000 } } });
+      const visited: unknown[] = [];
+      withRecentSessionTranscriptActiveEvents(scope, 2, (visit) => {
+        visit((event) => visited.push(event));
+      });
+      expect(visited).toEqual(tail.toReversed());
       expect(readTranscriptStatsSync(scope).eventCount).toBeGreaterThan(513);
+    },
+  );
+
+  it("keeps repeated visits on one snapshot and expires their reader on return", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "before" } }],
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase(scope);
+    const { DatabaseSync } = requireNodeSqlite();
+    const writer = new DatabaseSync(database.path);
+    let savedVisit: ((visitor: (event: unknown) => void) => void) | undefined;
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    try {
+      withRecentSessionTranscriptActiveEvents(scope, 1, (visit) => {
+        savedVisit = visit;
+        visit((event) => first.push(event));
+        writer.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
+          JSON.stringify({
+            type: "message",
+            id: "seed",
+            parentId: null,
+            message: { role: "user", content: "after" },
+          }),
+          scope.sessionId,
+        );
+        visit((event) => second.push(event));
+      });
+    } finally {
+      writer.close();
+    }
+    expect(first).toMatchObject([{ message: { content: "before" } }]);
+    expect(second).toEqual(first);
+    expect(readRecentSessionTranscriptActiveEvents(scope, 1)).toMatchObject([
+      { message: { content: "after" } },
+    ]);
+    expect(() => savedVisit?.(() => {})).toThrow("outside its read snapshot");
+  });
+
+  it.each(["json", "sql", "consumer"] as const)(
+    "preserves %s failure precedence and releases the read cursor",
+    async (failureKind) => {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [
+          { eventId: "oldest", parentId: null, message: { role: "user", content: "oldest" } },
+          {
+            eventId: "middle",
+            parentId: "oldest",
+            message: { role: "assistant", content: "middle" },
+          },
+          { eventId: "newest", parentId: "middle", message: { role: "user", content: "newest" } },
+        ],
+        touchSessionEntry: false,
+      });
+      const database = openOpenClawAgentDatabase(scope);
+      const failure = new Error("consumer stopped");
+      const malformed = '{"old":}';
+      let parseFailure: Error | undefined;
+      try {
+        JSON.parse(malformed);
+      } catch (error) {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        parseFailure = error;
+      }
+      if (failureKind !== "consumer") {
+        // The connection-local view corrupts reads without changing canonical rows or projections.
+        database.db.exec(`CREATE TEMP VIEW transcript_events AS
+          SELECT event.session_id, event.seq, event.created_at,
+            CASE identity.event_id
+              WHEN 'oldest' THEN ${failureKind === "sql" ? "json_extract('{broken', '$')" : "'{\"old\":}'"}
+              WHEN 'middle' THEN '{"newer":}'
+              ELSE event.event_json
+            END AS event_json
+          FROM main.transcript_events AS event
+          JOIN transcript_event_identities AS identity
+            ON identity.session_id = event.session_id AND identity.seq = event.seq`);
+      }
+      try {
+        if (failureKind === "consumer") {
+          expect(() =>
+            withRecentSessionTranscriptActiveEvents(scope, 3, (visit) => {
+              visit(() => {
+                throw failure;
+              });
+            }),
+          ).toThrow(failure);
+        } else {
+          expect(() => readRecentSessionTranscriptActiveEvents(scope, 3)).toThrow(
+            failureKind === "sql" ? "malformed JSON" : parseFailure,
+          );
+        }
+      } finally {
+        if (failureKind !== "consumer") {
+          database.db.exec("DROP VIEW temp.transcript_events");
+        }
+      }
+      expect(database.db.isTransaction).toBe(false);
+      expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+        busy: 0,
+      });
+      expect(readRecentSessionTranscriptActiveEvents(scope, 3)).toHaveLength(3);
+      await appendTranscriptEvent(scope, { type: "custom", id: "after", parentId: "newest" });
+      expect(readRecentSessionTranscriptActiveEvents(scope, 1)).toMatchObject([{ id: "after" }]);
     },
   );
 

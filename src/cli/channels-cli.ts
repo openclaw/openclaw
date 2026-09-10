@@ -2,6 +2,7 @@
 import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
@@ -74,12 +75,13 @@ function getOptionNames(command: Command): string[] {
   return command.options.map((option) => option.attributeName());
 }
 
-function resolveAgentOption(command: Command): string | undefined {
-  const source = command.getOptionValueSource("agent");
+function resolveStringOption(command: Command, name: string): string | undefined {
+  const source = command.getOptionValueSource(name);
+  const localValue = command.getOptionValue(name);
   const value =
     source && source !== "default"
-      ? command.getOptionValue("agent")
-      : inheritOptionFromParent<string>(command, "agent");
+      ? localValue
+      : (inheritOptionFromParent<string>(command, name) ?? localValue);
   return typeof value === "string" ? value : undefined;
 }
 
@@ -210,7 +212,7 @@ export async function registerChannelsCli(
     .description("Show provider capabilities (intents/scopes + supported features)")
     .option("--agent <id>", "Agent owner for channel discovery")
     .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`)
-    .option("--account <id>", "Account id (only with --channel)")
+    .option("--account <id>", "Account id (only with --channel)", parseAccountSelector)
     .option("--target <dest>", "Channel target for permission audit (Discord channel:<id>)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--json", "Output JSON", false)
@@ -218,7 +220,7 @@ export async function registerChannelsCli(
       await runChannelsCommand(async () => {
         const { channelsCapabilitiesCommand } = await loadChannelsCommands();
         await channelsCapabilitiesCommand(
-          { ...opts, agent: resolveAgentOption(command) },
+          { ...opts, agent: resolveStringOption(command, "agent") },
           defaultRuntime,
         );
       });
@@ -229,7 +231,7 @@ export async function registerChannelsCli(
     .description("Resolve channel/user names to IDs")
     .argument("<entries...>", "Entries to resolve (names or ids)")
     .option("--channel <name>", `Channel (${channelNames})`)
-    .option("--account <id>", "Account id (accountId)")
+    .option("--account <id>", "Account id (accountId)", parseAccountSelector)
     .option("--agent <id>", "Agent owner for channel resolution")
     .addOption(
       new Option("--kind <kind>", "Target kind (auto|user|group|channel)")
@@ -242,7 +244,7 @@ export async function registerChannelsCli(
         const { channelsResolveCommand } = await loadChannelsCommands();
         await channelsResolveCommand(
           {
-            agent: resolveAgentOption(command),
+            agent: resolveStringOption(command, "agent"),
             channel: opts.channel as string | undefined,
             account: opts.account as string | undefined,
             kind: opts.kind as "auto" | "user" | "group" | "channel",
@@ -269,7 +271,8 @@ export async function registerChannelsCli(
 
   const deadLetters = channels
     .command("dead-letters")
-    .description("Inspect and resubmit failed inbound channel events");
+    .description("Inspect and resubmit failed inbound channel events")
+    .option("--account <id>", "Account id", "default");
 
   deadLetters
     .command("list")
@@ -278,11 +281,14 @@ export async function registerChannelsCli(
     .option("--account <id>", "Account id", "default")
     .option("--limit <n>", "Maximum entries", "100")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runChannelsCommand(async () => {
         const { channelsDeadLettersListCommand } =
           await import("../commands/channels/dead-letters.js");
-        await channelsDeadLettersListCommand(opts, defaultRuntime);
+        await channelsDeadLettersListCommand(
+          { ...opts, account: resolveStringOption(command, "account") },
+          defaultRuntime,
+        );
       });
     });
 
@@ -293,11 +299,15 @@ export async function registerChannelsCli(
     .requiredOption("--channel <name>", "Channel id")
     .option("--account <id>", "Account id", "default")
     .option("--json", "Output JSON", false)
-    .action(async (eventId, opts) => {
+    .action(async (eventId, opts, command) => {
       await runChannelsCommand(async () => {
         const { channelsDeadLettersResubmitCommand } =
           await import("../commands/channels/dead-letters.js");
-        await channelsDeadLettersResubmitCommand(eventId, opts, defaultRuntime);
+        await channelsDeadLettersResubmitCommand(
+          eventId,
+          { ...opts, account: resolveStringOption(command, "account") },
+          defaultRuntime,
+        );
       });
     });
 
@@ -350,7 +360,7 @@ export async function registerChannelsCli(
             opts,
             channelSetupOptionMode === "modern" ? command : undefined,
           ),
-          agent: resolveAgentOption(command),
+          agent: resolveStringOption(command, "agent"),
         },
         defaultRuntime,
         {
@@ -372,7 +382,7 @@ export async function registerChannelsCli(
         const { channelsRemoveCommand } = await loadChannelsCommands();
         const hasFlags = hasExplicitOptions(command, optionNamesRemove);
         await channelsRemoveCommand(
-          { ...opts, agent: resolveAgentOption(command) },
+          { ...opts, agent: resolveStringOption(command, "agent") },
           defaultRuntime,
           { hasFlags },
         );
@@ -398,7 +408,7 @@ export async function registerChannelsCli(
         () =>
           (mode === "login" ? runChannelLogin : runChannelLogout)(
             {
-              agent: resolveAgentOption(command),
+              agent: resolveStringOption(command, "agent"),
               channel: opts.channel as string | undefined,
               account: opts.account as string | undefined,
               ...(mode === "login" ? { verbose: Boolean(opts.verbose) } : {}),

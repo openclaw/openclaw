@@ -9,6 +9,7 @@ import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { isQaPosixProcessGroupAlive } from "./posix-process-group.js";
+import { runQaCli } from "./qa-cli-process.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 // RPC is outside these process-lifetime tests. HTTP readiness and all processes stay real.
@@ -30,6 +31,7 @@ type FixtureRecord = {
 const fixtureSource = String.raw`
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
 const [record, phase, mode, command, ...args] = process.argv.slice(2);
@@ -48,21 +50,40 @@ if (command === "descendant") {
     : command === "update" ? (args.includes("--help") ? "help" : "repair") : command;
   write(current);
   if (current === phase) {
-    process.on("SIGTERM", () => {});
+    process.on("SIGTERM", () => {
+      if (mode === "running") for (const [fd, label] of [[1, "stdout"], [2, "stderr"]]) {
+        try { fs.writeSync(fd, "\nshutdown " + label + " diagnostic apiKey=synthetic-drain-secret\n"); }
+        catch { /* The fault matrix can close either parent-side pipe. */ }
+      }
+    });
     setTimeout(() => process.exit(20), 30_000);
     const child = spawn(process.execPath, [process.argv[1], record, phase, mode, "descendant"],
       { stdio: ["ignore", mode === "closed-pipes" ? "ignore" : "inherit", mode === "closed-pipes" ? "ignore" : "inherit", "ipc"] });
     await once(child, "message");
     write("ready", { descendant: child.pid, tempRoot: process.env.OPENCLAW_QA_TEMP_ROOT,
       ...(mode === "failure" ? { submittedKey: input.trim() } : {}) });
+    if (mode === "running") {
+      fs.writeSync(2, "plugin registry still pending apiKey=synthetic-stderr-secret\n::error::stderr diagnostic\nstderr ready\n");
+      fs.writeSync(1, "diagnostic ".repeat(400) + "\nplugin scan still pending Authorization: Bearer synthetic-stdout-secret\n##[error]stdout diagnostic\nstdout ready\n");
+    }
     if (mode !== "running") {
       if (mode === "failure") fs.writeSync(2, "Authorization: Bearer " + input.trim() + "\ncontext retained\n" + "diagnostic ".repeat(400));
       process.stdout.write("fixture-output");
       process.exit(mode === "failure" ? 17 : 0);
     }
   } else if (current === "gateway") {
+    fs.writeFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "candidate-owner"), String(process.pid));
     http.createServer((_request, response) => response.end("ok"))
       .listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");
+  } else if (current === "message") {
+    const ownerPid = Number(fs.readFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "candidate-owner"), "utf8"));
+    process.kill(ownerPid, 0);
+    if (args.includes("--gateway-only")) throw new Error("Gateway-only argument reached scenario CLI");
+    if (args.includes("--unsupported")) {
+      console.error("candidate does not support this action");
+      process.exit(2);
+    }
+    console.log(JSON.stringify({ ownerPid, args, cwd: process.cwd(), marker: process.env.QA_CLI_MARKER }));
   } else {
     if (current === "help") process.stdout.write("--accept-capabilities");
     process.exit(0);
@@ -215,6 +236,55 @@ async function fixture(phase: string, mode: string) {
 }
 
 describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", () => {
+  it("uses the direct candidate CLI while its Gateway owns the state", async () => {
+    const f = await fixture("hang", "running");
+    const repoRoot = path.join(f.root, "harness");
+    await fs.mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "dist", "index.js"),
+      'throw new Error("harness CLI must not touch candidate-owned state");\n',
+    );
+    const gateway = await f.owner.start({
+      repoRoot,
+      command: { ...f.command, cwd: f.root, argsSuffix: ["--gateway-only"] },
+      providerMode: "mock-openai",
+      controlUiEnabled: false,
+      transportBaseUrl: "http://127.0.0.1:1",
+      runtimeEnvPatch: { QA_CLI_MARKER: "gateway" },
+    });
+    const env = {
+      gateway,
+      repoRoot,
+      providerMode: "mock-openai" as const,
+      primaryModel: "openai/gpt-5",
+      alternateModel: "openai/gpt-5",
+    };
+    await expect(
+      runQaCli(env, ["message", "edit", "--json"], {
+        json: true,
+        env: { QA_CLI_MARKER: "scenario" },
+      }),
+    ).resolves.toEqual({
+      ownerPid: gateway.pid,
+      args: ["edit", "--json"],
+      cwd: f.root,
+      marker: "scenario",
+    });
+    await expect(runQaCli(env, ["message", "edit", "--unsupported"])).rejects.toThrow(
+      "qa cli failed (2): candidate does not support this action",
+    );
+    expect(f.records().map((entry) => entry.kind)).toEqual([
+      "openai",
+      "anthropic",
+      "help",
+      "repair",
+      "gateway",
+      "message",
+      "message",
+    ]);
+    expect(isQaPosixProcessGroupAlive(gateway.pid!)).toBe(true);
+  });
+
   it.each([
     { phase: "openai", mode: "running" },
     { phase: "anthropic", mode: "running" },
@@ -277,8 +347,8 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     },
   );
 
-  it.each(["timeout", "stdout", "stderr", "process"] as const)(
-    "settles a real CLI tree after %s failure without retaining raw error graphs",
+  it.each(["timeout", "cancel", "stdout", "stderr", "stdin", "process"] as const)(
+    "retains bounded redacted diagnostics after %s failure and settles the real CLI tree",
     async (failure) => {
       const f = await fixture("probe", "running");
       const lifetime = new QaGatewayChildLifecycle();
@@ -290,38 +360,88 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
         runQaGatewayCliCommand({
           ...f.command,
           lifetime,
-          args: ["probe"],
+          args: ["probe", "unlabeled-argv-secret"],
           cwd: f.root,
-          env: { HOME: f.root },
+          env: { HOME: f.root, QA_SYNTHETIC_SECRET: "unlabeled-env-secret" },
+          stdin: failure === "stdin" ? "unlabeled-stdin-secret" : undefined,
         }),
       );
       cleanups.push(async () => {
         await lifetime.stop();
       });
-      await f.ready();
       const child = registration.mock.calls[0]![0];
+      const observed = { stdout: "", stderr: "" };
+      for (const stream of ["stdout", "stderr"] as const) {
+        child[stream]!.on("data", (chunk) => (observed[stream] += String(chunk)));
+      }
+      await f.ready();
+      await vi.waitFor(() => {
+        expect(observed.stdout).toContain("stdout ready");
+        expect(observed.stderr).toContain("stderr ready");
+      });
+      let stopping: Promise<unknown> | undefined;
       if (failure === "timeout") {
         await vi.advanceTimersByTimeAsync(120_000);
+      } else if (failure === "cancel") {
+        stopping = f.track(lifetime.stop());
       } else {
-        const error = new AggregateError(
-          [new Error("unlabeled-nested-secret")],
-          "apiKey=synthetic-stream-secret",
-          { cause: new Error("unlabeled-cause-secret") },
+        const error = Object.assign(
+          new AggregateError(
+            [new Error("unlabeled-nested-secret")],
+            "apiKey=synthetic-stream-secret",
+            { cause: new Error("unlabeled-cause-secret") },
+          ),
+          { spawnargs: ["unlabeled-spawnargs-secret"], env: { key: "unlabeled-error-env-secret" } },
         );
         if (failure === "process") {
           child.emit("error", error);
+        } else if (failure === "stdin") {
+          child.stdin!.emit("error", error);
         } else {
-          child[failure]!.destroy(error);
+          await bounded(
+            new Promise<void>((resolve) => {
+              child[failure]!.once("error", () => resolve());
+              child[failure]!.destroy(error);
+            }),
+          );
         }
       }
+      (failure === "process" ? child.stderr! : child).emit("error", new Error("later failure"));
       const error = await bounded(command);
       expect(error).toBeInstanceOf(Error);
-      expect(String(error)).toContain(
-        failure === "timeout" ? "exceeded 120000ms" : `${failure} failed`,
+      if (!(error instanceof Error)) {
+        throw new Error("expected CLI failure");
+      }
+      expect(error.message).toContain(
+        failure === "timeout"
+          ? "exceeded 120000ms"
+          : failure === "cancel"
+            ? "CLI cancelled"
+            : `${failure} failed`,
       );
+      expect(error.message).not.toContain("later failure");
+      expect(error.message).toContain("plugin registry still pending apiKey=<redacted>");
+      expect(error.message).toContain("plugin scan still pending Authorization: Bearer <redacted>");
+      expect(error.message.indexOf("plugin registry")).toBeLessThan(
+        error.message.indexOf("plugin scan"),
+      );
+      for (const stream of ["stdout", "stderr"] as const) {
+        if (failure !== stream) {
+          expect(error.message).toContain(`shutdown ${stream} diagnostic apiKey=<redacted>`);
+        }
+      }
+      expect(error.message.length).toBeLessThanOrEqual(2_048);
+      expect(error.message).toContain(": :error::stderr diagnostic");
+      expect(error.message).toContain("# #[error]stdout diagnostic");
+      expect(error.message).not.toMatch(/(^|[\r\n])[^\S\r\n]*::/u);
+      expect(error).not.toHaveProperty("cause");
+      expect(error).not.toHaveProperty("errors");
       const diagnostic = inspect(error, { depth: null });
-      expect(diagnostic).not.toMatch(/synthetic-stream-secret|unlabeled-(nested|cause)-secret/u);
+      expect(diagnostic).not.toMatch(/synthetic-[\w-]+-secret|unlabeled-[\w-]+-secret/u);
       f.assertStopped();
+      if (stopping) {
+        expect(await bounded(stopping)).toEqual({ process: "confirmed-stopped", errors: [] });
+      }
       await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
     },
   );

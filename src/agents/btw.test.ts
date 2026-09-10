@@ -1,12 +1,17 @@
 /** Tests BTW side-question execution, session context, auth, and harness routing. */
 
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { consumeReplyUsageState } from "../auto-reply/reply/reply-usage-state.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import {
@@ -14,6 +19,8 @@ import {
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -55,6 +62,7 @@ const migrateSessionEntriesMock = vi.fn();
 const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
 const loadPreparedModelRuntimeSnapshotMock = vi.fn();
+let acquireSnapshotResources: (() => { release: () => void }) | undefined;
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
 const getModelRegistryRuntimeMock = vi.fn();
@@ -72,7 +80,7 @@ const resolveAgentWorkspaceDirMock = vi.fn();
 const listAgentEntriesMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
-const resolveEmbeddedAgentStreamFnMock = vi.fn();
+const resolveEmbeddedAgentStreamMock = vi.fn();
 const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
@@ -142,9 +150,8 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
   getModelRegistryRuntime: (...args: unknown[]) => getModelRegistryRuntimeMock(...args),
 }));
 
-vi.mock("./prepared-model-runtime.js", () => ({
-  preparedModelRuntimeConfigsMatch: (left: unknown, right: unknown) => left === right,
-  loadPreparedModelRuntimeSnapshot: async (params: {
+vi.mock("./prepared-model-runtime.js", () => {
+  const loadSnapshot = async (params: {
     agentId?: string;
     agentDir: string;
     config: unknown;
@@ -177,8 +184,16 @@ vi.mock("./prepared-model-runtime.js", () => ({
       inlineProviderModels: [],
       createStores: () => ({ authStorage, modelRegistry }),
     };
-  },
-}));
+  };
+  return {
+    preparedModelRuntimeConfigsMatch: (left: unknown, right: unknown) => left === right,
+    loadPreparedModelRuntimeSnapshot: loadSnapshot,
+    acquirePublishedPreparedModelRuntime: async (params: Parameters<typeof loadSnapshot>[0]) => {
+      const snapshot = await loadSnapshot(params);
+      return { snapshot, release: acquireSnapshotResources?.().release ?? (() => {}) };
+    },
+  };
+});
 
 vi.mock("./model-discovery-context.js", () => ({
   resolveModelPluginMetadataSnapshot: () => undefined,
@@ -358,7 +373,7 @@ vi.mock("./provider-stream.js", () => ({
 }));
 
 vi.mock("./embedded-agent-runner/stream-resolution.js", () => ({
-  resolveEmbeddedAgentStreamFn: (...args: unknown[]) => resolveEmbeddedAgentStreamFnMock(...args),
+  resolveEmbeddedAgentStream: (...args: unknown[]) => resolveEmbeddedAgentStreamMock(...args),
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -423,8 +438,6 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry
 }
 
 function createAssistantDoneEvent(content: unknown[]) {
-  // Done events include usage/provider metadata because BTW persists the reply
-  // as a normal assistant turn.
   return {
     type: "done",
     reason: "stop",
@@ -497,8 +510,10 @@ function supportsPreparedOpenAIAuth(ctx: Parameters<AgentHarness["supports"]>[0]
   return { supported: true as const, priority: 100 };
 }
 
-function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
-  return runBtwSideQuestion({
+function createSideQuestionParams(
+  overrides: Partial<RunBtwSideQuestionParams> = {},
+): RunBtwSideQuestionParams {
+  return {
     cfg: { agents: { entries: { main: { default: true } } } } as never,
     agentId: "main",
     agentDir: DEFAULT_AGENT_DIR,
@@ -512,7 +527,11 @@ function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
     opts: {},
     isNewSession: false,
     ...overrides,
-  });
+  };
+}
+
+function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
+  return runBtwSideQuestion(createSideQuestionParams(overrides));
 }
 
 function runMathSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
@@ -713,6 +732,7 @@ describe("runBtwSideQuestion", () => {
     buildSessionContextMock.mockReset();
     ensureOpenClawModelsJsonMock.mockReset();
     loadPreparedModelRuntimeSnapshotMock.mockReset();
+    acquireSnapshotResources = undefined;
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
     getModelRegistryRuntimeMock.mockReset();
@@ -734,7 +754,7 @@ describe("runBtwSideQuestion", () => {
     listAgentEntriesMock.mockReset();
     prepareProviderRuntimeAuthMock.mockReset();
     registerProviderStreamForModelMock.mockReset();
-    resolveEmbeddedAgentStreamFnMock.mockReset();
+    resolveEmbeddedAgentStreamMock.mockReset();
     prepareCliRunContextMock.mockReset();
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
@@ -793,6 +813,9 @@ describe("runBtwSideQuestion", () => {
       id: "claude-sonnet-4-6",
       api: "anthropic-messages",
     });
+    resolveModelAsyncMock.mockImplementation(async () => ({
+      model: resolveModelWithRegistryMock(),
+    }));
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({ version: 1, profiles: {} });
     getApiKeyForModelMock.mockImplementation(async (params: { profileId?: string } = {}) => ({
@@ -814,9 +837,12 @@ describe("runBtwSideQuestion", () => {
     listAgentEntriesMock.mockReturnValue([]);
     prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
     registerProviderStreamForModelMock.mockReturnValue(undefined);
-    resolveEmbeddedAgentStreamFnMock.mockImplementation(
+    resolveEmbeddedAgentStreamMock.mockImplementation(
       (params: { currentStreamFn: unknown; providerStreamFn?: unknown }) => {
-        return params.providerStreamFn ?? params.currentStreamFn;
+        return {
+          streamFn: params.providerStreamFn ?? params.currentStreamFn,
+          strategy: "session-custom",
+        };
       },
     );
   });
@@ -900,20 +926,70 @@ describe("runBtwSideQuestion", () => {
     });
   });
 
-  it("returns a final payload when block streaming is unavailable", async () => {
-    mockDoneAnswer("Final answer.");
+  it.each([false, true])(
+    "returns only final text when block streaming is unavailable (thinking: %s)",
+    async (withThinking) => {
+      const onReasoningStream = vi.fn();
+      const onReasoningEnd = vi.fn();
+      streamSimpleMock.mockReturnValue(
+        makeAsyncEvents([
+          createAssistantDoneEvent([
+            ...(withThinking ? [{ type: "thinking", thinking: "Hidden reasoning." }] : []),
+            { type: "text", text: "Final answer." },
+          ]),
+        ]),
+      );
 
-    const result = await runSideQuestion();
+      const result = await runSideQuestion({ opts: { onReasoningStream, onReasoningEnd } });
 
-    expect(result).toEqual({ text: "Final answer." });
-    const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
-    expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
-    expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
-    expect(discoverModelsMock).toHaveBeenCalledWith(undefined, DEFAULT_AGENT_DIR, {
-      config: ensureArgs?.[0],
-      workspaceDir: "/tmp/workspace",
-    });
-  });
+      expect(result).toEqual({ text: "Final answer." });
+      expect(onReasoningStream).not.toHaveBeenCalled();
+      expect(onReasoningEnd).not.toHaveBeenCalled();
+      const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
+      expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
+      expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+      expect(discoverModelsMock).toHaveBeenCalledWith(undefined, DEFAULT_AGENT_DIR, {
+        config: ensureArgs?.[0],
+        workspaceDir: "/tmp/workspace",
+      });
+    },
+  );
+
+  it.each(["off", "on", "stream"] as const)(
+    "keeps admitted %s reasoning visibility when caller input changes",
+    async (mode) => {
+      const onReasoningStream = vi.fn();
+      const onReasoningEnd = vi.fn();
+      const input = createSideQuestionParams({
+        resolvedReasoningLevel: mode,
+        opts: {
+          onAssistantMessageStart: async () => {
+            input.resolvedReasoningLevel = mode === "off" ? "on" : "off";
+          },
+          onReasoningStream,
+          onReasoningEnd,
+        },
+      });
+      const done = createDoneEvent("Final answer.");
+      streamSimpleMock.mockReturnValue(
+        makeAsyncEvents([
+          { type: "start", partial: done.message },
+          { type: "thinking_delta", delta: "One " },
+          { type: "thinking_delta", delta: "two" },
+          { type: "thinking_end" },
+          done,
+        ]),
+      );
+
+      await expect(runBtwSideQuestion(input)).resolves.toEqual({ text: "Final answer." });
+      expect(onReasoningStream.mock.calls).toEqual(
+        mode === "off"
+          ? []
+          : [[{ text: "One ", isReasoning: true }], [{ text: "One two", isReasoning: true }]],
+      );
+      expect(onReasoningEnd).toHaveBeenCalledTimes(mode === "off" ? 0 : 1);
+    },
+  );
 
   it.each([
     { harness: "openclaw", sandboxSessionKey: undefined },
@@ -970,6 +1046,121 @@ describe("runBtwSideQuestion", () => {
       "allowGatewaySubagentBinding",
     );
   });
+
+  it.each(["harness cleanup", "harness error", "stream output and transport"] as const)(
+    "keeps the source database through %s after its publication retires",
+    async (mode) => {
+      const file = state.path(`btw-${mode.replaceAll(" ", "-")}.sqlite`);
+      const database = new DatabaseSync(file);
+      database.exec("CREATE TABLE answer (value INTEGER); INSERT INTO answer VALUES (42)");
+      const source = new PluginRegistryInspectionResources();
+      source.attach(createEmptyPluginRegistry());
+      let disposals = 0;
+      source.runRegistration("btw-fixture", () =>
+        source.register("btw-fixture", {
+          id: "database",
+          dispose: () => {
+            disposals++;
+            database.close();
+          },
+        }),
+      );
+      acquireSnapshotResources = () => {
+        const claim = source.retain();
+        return {
+          release: () => {
+            void claim.release();
+          },
+        };
+      };
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const tailEntered = createDeferredCore();
+      const finishTail = createDeferredCore();
+      const owner = new AsyncWorkScope();
+      let operation: Promise<unknown> | undefined;
+      let tailValue: unknown;
+      try {
+        if (mode !== "stream output and transport") {
+          const runHarness = registerCodexSideQuestionHarness();
+          runHarness.mockImplementationOnce(async () => {
+            try {
+              entered.resolve();
+              await finish.promise;
+              if (mode === "harness error") {
+                throw new Error("side question failed");
+              }
+              return { text: String(database.prepare("SELECT value FROM answer").get()?.value) };
+            } finally {
+              tailEntered.resolve();
+              await finishTail.promise;
+              tailValue = database.prepare("SELECT value FROM answer").get()?.value;
+            }
+          });
+          operation = owner.track(() => runSideQuestion());
+        } else {
+          streamSimpleMock.mockImplementationOnce(() => {
+            void trackAsyncWork(async () => {
+              tailEntered.resolve();
+              await finishTail.promise;
+              tailValue = database.prepare("SELECT value FROM answer").get()?.value;
+            });
+            return makeAsyncEvents([{ type: "text_start" }, createDoneEvent("The answer is 42.")]);
+          });
+          operation = owner.track(() =>
+            runSideQuestion({
+              opts: {
+                onAssistantMessageStart: async () => {
+                  entered.resolve();
+                  await finish.promise;
+                  expect(database.prepare("SELECT value FROM answer").get()?.value).toBe(42);
+                },
+              },
+            }),
+          );
+        }
+        const outcome = operation.catch((error: unknown) => error);
+        await Promise.race([
+          entered.promise,
+          operation.then(() => {
+            throw new Error("Side question completed before its controlled operation");
+          }),
+        ]);
+        await source.release();
+        expect(database.isOpen).toBe(true);
+        expect(disposals).toBe(0);
+        finish.resolve();
+        await tailEntered.promise;
+        if (mode === "stream output and transport") {
+          expect(await outcome).toEqual({ text: "The answer is 42." });
+        }
+        expect(database.isOpen).toBe(true);
+        finishTail.resolve();
+        if (mode === "harness cleanup") {
+          expect(await outcome).toEqual({ text: "42" });
+        } else if (mode === "harness error") {
+          expect(await outcome).toEqual(new Error("side question failed"));
+        }
+        await owner.drain();
+        expect(tailValue).toBe(42);
+        await expect.poll(() => disposals).toBe(1);
+        expect(database.isOpen).toBe(false);
+        const reopened = new DatabaseSync(file, { readOnly: true });
+        try {
+          expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);
+        } finally {
+          reopened.close();
+        }
+      } finally {
+        finish.resolve();
+        finishTail.resolve();
+        await Promise.allSettled([operation, owner.drain(), source.release()]);
+        if (database.isOpen) {
+          database.close();
+        }
+      }
+    },
+  );
 
   it("keeps model, runtime auth, and stream selection on prepared A after current advances to B", async () => {
     const cfg = { agents: { entries: { main: { default: true } } } } as never;
@@ -1078,14 +1269,25 @@ describe("runBtwSideQuestion", () => {
       },
       order: { openai: ["openai:work"] },
     });
-    resolveModelAsyncMock.mockResolvedValue({
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      },
-    });
+    resolveModelAsyncMock.mockImplementation(
+      async (
+        _provider: string,
+        _modelId: string,
+        _agentDir: string,
+        _config: unknown,
+        options?: { authProfileMode?: string },
+      ) => ({
+        model:
+          options?.authProfileMode === "token"
+            ? {
+                provider: "openai",
+                id: "gpt-5.5",
+                api: "openai-chatgpt-responses",
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+              }
+            : resolveModelWithRegistryMock(),
+      }),
+    );
     getApiKeyForModelMock.mockResolvedValue({
       apiKey: "subscription-token",
       mode: "token",
@@ -1191,6 +1393,98 @@ describe("runBtwSideQuestion", () => {
       }),
     );
   });
+
+  it.each(
+    ["harness", "direct", "direct-block"].flatMap((mode) =>
+      [false, true, undefined].map((enabled) => ({ mode, enabled })),
+    ),
+  )(
+    "exposes $mode side-question usage with diagnostics enabled: $enabled",
+    async ({ mode, enabled }) => {
+      const tokens = { input: 13, output: 9, cacheRead: 7, cacheWrite: 3 };
+      const usage = { ...tokens, total: 41 };
+      const cost = { input: 0.1, output: 0.1, cacheRead: 0.03, cacheWrite: 0.02, total: 0.25 };
+      const text = "Side answer.";
+      const onBlockReply = vi.fn().mockResolvedValue(undefined);
+      if (mode === "harness") {
+        registerCodexSideQuestionHarness().mockResolvedValue({ text, usage: { ...usage, cost } });
+      } else {
+        const done = createDoneEvent(text);
+        done.message.usage = { ...tokens, totalTokens: 41, cost };
+        streamSimpleMock.mockReturnValue(
+          makeAsyncEvents([
+            ...(mode === "direct-block"
+              ? [
+                  { type: "text_delta", delta: text },
+                  { type: "text_end", content: text, contentIndex: 0 },
+                ]
+              : []),
+            done,
+          ]),
+        );
+      }
+      const runId = `btw-usage-reply-${mode}-${enabled}`;
+      const authorityRunId = `btw-usage-authority-${mode}-${enabled}`;
+      const sessionEntry = createSessionEntry({ inputTokens: 200, cacheRead: 100 });
+      const originalEntry = structuredClone(sessionEntry);
+      const diagnostics: unknown[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => {
+        if (event.type === "model.usage") {
+          diagnostics.push(event);
+        }
+      });
+      try {
+        await expect(
+          runSideQuestion({
+            cfg: { diagnostics: { enabled } },
+            sessionEntry,
+            authorityRunId,
+            ...(mode === "direct-block"
+              ? {
+                  blockReplyChunking: {
+                    minChars: 1,
+                    maxChars: 200,
+                    breakPreference: "paragraph" as const,
+                  },
+                  resolvedBlockStreamingBreak: "text_end" as const,
+                }
+              : {}),
+            opts: { runId, onBlockReply },
+          }),
+        ).resolves.toEqual(mode === "direct-block" ? undefined : { text });
+        if (mode === "direct-block") {
+          expect(onBlockReply).toHaveBeenCalledExactlyOnceWith({
+            text,
+            btw: { question: DEFAULT_QUESTION },
+          });
+        }
+        expect.soft(consumeReplyUsageState(runId)).toMatchObject({
+          usage,
+          sessionId: "session-1",
+          turnUsd: 0.25,
+        });
+        expect(consumeReplyUsageState(authorityRunId)).toBeUndefined();
+        expect(sessionEntry).toEqual(originalEntry);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect.soft(diagnostics).toEqual(
+          enabled !== false
+            ? [
+                expect.objectContaining({
+                  type: "model.usage",
+                  sessionId: "session-1",
+                  usage: { ...usage, promptTokens: 23 },
+                  costUsd: 0.25,
+                }),
+              ]
+            : [],
+        );
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it("keeps an unprofiled subscription token on the OpenClaw BTW path", async () => {
     const supports = vi.fn(supportsPreparedOpenAIAuth);
@@ -1755,31 +2049,39 @@ describe("runBtwSideQuestion", () => {
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
-  it("preserves the explicit no-timeout override for CLI-runtime BTW", async () => {
-    mockCliOutput({ text: "CLI side answer." });
+  it.each([
+    { options: { timeoutOverrideSeconds: 0 }, expected: MAX_TIMER_TIMEOUT_MS },
+    { options: { timeoutOverrideMs: 0 }, expected: MAX_TIMER_TIMEOUT_MS },
+    { options: { timeoutOverrideMs: 1500 }, expected: 1500 },
+    { options: { timeoutOverrideSeconds: 1800, timeoutOverrideMs: 1500 }, expected: 1500 },
+  ])(
+    "preserves the timeout override $options for CLI-runtime BTW",
+    async ({ options, expected }) => {
+      mockCliOutput({ text: "CLI side answer." });
 
-    await runSideQuestion({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+      await runSideQuestion({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+              },
             },
           },
-        },
-      } as never,
-      model: "claude-opus-4-7",
-      opts: { timeoutOverrideSeconds: 0 },
-      sessionKey: DEFAULT_SESSION_KEY,
-    });
+        } as never,
+        model: "claude-opus-4-7",
+        opts: options,
+        sessionKey: DEFAULT_SESSION_KEY,
+      });
 
-    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
-      timeoutMs?: unknown;
-      runTimeoutOverrideMs?: unknown;
-    };
-    expect(prepareParams.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(prepareParams.runTimeoutOverrideMs).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
+      const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+        timeoutMs?: unknown;
+        runTimeoutOverrideMs?: unknown;
+      };
+      expect(prepareParams.timeoutMs).toBe(expected);
+      expect(prepareParams.runTimeoutOverrideMs).toBe(expected);
+    },
+  );
 
   it("runs auth-order-selected CLI BTW through the CLI side-question path", async () => {
     const { cleanup } = mockCliOutput({ text: "CLI auth-order side answer." });
@@ -2189,7 +2491,7 @@ describe("runBtwSideQuestion", () => {
       resolveModelAsyncMock.mock.calls.map(
         (call) => (call[4] as { authProfileId?: string }).authProfileId,
       ),
-    ).toEqual(["openai:subscription", "openai:platform"]);
+    ).toEqual([undefined, "openai:subscription", "openai:platform"]);
     expectRecordFields(mockArg(streamSimpleMock, 0, 0), {
       name: "Platform model",
       api: "openai-responses",
@@ -2329,6 +2631,7 @@ describe("runBtwSideQuestion", () => {
 
     expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
     expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(DEFAULT_AGENT_DIR, {
+      profileId: "anthropic:api",
       externalCliProviderIds: ["claude-cli"],
       allowKeychainPrompt: false,
     });
@@ -2424,6 +2727,7 @@ describe("runBtwSideQuestion", () => {
     expect(result).toEqual({ text: "Ollama Cloud answer." });
     const registerParams = expectRecordFields(mockArg(registerProviderStreamForModelMock, 0, 0), {
       workspaceDir: "/tmp/workspace",
+      wrapProviderStream: true,
     });
     expectRecordFields(registerParams.model, {
       provider: "ollama",
@@ -2446,7 +2750,10 @@ describe("runBtwSideQuestion", () => {
     const resolvedStreamFn = vi
       .fn()
       .mockReturnValue(makeAsyncEvents([createDoneEvent("MiniMax answer.")]));
-    resolveEmbeddedAgentStreamFnMock.mockReturnValueOnce(resolvedStreamFn);
+    resolveEmbeddedAgentStreamMock.mockReturnValueOnce({
+      streamFn: resolvedStreamFn,
+      strategy: "boundary-aware:anthropic-messages",
+    });
 
     const result = await runSideQuestion({
       provider: "minimax-portal",
@@ -2454,7 +2761,7 @@ describe("runBtwSideQuestion", () => {
     });
 
     expect(result).toEqual({ text: "MiniMax answer." });
-    const resolverParams = expectRecordFields(mockArg(resolveEmbeddedAgentStreamFnMock, 0, 0), {
+    const resolverParams = expectRecordFields(mockArg(resolveEmbeddedAgentStreamMock, 0, 0), {
       sessionId: "session-1",
       resolvedApiKey: "secret",
       authProfileId: undefined,
@@ -2477,7 +2784,7 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Fallback answer." });
-    expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledWith(
+    expect(resolveEmbeddedAgentStreamMock).toHaveBeenCalledWith(
       expect.objectContaining({
         currentStreamFn: expect.any(Function),
         providerStreamFn: undefined,

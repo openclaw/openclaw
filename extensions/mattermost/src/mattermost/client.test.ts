@@ -13,6 +13,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
+import { cancelTrackedTextResponse } from "../../../test-support/streaming-error-response.js";
 import {
   createMattermostClient,
   createMattermostDirectChannelWithRetry,
@@ -97,28 +98,6 @@ function streamingMattermostResponse(body: unknown): {
       arrayBuffer,
     } as unknown as Response,
     arrayBuffer,
-  };
-}
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
   };
 }
 
@@ -243,7 +222,7 @@ describe("createMattermostClient", () => {
 
   it("bounds and cancels guarded Mattermost error bodies", async () => {
     const release = vi.fn(async () => {});
-    const tracked = cancelTrackedResponse(`${"upstream unavailable ".repeat(512)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"upstream unavailable ".repeat(512)}tail`, {
       status: 503,
       statusText: "Service Unavailable",
       headers: { "content-type": "text/plain" },
@@ -314,7 +293,7 @@ describe("createMattermostClient", () => {
 
   it("rejects oversized guarded Mattermost success text bodies instead of truncating", async () => {
     const release = vi.fn(async () => {});
-    const tracked = cancelTrackedResponse(`${"plain success ".repeat(7000)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"plain success ".repeat(7000)}tail`, {
       status: 200,
       headers: { "content-type": "text/plain" },
     });

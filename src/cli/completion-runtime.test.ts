@@ -288,36 +288,38 @@ describe("completion-runtime", () => {
     });
   });
 
-  it("recognizes cached Bash completion installed into the login profile", async () => {
-    await withBashCompletionHome(async ({ homeDir }) => {
-      const cachePath = resolveCompletionCachePath("bash", "openclaw");
-      await fs.mkdir(path.dirname(cachePath), { recursive: true });
-      await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+  it.each(["ordinary", "literal$dollar", "Ada's !42"])(
+    "loads cached Bash completion from a %s path through the login profile",
+    async (stateName) => {
+      await withBashCompletionHome(async ({ homeDir }) => {
+        const cachePath = resolveCompletionCachePath("bash", "openclaw");
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
 
-      await installCompletion("bash", true, "openclaw");
+        await installCompletion("bash", true, "openclaw");
 
-      const profilePath = path.join(homeDir, ".bash_profile");
-      await expect(fs.readFile(profilePath, "utf-8")).resolves.toContain(cachePath);
-      await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
-      await expect(usesSlowDynamicCompletion("bash", "openclaw")).resolves.toBe(false);
+        const profilePath = path.join(homeDir, ".bash_profile");
+        await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
+        await expect(usesSlowDynamicCompletion("bash", "openclaw")).resolves.toBe(false);
 
-      const shell = spawnSync(
-        "bash",
-        [
-          "--noprofile",
-          "--norc",
-          "-c",
-          'source "$1"; complete -p openclaw',
-          "openclaw",
-          profilePath,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(shell.stderr).toBe("");
-      expect(shell.status).toBe(0);
-      expect(shell.stdout).toContain("complete -W 'status' openclaw");
-    });
-  });
+        const shell = spawnSync(
+          "bash",
+          [
+            "--noprofile",
+            "--norc",
+            "-c",
+            'source "$1"; complete -p openclaw',
+            "openclaw",
+            profilePath,
+          ],
+          { encoding: "utf8" },
+        );
+        expect(shell.stderr).toBe("");
+        expect(shell.status).toBe(0);
+        expect(shell.stdout).toContain("complete -W 'status' openclaw");
+      }, `openclaw-completion-${stateName}-`);
+    },
+  );
 
   it("prints the same canonical reload hint used by Doctor and onboarding", async () => {
     await withBashCompletionHome(async ({ homeDir }) => {
@@ -461,30 +463,51 @@ describe("completion-runtime", () => {
     });
   });
 
-  it.each(COMPLETION_SHELLS)(
-    "replaces the old generated %s source after the state directory changes",
-    async (shell) => {
-      await withBashCompletionHome(async ({ stateDir }) => {
-        const previousStateDir = tempDirs.make("openclaw-completion-previous-state-");
-        let previousCachePath = "";
+  it.each(
+    COMPLETION_SHELLS.flatMap((shell) => [
+      { shell, generation: "legacy" },
+      { shell, generation: "current" },
+    ]),
+  )(
+    "replaces the $generation $shell source after the literal state directory changes",
+    async ({ shell, generation }) => {
+      await withBashCompletionHome(async () => {
+        const previousStateDir = tempDirs.make(
+          `openclaw-completion-previous-${process.platform === "win32" ? "" : '"'}$state's ‘quoted’-`,
+        );
+        const profilePath = resolveCompletionProfilePath(shell);
         await withEnvAsync({ OPENCLAW_STATE_DIR: previousStateDir }, async () => {
-          previousCachePath = resolveCompletionCachePath(shell, "openclaw");
+          const previousCachePath = resolveCompletionCachePath(shell, "openclaw");
           await fs.mkdir(path.dirname(previousCachePath), { recursive: true });
           await fs.writeFile(previousCachePath, "# previous completion\n", "utf-8");
-          await installCompletion(shell, true, "openclaw");
+          if (generation === "current") {
+            await installCompletion(shell, true, "openclaw");
+          } else {
+            // Stable v2026.8.2 wrote POSIX/Fish paths in raw double quotes.
+            const source =
+              shell === "powershell"
+                ? `. '${previousCachePath.replaceAll("'", "''")}'`
+                : shell === "fish"
+                  ? `test -f "${previousCachePath}"; and source "${previousCachePath}"`
+                  : `[ -f "${previousCachePath}" ] && source "${previousCachePath}"`;
+            await fs.mkdir(path.dirname(profilePath), { recursive: true });
+            await fs.writeFile(profilePath, `# OpenClaw Completion\n${source}\n`, "utf8");
+          }
         });
+        const previousSource = (await fs.readFile(profilePath, "utf8")).trim().split("\n").at(-1)!;
 
         const currentCachePath = resolveCompletionCachePath(shell, "openclaw");
-        expect(currentCachePath).toContain(stateDir);
         await fs.mkdir(path.dirname(currentCachePath), { recursive: true });
         await fs.writeFile(currentCachePath, "# current completion\n", "utf-8");
         await installCompletion(shell, true, "openclaw");
 
-        const profile = await fs.readFile(resolveCompletionProfilePath(shell), "utf-8");
-        expect(profile).toContain(currentCachePath);
-        expect(profile).not.toContain(previousCachePath);
+        const profile = await fs.readFile(profilePath, "utf-8");
+        expect(profile).not.toContain(previousSource);
         expect(profile.match(/^# OpenClaw Completion$/gm)).toHaveLength(1);
-      });
+        await expect(isCompletionInstalled(shell, "openclaw")).resolves.toBe(true);
+        await installCompletion(shell, true, "openclaw");
+        await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(profile);
+      }, "openclaw-completion-current-$state's-");
     },
   );
 
@@ -494,15 +517,35 @@ describe("completion-runtime", () => {
       const profilePath = path.join(homeDir, ".bash_profile");
       const unrelatedSource = 'source "/opt/tools/completions/openclaw.zsh"';
       const unmarkedPriorSource = 'source "/opt/tools/completions/openclaw.bash"';
+      const markedUserSources = [
+        "source '/opt/tools/not-completions/openclaw.bash'",
+        "source '/opt/tools/completions/openclaw.zsh'",
+        "[ -f '/other/completions/openclaw.bash' ] && source '/opt/tools/completions/openclaw.bash'",
+        '[ -f "/opt/tools/completions/openclaw.bash" ] && source "/opt/tools/completions/openclaw.bash"; export IMPORTANT=keep',
+        "source '/opt/tools/completions/openclaw.bash'; export IMPORTANT=keep",
+        'source "/old/completions/openclaw.bash"; printf "%s" "/other/completions/openclaw.bash"',
+        "source '/opt/tools/completions/openclaw.bash",
+        '. "/opt/tools/completions/openclaw.bash"',
+      ];
       await fs.mkdir(path.dirname(cachePath), { recursive: true });
       await fs.writeFile(cachePath, "# current completion\n", "utf-8");
-      await fs.writeFile(profilePath, `${unrelatedSource}\n${unmarkedPriorSource}\n`, "utf-8");
+      await fs.writeFile(
+        profilePath,
+        [
+          unrelatedSource,
+          unmarkedPriorSource,
+          ...markedUserSources.flatMap((source) => ["# OpenClaw Completion", source]),
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
 
       await installCompletion("bash", true, "openclaw");
 
       const profile = await fs.readFile(profilePath, "utf-8");
-      expect(profile).toContain(`${unrelatedSource}\n`);
-      expect(profile).toContain(`${unmarkedPriorSource}\n`);
+      for (const source of [unrelatedSource, unmarkedPriorSource, ...markedUserSources]) {
+        expect(profile).toContain(`${source}\n`);
+      }
       expect(profile).toContain(cachePath);
     });
   });
@@ -593,7 +636,7 @@ describe("completion-runtime", () => {
 
       const profile = await fs.readFile(profilePath, "utf-8");
       expect(profile).toContain(`${compoundLine}\n`);
-      expect(profile).toContain(`[ -f "${cachePath}" ] && source "${cachePath}"`);
+      await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
     });
   });
 
@@ -665,10 +708,11 @@ describe("completion-runtime", () => {
     });
   });
 
-  it("formats PowerShell reload commands with single-quoted paths", () => {
-    expect(formatCompletionReloadCommand("powershell", "C:\\Users\\Ada\\profile.ps1")).toBe(
-      ". 'C:\\Users\\Ada\\profile.ps1'",
-    );
+  it.each([
+    { profile: "C:\\Users\\Ada\\profile.ps1", command: ". 'C:\\Users\\Ada\\profile.ps1'" },
+    { profile: "C:\\Users\\Ada’s\\profile.ps1", command: ". 'C:\\Users\\Ada’’s\\profile.ps1'" },
+  ])("formats a literal PowerShell reload command for $profile", ({ profile, command }) => {
+    expect(formatCompletionReloadCommand("powershell", profile)).toBe(command);
   });
 
   it.each(["bash", "zsh"] as const)(
@@ -805,4 +849,227 @@ describe("completion-runtime", () => {
       );
     });
   });
+
+  it
+    .skipIf(process.platform === "win32")
+    .each([
+      '[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
+      '[ -f "$HOME/.openclaw/completions/openclaw.bash" ] && source "$HOME/.openclaw/completions/openclaw.bash"',
+      '# OpenClaw Completion\n[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
+      '# OpenClaw Completion\n[ -f "$HOME/.openclaw/completions/openclaw.bash" ] && source "$HOME/.openclaw/completions/openclaw.bash"',
+      '[\t-f\t"$HOME/.openclaw/completions/openclaw.bash"\t]&& source "$HOME/.openclaw/completions/openclaw.bash"\t',
+    ])(
+    "preserves a managed portable Bash hook byte-for-byte across installs: %s",
+    async (portableHook) => {
+      const homeDir = tempDirs.make("openclaw-bash-portable-home-");
+      const stateDir = path.join(homeDir, ".openclaw");
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          USERPROFILE: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          XDG_CONFIG_HOME: undefined,
+          ZDOTDIR: undefined,
+        },
+        async () => {
+          const profilePath = path.join(homeDir, ".bashrc");
+          const cachePath = resolveCompletionCachePath("bash", "openclaw");
+          expect(cachePath).toBe(path.join(stateDir, "completions", "openclaw.bash"));
+          await fs.mkdir(path.dirname(cachePath), { recursive: true });
+          await fs.writeFile(cachePath, "complete -W 'completion doctor' openclaw\n", "utf-8");
+          await fs.writeFile(profilePath, `${portableHook}\n`, "utf-8");
+
+          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
+
+          await installCompletion("bash", true, "openclaw");
+          await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(`${portableHook}\n`);
+
+          await installCompletion("bash", true, "openclaw");
+          await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(`${portableHook}\n`);
+
+          const freshBash = spawnSync(
+            "bash",
+            ["-c", `source "${profilePath}" && complete -p openclaw`],
+            { encoding: "utf8" },
+          );
+          expect(freshBash.stderr).toBe("");
+          expect(freshBash.status).toBe(0);
+          expect(freshBash.stdout).toContain("openclaw");
+        },
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves a managed portable Zsh hook without appending a literal block",
+    async () => {
+      const homeDir = tempDirs.make("openclaw-zsh-portable-home-");
+      const stateDir = path.join(homeDir, ".openclaw");
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          ZDOTDIR: undefined,
+          XDG_CONFIG_HOME: undefined,
+        },
+        async () => {
+          const portableHook =
+            '[[ -f "${HOME}/.openclaw/completions/openclaw.zsh" ]] && source "${HOME}/.openclaw/completions/openclaw.zsh"';
+          const profilePath = path.join(homeDir, ".zshrc");
+          const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+          await fs.mkdir(path.dirname(cachePath), { recursive: true });
+          await fs.writeFile(cachePath, "# cached zsh completion\n", "utf-8");
+          await fs.writeFile(profilePath, `${portableHook}\n`, "utf-8");
+
+          await expect(isCompletionInstalled("zsh", "openclaw")).resolves.toBe(true);
+          await installCompletion("zsh", true, "openclaw");
+          await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(`${portableHook}\n`);
+        },
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves a managed portable Fish hook without appending a literal block",
+    async () => {
+      const homeDir = tempDirs.make("openclaw-fish-portable-home-");
+      const stateDir = path.join(homeDir, ".openclaw");
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          XDG_CONFIG_HOME: undefined,
+          ZDOTDIR: undefined,
+        },
+        async () => {
+          const portableHook =
+            'test -f "$HOME/.openclaw/completions/openclaw.fish"; and source "$HOME/.openclaw/completions/openclaw.fish"';
+          const profilePath = path.join(homeDir, ".config", "fish", "config.fish");
+          const cachePath = resolveCompletionCachePath("fish", "openclaw");
+          await fs.mkdir(path.dirname(cachePath), { recursive: true });
+          await fs.writeFile(cachePath, "# cached fish completion\n", "utf-8");
+          await fs.mkdir(path.dirname(profilePath), { recursive: true });
+          await fs.writeFile(profilePath, `${portableHook}\n`, "utf-8");
+
+          await expect(isCompletionInstalled("fish", "openclaw")).resolves.toBe(true);
+          await installCompletion("fish", true, "openclaw");
+          await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(`${portableHook}\n`);
+        },
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not claim a portable hook for a different state location",
+    async () => {
+      const homeDir = tempDirs.make("openclaw-bash-other-state-home-");
+      const stateDir = path.join(homeDir, ".openclaw");
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          XDG_CONFIG_HOME: undefined,
+          ZDOTDIR: undefined,
+        },
+        async () => {
+          const otherHook =
+            '[[ -f "${HOME}/.other/completions/openclaw.bash" ]] && source "${HOME}/.other/completions/openclaw.bash"';
+          const profilePath = path.join(homeDir, ".bashrc");
+          const cachePath = resolveCompletionCachePath("bash", "openclaw");
+          await fs.mkdir(path.dirname(cachePath), { recursive: true });
+          await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+          await fs.writeFile(profilePath, `${otherHook}\n`, "utf-8");
+
+          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(false);
+          await installCompletion("bash", true, "openclaw");
+
+          const profile = await fs.readFile(profilePath, "utf8");
+          expect(profile).toContain(`${otherHook}\n`);
+          expect(profile).toContain("# OpenClaw Completion");
+          expect(profile).toContain(cachePath);
+          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
+        },
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves compound portable-looking Bash statements without claiming them",
+    async () => {
+      const homeDir = tempDirs.make("openclaw-bash-compound-home-");
+      const stateDir = path.join(homeDir, ".openclaw");
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          XDG_CONFIG_HOME: undefined,
+          ZDOTDIR: undefined,
+        },
+        async () => {
+          const compoundLine =
+            '[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"; export OPENCLAW_KEEP=1';
+          const profilePath = path.join(homeDir, ".bashrc");
+          const cachePath = resolveCompletionCachePath("bash", "openclaw");
+          await fs.mkdir(path.dirname(cachePath), { recursive: true });
+          await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+          await fs.writeFile(profilePath, `${compoundLine}\n`, "utf-8");
+
+          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(false);
+          await installCompletion("bash", true, "openclaw");
+
+          const profile = await fs.readFile(profilePath, "utf8");
+          expect(profile).toContain(`${compoundLine}\n`);
+          expect(profile).toContain(cachePath);
+          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
+        },
+      );
+    },
+  );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(
+      [
+        '[ -f "$HOME/.openclaw/completions/openclaw.bash"] && source "$HOME/.openclaw/completions/openclaw.bash"',
+        '[[ -f "${HOME}/.openclaw/completions/openclaw.bash"]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
+        '[ -f "$HOME/.openclaw/completions/openclaw.bash"\u00a0] && source "$HOME/.openclaw/completions/openclaw.bash"',
+        '\u00a0[ -f "$HOME/.openclaw/completions/openclaw.bash" ] && source "$HOME/.openclaw/completions/openclaw.bash"',
+        '[ -f "$HOME/.other/completions/openclaw.bash" ] && source "$HOME/.other/completions/openclaw.bash"',
+      ].flatMap((brokenHook) => [false, true].map((marked) => ({ brokenHook, marked }))),
+    )(
+    "preserves unrecognized portable hooks across literal installs (marked=$marked): $brokenHook",
+    async ({ brokenHook, marked }) => {
+      const homeDir = tempDirs.make("openclaw-bash-broken-guard-literal-home-");
+      const stateDir = path.join(homeDir, ".openclaw");
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          XDG_CONFIG_HOME: undefined,
+          ZDOTDIR: undefined,
+        },
+        async () => {
+          const profilePath = path.join(homeDir, ".bashrc");
+          const cachePath = resolveCompletionCachePath("bash", "openclaw");
+          await fs.mkdir(path.dirname(cachePath), { recursive: true });
+          await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+          await fs.writeFile(
+            profilePath,
+            `${marked ? "# OpenClaw Completion\n" : ""}${brokenHook}\n`,
+            "utf-8",
+          );
+          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(false);
+          await installCompletion("bash", true, "openclaw");
+          const first = await fs.readFile(profilePath, "utf8");
+          expect(first).toContain(`${brokenHook}\n`);
+          expect(first).toContain("# OpenClaw Completion");
+          expect(first).toContain(cachePath);
+          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
+
+          await installCompletion("bash", true, "openclaw");
+          await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(first);
+        },
+      );
+    },
+  );
 });

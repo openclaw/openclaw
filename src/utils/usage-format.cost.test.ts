@@ -8,15 +8,6 @@ import {
 type PricingTier = NonNullable<ModelCostConfig["tieredPricing"]>[number];
 
 describe("usage cost estimation", () => {
-  it("uses flat pricing when tieredPricing is absent", () => {
-    const cost = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
-    const total = estimateUsageCost({
-      usage: { input: 1000, output: 500, cacheRead: 2000 },
-      cost,
-    });
-    expect(total).toBeCloseTo(0.003);
-  });
-
   it.each([
     {
       name: "recorded total",
@@ -46,6 +37,34 @@ describe("usage cost estimation", () => {
           : {}),
       };
       expect(estimateAggregateUsageCost({ usage, cost })).toBe(expected);
+      expect(
+        estimateAggregateUsageCost({
+          usage,
+          provider: "fixture",
+          model: "priced",
+          agentDir: "/missing-aggregate-cost-test-agent",
+          allowPluginNormalization: false,
+          config: {
+            models: {
+              providers: {
+                fixture: {
+                  baseUrl: "https://fixture.invalid",
+                  models: [
+                    {
+                      id: "priced",
+                      name: "Priced",
+                      reasoning: false,
+                      input: ["text"],
+                      maxTokens: 1,
+                      cost,
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ).toBe(expected);
     },
   );
 

@@ -3,8 +3,10 @@ import {
   handleToolExecutionStart,
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
 import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
-import { registerToolEffectReceipt, type ToolEffectReceipt } from "./tool-effect-receipt.js";
+import type { AgentEvent } from "./runtime/index.js";
+import { markToolExecutionNotStarted, type ToolEffectReceipt } from "./tool-effect-receipt.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 
 type ToolTerminal = {
@@ -30,7 +32,8 @@ export function createEmbeddedToolLifecycleRunner(
   ctx: EmbeddedAgentSubscribeContext,
 ): EmbeddedToolLifecycleRunner {
   return async <T>(toolParams: EmbeddedToolLifecycleParams<T>): Promise<T> => {
-    await handleToolExecutionStart(ctx, {
+    ctx.flushAssistantStream();
+    const startEvent = {
       type: "tool_execution_start",
       toolName: toolParams.toolName,
       toolCallId: toolParams.toolCallId,
@@ -38,7 +41,9 @@ export function createEmbeddedToolLifecycleRunner(
       replaySafe: toolParams.replaySafe,
       hideFromChannelProgress: toolParams.hideFromChannelProgress,
       lifecycleProvenance: "nested",
-    } as never); // SAFETY: internal nested lifecycle event uses the handler's closed shape.
+    } as const;
+    recordEmbeddedToolTrajectoryEvent(ctx, startEvent);
+    await handleToolExecutionStart(ctx, startEvent);
     let executionStarted = false;
     const onImplementationStart = () => {
       executionStarted = true;
@@ -49,24 +54,24 @@ export function createEmbeddedToolLifecycleRunner(
     } catch (error) {
       const trustedNoStart = consumeTrustedToolNoStartError(error);
       const result = buildToolLifecycleErrorResult(error);
+      if (trustedNoStart) {
+        markToolExecutionNotStarted(result);
+      }
       const terminal = await finishToolLifecycle(ctx, toolParams, {
         executionStarted,
         isError: true,
         result,
       });
-      const effectReceipt = trustedNoStart
-        ? ({ state: "not_started" } as const)
-        : terminal.effectReceipt;
-      await notifyTerminal(toolParams.onTerminal, { ...terminal, effectReceipt });
-      throw registerToolEffectReceipt(error, effectReceipt);
+      await toolParams.onTerminal?.(terminal);
+      throw error;
     }
     const terminal = await finishToolLifecycle(ctx, toolParams, {
       executionStarted,
       isError: false,
       result: completedResult,
     });
-    await notifyTerminal(toolParams.onTerminal, terminal);
-    return registerToolEffectReceipt(completedResult, terminal.effectReceipt);
+    await toolParams.onTerminal?.(terminal);
+    return completedResult;
   };
 }
 
@@ -75,7 +80,8 @@ async function finishToolLifecycle(
   toolParams: EmbeddedToolLifecycleParams<unknown>,
   outcome: { executionStarted: boolean; isError: boolean; result: unknown },
 ): Promise<ToolTerminal> {
-  const terminal = await handleToolExecutionEnd(ctx, {
+  ctx.flushAssistantStream();
+  const endEvent: Extract<AgentEvent, { type: "tool_execution_end" }> = {
     type: "tool_execution_end",
     toolName: toolParams.toolName,
     toolCallId: toolParams.toolCallId,
@@ -83,22 +89,13 @@ async function finishToolLifecycle(
     executionStarted: outcome.executionStarted,
     result: outcome.result,
     hideFromChannelProgress: toolParams.hideFromChannelProgress,
-  } as never); // SAFETY: internal nested lifecycle event uses the handler's closed shape.
+  };
+  recordEmbeddedToolTrajectoryEvent(ctx, endEvent);
+  const terminal = await handleToolExecutionEnd(ctx, endEvent);
   return {
     result: outcome.result,
     isError: terminal.isError,
     executedArguments: terminal.executedArguments ?? toolParams.args,
     effectReceipt: terminal.effectReceipt,
   };
-}
-
-async function notifyTerminal(
-  callback: ((terminal: ToolTerminal) => void | Promise<void>) | undefined,
-  terminal: ToolTerminal,
-): Promise<void> {
-  try {
-    await callback?.(terminal);
-  } catch (error) {
-    throw registerToolEffectReceipt(error, terminal.effectReceipt);
-  }
 }

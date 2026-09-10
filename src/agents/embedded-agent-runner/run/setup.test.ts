@@ -12,7 +12,6 @@ import {
   resolveAgentHarnessRunAdmissionError,
   resolveEmbeddedRuntimeModelPolicy,
   resolveHookModelSelection,
-  resolveNativeModelOwnedHarnessId,
 } from "./setup.js";
 
 const hookContext = {
@@ -422,55 +421,87 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     expect(discovered.contextTokenBudget).toBe(272_000);
     expect(discovered).not.toHaveProperty("authoredContextTokenCap");
   });
+
+  it("caps the effective attempt budget with the caller limit", () => {
+    const result = resolveEmbeddedRunEffectiveModel({
+      runParams: {
+        sessionId: "maintenance-session",
+        workspaceDir: hookContext.workspaceDir,
+        prompt: "checkpoint memory",
+        runId: "maintenance-run",
+        timeoutMs: 5_000,
+        contextTokenBudget: 32_000,
+      },
+      provider: "openai",
+      modelConfigProvider: "openai",
+      modelId: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      runtimeModel: createRuntimeModel(),
+      nativeModelOwned: false,
+    });
+
+    expect(result.contextTokenBudget).toBe(32_000);
+    expect(result.contextWindowInfo).toEqual({
+      source: "model",
+      tokens: 32_000,
+      referenceTokens: 272_000,
+    });
+    expect(result.effectiveModel.contextWindow).toBe(32_000);
+  });
+
+  it("does not let the caller budget widen a smaller fallback model", () => {
+    const result = resolveEmbeddedRunEffectiveModel({
+      runParams: {
+        sessionId: "maintenance-session",
+        workspaceDir: hookContext.workspaceDir,
+        prompt: "checkpoint memory",
+        runId: "maintenance-run",
+        timeoutMs: 5_000,
+        contextTokenBudget: 32_000,
+      },
+      provider: "fallback",
+      modelConfigProvider: "fallback",
+      modelId: "small-model",
+      agentHarnessId: "openclaw",
+      runtimeModel: {
+        ...createRuntimeModel(),
+        id: "small-model",
+        contextTokens: 16_000,
+      },
+      nativeModelOwned: false,
+    });
+
+    expect(result.contextTokenBudget).toBe(16_000);
+    expect(result.effectiveModel.contextWindow).toBe(16_000);
+  });
 });
 
 describe("native model-owned harness policy", () => {
-  it("requires an exact pinned, locked, non-default harness", () => {
-    expect(
-      resolveNativeModelOwnedHarnessId({
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        selectedHarnessId: "codex",
-      }),
-    ).toBe("codex");
-    expect(
-      resolveNativeModelOwnedHarnessId({
-        agentHarnessId: "codex",
-        modelSelectionLocked: false,
-        selectedHarnessId: "codex",
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveNativeModelOwnedHarnessId({
-        agentHarnessId: "openclaw",
-        modelSelectionLocked: true,
-        selectedHarnessId: "openclaw",
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveNativeModelOwnedHarnessId({
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        selectedHarnessId: "other",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not apply outer context guards or budgets", () => {
+  it("does not apply outer context guards, budgets, or authored caps", () => {
     const runtimeModel = createRuntimeModel();
-    const result = resolveEmbeddedRuntimeModelPolicy({
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [createConfiguredModel({ contextWindow: 1, contextTokens: 1 })],
+    const result = resolveEmbeddedRunEffectiveModel({
+      runParams: {
+        sessionId: "native-session",
+        workspaceDir: hookContext.workspaceDir,
+        prompt: "hello",
+        runId: "native-run",
+        timeoutMs: 5_000,
+        contextTokenBudget: 32_000,
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [createConfiguredModel({ contextWindow: 1, contextTokens: 1 })],
+              },
             },
           },
         },
       },
       provider: "openai",
+      modelConfigProvider: "openai",
       modelId: runtimeModel.id,
+      agentHarnessId: "codex",
       runtimeModel,
       nativeModelOwned: true,
     });

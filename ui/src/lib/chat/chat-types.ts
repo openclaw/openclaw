@@ -1,3 +1,4 @@
+import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
 /**
  * Chat message types for the UI layer.
@@ -6,9 +7,12 @@ import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
+
+export type { HumanMention };
 
 export type BrowserAnnotationAttachment = {
   modelContext: string;
@@ -59,6 +63,7 @@ export type ChatComposerMemoryFallback = {
   awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
   message: string;
+  mentions?: readonly HumanMention[];
   attachments: ChatAttachment[];
   storageFailed: boolean;
   draftRetry?: ChatComposerDraftRetry;
@@ -89,6 +94,7 @@ export type ToolApprovalReview = {
 export type ChatQueueItem = {
   id: string;
   text: string;
+  mentions?: readonly HumanMention[];
   createdAt: number;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
@@ -146,6 +152,8 @@ export type ChatItem =
   | {
       kind: "divider";
       key: string;
+      compaction?: "active" | "complete";
+      compactionId?: string;
       label: string;
       icon?: keyof typeof toolIcons;
       metric?: string;
@@ -183,6 +191,10 @@ export type ChatStreamSegment = {
   boundaryMarker?: true;
   /** Hidden durable replacement; cumulative text still owns the prefix baseline. */
   persisted?: true;
+  /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
+  retiredItemId?: string;
+  /** Original cumulative prefix when the item overtook its final chat delta. */
+  pendingStreamText?: string;
   toolCallId?: string;
   itemId?: string;
 };
@@ -243,6 +255,7 @@ export type MessageGroup = {
   sender?: SenderIdentity;
   replyToSender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
+  visibleContent: "none" | "text" | "non-text";
   timestamp: number;
   isStreaming: boolean;
   runId?: string;
@@ -250,11 +263,23 @@ export type MessageGroup = {
 
 /** Content item types in a normalized message */
 export type MessageContentItem =
+  | ClawHubRecommendation
   | {
       type: "text" | "tool_call" | "tool_result";
       text?: string;
       name?: string;
       args?: unknown;
+    }
+  | {
+      type: "thinking";
+      thinking: string;
+    }
+  | {
+      type: "omitted_media";
+      media: {
+        kind: "image";
+        sizeBytes?: number;
+      };
     }
   | {
       type: "attachment";
@@ -331,6 +356,8 @@ export type ToolCard = {
   messageId?: string;
   /** UI-local preview identity for results without a call or transcript id. */
   previewRevision?: string;
+  /** Tab actions can identify a route without a previewable page URL. */
+  browserTab?: BrowserTabTarget;
   preview?:
     | {
         kind: "canvas";

@@ -5,11 +5,13 @@ import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+  NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_PREPARED_WORKSPACE_VERSION,
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
   type NodeWorkerCapacitySnapshot,
@@ -108,6 +110,7 @@ export type NodeWorkerSupervisorTransport = {
 
 type NodeRegistryPrivateContext = {
   getNode: (nodeId: string) => PairingBoundNodeSession | undefined;
+  isCommandAllowed: (nodeId: string, command: string) => boolean;
   listCurrentConnected: () => Promise<NodeRegistryPrivateSession[]>;
   hasCurrentPairingStateResolver: boolean;
   resolvePairingLease: (node: PairingBoundNodeSession) => Promise<PairingLeaseResolution>;
@@ -164,6 +167,7 @@ function isWorkerSupervisorProofCurrent(
   requireLaunchEligibility: boolean,
   requiredCommands: readonly string[] = [],
   requireEnvironmentSession = false,
+  requirePreparedWorkspace = false,
 ): boolean {
   const node = state.context.getNode(proof.nodeId);
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
@@ -179,6 +183,8 @@ function isWorkerSupervisorProofCurrent(
     (!requireLaunchEligibility || current.workerHost.capacity.available > 0) &&
     (!requireEnvironmentSession ||
       current.workerHost.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION) &&
+    (!requirePreparedWorkspace ||
+      current.workerHost.preparedWorkspace === NODE_WORKER_PREPARED_WORKSPACE_VERSION) &&
     requiredCommands.every((command) => current.commands.includes(command))
   );
 }
@@ -370,6 +376,12 @@ async function invokeNodeRegistryCore(
       },
     };
   }
+  if (!state.context.isCommandAllowed(params.nodeId, params.command)) {
+    return {
+      ok: false,
+      error: { code: "POLICY_CHANGED", message: "node command is no longer allowed" },
+    };
+  }
   if (deadlineAtMs !== undefined) {
     timeoutMs = Math.max(0, deadlineAtMs - Date.now());
     if (timeoutMs === 0) {
@@ -522,6 +534,7 @@ export function registerNodeRegistryPrivateRuntime(
           [],
           params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
             params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+          params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
         );
       if (!isProofCurrent()) {
         return {

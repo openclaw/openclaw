@@ -19,7 +19,14 @@ export function isHostRestrictedConversationReadTool(params: {
 export function registrationIncludesHostRestrictedConversationReadTool(
   entry: PluginToolRegistration,
 ): boolean {
-  return [...entry.names, ...(entry.declaredNames ?? [])].some((toolName) =>
+  // The gate must reflect the tools this registration actually produces
+  // (`names`), not the full manifest contract (`declaredNames`). A non-bundled
+  // Feishu registration that produces feishu_doc still declares feishu_chat in
+  // its contract; checking declaredNames would collaterally drop feishu_doc.
+  // Fall back to declaredNames only when the registration has no produced names
+  // yet, preserving the fail-closed contract for unnamed registrations.
+  const producibleNames = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
+  return producibleNames.some((toolName) =>
     isHostRestrictedConversationReadTool({ pluginId: entry.pluginId, toolName }),
   );
 }

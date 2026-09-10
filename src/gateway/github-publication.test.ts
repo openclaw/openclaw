@@ -32,6 +32,7 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 const mocks = githubPublicationTestMocks();
 
@@ -581,6 +582,11 @@ describe("Gateway GitHub publication", () => {
   it("rejects a stale turn claim after awaited identity verification", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-1",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(placements, {
       environmentId: "environment-1",
       ownerEpoch: 2,
@@ -622,6 +628,11 @@ describe("Gateway GitHub publication", () => {
   it("rejects reuse of a worker publication idempotency key by a later turn", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-idempotency",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(placements, {
       environmentId: "environment-idempotency",
       ownerEpoch: 2,
@@ -664,6 +675,11 @@ describe("Gateway GitHub publication", () => {
   it("binds the accepted worker snapshot before acceptance and never recaptures it", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-snapshot",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(placements, {
       environmentId: "environment-snapshot",
       ownerEpoch: 2,
@@ -899,6 +915,11 @@ describe("Gateway GitHub publication", () => {
   it("projects an accepted worker publication exactly once across transcript-report restart", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-publication",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(placements, {
       environmentId: "environment-publication",
       ownerEpoch: 2,

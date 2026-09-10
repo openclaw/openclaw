@@ -10,7 +10,7 @@ import { isStaticallyChannelConfigured } from "../../config/channel-configured-s
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
-import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
+import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import {
   listSetupDiscoveryChannelPluginCatalogEntries,
@@ -52,12 +52,13 @@ export function listManifestInstalledChannelIds(params: {
   }).config;
   const workspaceDir = resolveWorkspaceDir(resolvedConfig, params.workspaceDir);
   return new Set(
-    listManifestChannelContributionIds({
+    listPluginContributionIds({
+      contribution: "channels",
       config: resolvedConfig,
       workspaceDir,
       env: params.env ?? process.env,
       ...(params.index ? { index: params.index } : {}),
-    }).map((channelId) => channelId as ChannelChoice),
+    }),
   );
 }
 
@@ -143,28 +144,9 @@ export function resolveChannelSetupEntries(params: {
       }),
     );
   }
-  for (const entry of installedCatalogEntries) {
+  for (const entry of [...installedCatalogEntries, ...installableCatalogEntries]) {
     if (!metaById.has(entry.id)) {
-      metaById.set(
-        entry.id,
-        normalizeChannelMeta({
-          id: entry.id as ChannelChoice,
-          meta: entry.meta,
-          existing: metaById.get(entry.id),
-        }),
-      );
-    }
-  }
-  for (const entry of installableCatalogEntries) {
-    if (!metaById.has(entry.id)) {
-      metaById.set(
-        entry.id,
-        normalizeChannelMeta({
-          id: entry.id as ChannelChoice,
-          meta: entry.meta,
-          existing: metaById.get(entry.id),
-        }),
-      );
+      metaById.set(entry.id, entry.meta);
     }
   }
 

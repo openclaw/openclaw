@@ -43,6 +43,26 @@ async function collectChannelBoundMessageToolPolicyWarningsThroughDoctor(
   return warnings.filter((warning) => warning.includes("is routed from channel"));
 }
 
+function createMessagePolicyAgents(routedAgentId: string): NonNullable<OpenClawConfig["agents"]> {
+  return {
+    list: [
+      {
+        id: "main",
+        default: true,
+        tools: {
+          allow: ["read"],
+        },
+      },
+      {
+        id: routedAgentId,
+        tools: {
+          profile: "messaging",
+        },
+      },
+    ],
+  };
+}
+
 type TestManifestRecord = {
   id: string;
   channels: string[];
@@ -66,6 +86,12 @@ const staleOAuthShadowState = vi.hoisted(() => ({
 
 const staleAuthOrderState = vi.hoisted(() => ({
   warnings: [] as string[],
+}));
+
+const repairMergedGatewayOwnerProfile = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../state/user-profiles-owner-migration.js", () => ({
+  repairMergedGatewayOwnerProfile,
 }));
 
 const activeToolSchemaState = vi.hoisted(() => ({
@@ -394,6 +420,11 @@ describe("doctor preview warnings", () => {
     manifestState.diagnostics = [];
     staleOAuthShadowState.warnings = [];
     staleAuthOrderState.warnings = [];
+    repairMergedGatewayOwnerProfile.mockReset().mockReturnValue({
+      repaired: false,
+      changes: [],
+      warnings: [],
+    });
     activeToolSchemaState.warnings = [];
     activeToolSchemaState.params = undefined;
     commandSecretState.targetIds = new Set<string>();
@@ -410,6 +441,26 @@ describe("doctor preview warnings", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
     tempRoots.clear();
+  });
+
+  it("reports merged gateway owner profiles without applying the repair", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-preview" };
+    const warning = 'Gateway owner profile is merged. Run "openclaw doctor --fix" to repair it.';
+    repairMergedGatewayOwnerProfile.mockReturnValue({
+      repaired: false,
+      changes: [],
+      warnings: [warning],
+    });
+
+    const notes = await collectDoctorPreviewNotes({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+      env,
+    });
+
+    expect(repairMergedGatewayOwnerProfile).toHaveBeenCalledWith({ env, shouldRepair: false });
+    expect(notes.warningNotes).toContain(warning);
+    expect(notes.infoNotes).toEqual([]);
   });
 
   it("routes personal Codex asset notices to info instead of warnings", async () => {
@@ -1438,23 +1489,7 @@ describe("doctor preview warnings", () => {
         discord: {},
         telegram: {},
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            tools: {
-              allow: ["read"],
-            },
-          },
-          {
-            id: "commander",
-            tools: {
-              profile: "messaging",
-            },
-          },
-        ],
-      },
+      agents: createMessagePolicyAgents("commander"),
       bindings: [
         {
           agentId: "commander",
@@ -1477,23 +1512,7 @@ describe("doctor preview warnings", () => {
       channels: {
         discord: {},
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            tools: {
-              allow: ["read"],
-            },
-          },
-          {
-            id: "commander",
-            tools: {
-              profile: "messaging",
-            },
-          },
-        ],
-      },
+      agents: createMessagePolicyAgents("commander"),
       bindings: [
         {
           agentId: "commander",
@@ -1516,23 +1535,7 @@ describe("doctor preview warnings", () => {
       channels: {
         discord: {},
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            tools: {
-              allow: ["read"],
-            },
-          },
-          {
-            id: "commander",
-            tools: {
-              profile: "messaging",
-            },
-          },
-        ],
-      },
+      agents: createMessagePolicyAgents("commander"),
       bindings: [
         {
           agentId: "commander",
@@ -1606,23 +1609,7 @@ describe("doctor preview warnings", () => {
       channels: {
         imessage: {},
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            tools: {
-              allow: ["read"],
-            },
-          },
-          {
-            id: "ios-agent",
-            tools: {
-              profile: "messaging",
-            },
-          },
-        ],
-      },
+      agents: createMessagePolicyAgents("ios-agent"),
       bindings: [
         {
           agentId: "ios-agent",
@@ -1650,23 +1637,7 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            tools: {
-              allow: ["read"],
-            },
-          },
-          {
-            id: "personal-agent",
-            tools: {
-              profile: "messaging",
-            },
-          },
-        ],
-      },
+      agents: createMessagePolicyAgents("personal-agent"),
       bindings: [
         {
           agentId: "personal-agent",

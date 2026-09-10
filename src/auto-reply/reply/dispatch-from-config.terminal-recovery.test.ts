@@ -15,6 +15,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
+import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -205,10 +206,7 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
       code: "run_failed",
       cause: resolverError,
     });
-    expect(result).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    expect(result).toMatchObject(expectedNoQueuedReplyResult());
     expect(readAgentRunTerminalOutcome(result)).toBe("failed");
     expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });

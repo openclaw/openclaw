@@ -18,6 +18,11 @@ alias `OPENCODE_ZEN_API_KEY`). Go still requires its own paid subscription;
 having a Zen key does not by itself grant Go access. OpenClaw keeps the runtime
 provider ids split so upstream per-model routing stays correct.
 
+OpenClaw sends a stable `x-opencode-session` conversation header on requests to
+`https://opencode.ai` across the Anthropic, Gemini, OpenAI Chat Completions, and
+OpenAI Responses transports. This header remains enabled when prompt caching is
+disabled. Direct SDK callers should supply `sessionId` in their stream options.
+
 ## Getting started
 
 <Tabs>
@@ -119,6 +124,11 @@ deprecated models are excluded from active discovery and its offline fallback.
 Deprecated explicit refs remain resolvable for existing configurations but are
 not shown as current recommendations.
 
+Account-list failures produce a failed catalog outcome, not a successful seed
+list. A successful empty or fully filtered account response stays empty.
+The separate public metadata feed can still use trusted offline metadata when
+it is unavailable; that does not replace or retry the account-list request.
+
 Price estimates also refresh through the [hosted model catalog](/concepts/models#hosted-catalog-updates),
 using the same public OpenCode pricing feed as live discovery. Hosted updates
 activate after the next Gateway restart; the bundled snapshot remains available
@@ -182,5 +192,8 @@ a model does not prove your account can run it.
   </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config reference for agents, models, and providers.
+  </Card>
+  <Card title="OpenCode plugin reference" href="/plugins/reference/opencode" icon="plug">
+    Native sessions, the session catalog toggle, and plugin config keys.
   </Card>
 </CardGroup>

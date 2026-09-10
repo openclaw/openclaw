@@ -94,10 +94,11 @@ export function nextWebSearchToolOverrides(
   baseEnabled = true,
 ): SessionToolOverrides {
   const next = copyOverrides(current);
-  // Kill switch: never persist webSearch:true while the global base is off.
-  // Any edit while base is off clears a stale enable override instead.
+  // Clear stale enablement without discarding an explicit session suppression.
   if (!baseEnabled) {
-    delete next.webSearch;
+    if (next.webSearch === true) {
+      delete next.webSearch;
+    }
     return next;
   }
   if (nextEnabled === baseEnabled) {

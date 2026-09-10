@@ -22,7 +22,7 @@ import {
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
   collectMemorySearchHealthFindings,
-  collectWorkspaceStatusPluginVersionDrift,
+  collectWorkspaceStatusPluginVersionReadiness,
   runBootstrapSizeHealth,
   runHeartbeatCadenceMigrationHealth,
   runHeartbeatScratchMigrationHealth,
@@ -31,6 +31,7 @@ import {
   runMemorySearchHealthContribution,
   runSkillsHealth,
   runToolsMdMigrationHealth,
+  runWorkspaceAliasHealth,
   runWorkspaceStatusHealth,
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
@@ -167,6 +168,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:github-projects",
       label: "GitHub projects",
+      updatePolicy: "standalone",
       run: runGitHubProjectHealth,
     }),
     createDoctorHealthContribution({
@@ -218,6 +220,12 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy"),
     }),
     createDoctorHealthContribution({
+      id: "doctor:skill-workshop-relocation",
+      label: "Skill Workshop relocation",
+      healthCheckIds: ["core/doctor/skill-workshop-relocation"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-relocation"),
+    }),
+    createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
       healthChecks: {
@@ -236,14 +244,14 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectWorkspaceStatusHealthFindings } =
             await import("../commands/doctor-workspace-status.js");
-          const pluginVersionDrift = await collectWorkspaceStatusPluginVersionDrift({
+          const pluginVersionReadiness = await collectWorkspaceStatusPluginVersionReadiness({
             cfg: ctx.cfg,
             options: { nonInteractive: true, allowExec: ctx.allowExecSecretRefs === true },
           });
           const runWithPluginMetadataSnapshot = (ctx as DoctorHealthCheckContext)
             .runWithPluginMetadataSnapshot;
           return collectWorkspaceStatusHealthFindings(ctx.cfg, {
-            pluginVersionDrift,
+            pluginVersionReadiness,
             ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
           });
         },
@@ -261,6 +269,21 @@ export function resolveFinalDoctorHealthContributions(params: {
         ]
       : []),
     createDoctorHealthContribution({
+      id: "doctor:workspace-alias",
+      label: "Workspace alias",
+      healthChecks: {
+        description:
+          "Persisted workspace aliases must resolve to the canonical target that owns their stored state.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectRepointedWorkspaceAliasFindings } =
+            await import("../commands/doctor-workspace-alias.js");
+          return collectRepointedWorkspaceAliasFindings(ctx.cfg);
+        },
+      },
+      run: runWorkspaceAliasHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
       healthCheckIds: ["core/doctor/skills-readiness"],
@@ -269,6 +292,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",
       label: "Bootstrap size",
+      updatePolicy: "standalone",
       healthCheckIds: ["core/doctor/bootstrap-size"],
       run: runBootstrapSizeHealth,
     }),
@@ -344,8 +368,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
       healthChecks: {
-        description:
-          "WhatsApp responsiveness pressure from degraded Gateway and local TUI clients.",
+        description: "Gateway pressure and local TUI observations when WhatsApp is enabled.",
         defaultEnabled: false,
         async detect(ctx) {
           const { collectWhatsappResponsivenessHealthFindings } =
@@ -390,7 +413,11 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectDevicePairingHealthFindings } =
             await import("../commands/doctor-device-pairing.js");
-          return collectDevicePairingHealthFindings({ cfg: ctx.cfg, healthOk: false });
+          return collectDevicePairingHealthFindings({
+            cfg: ctx.cfg,
+            healthOk: false,
+            env: ctx.env,
+          });
         },
       },
       run: runDevicePairingHealth,
@@ -414,6 +441,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:workspace-suggestions",
       label: "Workspace suggestions",
+      updatePolicy: "standalone",
       healthCheckIds: ["core/doctor/workspace-suggestions"],
       run: runWorkspaceSuggestionsHealth,
     }),

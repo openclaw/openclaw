@@ -5,7 +5,7 @@ read_when:
   - You want OpenClaw config credentials to resolve from 1Password
   - You need per-secret approval policy and audit history
   - You are configuring a 1Password service account for OpenClaw
-title: "1Password"
+title: "1Password plugin"
 ---
 
 # 1Password
@@ -327,3 +327,8 @@ Policy and validation errors:
 | `POLICY_CHANGED`                                   | Config changed between approval and execution                                |
 | `GRANT_EXPIRED`                                    | Standing grant lapsed before execution                                       |
 | `APPROVAL_CANCELLED`                               | The run was aborted while the approval was pending                           |
+
+## Related
+
+- [Secrets management](/gateway/secrets)
+- [1Password](/gateway/1password) — the built-in `op://` secret source, and how the plugin, skill, and MCP options compare

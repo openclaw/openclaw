@@ -1,5 +1,6 @@
 /** Tests connected node-hosted plugin tool materialization. */
 
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
@@ -8,12 +9,15 @@ import {
   removeConnectedNodePluginTools,
   replaceConnectedNodePluginTools,
 } from "../gateway/node-plugin-tool-snapshot.js";
+import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
+import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
+import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -345,6 +349,43 @@ describe("createNodePluginTools", () => {
     expect(isToolResultError(result)).toBe(true);
   });
 
+  it.each([false, true])("snapshots node MCP text once (isError: %s)", async (isError) => {
+    const text = "ordinary report line\n".repeat(25_000);
+    const payload = CallToolResultSchema.parse({
+      content: [
+        { type: "text", text },
+        { type: "resource_link", uri: "memo://report", name: "Report" },
+        { type: "text", text: "résumé\n東京", _meta: { source: "report" } },
+      ],
+      isError,
+    });
+    replaceNodePluginTools({
+      nodeId: "node-1",
+      tools: [
+        {
+          pluginId: "node-mcp",
+          name: "docs_read",
+          description: "Read node-local reports",
+          command: "mcp.tools.call.v1",
+          mcp: { server: "docs", tool: "read" },
+        },
+      ],
+    });
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({ payload });
+    const tool = expectDefined(createNodePluginTools({})[0], "node MCP report tool");
+    const result = snapshotToolSearchTargetTranscriptResult(await tool.execute("report", {}));
+
+    expect(result.content).toEqual([
+      { type: "text", text },
+      { type: "text", text: "[Report] memo://report" },
+      { type: "text", text: "résumé\n東京" },
+    ]);
+    expect(isToolResultError(result)).toBe(isError);
+    expect(consumeMcpCodeModeGuestResult(result)).toEqual(payload);
+    const contentBytes = Buffer.byteLength(JSON.stringify(result.content));
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(contentBytes + 1_024);
+  });
+
   it("projects node MCP schemas and calls through the exact namespace catalog entry", async () => {
     replaceNodePluginTools({
       nodeId: "node-1",
@@ -666,32 +707,35 @@ describe("createNodePluginTools", () => {
     });
   });
 
-  it("honors policy for disambiguated node tool names", () => {
-    for (const nodeId of ["node-a", "node-b"]) {
-      replaceNodePluginTools({
-        nodeId,
-        tools: [
-          {
-            pluginId: "remote-demo",
-            name: "remote_echo",
-            description: "Echo through a remote node",
-            command: "remote.echo",
-          },
-        ],
-      });
-    }
+  it.each(["node_b_remote_echo", "NODE_B_*"])(
+    "honors policy for disambiguated names with %s",
+    (allowedName) => {
+      for (const nodeId of ["node-a", "node-b"]) {
+        replaceNodePluginTools({
+          nodeId,
+          tools: [
+            {
+              pluginId: "remote-demo",
+              name: "remote_echo",
+              description: "Echo through a remote node",
+              command: "remote.echo",
+            },
+          ],
+        });
+      }
 
-    expect(
-      createNodePluginTools({
-        toolAllowlist: ["node_b_remote_echo"],
-      }).map((tool) => tool.name),
-    ).toEqual(["node_b_remote_echo"]);
-    expect(
-      createNodePluginTools({
-        toolDenylist: ["node_b_remote_echo"],
-      }).map((tool) => tool.name),
-    ).toEqual(["node_a_remote_echo"]);
-  });
+      expect(
+        createNodePluginTools({
+          toolAllowlist: [allowedName],
+        }).map((tool) => tool.name),
+      ).toEqual(["node_b_remote_echo"]);
+      expect(
+        createNodePluginTools({
+          toolDenylist: ["node_b_remote_echo"],
+        }).map((tool) => tool.name),
+      ).toEqual(["node_a_remote_echo"]);
+    },
+  );
 
   it("keeps numeric node fragments provider-safe", () => {
     replaceNodePluginTools({
@@ -757,34 +801,63 @@ describe("createNodePluginTools", () => {
     expect(names[0]).not.toBe(names[1]);
   });
 
-  it("honors plugin tool allow and deny policy", () => {
-    replaceNodePluginTools({
-      nodeId: "node-1",
-      tools: [
-        {
-          pluginId: "remote-demo",
-          name: "remote_echo",
-          description: "Echo through a remote node",
-          command: "remote.echo",
-        },
-        {
-          pluginId: "remote-demo",
-          name: "remote_status",
-          description: "Read remote status",
-          command: "remote.status",
-        },
-      ],
-      registered: true,
-    });
+  it.each(["remote-demo", "REMOTE_*"])(
+    "honors plugin tool allow %s and deny policy",
+    (allowedName) => {
+      replaceNodePluginTools({
+        nodeId: "node-1",
+        tools: [
+          {
+            pluginId: "remote-demo",
+            name: "remote_echo",
+            description: "Echo through a remote node",
+            command: "remote.echo",
+          },
+          {
+            pluginId: "remote-demo",
+            name: "remote_status",
+            description: "Read remote status",
+            command: "remote.status",
+          },
+        ],
+        registered: true,
+      });
 
-    expect(
-      createNodePluginTools({
-        toolAllowlist: ["remote-demo"],
-        toolDenylist: ["remote_status"],
-      }).map((tool) => tool.name),
-    ).toEqual(["remote_echo"]);
-    expect(createNodePluginTools({ toolAllowlist: ["other-plugin"] })).toEqual([]);
-  });
+      expect(
+        createNodePluginTools({
+          toolAllowlist: [allowedName],
+          toolDenylist: ["remote_status"],
+        }).map((tool) => tool.name),
+      ).toEqual(["remote_echo"]);
+      expect(createNodePluginTools({ toolAllowlist: ["other-plugin"] })).toEqual([]);
+    },
+  );
+
+  it.each([false, true])(
+    "does not use local runtime grants for node tools (registered: %s)",
+    (registered) => {
+      replaceNodePluginTools({
+        nodeId: "node-1",
+        registered,
+        tools: [
+          {
+            pluginId: "github",
+            name: "remote_repo_search",
+            description: "Search repos",
+            command: "remote.search",
+          },
+        ],
+      });
+      const toolAllowlist = appendRuntimePluginToolGrant([], {
+        pluginId: "github",
+        toolNames: ["remote_repo_search"],
+      });
+
+      expect(createNodePluginTools({ toolAllowlist })).toEqual([]);
+      expect(createNodePluginTools({ toolAllowlist: ["git*"] })).toEqual([]);
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 
   it("trusts plugin-id allowlist entries only for registered tools and node-mcp", () => {
     const githubDescriptor: NodePluginToolDescriptor = {

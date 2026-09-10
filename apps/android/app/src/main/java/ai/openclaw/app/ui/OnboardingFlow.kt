@@ -4,11 +4,10 @@ import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.R
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
-import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
+import ai.openclaw.app.gatewayConnectionStatusForDisplay
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
@@ -35,7 +34,6 @@ import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.os.Build
-import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -108,7 +106,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -117,7 +114,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
@@ -131,15 +127,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -349,8 +345,6 @@ internal fun onboardingMascotMood(
   }
 }
 
-private const val GATEWAY_CONNECT_SETTLING_MS = 2_500L
-private const val GATEWAY_CONNECT_TIMEOUT_MS = 20_000L
 private const val NODE_APPROVAL_REFRESH_OBSERVE_TIMEOUT_MS = 750L
 private const val NODE_APPROVAL_AUTO_REFRESH_MS = 2_000L
 private const val ANDROID_SETUP_GUIDE_URL = "https://docs.openclaw.ai/platforms/android"
@@ -509,8 +503,6 @@ fun OnboardingFlow(
     var lastGatewayInputSource by rememberSaveable { mutableStateOf(OnboardingGatewayInputSource.SetupScanner) }
     var inlineQrScannerActive by rememberSaveable { mutableStateOf(false) }
     var setupCodeEntryOpenedFromScanner by rememberSaveable { mutableStateOf(false) }
-    var connectAttemptStartedAtMs by rememberSaveable { mutableLongStateOf(0L) }
-    var recoveryNowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     var accessStage by rememberSaveable { mutableStateOf(OnboardingAccessStage.InitialApproval) }
     var nodeApprovalCheckRequested by rememberSaveable { mutableStateOf(false) }
     var nodeApprovalCheckRefreshStarted by rememberSaveable { mutableStateOf(false) }
@@ -574,15 +566,6 @@ fun OnboardingFlow(
     LaunchedEffect(step) {
       if (step == OnboardingStep.Gateway || step == OnboardingStep.Manual) {
         viewModel.startGatewayDiscovery()
-      }
-    }
-
-    LaunchedEffect(step, connectAttemptStartedAtMs) {
-      if (step != OnboardingStep.Recovery || connectAttemptStartedAtMs <= 0L) return@LaunchedEffect
-      recoveryNowMs = SystemClock.elapsedRealtime()
-      while (true) {
-        delay(1_000L)
-        recoveryNowMs = SystemClock.elapsedRealtime()
       }
     }
 
@@ -683,7 +666,6 @@ fun OnboardingFlow(
       attemptedGatewayName = attemptedName
       attemptedConnect = true
       lastGatewayInputSource = inputSource
-      connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
       viewModel.saveGatewayConfigAndConnect(plan)
       step = OnboardingStep.Recovery
     }
@@ -884,84 +866,13 @@ fun OnboardingFlow(
     }
 
     pendingTrust?.let { prompt ->
-      val manualEntry = prompt.fingerprintSha256 == null
-      val systemTrustAvailable = prompt.systemTrustAvailable
-      var manualFingerprint by
-        rememberSaveable(prompt.endpoint.stableId, prompt.probeFailure) {
-          mutableStateOf("")
-        }
-      val normalizedManualFingerprint = normalizeGatewayTlsFingerprintInput(manualFingerprint)
-      AlertDialog(
-        onDismissRequest = viewModel::declineGatewayTrustPrompt,
-        containerColor = ClawTheme.colors.surfaceRaised,
-        title = { Text(stringResource(R.string.trust_this_gateway), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-        text = {
-          val message =
-            when {
-              manualEntry -> {
-                nativeString(
-                  "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
-                )
-              }
-
-              prompt.previousFingerprintSha256.isNullOrBlank() -> {
-                stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
-              }
-
-              else -> {
-                stringResource(
-                  R.string.gateway_trust_changed,
-                  prompt.previousFingerprintSha256,
-                  prompt.fingerprintSha256,
-                )
-              }
-            }
-          Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-              message,
-              style = ClawTheme.type.body,
-              color = ClawTheme.colors.textMuted,
-            )
-            if (systemTrustAvailable) {
-              Text(
-                nativeString("This gateway now presents a certificate trusted by this device."),
-                style = ClawTheme.type.body,
-                color = ClawTheme.colors.textMuted,
-              )
-            }
-            if (manualEntry) {
-              OutlinedTextField(
-                value = manualFingerprint,
-                onValueChange = { manualFingerprint = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(nativeString("SHA-256 fingerprint")) },
-                singleLine = true,
-              )
-            }
-          }
-        },
-        confirmButton = {
-          TextButton(
-            onClick = {
-              viewModel.acceptGatewayTrustPrompt(if (manualEntry) normalizedManualFingerprint else null)
-            },
-            enabled = !manualEntry || normalizedManualFingerprint != null,
-          ) {
-            Text(nativeString("Trust"))
-          }
-        },
-        dismissButton = {
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (systemTrustAvailable) {
-              TextButton(onClick = viewModel::useSystemGatewayTrustPrompt) {
-                Text(nativeString("Use system trust"))
-              }
-            }
-            TextButton(onClick = viewModel::declineGatewayTrustPrompt) {
-              Text(nativeString("Cancel"))
-            }
-          }
-        },
+      GatewayTrustDialog(
+        prompt = prompt,
+        confirmLabel = nativeString("Trust"),
+        cancelLabel = nativeString("Cancel"),
+        onAccept = viewModel::acceptGatewayTrustPrompt,
+        onUseSystemTrust = viewModel::useSystemGatewayTrustPrompt,
+        onDecline = viewModel::declineGatewayTrustPrompt,
       )
     }
 
@@ -1095,13 +1006,8 @@ fun OnboardingFlow(
                 nodeCapabilityApproval = nodeCapabilityApproval,
               ) != null,
           gatewayConnectionProblem = gatewayConnectionProblem,
-          connectSettling = recoveryNowMs - connectAttemptStartedAtMs < GATEWAY_CONNECT_SETTLING_MS,
-          connectTimedOut = recoveryNowMs - connectAttemptStartedAtMs >= GATEWAY_CONNECT_TIMEOUT_MS,
           onBack = ::goBack,
-          onRetry = {
-            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-            viewModel.refreshGatewayConnection()
-          },
+          onRetry = viewModel::refreshGatewayConnection,
           onContinue = ::continueFromGatewayPairing,
         )
       }
@@ -1503,19 +1409,19 @@ private fun SetupScanErrorDialog(
   onChooseAnotherImage: () -> Unit,
   onEnterSetupCode: () -> Unit,
 ) {
-  Dialog(
+  FoldAwareDialog(
     onDismissRequest = onDismiss,
-    properties = DialogProperties(usePlatformDefaultWidth = false),
+    title = nativeString("QR code not accepted"),
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 26.dp),
+      modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(ClawTheme.radii.sheet),
       color = ClawTheme.colors.surfaceRaised,
       contentColor = ClawTheme.colors.text,
       border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
     ) {
       Column(
-        modifier = Modifier.fillMaxWidth().padding(18.dp),
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
       ) {
         Row(
@@ -1556,13 +1462,13 @@ private fun SetupScanErrorDialog(
             text = nativeString("Choose another image"),
             icon = Icons.Default.Image,
             onClick = onChooseAnotherImage,
-            modifier = Modifier.onboardingActionButton(),
+            modifier = Modifier.fillMaxWidth().heightIn(min = OnboardingButtonHeight),
           )
           ClawSecondaryButton(
             text = nativeString("Enter setup code"),
             icon = Icons.Default.QrCode2,
             onClick = onEnterSetupCode,
-            modifier = Modifier.onboardingActionButton(),
+            modifier = Modifier.fillMaxWidth().heightIn(min = OnboardingButtonHeight),
           )
         }
       }
@@ -1860,6 +1766,7 @@ private fun SetupCodeEntryScreen(
             value = setupCode,
             onValueChange = onSetupCodeChange,
             placeholder = nativeString("Paste setup code"),
+            secret = true,
           )
         }
         error?.let { message ->
@@ -1933,7 +1840,7 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Token")) {
-            ClawTextField(value = token, onValueChange = onTokenChange, placeholder = nativeString("Paste token"))
+            ClawTextField(value = token, onValueChange = onTokenChange, placeholder = nativeString("Paste token"), secret = true)
             Text(
               text = nativeString("Paste a shared Gateway token or operator-issued token."),
               style = ClawTheme.type.caption,
@@ -1943,7 +1850,7 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Password")) {
-            ClawTextField(value = password, onValueChange = onPasswordChange, placeholder = nativeString("Password optional"))
+            ClawTextField(value = password, onValueChange = onPasswordChange, placeholder = nativeString("Password optional"), secret = true)
           }
         }
         item {
@@ -2067,8 +1974,6 @@ private fun GatewayRecoveryScreen(
   gatewayPaired: Boolean,
   gatewayPairingCanContinue: Boolean,
   gatewayConnectionProblem: GatewayConnectionProblem?,
-  connectSettling: Boolean,
-  connectTimedOut: Boolean,
   onBack: () -> Unit,
   onRetry: () -> Unit,
   onContinue: () -> Unit,
@@ -2076,14 +1981,12 @@ private fun GatewayRecoveryScreen(
 ) {
   val recoveryState =
     gatewayPairingUiState(
-      gatewayPaired = gatewayPaired,
       gatewayPairingCanContinue = gatewayPairingCanContinue,
       statusText = statusText,
-      connectSettling = connectSettling,
-      connectTimedOut = connectTimedOut,
       gatewayConnectionProblem = gatewayConnectionProblem,
     )
   val context = LocalContext.current
+  val uriHandler = LocalUriHandler.current
   val approvalCommand = recoveryGatewayApprovalCommand(gatewayConnectionProblem)
   val protocolUpdateCommand = recoveryGatewayProtocolMismatchCommand(gatewayConnectionProblem)
   val recoveryTitle: NativeText =
@@ -2121,9 +2024,8 @@ private fun GatewayRecoveryScreen(
     gatewayRecoveryProgressItems(
       state = recoveryState,
       statusText = statusText,
-      connectSettling = connectSettling,
     )
-  val primaryAction = gatewayRecoveryPrimaryAction(recoveryState)
+  val primaryAction = gatewayRecoveryPrimaryAction(recoveryState, gatewayConnectionProblem)
   val showDiagnosticAction =
     gatewayRecoveryShowsDiagnosticAction(
       state = recoveryState,
@@ -2215,6 +2117,11 @@ private fun GatewayRecoveryScreen(
           Spacer(modifier = Modifier.height(14.dp))
           TextButton(onClick = { diagnosticDialogVisible = true }) {
             Text(nativeString("View details"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
+          }
+        }
+        gatewayNetworkRecoveryHelpUrl(gatewayConnectionProblem)?.let { url ->
+          TextButton(onClick = { uriHandler.openUri(url) }) {
+            Text(nativeString("Set up Tailscale"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
           }
         }
       }
@@ -2638,9 +2545,10 @@ private fun TogglePill(
   onClick: () -> Unit,
 ) {
   Surface(
+    selected = selected,
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier.heightIn(min = 34.dp),
+    modifier = modifier.heightIn(min = 34.dp).semantics { role = Role.Button },
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
     contentColor = if (selected) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,
@@ -2734,10 +2642,6 @@ internal enum class GatewayRecoveryUiState(
     title = nativeText("Connecting Gateway"),
     message = nativeText("OpenClaw is checking gateway and node access."),
   ),
-  TakingLonger(
-    title = nativeText("Still connecting"),
-    message = nativeText("This is taking longer than expected.\nCheck that the Gateway is running and reachable."),
-  ),
   Failed(
     title = nativeText("Connection issue"),
     message = nativeText("We could not reach your Gateway.\nLet's fix this."),
@@ -2764,20 +2668,29 @@ internal data class GatewayRecoveryProgressItem(
   val status: GatewayRecoveryProgressStatus,
 )
 
-internal fun gatewayRecoveryPrimaryAction(state: GatewayRecoveryUiState): GatewayRecoveryPrimaryAction? =
+internal fun gatewayRecoveryPrimaryAction(
+  state: GatewayRecoveryUiState,
+  problem: GatewayConnectionProblem? = null,
+): GatewayRecoveryPrimaryAction? =
   when (state) {
-    GatewayRecoveryUiState.Connected -> GatewayRecoveryPrimaryAction.Finish
+    GatewayRecoveryUiState.Connected -> {
+      GatewayRecoveryPrimaryAction.Finish
+    }
 
-    GatewayRecoveryUiState.Failed -> GatewayRecoveryPrimaryAction.Back
+    GatewayRecoveryUiState.Failed -> {
+      if (problem?.isNetworkFailure == true) GatewayRecoveryPrimaryAction.Retry else GatewayRecoveryPrimaryAction.Back
+    }
 
-    GatewayRecoveryUiState.ApprovalRequired -> GatewayRecoveryPrimaryAction.Retry
+    GatewayRecoveryUiState.ApprovalRequired -> {
+      GatewayRecoveryPrimaryAction.Retry
+    }
 
     GatewayRecoveryUiState.NodeCapabilityApprovalPending,
     GatewayRecoveryUiState.Pairing,
     GatewayRecoveryUiState.Finishing,
-    -> null
-
-    GatewayRecoveryUiState.TakingLonger -> GatewayRecoveryPrimaryAction.Retry
+    -> {
+      null
+    }
   }
 
 internal fun gatewayRecoveryShowsDiagnosticAction(
@@ -2785,7 +2698,6 @@ internal fun gatewayRecoveryShowsDiagnosticAction(
   gatewayConnectionProblem: GatewayConnectionProblem?,
 ): Boolean =
   state == GatewayRecoveryUiState.Failed ||
-    state == GatewayRecoveryUiState.TakingLonger ||
     gatewayConnectionProblem != null
 
 internal fun gatewayRecoveryDiagnosticText(
@@ -2811,11 +2723,8 @@ internal fun gatewayRecoveryDiagnosticText(
   ).joinToString("\n")
 
 internal fun gatewayPairingUiState(
-  gatewayPaired: Boolean,
   gatewayPairingCanContinue: Boolean,
   statusText: String,
-  connectSettling: Boolean,
-  connectTimedOut: Boolean = false,
   gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): GatewayRecoveryUiState =
   when {
@@ -2826,17 +2735,13 @@ internal fun gatewayPairingUiState(
 
     gatewayConnectionProblem?.isPairingRequired == true -> GatewayRecoveryUiState.Pairing
 
+    gatewayConnectionProblem?.isNetworkFailure == true -> GatewayRecoveryUiState.Failed
+
     gatewayConnectionProblem?.pauseReconnect == true -> GatewayRecoveryUiState.Failed
 
     gatewayStatusLooksLikePairing(statusText) -> GatewayRecoveryUiState.Pairing
 
     gatewayStatusLooksLikeFailure(statusText) -> GatewayRecoveryUiState.Failed
-
-    gatewayPaired -> if (connectTimedOut) GatewayRecoveryUiState.TakingLonger else GatewayRecoveryUiState.Finishing
-
-    connectSettling -> GatewayRecoveryUiState.Finishing
-
-    connectTimedOut -> GatewayRecoveryUiState.TakingLonger
 
     else -> GatewayRecoveryUiState.Finishing
   }
@@ -2844,20 +2749,11 @@ internal fun gatewayPairingUiState(
 internal fun gatewayRecoveryProgressItems(
   state: GatewayRecoveryUiState,
   statusText: String = "",
-  connectSettling: Boolean = false,
 ): List<GatewayRecoveryProgressItem> =
   when (state) {
     GatewayRecoveryUiState.Finishing -> {
       finishingGatewayProgressItems(
         statusText = statusText,
-        connectSettling = connectSettling,
-      )
-    }
-
-    GatewayRecoveryUiState.TakingLonger -> {
-      finishingGatewayProgressItems(
-        statusText = statusText,
-        connectSettling = connectSettling,
       )
     }
 
@@ -2889,7 +2785,6 @@ internal fun gatewayRecoveryProgressItems(
 
 private fun finishingGatewayProgressItems(
   statusText: String,
-  connectSettling: Boolean,
 ): List<GatewayRecoveryProgressItem> {
   val gatewayAccessComplete = gatewayStatusLooksLikePartialConnect(statusText)
   val nodeAccessCurrent = gatewayAccessComplete
@@ -2946,66 +2841,16 @@ internal fun recoveryGatewayName(
       ?.takeIf { it.isNotEmpty() }
     ?: "Home Gateway"
 
-/** Resolves onboarding setup-code or manual fields into the gateway plan used for connect. */
-internal fun resolveOnboardingGatewayConnectPlan(
-  setupCode: String,
-  savedManualHost: String,
-  savedManualPort: String,
-  savedManualTls: Boolean,
-  manualHost: String,
-  manualPort: String,
-  manualTls: Boolean,
-  token: String,
-  password: String,
-): GatewayConnectPlan? =
-  resolveGatewayConnectPlan(
-    useSetupCode = setupCode.isNotBlank(),
-    setupCode = setupCode,
-    savedManualHost = savedManualHost,
-    savedManualPort = savedManualPort,
-    savedManualTls = savedManualTls,
-    manualHostInput = manualHost,
-    manualPortInput = manualPort,
-    manualTlsInput = manualTls,
-    bootstrapTokenInput = "",
-    tokenInput = token,
-    passwordInput = password,
-  )
-
-/** Selects the recovery detail line from endpoint metadata and transient gateway status. */
-internal fun recoveryGatewayDetail(
-  ready: Boolean,
-  remoteAddress: String?,
-  statusText: String,
-  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
-  gatewayConnectionProblem: GatewayConnectionProblem?,
-): String =
-  if (ready) {
-    remoteAddress?.takeIf { it.isNotBlank() } ?: nativeString("Ready for chat and voice")
-  } else if (nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval)) {
-    nativeString("Gateway paired. Waiting for node capability approval.")
-  } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
-    recoveryGatewayApprovalCommand(gatewayConnectionProblem)
-      ?.let { nativeString("Gateway approval is pending. Run this on the gateway host:") }
-      ?: nativeString(
-        "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry.",
-      )
-  } else if (gatewayConnectionProblem?.isPairingRequired == true && gatewayConnectionProblem.canAutoRetry) {
-    nativeString("Gateway approval is in progress. OpenClaw will retry automatically.")
-  } else if (gatewayConnectionProblem != null) {
-    recoveryGatewayAuthDetail(gatewayConnectionProblem)
-  } else if (nodeCapabilityApproval == GatewayNodeCapabilityApproval.Loading) {
-    nativeString("Gateway paired. Checking node capability approval.")
-  } else if (statusText.contains("operator offline", ignoreCase = true)) {
-    nativeString("Gateway paired. Waiting for operator access.")
-  } else if (gatewayStatusLooksLikePairing(statusText)) {
-    nativeString("Gateway approval is in progress. OpenClaw will retry automatically.")
-  } else {
-    remoteAddress?.takeIf { it.isNotBlank() } ?: nativeString("Gateway unreachable")
-  }
-
 internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String =
   when (gatewayConnectionProblem.code) {
+    "NETWORK_UNREACHABLE" -> {
+      if (gatewayConnectionProblem.isTailscaleRoute && gatewayConnectionProblem.reason != "transport-cleanup") {
+        nativeString("This address may use Tailscale. Open Tailscale and connect to the Gateway's tailnet, then retry. Check that the Gateway computer is online and OpenClaw is running.")
+      } else {
+        gatewayConnectionStatusForDisplay(gatewayConnectionProblem.message)
+      }
+    }
+
     "PROTOCOL_MISMATCH" -> {
       recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem)
     }
@@ -3046,6 +2891,11 @@ internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnecti
         else -> gatewayConnectionProblem.message.takeIf { it.isNotBlank() } ?: nativeString("Gateway authentication needs attention.")
       }
     }
+  }
+
+internal fun gatewayNetworkRecoveryHelpUrl(problem: GatewayConnectionProblem?): String? =
+  "https://tailscale.com/docs/install/android".takeIf {
+    problem?.isNetworkFailure == true && problem.isTailscaleRoute && problem.reason != "transport-cleanup"
   }
 
 private fun recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem: GatewayConnectionProblem): String {
