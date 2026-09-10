@@ -29,6 +29,8 @@ import { neutralizeMediaDirectives } from "./browser/vision.js";
 import { formatErrorMessage } from "./infra/errors.js";
 
 type BrowserExternalJsonKind =
+  | "webmcp_list"
+  | "webmcp_execute"
   | "snapshot"
   | "console"
   | "requests"
@@ -38,6 +40,8 @@ type BrowserExternalJsonKind =
   | "download";
 
 const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
+  webmcp_list: "\n[truncated — tool metadata is incomplete]",
+  webmcp_execute: "\n[truncated — inspect the page before retrying execution]",
   snapshot: "\n[truncated — retry with a smaller maxChars or limit]",
   console: "\n[truncated — retry with a stricter level or targetId]",
   requests: "\n[truncated — retry with a narrower filter or smaller limit]",

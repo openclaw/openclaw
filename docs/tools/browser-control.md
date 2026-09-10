@@ -11,6 +11,59 @@ For setup, configuration, and troubleshooting, see [Browser](/tools/browser).
 This page is the reference for the local control HTTP API, the `openclaw browser`
 CLI, and scripting patterns (snapshots, refs, waits, debug flows).
 
+## Experimental WebMCP
+
+`webmcp_list` and `webmcp_execute` expose page-provided tools through an
+`existing-session` profile's Chrome DevTools MCP connection. Other browser
+drivers return an unsupported-operation error. No page tools are dynamically
+registered as agent tools, and there is no DOM fallback.
+
+Chrome's WebMCP developer trial starts at Chrome 146; this integration was
+verified with Chrome 152 and Chrome DevTools MCP 1.8.0. Earlier Chrome versions
+are not covered by that verification. Enable **WebMCP for testing** at
+`chrome://flags/#enable-webmcp-testing` and restart your disposable browser.
+See [Chrome's WebMCP documentation](https://developer.chrome.com/docs/ai/webmcp).
+Use a separate user-data directory without personal logins for testing.
+
+Add `--categoryExperimentalWebmcp=true` to the existing profile's `mcpArgs`.
+Keep the pinned Chrome MCP version and its existing structured-content/page
+routing options. See [existing-session setup](/tools/browser/existing-session).
+
+```bash
+openclaw browser --browser-profile isolated webmcp_list --target-id <target-id>
+openclaw browser --browser-profile isolated webmcp_execute --target-id <target-id> --context-id <context-id> --tool-name increment_counter --input '{"amount":2}'
+```
+
+Both commands return JSON. The agent tool uses the same action names with
+`profile`, `targetId`, `contextId`, `toolName`, and object-valued `input`.
+Discovery returns `targetId`, `contextId`, and `tools` (name, description, input
+schema, and available annotations). Execute returns `targetId`, `contextId`,
+and `result`. The control routes are `POST /webmcp/list` and
+`POST /webmcp/execute`, through the existing Browser transport.
+
+Execution requires the document reference returned by discovery and refreshes
+the tool list on that target. A reload or replacement detected before dispatch
+rejects the stale reference. Failures after dispatch begins, including connection
+loss, invalid results, and failed document or navigation checks, report **outcome
+unknown**; inspect the page before retrying because a mutation may have happened.
+Chrome MCP does not offer atomic document-bound execution: these checks cannot
+prevent a navigation between the final check and the invocation. Do not use this
+experimental path where that stronger guarantee is required.
+
+Metadata, arguments, and results are untrusted JSON, bounded to 64 KiB, depth 16
+and 8192 values. Discovery accepts at most 64 tools and rejects oversized
+metadata rather than silently damaging a schema. Existing agent-output limits
+can further truncate its displayed text. Oversized results may be rejected
+after execution; do not retry the mutation merely to obtain a smaller result.
+
+Missing MCP operations or disabled MCP WebMCP support return an enablement
+error. An empty tool list means the page exposes no tools **or** Chrome's WebMCP
+capability is unavailable; the upstream list operation does not distinguish
+those states. Check the Chrome flag and version before concluding the page has
+no tools. Unknown tools, malformed input, stale references and MCP connection
+failures are returned explicitly, without changing profile or falling back to
+JavaScript execution.
+
 ## Control API (optional)
 
 For local integrations only, the Gateway exposes a small loopback HTTP API.

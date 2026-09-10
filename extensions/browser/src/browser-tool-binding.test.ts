@@ -11,6 +11,16 @@ const binding = {
 };
 
 describe("browser tab tool binding", () => {
+  it.each(["webmcp_list", "webmcp_execute"])(
+    "pins %s to the bound tab and rejects overrides",
+    (action) => {
+      expect(applyBrowserTabToolBinding({ action }, binding)).toMatchObject({
+        targetId: "target-a",
+        profile: "chrome",
+      });
+      expect(() => applyBrowserTabToolBinding({ action, targetId: "target-b" }, binding)).toThrow();
+    },
+  );
   it("pins route and nested act targets to the trusted tab", () => {
     expect(
       applyBrowserTabToolBinding(

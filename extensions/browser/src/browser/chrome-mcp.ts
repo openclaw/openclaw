@@ -1,4 +1,5 @@
 /** Chrome MCP existing-session adapter public facade. */
+export { runChromeMcpWebMcp } from "./chrome-mcp.webmcp.js";
 export { ChromeMcpDocumentUnavailableError } from "./chrome-mcp-contracts.js";
 export type { ChromeMcpOperationOptions, ChromeMcpProfileOptions } from "./chrome-mcp-contracts.js";
 export { decodeChromeMcpStderrTail } from "./chrome-mcp-diagnostics.js";

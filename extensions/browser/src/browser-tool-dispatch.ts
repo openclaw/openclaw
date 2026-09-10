@@ -43,6 +43,7 @@ import {
   BROWSER_ACTION_TRANSPORT_SLACK_MS,
   resolveBrowserNavigationTimeoutMs,
 } from "./browser/act-policy.js";
+import { browserWebMcp } from "./browser/client-webmcp.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
@@ -111,6 +112,40 @@ export async function executeBrowserTabAction(context: {
     return jsonResult(result);
   };
   switch (action) {
+    case "webmcp_list":
+    case "webmcp_execute": {
+      const targetId = readStringParam(params, "targetId", { required: true });
+      const request = {
+        targetId,
+        contextId: readStringParam(params, "contextId", { required: action === "webmcp_execute" }),
+        toolName: readStringParam(params, "toolName", { required: action === "webmcp_execute" }),
+        input: params.input,
+      };
+      if (
+        request.input !== undefined &&
+        (!request.input || typeof request.input !== "object" || Array.isArray(request.input))
+      ) {
+        throw new Error("WebMCP input must be a JSON object.");
+      }
+      const operation = action === "webmcp_list" ? "list" : "execute";
+      const result = proxyRequest
+        ? await proxyRequest({
+            method: "POST",
+            path: `/webmcp/${operation}`,
+            profile,
+            body: request,
+            timeoutMs: toolTimeoutMs,
+          })
+        : await browserWebMcp(
+            baseUrl,
+            operation,
+            // SAFETY: The input guard above accepts only non-null, non-array objects.
+            { ...request, input: request.input as Record<string, unknown> | undefined },
+            { profile, timeoutMs: toolTimeoutMs, signal },
+          );
+      touchTab(targetId);
+      return formatBrowserExternalToolResult({ kind: action, payload: result });
+    }
     case "tabs":
       return await executeTabsAction({
         baseUrl,

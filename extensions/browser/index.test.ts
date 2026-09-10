@@ -350,6 +350,8 @@ describe("browser plugin", () => {
     };
 
     expect(action.enum).toEqual([
+      "webmcp_list",
+      "webmcp_execute",
       "act",
       "close",
       "console",
