@@ -45,6 +45,7 @@ export const SystemInfoResultSchema = closedObject({
       }),
     ),
   ),
+  gatewayIsolation: Type.Optional(Type.Enum(["enabled", "disabled"] as const, { type: "string" })),
   /** Resolved utility model for the configured default agent. */
   defaultAgentUtilityModel: Type.Optional(UtilityModelStatusSchema),
 });

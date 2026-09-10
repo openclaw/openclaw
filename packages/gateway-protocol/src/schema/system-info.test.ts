@@ -34,6 +34,24 @@ describe("SystemInfoResultSchema", () => {
     expect(Value.Check(SystemInfoResultSchema, validSystemInfo)).toBe(true);
   });
 
+  it.each(["enabled", "disabled"] as const)(
+    "accepts the optional Gateway isolation state %s",
+    (gatewayIsolation) => {
+      expect(Value.Check(SystemInfoResultSchema, { ...validSystemInfo, gatewayIsolation })).toBe(
+        true,
+      );
+    },
+  );
+
+  it("rejects an invalid Gateway isolation state", () => {
+    expect(
+      Value.Check(SystemInfoResultSchema, {
+        ...validSystemInfo,
+        gatewayIsolation: "unknown",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects extra properties", () => {
     expect(Value.Check(SystemInfoResultSchema, { ...validSystemInfo, extra: true })).toBe(false);
   });

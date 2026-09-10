@@ -49,6 +49,15 @@ import { assertValidParams } from "./validation.js";
 
 let advertisedLanHostPromise: Promise<string | null> | null = null;
 
+function readGatewayIsolation(): SystemInfoResult["gatewayIsolation"] {
+  const value = process.env.OPENCLAW_GATEWAY_ISOLATION;
+  return value === "enabled" || value === "disabled" ? value : undefined;
+}
+
+// The launch environment defines this process's posture. Keep it stable across
+// polling so the reported state cannot diverge from how the Gateway started.
+const gatewayIsolation = readGatewayIsolation();
+
 function resolveCachedAdvertisedLanHost(): Promise<string | null> {
   // Route discovery may spawn a platform command. Keep the result process-stable
   // so each visible Settings page does not repeat that work every ten seconds.
@@ -116,6 +125,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
           diskPath: stateDir,
         }
       : {}),
+    ...(gatewayIsolation ? { gatewayIsolation } : {}),
     defaultAgentUtilityModel,
   };
 }

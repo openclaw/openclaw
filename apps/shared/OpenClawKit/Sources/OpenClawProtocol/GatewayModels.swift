@@ -18974,6 +18974,7 @@ public struct SystemInfoResult: Codable, Sendable {
     public let diskavailablebytes: Int?
     public let diskpath: String?
     public let disks: [[String: AnyCodable]]?
+    public let gatewayisolation: String?
     public let defaultagentutilitymodel: AnyCodable?
 
     public init(
@@ -18998,6 +18999,7 @@ public struct SystemInfoResult: Codable, Sendable {
         diskavailablebytes: Int? = nil,
         diskpath: String? = nil,
         disks: [[String: AnyCodable]]? = nil,
+        gatewayisolation: String? = nil,
         defaultagentutilitymodel: AnyCodable? = nil)
     {
         self.machinename = machinename
@@ -19021,6 +19023,7 @@ public struct SystemInfoResult: Codable, Sendable {
         self.diskavailablebytes = diskavailablebytes
         self.diskpath = diskpath
         self.disks = disks
+        self.gatewayisolation = gatewayisolation
         self.defaultagentutilitymodel = defaultagentutilitymodel
     }
 
@@ -19046,6 +19049,7 @@ public struct SystemInfoResult: Codable, Sendable {
         case diskavailablebytes = "diskAvailableBytes"
         case diskpath = "diskPath"
         case disks
+        case gatewayisolation = "gatewayIsolation"
         case defaultagentutilitymodel = "defaultAgentUtilityModel"
     }
 }
