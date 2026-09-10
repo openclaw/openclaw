@@ -10,36 +10,6 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
-  # GHSA-2x7j-588g-ccc2 / GHSA-rgj7-g3m4-5g8c patches; remove after 2026-09-17.
-  - "nodemailer@9.1.1"
-  - "sharp@0.35.4"
-  - "@img/sharp-darwin-arm64@0.35.4"
-  - "@img/sharp-darwin-x64@0.35.4"
-  - "@img/sharp-freebsd-wasm32@0.35.4"
-  - "@img/sharp-libvips-darwin-arm64@1.3.3"
-  - "@img/sharp-libvips-darwin-x64@1.3.3"
-  - "@img/sharp-libvips-linux-arm@1.3.3"
-  - "@img/sharp-libvips-linux-arm64@1.3.3"
-  - "@img/sharp-libvips-linux-ppc64@1.3.3"
-  - "@img/sharp-libvips-linux-riscv64@1.3.3"
-  - "@img/sharp-libvips-linux-s390x@1.3.3"
-  - "@img/sharp-libvips-linux-x64@1.3.3"
-  - "@img/sharp-libvips-linuxmusl-arm64@1.3.3"
-  - "@img/sharp-libvips-linuxmusl-x64@1.3.3"
-  - "@img/sharp-linux-arm@0.35.4"
-  - "@img/sharp-linux-arm64@0.35.4"
-  - "@img/sharp-linux-ppc64@0.35.4"
-  - "@img/sharp-linux-riscv64@0.35.4"
-  - "@img/sharp-linux-s390x@0.35.4"
-  - "@img/sharp-linux-x64@0.35.4"
-  - "@img/sharp-linuxmusl-arm64@0.35.4"
-  - "@img/sharp-linuxmusl-x64@0.35.4"
-  - "@img/sharp-wasm32@0.35.4"
-  - "@img/sharp-webcontainers-wasm32@0.35.4"
-  - "@img/sharp-win32-arm64@0.35.4"
-  - "@img/sharp-win32-ia32@0.35.4"
-  - "@img/sharp-win32-x64@0.35.4"
-  - "@emnapi/runtime@1.11.3"
   # GHSA-58mr-gqgx-xq4g / GHSA-qw65-cvwx-89v3 security fix; remove after 2026-09-09.
   - "fast-uri@4.1.4"
   - "@openai/codex"
@@ -78,8 +48,7 @@ overrides:
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   qs: 6.15.3
-  sharp: 0.35.4
-  nodemailer: 9.1.1
+  sharp: 0.35.3
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
   typebox: 1.3.16
   tar: 7.5.22
