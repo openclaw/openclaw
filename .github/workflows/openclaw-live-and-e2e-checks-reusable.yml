@@ -4202,7 +4202,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-infra
             label: Native live infra
-            command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra
+            command: OPENCLAW_LIVE_APNS_REACHABILITY=1 OPENCLAW_LIVE_SESSION_EVENT_WAKE=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra
             timeout_minutes: 45
             profile_env_only: false
             profiles: stable full

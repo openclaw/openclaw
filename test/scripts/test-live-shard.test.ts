@@ -256,7 +256,9 @@ describe("scripts/test-live-shard", () => {
   it.each([
     "native-live-src-gateway-core",
     "native-live-src-gateway-backends",
+    "native-live-src-infra",
     "native-live-test",
+    "src/infra/heartbeat-runner.live.test.ts",
     "test/e2e/qa-lab/runtime/worker-skill-resources.live.test.ts",
     "test/e2e/qa-lab/runtime/gateway-node-mcp.live.test.ts",
   ])("prepares the built gateway runtime before %s starts Vitest", (target) => {
@@ -276,9 +278,7 @@ describe("scripts/test-live-shard", () => {
       profile: "sourcePerformance",
       requiredArtifact: "dist/.runtime-postbuildstamp",
     });
-    expect(
-      resolveLiveShardPreparation(selectLiveShardFiles("native-live-src-infra", allFiles)),
-    ).toBeNull();
+    expect(resolveLiveShardPreparation(["src/infra/push-apns-http2.live.test.ts"])).toBeNull();
   });
 
   it("runs the frozen candidate's available build entrypoint and advertised profile", () => {
