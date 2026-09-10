@@ -5,6 +5,39 @@ import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
 import { sanitizeHtml } from "./web-fetch-visibility.js";
 
 describe("sanitizeHtml", () => {
+  it.each(["meta\u00a0", "embed\u00a0"])(
+    "retains visible contents in the complete ordinary name %s",
+    async (name) => {
+      const html = `<${name}><p>Visible inside</p></${name}><p>Visible sibling</p>`;
+      expect(await sanitizeHtml(html)).toBe(html);
+    },
+  );
+
+  it("filters real metadata and hidden ordinary names without removing the visible sibling", async () => {
+    const html =
+      '<meta content="Secret metadata"><meta\u00a0 hidden>Secret body</meta\u00a0><p>Visible sibling</p>';
+    expect(await sanitizeHtml(html)).toBe("<p>Visible sibling</p>");
+  });
+
+  it.each([
+    "<p hidden>Before<div.foo>Secret</div.foo></p><p>Visible</p>",
+    "<p hidden>Before<p.foo>Secret</p.foo></p><p>Visible</p>",
+    "<p hidden>Before<div@click>Secret</div@click></p><p>Visible</p>",
+    "<p hidden>Before<div=note>Secret</div=note></p><p>Visible</p>",
+    "<p hidden>Before< div>Secret</ div></p><p>Visible</p>",
+    "<p hidden>Before<\u00a0div>Secret</\u00a0div></p><p>Visible</p>",
+    "<div><p hidden>Before</div.foo>Secret</p></div><p>Visible</p>",
+    "<div><p hidden>Before</ div>Secret</p></div><p>Visible</p>",
+    "<ul><li hidden>Before<li.foo>Secret</li.foo></li><li>Visible</li></ul>",
+    "<dl><dt hidden>Before<dd.foo>Secret</dd.foo></dt><dd>Visible</dd></dl>",
+    "<table><tr><td hidden>Before<th.foo>Secret</th.foo></td><td>Visible</td></tr></table>",
+    "<select><option hidden>Before<option.foo>Secret</option.foo></option><option>Visible</option></select>",
+  ])("does not recover HTML scope from an incomplete tag identity: %s", async (html) => {
+    const result = await sanitizeHtml(html);
+    expect(result).toContain("Visible");
+    expect(result).not.toContain("Secret");
+  });
+
   it.each(["script.foo", "textarea.foo", "title.foo", "plaintext.foo", " script", "\u00a0script"])(
     "checks hidden descendants when %s is not a raw-text element",
     async (name) => {

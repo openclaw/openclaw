@@ -9,10 +9,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   readRawTextBounds,
-  readRawTextOpenTagName,
   isAsciiWhitespace,
   readTagToken,
   skipHtmlComment,
+  startsLikeHtmlTag,
 } from "./web-fetch-html-tag.js";
 
 // Compile property matchers once: this list is checked for every styled element.
@@ -193,9 +193,7 @@ const readClass = createAttributeReader("class");
 const readStyle = createAttributeReader("style");
 const readEncoding = createAttributeReader("encoding");
 
-function shouldRemoveElement(tagNameRaw: string, attrs: string): boolean {
-  const tagName = normalizeLowercaseStringOrEmpty(tagNameRaw);
-
+function shouldRemoveElement(tagName: string, attrs: string): boolean {
   if (["meta", "template", "svg", "canvas", "iframe", "object", "embed"].includes(tagName)) {
     return true;
   }
@@ -611,6 +609,14 @@ function removeMarkedElements(html: string): string {
       continue;
     }
 
+    if (!startsLikeHtmlTag(html, tagStart)) {
+      if (hiddenRoot < 0) {
+        output += "<";
+      }
+      cursor = tagStart + 1;
+      continue;
+    }
+
     const read = readTagToken(html, tagStart, "visibility");
     if (!read) {
       if (hiddenRoot < 0) {
@@ -640,12 +646,7 @@ function removeMarkedElements(html: string): string {
     } else if (namespace === "html" && (parsed.name === "math" || parsed.name === "svg")) {
       namespace = parsed.name;
     }
-    if (
-      !parsed.closing &&
-      namespace === "html" &&
-      OPAQUE_TEXT_ELEMENTS.has(parsed.name) &&
-      readRawTextOpenTagName(html, tagStart, OPAQUE_TEXT_ELEMENTS) === parsed.name
-    ) {
+    if (!parsed.closing && namespace === "html" && OPAQUE_TEXT_ELEMENTS.has(parsed.name)) {
       closeForStart(parsed.name);
       const bounds =
         parsed.name === "plaintext"

@@ -63,15 +63,11 @@ function startsWithClosingTag(html: string, start: number, tagName: string): boo
   return isTagBoundary(html[start + 2 + tagName.length]);
 }
 
-export function readRawTextOpenTagName(
-  html: string,
-  start: number,
-  tagNames: ReadonlySet<string> = RAW_TEXT_TAGS,
-): string | undefined {
+export function readRawTextOpenTagName(html: string, start: number): string | undefined {
   if (html[start] !== "<" || html[start + 1] === "/") {
     return undefined;
   }
-  for (const tagName of tagNames) {
+  for (const tagName of RAW_TEXT_TAGS) {
     let matches = true;
     for (let offset = 0; offset < tagName.length; offset += 1) {
       if (asciiLower(html[start + 1 + offset] ?? "") !== tagName[offset]) {
@@ -200,42 +196,33 @@ export function readTagToken(
   }
 
   const raw = html.slice(start + 1, end);
-  const body = rendering ? raw : raw.trim();
+  const body = raw;
   let pos = 0;
-  while (pos < body.length && isAsciiWhitespace(body.charAt(pos))) {
-    pos += 1;
-  }
   const closing = body[pos] === "/";
   if (closing) {
     pos += 1;
-    while (
-      pos < body.length &&
-      (rendering ? isAsciiWhitespace(body.charAt(pos)) : /\s/.test(body.charAt(pos)))
-    ) {
-      pos += 1;
-    }
   }
-  if (pos >= body.length || body[pos] === "!" || body[pos] === "?") {
+  if (!isTagNameStartChar(body[pos] ?? "")) {
     return { token: null, next: end + 1 };
   }
 
   const nameStart = pos;
-  while (pos < body.length && isTagNameChar(body.charAt(pos))) {
-    if (!rendering && body[pos] === ".") {
-      break;
-    }
+  while (
+    pos < body.length &&
+    !isAsciiWhitespace(body.charAt(pos)) &&
+    body[pos] !== "/" &&
+    body[pos] !== ">"
+  ) {
     pos += 1;
-  }
-  if (pos === nameStart || (rendering && !isTagNameStartChar(body[nameStart] ?? ""))) {
-    const rawTextStart = rendering ? findRawTextOpenTagStart(html, start + 1, end + 1) : -1;
-    return { token: null, next: rawTextStart === -1 ? end + 1 : rawTextStart };
   }
 
   const attrs = closing ? "" : body.slice(pos);
   return {
     token: {
       closing,
-      name: body.slice(nameStart, pos).toLowerCase(),
+      name: body
+        .slice(nameStart, pos)
+        .replace(/\0|[A-Z]/g, (ch) => (ch === "\0" ? "\uFFFD" : asciiLower(ch))),
       raw,
       attrs,
       selfClosing: rendering ? isSelfClosingTagRaw(raw) : !closing && attrs.trimEnd().endsWith("/"),
