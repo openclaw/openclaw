@@ -54,11 +54,11 @@ export const uiE2eRealGatewayTestFiles = [
 // Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
+  "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-export-attribution.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",

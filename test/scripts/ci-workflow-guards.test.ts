@@ -13367,6 +13367,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(helperPrivateServerFiles.toSorted()).toEqual([
       "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
