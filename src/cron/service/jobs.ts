@@ -7,7 +7,7 @@ import {
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
-import { cronDeliveryTargetIncludesTelegramTopic } from "../delivery-topic-routing.js";
+import { cronDeliveryHasRedundantTelegramThreadId } from "../delivery-topic-routing.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
@@ -396,7 +396,7 @@ export function applyJobPatch(
     const implicitMode = resolveCronDeliveryPlan(job).mode;
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery, implicitMode);
   }
-  if (job.delivery && cronDeliveryTargetIncludesTelegramTopic(job.delivery)) {
+  if (job.delivery && cronDeliveryHasRedundantTelegramThreadId(job.delivery)) {
     delete job.delivery.threadId;
   }
   if ("failureAlert" in patch) {

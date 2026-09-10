@@ -5,7 +5,7 @@ import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
-import { cronDeliveryTargetIncludesTelegramTopic } from "./delivery-topic-routing.js";
+import { cronDeliveryHasRedundantTelegramThreadId } from "./delivery-topic-routing.js";
 import type { CronDelivery, CronMessageChannel } from "./types.js";
 
 /** Converts an active delivery context into cron announce delivery config. */
@@ -27,7 +27,7 @@ function cronDeliveryFromContext(context?: DeliveryContext): CronDelivery | null
   if (normalized.threadId != null) {
     delivery.threadId = normalized.threadId;
   }
-  if (cronDeliveryTargetIncludesTelegramTopic(delivery)) {
+  if (cronDeliveryHasRedundantTelegramThreadId(delivery)) {
     delete delivery.threadId;
   }
   return delivery;

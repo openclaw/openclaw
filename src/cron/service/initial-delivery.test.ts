@@ -120,6 +120,35 @@ describe("CronService initial delivery", () => {
     }
   });
 
+  it("normalizes Telegram numeric topic shorthand during creation", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createDirectCronService(storePath);
+    await cron.start();
+
+    try {
+      const added = await cron.add(
+        createInput({
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "hello" },
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "-1001234567890:99",
+            threadId: 99,
+          },
+        }),
+      );
+
+      expect(added.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: "-1001234567890:99",
+      });
+    } finally {
+      cron.stop();
+    }
+  });
+
   it("normalizes legacy split Telegram topic routing during an unrelated update", async () => {
     const { storePath } = await makeStorePath();
     const cron = createDirectCronService(storePath);
@@ -149,6 +178,39 @@ describe("CronService initial delivery", () => {
       });
       await expect(loadCronStore(storePath)).resolves.toMatchObject({
         jobs: [{ name: "updated topic job", delivery: updated.delivery }],
+      });
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("preserves a differing explicit Telegram topic during an unrelated update", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createDirectCronService(storePath);
+    await cron.start();
+
+    try {
+      const added = await cron.add(
+        createInput({
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "hello" },
+        }),
+      );
+      const legacy = cron.getJob(added.id) as CronJob;
+      legacy.delivery = {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:99",
+        threadId: "42",
+      };
+
+      const updated = await cron.update(added.id, { name: "updated override job" });
+
+      expect(updated.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:99",
+        threadId: "42",
       });
     } finally {
       cron.stop();

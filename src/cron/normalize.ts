@@ -11,7 +11,7 @@ import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
-import { cronDeliveryTargetIncludesTelegramTopic } from "./delivery-topic-routing.js";
+import { cronDeliveryHasRedundantTelegramThreadId } from "./delivery-topic-routing.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { snapshotOwnCronRecord } from "./own-record.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -219,7 +219,7 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if ("threadId" in next) {
     delete next.threadId;
   }
-  if (cronDeliveryTargetIncludesTelegramTopic(next)) {
+  if (cronDeliveryHasRedundantTelegramThreadId(next)) {
     delete next.threadId;
   }
   if ("accountId" in next && next.accountId === null) {

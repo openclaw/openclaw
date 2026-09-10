@@ -2882,6 +2882,34 @@ describe("cron tool", () => {
     });
   });
 
+  it("preserves a differing explicit Telegram topic override in updates", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-preserve-topic-override", {
+      action: "update",
+      id: "job-topic",
+      job: {
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:-1001234567890:topic:99",
+          threadId: "42",
+        },
+      },
+    });
+
+    expect(expectSingleGatewayCallMethod("cron.update")).toEqual({
+      id: "job-topic",
+      patch: {
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:-1001234567890:topic:99",
+          threadId: "42",
+        },
+      },
+    });
+  });
+
   it.each([
     ["nested", "worker"],
     ["flat", "worker"],
