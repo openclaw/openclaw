@@ -43,7 +43,8 @@ vi.mock("../daemon/constants.js", () => ({
 }));
 vi.mock("../daemon/diagnostics.js", () => ({ readLastGatewayErrorLine }));
 vi.mock("../daemon/launchd.js", async () => {
-  const actual = await vi.importActual<typeof import("../daemon/launchd.js")>("../daemon/launchd.js");
+  const actual =
+    await vi.importActual<typeof import("../daemon/launchd.js")>("../daemon/launchd.js");
   return {
     ...actual,
     isLaunchAgentLoaded: vi.fn(async () => false),
@@ -53,7 +54,8 @@ vi.mock("../daemon/launchd.js", async () => {
 });
 vi.mock("../daemon/inspect.js", () => ({ findSystemGatewayServices }));
 vi.mock("../daemon/service.js", async () => {
-  const actual = await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
+  const actual =
+    await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
   return { ...actual, resolveGatewayService: () => service };
 });
 vi.mock("../daemon/systemd.js", async (importOriginal) => ({
