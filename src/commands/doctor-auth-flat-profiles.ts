@@ -1884,11 +1884,12 @@ export function maybeRepairLegacyAuthProfileStores(params: {
   const targets = new Map<string, string | undefined>([
     [resolveSharedAuthStorePath(env), undefined],
   ]);
-  for (const candidate of listAuthProfileRepairCandidates(params.cfg, env, (pathname) => {
+  const candidates = listAuthProfileRepairCandidates(params.cfg, env, (pathname) => {
     warnings.push(
       `Skipped auth-profile alias migration because ${shortenHomePath(pathname)} is unavailable.`,
     );
-  })) {
+  });
+  for (const candidate of candidates) {
     if (!candidate.agentDir) {
       continue;
     }
@@ -1997,7 +1998,11 @@ export function maybeRepairLegacyAuthProfileStores(params: {
     }
   }
 
-  const recovery = recoverAuthAliasMigration({ stores: planned, env });
+  const recovery = recoverAuthAliasMigration({
+    stores: planned,
+    env,
+    archivedProfileIdMap: recoverArchivedOpenAICodexAuthProfileIdMap({ candidates, env }),
+  });
   for (const from of params.profileIdMap.keys()) {
     if (recovery.blocked.has(from)) {
       return {
@@ -2081,7 +2086,7 @@ function recoverArchivedOpenAICodexAuthProfileIdMap(params: {
     ...params.candidates.flatMap((candidate) => (candidate.agentDir ? [candidate.agentDir] : [])),
   ];
   const archives = listLegacyAuthProfileArchives({ agentDirs, env: params.env }).filter(
-    (archive) => archive.kind === "auth-profiles",
+    (archive) => archive.kind === "auth-profiles" || archive.kind === "legacy-auth",
   );
   for (const candidate of params.candidates) {
     const canonicalProfiles = (
@@ -2092,14 +2097,22 @@ function recoverArchivedOpenAICodexAuthProfileIdMap(params: {
     if (!canonicalProfiles) {
       continue;
     }
-    for (const archive of archives.filter((entry) =>
-      entry.path.startsWith(`${candidate.authPath}.migrated-`),
-    )) {
+    const sourcePaths = [
+      candidate.authPath,
+      resolveLegacyAuthStorePath(path.dirname(candidate.authPath)),
+    ];
+    for (const archive of archives) {
+      const sourcePath = sourcePaths.find((source) =>
+        archive.path.startsWith(`${source}.migrated-`),
+      );
+      if (!sourcePath) {
+        continue;
+      }
       try {
         const sourceBytes = fs.readFileSync(archive.path);
         const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
         const sourceKey = `auth-profile-v2:${createHash("sha256")
-          .update(`${path.resolve(candidate.authPath)}\0${sourceSha256}`)
+          .update(`${path.resolve(sourcePath)}\0${sourceSha256}`)
           .digest("hex")}`;
         const receipt = readLegacyMigrationReceipt(sourceKey, params.env);
         if (!receipt?.removedSource || receipt.sourceSha256 !== sourceSha256) {
@@ -2125,28 +2138,33 @@ function recoverArchivedOpenAICodexAuthProfileIdMap(params: {
           continue;
         }
         const archivedStore = JSON.parse(sourceBytes.toString("utf8")) as unknown;
-        if (!isRecord(archivedStore) || !isRecord(archivedStore.profiles)) {
+        const sourceStore =
+          coercePersistedAuthProfileStore(archivedStore) ??
+          coerceLegacyFlatAuthProfileStore(archivedStore);
+        if (!sourceStore) {
           continue;
         }
-        for (const [legacyProfileId, rawCredential] of Object.entries(archivedStore.profiles)) {
-          if (!isLegacyOpenAICodexProfileId(legacyProfileId) || !isRecord(rawCredential)) {
+        for (const [legacyProfileId, rawCredential] of Object.entries(sourceStore.profiles)) {
+          const target = legacyAuthProfileTarget(legacyProfileId);
+          if (!target) {
             continue;
           }
           const archivedCredential = parseLegacyCredentialEntry(
-            { ...rawCredential, provider: "openai" },
-            "openai",
+            { ...rawCredential, provider: target.provider },
+            target.provider,
           );
-          if (archivedCredential?.type !== "oauth") {
+          if (!archivedCredential) {
             continue;
           }
           const matches = Object.entries(report.expectedProfileSha256).flatMap(
             ([canonicalProfileId, expectedSha256]) => {
               const credential = canonicalProfiles[canonicalProfileId];
               return typeof expectedSha256 === "string" &&
-                credential?.type === "oauth" &&
-                credential.provider === "openai" &&
-                (hasMatchingOAuthIdentity(archivedCredential, credential) ||
-                  areOAuthCredentialsEquivalent(archivedCredential, credential))
+                credential?.provider === target.provider &&
+                (archivedCredential.type === "oauth" && credential.type === "oauth"
+                  ? hasMatchingOAuthIdentity(archivedCredential, credential) ||
+                    areOAuthCredentialsEquivalent(archivedCredential, credential)
+                  : isDeepStrictEqual(archivedCredential, credential))
                 ? [canonicalProfileId]
                 : [];
             },
@@ -2318,7 +2336,8 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
       collectReferences(raw);
     }
   }
-  const recovery = recoverAuthAliasMigration({ stores: sqliteStores, env });
+  const archivedProfileIdMap = recoverArchivedOpenAICodexAuthProfileIdMap({ candidates, env });
+  const recovery = recoverAuthAliasMigration({ stores: sqliteStores, env, archivedProfileIdMap });
   for (const profileId of recovery.blocked) {
     blocked.add(profileId);
   }
@@ -2337,10 +2356,7 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
       );
     }
   }
-  for (const [legacyProfileId, canonicalProfileId] of recoverArchivedOpenAICodexAuthProfileIdMap({
-    candidates,
-    env,
-  })) {
+  for (const [legacyProfileId, canonicalProfileId] of archivedProfileIdMap) {
     if (!profileIdMap.has(legacyProfileId) && !blocked.has(legacyProfileId)) {
       profileIdMap.set(legacyProfileId, canonicalProfileId);
     }

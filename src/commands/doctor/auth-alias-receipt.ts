@@ -156,6 +156,7 @@ export function runWithAuthAliasMigrationReceipt<T>(
 export function recoverAuthAliasMigration(params: {
   stores: readonly AuthAliasStoreSnapshot[];
   env: NodeJS.ProcessEnv;
+  archivedProfileIdMap?: ReadonlyMap<string, string>;
 }): { recovered: Map<string, string>; blocked: Set<string> } {
   const recovered = new Map<string, string>();
   const blocked = new Set<string>();
@@ -167,6 +168,21 @@ export function recoverAuthAliasMigration(params: {
   const stores = new Map(params.stores.map((entry) => [entry.databasePath, profiles(entry.store)]));
   const matches = new Map<string, Set<string>>();
   for (const mapping of report.mappings) {
+    const sourcePaths = mapping.sources?.map((source) => source.path) ?? [];
+    const archived =
+      sourcePaths.length > 0 && sourcePaths.every((source) => !fs.existsSync(source));
+    if (archived) {
+      // The import owner validates archived bytes, refreshed OAuth identity and ambiguity.
+      if (
+        params.archivedProfileIdMap?.get(mapping.from) === mapping.to &&
+        ![...stores.values()].some((entries) => entries[mapping.from] !== undefined)
+      ) {
+        const targets = matches.get(mapping.from) ?? new Set<string>();
+        targets.add(mapping.to);
+        matches.set(mapping.from, targets);
+      }
+      continue;
+    }
     const matched =
       mapping.credentials.every((expected) => {
         const entries = stores.get(expected.databasePath);
