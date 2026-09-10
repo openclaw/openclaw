@@ -193,6 +193,7 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `loginOAuth`                      | Callback-based OAuth login for the session SDK `AuthStorage` API                            |
 | `refreshOAuth`                    | Custom OAuth refresh                                                                        |
 | `buildAuthDoctorHint`             | Auth repair guidance                                                                        |
+| `managesOwnAvailability`          | Declare upstream-owned rate limiting; OpenClaw skips auth-profile cooldowns                 |
 | `matchesContextOverflowError`     | Provider-owned overflow detection                                                           |
 | `classifyFailoverReason`          | Provider-owned rate-limit/overload classification                                           |
 | `isCacheTtlEligible`              | Prompt cache TTL gating                                                                     |
@@ -246,6 +247,15 @@ or `undefined` to leave that decision to the host. The host records the
 result on the resolved runtime model rather than writing configuration.
 Explicit `tools.toolSearch` settings take precedence. This hook changes
 schema exposure, not tool permissions or availability.
+
+`managesOwnAvailability` is a static boolean, not a hook. Set it to `true` on
+the provider and export the same value from the `provider-policy-api`
+artifact when the upstream gateway meters and rate-limits requests itself.
+OpenClaw then records no auth-profile cooldowns, blocks, or disables for that
+provider and ignores any stored ones in routing, `models status`,
+`models auth list`, and `doctor`. It defaults to `false`; a provider that does
+not own account health must leave it unset, or a failing credential is retried
+on every turn. The bundled Kilo Gateway and OpenRouter plugins declare it.
 
 `resolveFastModeSupport(ctx)` can be exported from the same policy artifact
 and registered on the provider. Return `false` only for a confirmed no-op

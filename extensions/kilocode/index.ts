@@ -5,6 +5,7 @@ import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-mod
 import { applyKilocodeConfig, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildKilocodeProvider, buildKilocodeProviderWithDiscovery } from "./provider-catalog.js";
+import { managesOwnAvailability } from "./provider-policy-api.js";
 import { wrapKilocodeProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "kilocode";
@@ -17,6 +18,7 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Kilo Gateway",
     docsPath: "/providers/kilocode",
+    managesOwnAvailability,
     manifestAuth: {
       defaultModel: KILOCODE_DEFAULT_MODEL_REF,
       applyConfig: applyKilocodeConfig,

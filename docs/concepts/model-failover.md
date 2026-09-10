@@ -203,6 +203,10 @@ Use a user-pinned profile to make one account/key the durable first preference f
 
 When a profile fails due to auth/rate-limit errors (or a timeout that looks like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
 
+Some upstream gateways manage their own rate limiting and account health. A provider plugin declares this with `managesOwnAvailability: true`, and OpenClaw then skips cooldown bookkeeping for that provider entirely: failures do not mark the profile, and the profile is never treated as cooled down. The bundled Kilo Gateway and OpenRouter plugins declare it. There is no `openclaw.json` setting for this; the plugin that owns the provider owns the claim. See [Provider plugin runtime hooks](/plugins/sdk-provider-plugins/runtime-hooks) for the plugin-side contract.
+
+The skip is provider-wide and covers every failure category OpenClaw would otherwise record against the profile: rate limits (`rate_limit`, `overloaded`), rate-limit-shaped timeouts (`timeout`), billing failures (`billing`), credential failures (`auth`, `auth_permanent`), and the remaining transient reasons (`format`, `model_not_found`, `session_expired`, `empty_response`, `no_error_details`, `unclassified`). Provider-reported blocks (for example Codex rate-limit windows) and inline API-key billing cooldowns are skipped for the same providers. Existing stored cooldown, block, or disable state for such a provider is ignored by routing and by `openclaw models status`, `openclaw models auth list`, and `openclaw doctor`. A plugin should declare this only when its upstream gateway really does own rate limiting and account health; otherwise a failing credential is retried on every turn.
+
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback; a successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
 
 <AccordionGroup>

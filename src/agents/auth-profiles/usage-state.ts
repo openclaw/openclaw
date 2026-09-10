@@ -5,6 +5,7 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveProviderManagesOwnAvailability } from "../../plugins/provider-availability-policy.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 /** Clears failure windows while preserving unrelated usage history. */
@@ -31,10 +32,13 @@ export function resetAuthProfileFailureState(
   };
 }
 
-/** Returns true for providers whose auth-profile cooldowns are provider-managed. */
+/**
+ * Returns true for providers whose plugin declares `managesOwnAvailability`.
+ * Their upstream gateway owns rate limiting, so OpenClaw neither records nor
+ * enforces auth-profile cooldowns for them.
+ */
 export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
-  const normalized = normalizeProviderId(provider ?? "");
-  return normalized === "openrouter" || normalized === "kilocode";
+  return resolveProviderManagesOwnAvailability({ provider });
 }
 
 export function resolveInlineProviderApiKeyUsageId(provider: string): string {

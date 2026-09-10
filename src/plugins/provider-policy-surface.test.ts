@@ -18,6 +18,7 @@ describe("direct provider policy surface", () => {
     const projectRealtimeVoicePublicProjection = vi.fn();
     const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(() => ({
       deprecatedProfileIds: ["demo:legacy"],
+      managesOwnAvailability: true,
       resolveModelRoutes,
       isResponseModelEquivalent,
       projectRealtimeVoicePublicProjection,
@@ -43,6 +44,7 @@ describe("direct provider policy surface", () => {
       projectRealtimeVoicePublicProjection,
     );
     expect(surface?.deprecatedProfileIds).toEqual(["demo:legacy"]);
+    expect(surface?.managesOwnAvailability).toBe(true);
     expect(loadBundledPluginPublicArtifactModuleFromCandidatesSync).toHaveBeenCalledWith({
       dirName: "openai",
       artifactCandidates: ["provider-policy-api.js"],

@@ -401,12 +401,16 @@ function describeInactiveProfileStatus(params: {
   afterActive: boolean;
 }): string {
   const stats = params.store.usageStats?.[params.profileId];
-  const blockedUntil = stats?.blockedUntil;
-  if (isActiveUntil(blockedUntil, params.now)) {
-    return `rate-limited - resets ${formatRelativeReset(blockedUntil, params.now)}`;
-  }
+  // The display resolver owns the provider availability policy and already
+  // folds blockedUntil into the window; a provider that manages its own
+  // availability must not read the stored block directly or the status
+  // disagrees with routing.
   const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, params.profileId);
   if (isActiveUntil(unusableUntil ?? undefined, params.now)) {
+    const blockedUntil = stats?.blockedUntil;
+    if (isActiveUntil(blockedUntil, params.now)) {
+      return `rate-limited - resets ${formatRelativeReset(blockedUntil, params.now)}`;
+    }
     return describeFailureStatus(stats?.disabledReason ?? stats?.cooldownReason, params.credential);
   }
   const eligibility = resolveAuthProfileEligibility({

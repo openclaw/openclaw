@@ -334,6 +334,8 @@ export function normalizeRegisteredProvider(params: {
     params.provider.oauthProfileIdRepairs,
   );
   const envVars = normalizeTextList(params.provider.envVars);
+  // Availability ownership is a strict opt-in; truthy non-booleans do not count.
+  const managesOwnAvailability = params.provider.managesOwnAvailability === true;
   const wizard = normalizeProviderWizard({
     providerId: id,
     pluginId: params.pluginId,
@@ -349,6 +351,7 @@ export function normalizeRegisteredProvider(params: {
     aliases: _ignoredAliases,
     envVars: _ignoredEnvVars,
     catalog: _ignoredCatalog,
+    managesOwnAvailability: _ignoredManagesOwnAvailability,
     ...restProvider
   } = params.provider;
   return {
@@ -358,6 +361,7 @@ export function normalizeRegisteredProvider(params: {
     ...(docsPath ? { docsPath } : {}),
     ...(aliases ? { aliases } : {}),
     ...(deprecatedProfileIds ? { deprecatedProfileIds } : {}),
+    ...(managesOwnAvailability ? { managesOwnAvailability } : {}),
     ...(oauthProfileIdRepairs ? { oauthProfileIdRepairs } : {}),
     ...(envVars ? { envVars } : {}),
     auth,

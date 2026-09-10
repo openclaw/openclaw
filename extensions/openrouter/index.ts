@@ -37,6 +37,7 @@ import {
   normalizeOpenRouterBaseUrl,
   resolveOpenRouterApiBaseUrl,
 } from "./provider-catalog.js";
+import { managesOwnAvailability } from "./provider-policy-api.js";
 import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
@@ -271,6 +272,7 @@ export default defineSingleProviderPluginEntry({
     return {
       label: "OpenRouter",
       docsPath: "/providers/models",
+      managesOwnAvailability,
       manifestAuth: {
         hint: "API key",
         defaultModel: OPENROUTER_DEFAULT_MODEL_REF,

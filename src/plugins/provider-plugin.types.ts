@@ -574,6 +574,17 @@ export type ProviderPlugin = {
    */
   deprecatedProfileIds?: string[];
   /**
+   * Declare that the upstream gateway owns rate limiting and account health.
+   *
+   * When true, OpenClaw skips auth-profile cooldown bookkeeping for this
+   * provider: failures do not mark the profile, provider-reported blocks are
+   * not recorded, and stored cooldown state is ignored by routing and status
+   * surfaces. Defaults to false. Export the same value from the plugin's
+   * `provider-policy-api` artifact so cold CLI paths see it without loading
+   * the provider runtime.
+   */
+  managesOwnAvailability?: boolean;
+  /**
    * Legacy OAuth profile-id migrations that `openclaw doctor` should offer.
    *
    * Use this when a provider moved from a legacy default OAuth profile id to a

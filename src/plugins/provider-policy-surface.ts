@@ -68,6 +68,8 @@ export type InspectEmbeddingProviderSetup = (params: {
 export type ProviderPolicySurface = {
   resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
   deprecatedProfileIds?: readonly string[];
+  /** Upstream gateway owns rate limiting; core skips auth-profile cooldowns. */
+  managesOwnAvailability?: boolean;
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
     ctx: ProviderApplyConfigDefaultsContext,
@@ -120,6 +122,9 @@ function extractProviderPolicySurface(mod: Record<string, unknown>): ProviderPol
     mod.deprecatedProfileIds.every((value) => typeof value === "string")
   ) {
     surface.deprecatedProfileIds = mod.deprecatedProfileIds;
+  }
+  if (typeof mod.managesOwnAvailability === "boolean") {
+    surface.managesOwnAvailability = mod.managesOwnAvailability;
   }
   for (const key of PROVIDER_POLICY_HOOK_KEYS) {
     const hook = mod[key];
