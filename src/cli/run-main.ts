@@ -22,6 +22,7 @@ import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
+  getFlagValue,
   hasFlag,
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
@@ -59,6 +60,7 @@ import {
 import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
 import {
   resolveMissingPluginCommandMessage,
+  isDoctorStateMutationInvocation,
   rewriteUpdateFlagArgv,
   shouldHandleBareRoot,
   shouldEnsureCliPath,
@@ -936,12 +938,12 @@ async function createExpectedPluginPolicyError(message: string): Promise<Error> 
 
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
-  options: { ensureDispatcher?: boolean } = {},
+  options: { ensureDispatcher?: boolean; capture?: boolean } = {},
 ): Promise<void> {
   // Capture init, exit finalize, and coverage warnings all no-op unless the
   // debug-proxy env requests capture; importing their sqlite-store graph anyway
   // costs ~100 MB RSS on metadata-only commands such as `plugins list --json`.
-  if (isDebugProxyCaptureEnvEnabled()) {
+  if (options.capture !== false && isDebugProxyCaptureEnvEnabled()) {
     const [
       { initializeDebugProxyCapture, finalizeDebugProxyCapture },
       { maybeWarnAboutDebugProxyCoverage },
@@ -1012,8 +1014,22 @@ export async function runCli(
       // Nested registrars and late actions share this lightweight owner, even when no
       // top-level plugin preparation is needed. Gateway retains its boot/process owner.
       const gatewayRun = isGatewayRunInvocationArgv(originalArgv);
+      const runWithRecovery = async (cleanup?: CliHarnessCleanup) => {
+        if (isDoctorStateMutationInvocation(originalArgv)) {
+          const { isCurrentRuntimeSupported } = await import("../infra/runtime-guard.js");
+          if (!isCurrentRuntimeSupported()) {
+            return run(cleanup);
+          }
+          const [{ withDoctorUpdateRecovery }, { defaultRuntime }] = await Promise.all([
+            import("../commands/doctor-update-recovery.js"),
+            import("../runtime.js"),
+          ]);
+          return withDoctorUpdateRecovery(defaultRuntime, () => run(cleanup));
+        }
+        return run(cleanup);
+      };
       return withCliCommandCleanup(gatewayRun, (cleanup) =>
-        gatewayRun ? run() : withPluginCache(createPluginCache(), () => run(cleanup)),
+        gatewayRun ? run() : withPluginCache(createPluginCache(), () => runWithRecovery(cleanup)),
       );
     },
     {
@@ -1122,6 +1138,9 @@ async function runCliWithPreparedOutputMode(
     true,
     options.runtimeRecoveryEnv,
   );
+  const runtimeSupported = isCurrentRuntimeSupported();
+  const mutatingDoctor = isDoctorStateMutationInvocation(normalizedArgv, runtimeSupported);
+  const readOnlyDoctor = normalizedInvocation.primary === "doctor" && !mutatingDoctor;
 
   if (
     !isHelpOrVersionInvocation &&
@@ -1139,13 +1158,25 @@ async function runCliWithPreparedOutputMode(
       }
     });
   }
-  if (
-    !isHelpOrVersionInvocation &&
-    normalizedInvocation.primary === "doctor" &&
-    process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1"
-  ) {
+  if (mutatingDoctor) {
     // Debug capture can migrate shared state before Commander reaches Doctor.
-    // Resolve the update guard after selectors settle, before any bootstrap writer.
+    // Capture recovery after selectors settle, before any bootstrap writer.
+    const { prepareDoctorUpdateRecovery } = await import("../commands/doctor-update-recovery.js");
+    const recoveryOwner = getFlagValue(normalizedArgv, "--update-recovery-owner");
+    const recoveryBackup = getFlagValue(normalizedArgv, "--update-recovery-backup");
+    if (recoveryOwner !== undefined && recoveryOwner !== "driver") {
+      throw new Error("--update-recovery-owner must be driver.");
+    }
+    if (recoveryBackup === null) {
+      throw new Error("--update-recovery-backup requires a reference.");
+    }
+    await prepareDoctorUpdateRecovery({
+      updateRecoveryOwner: recoveryOwner,
+      updateRecoveryBackup: recoveryBackup,
+      repair: hasFlag(normalizedArgv, "--fix") || hasFlag(normalizedArgv, "--repair"),
+      yes: hasFlag(normalizedArgv, "--yes"),
+      nonInteractive: hasFlag(normalizedArgv, "--non-interactive"),
+    });
     const [{ guardUpdateDoctorSchemaUpgrade }, { defaultRuntime }] = await Promise.all([
       import("../commands/doctor-update-schema-guard.js"),
       import("../runtime.js"),
@@ -1203,9 +1234,7 @@ async function runCliWithPreparedOutputMode(
     env: process.env,
   });
   const useSourceOnlyBestEffortConfig =
-    !isCurrentRuntimeSupported() ||
-    normalizedInvocation.primary === "update" ||
-    (normalizedInvocation.primary === "doctor" && hasFlag(normalizedArgv, "--lint"));
+    !runtimeSupported || normalizedInvocation.primary === "update" || readOnlyDoctor;
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(async (configIo) => {
@@ -1523,6 +1552,7 @@ async function runCliWithPreparedOutputMode(
     if (!isHelpOrVersionInvocation && !isDatabaseInvocation) {
       await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
         ensureDispatcher: shouldUseCliEnvProxy,
+        capture: !readOnlyDoctor,
       });
     }
 

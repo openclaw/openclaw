@@ -58,6 +58,13 @@ const pinConfigDirMock = vi.hoisted(() => vi.fn());
 const pinRuntimePathsMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn(async () => {}));
+const runtimeSupportedMock = vi.hoisted(() => vi.fn(() => true));
+const prepareDoctorUpdateRecoveryMock = vi.hoisted(() => vi.fn(async () => {}));
+const withDoctorUpdateRecoveryMock = vi.hoisted(() =>
+  vi.fn(async (_runtime: unknown, run: () => Promise<unknown>) => run()),
+);
+const guardUpdateDoctorSchemaUpgradeMock = vi.hoisted(() => vi.fn(async () => {}));
+const initializeDebugProxyCaptureMock = vi.hoisted(() => vi.fn());
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
@@ -322,7 +329,22 @@ vi.mock("../infra/path-env.js", () => ({
 vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/runtime-guard.js")>()),
   assertSupportedRuntime: assertRuntimeMock,
+  isCurrentRuntimeSupported: runtimeSupportedMock,
 }));
+
+vi.mock("../commands/doctor-update-recovery.js", () => ({
+  prepareDoctorUpdateRecovery: prepareDoctorUpdateRecoveryMock,
+  withDoctorUpdateRecovery: withDoctorUpdateRecoveryMock,
+  doctorUpdateRecoveryRuntime: (runtime: unknown) => runtime,
+}));
+vi.mock("../commands/doctor-update-schema-guard.js", () => ({
+  guardUpdateDoctorSchemaUpgrade: guardUpdateDoctorSchemaUpgradeMock,
+}));
+vi.mock("../proxy-capture/runtime.js", () => ({
+  initializeDebugProxyCapture: initializeDebugProxyCaptureMock,
+  finalizeDebugProxyCapture: vi.fn(),
+}));
+vi.mock("../proxy-capture/coverage.js", () => ({ maybeWarnAboutDebugProxyCoverage: vi.fn() }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
   closeActiveMemorySearchManagersCore: closeActiveMemorySearchManagersMock,
@@ -580,6 +602,7 @@ describe("runCli exit behavior", () => {
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     existsSyncOverride.value = undefined;
     vi.clearAllMocks();
+    runtimeSupportedMock.mockReturnValue(true);
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       valid: true,
@@ -2441,6 +2464,95 @@ describe("runCli exit behavior", () => {
     expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
     expect(loadConfigMock).not.toHaveBeenCalled();
     expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor-lint" });
+  });
+
+  it.each([
+    ["explicit lint", ["--lint", "--json"]],
+    ["bare JSON", ["--json"]],
+    ["post-upgrade probes", ["--post-upgrade", "--json"]],
+    ["session inspection", ["--session-sqlite", "inspect", "--json"]],
+    ["session validation", ["--session-sqlite", "validate", "--json"]],
+    ["session dry run", ["--session-sqlite=dry-run", "--json"]],
+    ["help", ["--help"]],
+    ["version", ["--version"]],
+  ])("does not acquire update state ownership for read-only Doctor %s", async (_name, args) => {
+    if (_name === "help") {
+      outputPrecomputedSubcommandHelpTextMock.mockReturnValueOnce(true);
+    } else if (_name === "version") {
+      buildProgramMock.mockReturnValueOnce({
+        commands: [{ name: () => "doctor", aliases: () => [] }],
+        parseAsync: vi.fn(async () => {}),
+      });
+    } else {
+      tryRouteCliMock.mockResolvedValueOnce(true);
+    }
+    await withEnvAsync(
+      { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_DEBUG_PROXY_ENABLED: "1" },
+      () => runCli(["node", "openclaw", "doctor", ...args]),
+    );
+    expect(prepareDoctorUpdateRecoveryMock).not.toHaveBeenCalled();
+    expect(withDoctorUpdateRecoveryMock).not.toHaveBeenCalled();
+    expect(guardUpdateDoctorSchemaUpgradeMock).not.toHaveBeenCalled();
+    expect(initializeDebugProxyCaptureMock).not.toHaveBeenCalled();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("does not acquire update state ownership when unsupported Node routes Doctor to lint", async () => {
+    runtimeSupportedMock.mockReturnValue(false);
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    await withEnvAsync(
+      { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_DEBUG_PROXY_ENABLED: "1" },
+      () => runCli(["node", "openclaw", "doctor"]),
+    );
+    expect(prepareDoctorUpdateRecoveryMock).not.toHaveBeenCalled();
+    expect(withDoctorUpdateRecoveryMock).not.toHaveBeenCalled();
+    expect(guardUpdateDoctorSchemaUpgradeMock).not.toHaveBeenCalled();
+    expect(initializeDebugProxyCaptureMock).not.toHaveBeenCalled();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the driver's recovery reference before Doctor bootstrap writes", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    const reference = JSON.stringify({
+      directory: "/var/tmp/openclaw-fixture/backup",
+      manifestPath: "/var/tmp/openclaw-fixture/backup/manifest.json",
+      manifestSha256: "a".repeat(64),
+    });
+    await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, () =>
+      runCli([
+        "node",
+        "openclaw",
+        "doctor",
+        "--fix",
+        "--update-recovery-owner=driver",
+        `--update-recovery-backup=${reference}`,
+      ]),
+    );
+    expect(prepareDoctorUpdateRecoveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ updateRecoveryOwner: "driver", updateRecoveryBackup: reference }),
+    );
+  });
+
+  it.each([
+    ["repair", ["--fix", "--non-interactive"]],
+    ["state compaction", ["--state-sqlite=compact", "--json"]],
+    ["session import", ["--session-sqlite", "import", "--json"]],
+  ])("prepares state recovery before an updating Doctor %s", async (_name, args) => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    await withEnvAsync(
+      { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_DEBUG_PROXY_ENABLED: "1" },
+      () => runCli(["node", "openclaw", "doctor", ...args]),
+    );
+    expect(prepareDoctorUpdateRecoveryMock).toHaveBeenCalledOnce();
+    expect(withDoctorUpdateRecoveryMock).toHaveBeenCalledOnce();
+    expect(guardUpdateDoctorSchemaUpgradeMock).toHaveBeenCalledOnce();
+    expect(initializeDebugProxyCaptureMock).toHaveBeenCalledOnce();
+    expect(prepareDoctorUpdateRecoveryMock.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        guardUpdateDoctorSchemaUpgradeMock.mock.invocationCallOrder[0],
+        "Doctor schema guard invocation",
+      ),
+    );
   });
 
   it.each([

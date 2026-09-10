@@ -176,10 +176,17 @@ type StateMigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyS
 export function createMemoryLanceDbStateMigrations(
   pluginRoot = DEFAULT_PLUGIN_ROOT,
 ): PluginDoctorStateMigration[] {
+  const collectBackupResources: NonNullable<
+    PluginDoctorStateMigration["collectBackupResources"]
+  > = (params) => {
+    const dbPath = resolveConfiguredDbPath(params.config, params.env, pluginRoot);
+    return dbPath.includes("://") ? [] : [{ path: dbPath, kind: "directory" }];
+  };
   return [
     {
       id: "memory-lancedb-agent-scope",
       label: "Memory LanceDB per-agent isolation",
+      collectBackupResources,
       async detectLegacyState(params: StateMigrationParams) {
         const opened = await openMemoryTable({ ...params, pluginRoot });
         try {
@@ -233,6 +240,7 @@ export function createMemoryLanceDbStateMigrations(
     {
       id: "memory-lancedb-legacy-envelope-rows",
       label: "Memory LanceDB legacy envelope contamination",
+      collectBackupResources,
       // Row deletion is destructive; gate it behind explicit `doctor --fix` so
       // startup auto-migration never purges memories without operator intent.
       doctorOnly: true,

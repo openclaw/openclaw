@@ -52,8 +52,10 @@ export type MutableUpdateExecutionResult = {
   ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   recoveryEnv: NodeJS.ProcessEnv | undefined;
   packageTransaction?: PackageUpdateTransaction;
+  updateRecoveryBackup?: import("../../infra/update-recovery-backup.js").UpdateRecoveryBackupRef;
   schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
   candidateSchemaVersions?: OpenClawSchemaVersions;
+  candidateUpdateRecovery?: "parent-v1";
   previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
   activationConfig?: UpdateConfigSnapshot;

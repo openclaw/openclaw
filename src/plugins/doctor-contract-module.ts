@@ -113,12 +113,24 @@ type PluginDoctorStateMigrationResult = {
   warningDisposition?: "recoverable";
 };
 
+export type PluginDoctorMigrationBackupResource = {
+  /** Absolute source or destination path, including destinations not created yet. */
+  path: string;
+  kind: "sqlite" | "file" | "directory";
+};
+
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
   phase?: "after-session-repair";
+  /** Read-only recovery inventory. Never open or migrate a writable store here. */
+  collectBackupResources?: (
+    params: Pick<PluginDoctorStateMigrationInput, "config" | "env" | "stateDir">,
+  ) =>
+    | readonly PluginDoctorMigrationBackupResource[]
+    | Promise<readonly PluginDoctorMigrationBackupResource[]>;
   detectLegacyState: (
     params: PluginDoctorStateMigrationInput,
   ) =>
@@ -207,6 +219,7 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
     label: migration.label.trim(),
     doctorOnly: migration.doctorOnly === true ? true : undefined,
     phase: migration.phase === "after-session-repair" ? migration.phase : undefined,
+    collectBackupResources: migration.collectBackupResources,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));

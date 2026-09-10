@@ -163,6 +163,30 @@ Plan-based migrations can use
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
 
+Migrations that touch paths outside the normal state and workspace roots must
+provide `collectBackupResources({ config, env, stateDir })` on their
+`PluginDoctorStateMigration`. Return an array of `{ path, kind }` resources,
+where `path` is absolute and `kind` is `"sqlite"`, `"file"`, or `"directory"`.
+Include both migration inputs and destinations, even destinations that do not
+exist yet, so rollback can remove artifacts created by the migration. Declare
+SQLite databases as `"sqlite"` regardless of their filename; OpenClaw captures
+them with the SQLite online backup API, without sanitizing their rows. Do not
+declare live WAL, SHM, or journal companions as ordinary files.
+
+This collector runs before update migrations and receives no writable Doctor
+context. It must only inspect paths: do not create databases, normalize config,
+or migrate state. Discovery errors must throw so the update cannot proceed with
+an incomplete recovery set. OpenClaw validates and deduplicates the returned
+inventory before capturing it. The hook is optional for existing plugins whose
+migration resources are already inside the captured roots.
+
+Memory Core declares legacy external SQLite indexes and their archive targets.
+Voice Call declares its configured local store, including plugin-local SQLite
+and legacy call logs. Memory LanceDB declares local database directories; URI-backed
+remote stores are outside this local recovery inventory. Older installed plugin
+artifacts must add the hook before their external migration resources can be
+included.
+
 For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
 sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
 errors and invalid JSON reach Doctor's detection or migration warnings; the

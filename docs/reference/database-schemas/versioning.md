@@ -133,7 +133,9 @@ publication alone does not trigger schema repair or require stopping the Gateway
 A subsequent update can run during this window. Its migration verification and
 rollback checks compare applied content versions from private database snapshots.
 Publishing already-applied content is not another migration; applying new content
-still blocks rollback even when the published number has not changed. Managed
+requires restoration of a verified pre-migration recovery set before an older
+package can run, even when the published number has not changed. Without that
+set, changed content still blocks package-only rollback. Managed
 service stop, activation, and Doctor maintenance keep their normal ownership rules.
 
 Publication waits until **every** update row whose `before.version` identifies
@@ -169,12 +171,32 @@ Update-time Doctor checks shared and registered agent databases before other
 repairs. A state-only migration proceeds with deferred publication and reports
 `schema content applied; version publication deferred until update run <id> finishes`.
 Publication still observes the five-minute grace after that run finishes.
-Doctor keeps the typed `update-schema-bump-unfenced` refusal when deferral cannot
-cover a pending agent-database migration, the required `config_machine_state`
-table is missing, or the state-content migration fails. A failed content
-transaction rolls back. The refusal includes the database versions, driving
+Without a verified update-recovery set, Doctor keeps the typed
+`update-schema-bump-unfenced` refusal for a pending agent-database migration or a
+shared-state migration whose database lacks the required `config_machine_state`
+table. A failed content transaction rolls back. The refusal includes the database versions, driving
 updater version, and [manual update commands](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
-Package rollback cannot reverse a migration that already happened.
+Package replacement alone cannot reverse a migration that already happened.
+
+Before migrations, the current updater captures and verifies an unsanitized
+`update-recovery` set covering inventoried local files and SQLite databases.
+SQLite online backup preserves committed WAL content without migrating the
+source, applying snapshot sanitizers, or pruning delivery and TTL records. The
+manifest records file sizes and SHA-256 hashes. A protected rollback restores
+the package and this set, including the original published and applied schema
+markers, then verifies the previous managed Gateway. Missing or invalid recovery
+data remains a hard failure, never evidence that a downgrade is safe. See
+[Update recovery sets](/cli/backup#update-recovery-sets) for inventory and retention.
+
+The target Doctor recognizes the current updater's explicit recovery marker.
+Without it, update-time Doctor creates the same verified set and restores it if
+its own migration or verification fails before returning. In the 2026.9.2
+case, package rollback still leaves the Gateway stopped; the failure message
+names `openclaw gateway start` to resume the old release and
+`npx openclaw@latest doctor --fix` to continue with a compatible newer binary.
+Failures after a successful Doctor invocation remain outside that old-driver
+protection. Recovery backups do not change the deferred-publication rules above
+or make older readers safe against migrated feature tables.
 
 The driver check requires a valid semantic version and includes 2026.9.2
 rebuilds. Earlier updaters, including 2026.9.1, have no ledger and keep normal

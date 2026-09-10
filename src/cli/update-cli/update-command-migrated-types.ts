@@ -27,10 +27,15 @@ export type MigratedUpdateFinalizationInput = {
   resultPath: string;
 };
 
-export type MigratedUpdateFinalizationResult = {
+type MigratedUpdateFinalizationOutcome = {
   result: UpdateRunResult;
   exitCode: number;
-  terminalRunId: string;
   executorDelegation?: "pid-start-v1";
   automaticTriage?: TriageFailureContext;
 };
+
+export type MigratedUpdateFinalizationResult = MigratedUpdateFinalizationOutcome &
+  (
+    | { terminalRunId: string; recoveryRequired?: never }
+    | { terminalRunId?: never; recoveryRequired: true }
+  );

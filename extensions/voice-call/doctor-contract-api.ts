@@ -315,6 +315,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "voice-call-calls-jsonl-to-plugin-state",
     label: "Voice Call call log",
+    collectBackupResources(params) {
+      return [{ path: resolveVoiceCallStorePath(params), kind: "directory" }];
+    },
     async detectLegacyState(params) {
       const { detectOpenClawStateDatabaseSchemaMigrations } =
         await import("openclaw/plugin-sdk/doctor-repair-runtime");

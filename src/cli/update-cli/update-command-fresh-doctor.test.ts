@@ -107,6 +107,27 @@ describe("post-plugin update readiness", () => {
     );
   });
 
+  it("passes the driver recovery reference to the Doctor child through argv", async () => {
+    const updateRecoveryBackup = {
+      directory: "/var/tmp/openclaw-fixture/backup",
+      manifestPath: "/var/tmp/openclaw-fixture/backup/manifest.json",
+      manifestSha256: "a".repeat(64),
+    };
+    await runUpdateFinalizationDoctorInFreshProcess({
+      ...updateOptions,
+      phase: "pre-plugin",
+      updateRecoveryBackup,
+    });
+    expect(mocks.runExec).toHaveBeenCalledExactlyOnceWith(
+      "/usr/bin/node",
+      expect.arrayContaining([
+        "--update-recovery-owner=driver",
+        `--update-recovery-backup=${JSON.stringify(updateRecoveryBackup)}`,
+      ]),
+      expect.any(Object),
+    );
+  });
+
   it.each([undefined, 5_000])(
     "bounds post-plugin checks separately from Doctor (%s)",
     async (timeoutMs) => {

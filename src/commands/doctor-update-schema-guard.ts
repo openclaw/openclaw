@@ -52,6 +52,10 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
     return;
   }
+  const { hasVerifiedDoctorUpdateRecovery } = await import("./doctor-update-recovery.js");
+  if (hasVerifiedDoctorUpdateRecovery()) {
+    return;
+  }
   const schemas =
     options.schemas ??
     (await preflightOpenClawDatabaseSchemas({

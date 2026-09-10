@@ -1,5 +1,5 @@
 ---
-summary: "Downgrading, automatic schema-neutral rollback, verified pre-update backups, and triage when an update leaves you stuck"
+summary: "Downgrading, automatic state and package rollback, verified pre-update backups, and triage when an update leaves you stuck"
 read_when:
   - Something broke after an update and you need to go back
   - You want to know when `openclaw update` can roll back automatically
@@ -19,7 +19,7 @@ supported format, the supported recovery is to restore a verified pre-update
 backup with its matching OpenClaw release.
 
 Prefer `openclaw update` for upgrades and recovery. It validates the target,
-runs required Doctor migrations, and verifies the activated Gateway. A raw
+backs up inventoried state before required Doctor migrations, and verifies the activated Gateway. A raw
 `npm i -g` replacement does not retain the previous package or run this recovery
 workflow; use `openclaw update` or [create a backup first](#before-updating-create-a-verified-backup).
 
@@ -27,7 +27,7 @@ The updater retains the previous package during activation and keeps it when
 failed recovery cannot prove a working installation. Migration recovery originals
 remain until explicit [update cleanup](/cli/update#update-cleanup). These are
 separate recovery mechanisms: cleanup does not manage package or Git runtime
-backups, and retained migration originals are not a full pre-update backup.
+backups or [update recovery sets](/cli/backup#update-recovery-sets), and retained migration originals are not a full pre-update backup.
 Preserve every recovery location named in the update report until you have
 verified the installation.
 
@@ -59,7 +59,7 @@ installation's package manager; a backup archive does not contain the package.
 A complete recovery point must cover these together:
 
 - The matching OpenClaw package version or source revision and built runtime.
-- `openclaw.json`, including `meta.lastTouchedVersion`.
+- `openclaw.json` and its `$include` files, including `meta.lastTouchedVersion`.
 - `state/openclaw.sqlite` and every `agents/<id>/agent/openclaw-agent.sqlite`,
   including databases at configured paths outside the default layout.
 - The workspaces, credentials, and retained originals needed by that installation.
@@ -95,10 +95,39 @@ openclaw update cleanup --dry-run
 
 ### Full-state recovery requires a backup
 
-`openclaw update` does not create or replay a full-state checkpoint. It can
-restore a retained package only under the compatibility checks below. It cannot
-reverse a database migration by replacing the package. Use a verified pre-update
-backup with its matching release when migration has made state incompatible.
+The current updater creates an `update-recovery` set before persistent Doctor
+migrations. It uses SQLite's online backup API to retain unsanitized database
+contents, plus the config, includes, and other inventoried local migration
+resources. Every file has a verified size and SHA-256. The set is stored at
+`<stateDir>/updates/<install-hash>/<run-id>/backup/` and its path is recorded in
+the update run. [Update recovery sets](/cli/backup#update-recovery-sets) describes
+coverage and the fixed three-set retention policy; recoveries with active or
+unobservable owners are preserved even when older.
+
+If activation or later verification fails, the current updater restores the
+previous package and that verified set, then verifies the previous managed
+Gateway's health and identity. A schema migration alone no longer blocks this
+recovery. Config changes by another writer and package-manager ownership changes
+still require intervention. A verified rollback retains the original failure
+and exits nonzero. With `--no-restart` or no managed service, file restoration
+does not claim that a Gateway was restarted or verified.
+
+A missing, corrupt, or unrestorable set is a hard failure. Preserve the path
+named in the report, keep an unverified Gateway stopped, and let the update and
+Doctor processes exit before running:
+
+```bash
+npx openclaw@latest doctor --fix
+```
+
+Run this on the Gateway host with the same profile, state, and config selection.
+If a compatible newer OpenClaw binary is already installed, use
+`openclaw doctor --fix`. Doctor verifies the pending set and checks that the
+Gateway and recorded update owners have stopped before restoring it. These
+commands cannot reconstruct a missing backup; preserve any surviving state and
+use an independent verified backup when the report says no usable set exists.
+Remote services and undeclared external plugin resources are outside this local
+inventory and need their own recovery procedure.
 
 An existing pending checkpoint-recovery record blocks further mutable updates.
 The updater reports that it is unsupported and leaves its records, backups, and
@@ -107,11 +136,39 @@ status, and do not use `update finalize` to bypass the refusal. Preserve the
 reported locations for a compatible recovery implementation or an independent
 verified backup. An interrupted or refused restore is not a successful rollback.
 
+### Recovery with older updaters
+
+The target Doctor detects whether its caller supplied a verified update-recovery
+set. When an older updater supplies none, Doctor creates and verifies the same
+kind of set before migrating. If migration or verification fails within that
+Doctor invocation, it restores the set before exiting nonzero, so the older
+updater can restore package files without leaving forward-migrated databases.
+
+The published 2026.9.2 updater leaves the Gateway stopped after its package
+rollback. Once it finishes and the report confirms state restoration, stay on
+that release with:
+
+```bash
+openclaw gateway start
+openclaw gateway status --deep --json
+```
+
+Alternatively, run `npx openclaw@latest doctor --fix` to continue repair with a
+newer compatible binary. This runs Doctor without replacing the installed
+package; if repair migrates state forward, install a release that supports that
+state before starting the Gateway. The failure output names both paths and the retained
+backup. This is best-effort support for the old driver: if Doctor succeeds and
+2026.9.2 fails later, that updater has already discarded its package backups.
+The target Doctor cannot automatically roll back a failure after its invocation
+has completed.
+
 ### Automatic schema-neutral rollback
 
-If a newly activated package fails verification, `openclaw update` compares the
-shared and affected per-agent SQLite `user_version` values with their
-pre-activation values and checks that the config file still matches the content
+When no verified update-recovery set is available, the compatibility-only
+package rollback path remains limited to unchanged database formats. If a newly
+activated package fails verification, `openclaw update` compares the
+shared and affected per-agent SQLite applied schema versions, including deferred
+content versions, with their pre-activation values and checks that the config file still matches the content
 reported by the candidate’s activation Doctor writer.
 Databases first created during activation or verification are
 schema-neutral when their version matches the candidate's supported version for
@@ -163,7 +220,7 @@ creation. Skipping or cancelling does not start diagnosis or submit a report.
 JSON, `--yes`, non-interactive, and managed-service handoff invocations do not
 show this menu after rollback.
 
-If the config file changed after the activation Doctor pass or the databases are
+On this compatibility-only path, if the config file changed after the activation Doctor pass or the databases are
 not schema-neutral, rollback is refused with
 `state-migrated-no-rollback`. For config edits, the next action names the file
 whose changes blocked restoration. The updater attempts
@@ -173,7 +230,7 @@ run if rollback itself fails, targeting the previous release if its package was
 already restored. If repair cannot pass verification, the update
 fails with the original reason and recorded repair attempts. Use `openclaw triage`
 or the printed repair command before considering an older version.
-Automatic rollback restores code and the captured config, not a full state snapshot.
+This compatibility-only rollback restores code and the captured config without a state recovery set.
 The candidate's temporary migration-rehearsal snapshots are removed after
 validation and do not replace your backup.
 If the schema comparison cannot be completed, automatic rollback is refused
@@ -269,7 +326,8 @@ dependencies, generated runtime files, or state, but a candidate with changed
 tracked source fails before the Gateway stops; fix the source revision before retrying.
 
 After activation, the updater can also enter `repairing` when verification fails
-and config edits after the activation Doctor pass or a schema migration prevent rollback, or
+and config edits after the activation Doctor pass prevent rollback, a schema
+migration has no verified update-recovery set, or
 when rollback itself fails. This repair targets the runtime that remains
 installed and preserves migrated state. After each turn, the updater starts or
 restarts a stopped or unhealthy service once, then reruns the service, version,

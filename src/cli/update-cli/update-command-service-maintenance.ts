@@ -329,6 +329,7 @@ export async function maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
 type ManagedServiceStopParams = {
   recovery?: unknown;
   updateRun?: UpdateCommandOptions["run"];
+  deferLedgerWrites?: boolean;
   updateInstallKind: "git" | "package";
   root: string;
   shouldRestart: boolean;
@@ -538,7 +539,10 @@ async function stopManagedServiceBeforeMutableUpdate(
             // Recovery outlives this preparation callback. Its later task
             // operations acquire their own native lock, but retain this executor.
             assertExecutor();
-            if (getUpdateRun(updateRun.runId, { env: updateRun.env })?.status !== "running") {
+            if (
+              !params.deferLedgerWrites &&
+              getUpdateRun(updateRun.runId, { env: updateRun.env })?.status !== "running"
+            ) {
               throw new Error("Update run no longer owns Windows task activation.");
             }
           }
@@ -601,9 +605,11 @@ async function stopManagedServiceBeforeMutableUpdate(
     }
     stoppedAtMs = Date.now();
     if (params.updateRun) {
-      recordUpdateRunPhase(params.updateRun.runId, "activating", undefined, {
-        env: params.updateRun.env,
-      });
+      if (!params.deferLedgerWrites) {
+        recordUpdateRunPhase(params.updateRun.runId, "activating", undefined, {
+          env: params.updateRun.env,
+        });
+      }
     }
     await service.stop({
       env: currentState.env,

@@ -7,10 +7,7 @@ import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
 import { runStep } from "./update-runner-command.js";
-import {
-  buildUpdateDoctorEnv,
-  resolveUpdateDoctorExecutionPolicy,
-} from "./update-runner-doctor.js";
+import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
@@ -654,13 +651,15 @@ export async function updateGitCheckout(params: {
         entryPath: doctorEntry,
         nodePath: doctorNodePath,
         fix: doctorPolicy.fix,
+        updateRecoveryBackup: opts.getUpdateRecoveryBackup?.(),
         step,
-        env: buildUpdateDoctorEnv({
+        env: opts.getDoctorEnv?.(),
+        doctorEnvOptions: {
           allowGatewayServiceRepair,
           allowGatewayActivation,
           serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
           deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
-        }),
+        },
       });
       if (doctorStep.exitCode !== 0 && !doctorStep.advisory) {
         return await rollbackError("doctor-failed");

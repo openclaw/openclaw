@@ -23,6 +23,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { collectDoctorSkillWorkshopBackupResources } from "./doctor-skill-workshop-readonly.js";
 import {
   inspectLegacySkillWorkshopMigration,
   migrateLegacySkillWorkshopProposals,
@@ -375,12 +376,63 @@ describe("read-only Skill Workshop migration inspection", () => {
           preservedLegacyBackupRootCount: 0,
         });
 
+        expect(await collectDoctorSkillWorkshopBackupResources({ config, env: state.env })).toEqual(
+          [
+            { path: legacyDir, kind: "directory" },
+            {
+              path: path.join(
+                resolveWorkshopSkillsDir(config, "main", state.env),
+                "readonly-workshop",
+              ),
+              kind: "directory",
+            },
+          ].toSorted((left, right) => left.path.localeCompare(right.path)),
+        );
+
         closeOpenClawStateDatabaseForTest();
         expect(await snapshotDatabase(databasePath)).toEqual(before);
         expect(await fs.readFile(skillFile, "utf8")).toBe(content);
       });
     },
   );
+
+  it("includes legacy sidecar targets without creating SQLite or capturing the full workspace", async () => {
+    await withOpenClawTestState({ label: "workshop-backup-sidecars" }, async (state) => {
+      const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+      const content = "# Retained skill\n";
+      const source = path.join(state.workspaceDir, ".agents", "skills", "retained");
+      const record = createAppliedLegacyProposal({
+        id: "retained-20260905-1234567890",
+        title: "Retained",
+        description: "Retained skill",
+        content,
+        target: { skillKey: "retained", skillDir: source },
+      });
+      await state.writeJson(`skill-workshop/proposals/${record.id}/proposal.json`, record);
+      await state.writeText(`skill-workshop/proposals/${record.id}/PROPOSAL.md`, content);
+      const resources = await collectDoctorSkillWorkshopBackupResources({ config, env: state.env });
+      expect(resources).toEqual(
+        [
+          { path: source, kind: "directory" },
+          {
+            path: path.join(resolveWorkshopSkillsDir(config, "main", state.env), "retained"),
+            kind: "directory",
+          },
+          { path: state.statePath("skill-workshop", "proposals"), kind: "directory" },
+          { path: state.statePath("skill-workshop", "recovery", "proposals"), kind: "directory" },
+        ].toSorted((left, right) => left.path.localeCompare(right.path)),
+      );
+      await expect(fs.access(resolveOpenClawStateSqlitePath(state.env))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(
+        await fs.readFile(
+          state.statePath("skill-workshop", "proposals", record.id, "proposal.json"),
+          "utf8",
+        ),
+      ).toContain(record.id);
+    });
+  });
 
   it("preserves proposal status filters, ownership precedence, and unknown owner counts", async () => {
     await withOpenClawTestState({ layout: "split" }, async (state) => {

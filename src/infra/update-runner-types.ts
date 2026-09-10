@@ -6,6 +6,7 @@ import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { GlobalInstallManager } from "./update-global.js";
+import type { UpdateRecoveryBackupRef } from "./update-recovery-backup.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 
 export type UpdateStepAdvisory =
@@ -117,6 +118,8 @@ export type UpdateRunnerOptions = {
   deferConfiguredPluginInstallRepair?: boolean;
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
+  getDoctorEnv?: () => NodeJS.ProcessEnv | undefined;
+  getUpdateRecoveryBackup?: () => UpdateRecoveryBackupRef | undefined;
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */
   publishGitCheckout?: () => Promise<string>;
   /** Read-only admission before executing a fetched candidate; never stops a service. */

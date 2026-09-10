@@ -1,4 +1,11 @@
 import { compareSemverStrings } from "./update-check.js";
+import type { UpdateRecoveryBackupRef } from "./update-recovery-backup.js";
+
+export function buildUpdateRecoveryDoctorArgs(backup?: UpdateRecoveryBackupRef): string[] {
+  return backup
+    ? ["--update-recovery-owner=driver", `--update-recovery-backup=${JSON.stringify(backup)}`]
+    : [];
+}
 
 const UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV =
   "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR";

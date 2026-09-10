@@ -22,8 +22,12 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup.js";
 import { normalizeFallbackFailureReason } from "../../infra/update-runner-command.js";
-import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
+import {
+  buildUpdateDoctorEnv,
+  buildUpdateRecoveryDoctorArgs,
+} from "../../infra/update-runner-doctor.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   type UpdateRunResult,
@@ -58,6 +62,7 @@ export async function readPackageUpdateIdentity(root: string) {
 }
 
 type PackageDoctorOptions = {
+  updateRecoveryBackup?: UpdateRecoveryBackupRef;
   root: string;
   timeoutMs: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
@@ -92,6 +97,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     "doctor",
     "--non-interactive",
     ...(doctorPolicy.fix ? ["--fix"] : []),
+    ...buildUpdateRecoveryDoctorArgs(params.updateRecoveryBackup),
   ];
   const doctorProgressInfo = {
     name: `${CLI_NAME} doctor`,
@@ -205,6 +211,7 @@ export async function prepareGitPackageExposure(
 
 export type PackageInstallUpdateParams = {
   reapplyLocalOverrides?: boolean;
+  updateRecoveryBackup?: UpdateRecoveryBackupRef;
   root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;

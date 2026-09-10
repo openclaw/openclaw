@@ -116,7 +116,8 @@ unsafe or fails. See
 budgets, permitted repairs, and attempt reports.
 
 Only `activating` stops the managed service. Its offline work includes the package
-or checkout swap, required `doctor --fix` migrations, and state compatibility
+or checkout swap, a verified update-recovery backup before required
+`doctor --fix` migrations, and state compatibility
 inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
@@ -139,17 +140,29 @@ convergence, and final runtime verification checks the resulting snapshot.
 
 ### Recovery limits
 
-Automatic rollback restores a retained package only when the current schema and
-configuration are compatible with the previous release. This update path does
-not capture or replay a full-state checkpoint and cannot reverse database
-migrations. Private snapshots used for validation are disposable and are not a
-recovery backup. Before a significant update, create an
-[independent verified backup](/install/updating#before-updating-create-a-verified-backup).
+The current updater writes a verified `update-recovery` set before persistent
+Doctor migrations. It captures inventoried local state, config and `$include`
+files, and raw SQLite online-backup copies, including plugin-declared migration
+resources. Every file has a verified size and SHA-256. Unlike portable user
+backups, these SQLite copies are unsanitized. The run records the set at
+`<stateDir>/updates/<install-hash>/<run-id>/backup/`; writing a new set prunes
+sets outside the newest three while retaining recoveries with active or
+unobservable owners.
+See [Update recovery sets](/cli/backup#update-recovery-sets) for coverage and retention.
 
-Unknown or changed schema/configuration does not authorize a restore. When
-compatibility cannot be established, the updater refuses rollback, preserves
-state and retained package material, and reports the failed operation. Restoring
-an older package alone is not proof that the service can safely start.
+If a later activation or verification step fails, rollback restores the retained
+package and the verified recovery set before starting the previous Gateway.
+Database migrations therefore do not themselves prevent rollback when that set
+is available. Restoring an older package alone is not proof that its state is
+usable. Missing, corrupt, or unverified recovery data remains a hard failure;
+the report names the retained path or its absence and directs recovery through
+`npx openclaw@latest doctor --fix`. Keep a stopped Gateway stopped until state
+restoration is verified.
+
+Private snapshots used for candidate validation are disposable and are not the
+retained recovery set. Remote state and undeclared external plugin resources are
+outside the set's inventory. Before a significant update, create an
+[independent verified backup](/install/updating#before-updating-create-a-verified-backup).
 
 Existing pending records that require checkpoint replay are unsupported by this
 update path. `openclaw update` reports them before ordinary mutable update work;
@@ -166,9 +179,19 @@ The previous package tree remains available until activation or package restorat
 is verified. If activation fails before a working package is confirmed and rollback
 cannot be verified, finalization retains the backup and reports its location. Keep
 that backup and repair the installation before restarting, including for older
-targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
-config content since the activation Doctor pass, and unchanged pre-existing shared and affected per-agent
-SQLite `user_version` values. A database first created during activation or
+targets without migration continuation. With a verified update-recovery set,
+rollback restores its files and databases, including captured config includes,
+then verifies the previous Gateway. Config edits made by another writer after
+activation and package-manager ownership changes still block automatic restore.
+A usable, verified restored Gateway can finish recovery with warnings for
+noncritical service-definition refresh problems; failed state restoration or
+health verification cannot be downgraded to a warning.
+
+Without a verified update-recovery set, compatibility-checked package rollback
+requires that retained package, its pre-update verification, unchanged
+config content since the activation Doctor pass, and unchanged applied schema
+versions in pre-existing shared and affected per-agent SQLite databases,
+including deferred content versions. A database first created during activation or
 verification is schema-neutral only at the candidate's supported version for its
 database kind; a missing pre-existing database or a new database at a foreign
 version blocks rollback. Newly created databases must also be readable by the
@@ -188,8 +211,8 @@ Operator edits made after activation block
 restoration, including edits before Doctor reads the config or after its last write; the next action names the changed config file. A failure alone does not
 authorize restarting the candidate.
 
-If the config file changed after the activation Doctor pass or the databases are
-not schema-neutral, automatic rollback is refused with
+On this compatibility-only path, if the config file changed after the activation
+Doctor pass or the databases are not schema-neutral, automatic rollback is refused with
 `state-migrated-no-rollback`. The updater enters `repairing` on the installed
 candidate, also used if rollback itself fails. If the previous package was
 already restored, repair targets that version. Between repair attempts, the
@@ -198,7 +221,7 @@ post-restart verification checks. Successful verification finishes the run as
 `succeeded` for the candidate, or `rolled-back` for the restored release with a
 nonzero command exit. Failed repair preserves the original failure and attempt summaries.
 Use the recorded diagnostics and [Triage](/cli/triage) for remaining failures,
-preserving migrated state. These temporary validation
+preserving migrated state. Temporary validation
 snapshots are not a full-state backup; see [Rollback](/install/updating#rollback).
 If schema state cannot be verified, rollback is refused with
 `rollback-state-unverified`; unknown state never counts as schema-neutral.
@@ -397,7 +420,7 @@ the sentinel.
     Runs candidate Doctor lint, config and plugin planning, and the isolated migration rehearsal and canary described above. Validation failure leaves the old Gateway serving.
   </Step>
   <Step title="Activate and verify">
-    Stops the managed service, checks out the exact candidate SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
+    Stops the managed service, captures and verifies the update-recovery set, checks out the exact candidate SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
 
     If restoring the previous Git runtime fails, the Gateway stays stopped and the failed rollback step records the filesystem error. Pending originals remain in sibling `<runtime>.openclaw-update-<id>.tmp/previous` directories. Preserve those backups and repair the installation before restarting; cleanup does not delete an unrestored original.
 

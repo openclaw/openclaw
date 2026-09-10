@@ -31,7 +31,12 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, execFile: snapshotProcesses.execFile };
 });
 
-const maintenance = vi.hoisted(() => ({ finish: vi.fn(), release: vi.fn() }));
+const maintenance = vi.hoisted(() => ({
+  assertCurrent: vi.fn(),
+  closeStores: vi.fn(async () => {}),
+  finish: vi.fn(),
+  release: vi.fn(),
+}));
 afterEach(() => vi.restoreAllMocks());
 
 describe("Doctor refused-migration maintenance outcome", () => {

@@ -451,6 +451,7 @@ export async function updateGitInstall(params: {
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   onConfigSnapshot?: Parameters<typeof runPackageUpdateDoctor>[0]["onConfigSnapshot"];
   getManagedServiceEnv: () => NodeJS.ProcessEnv | undefined;
+  getUpdateRecoveryBackup?: UpdateRunnerOptions["getUpdateRecoveryBackup"];
   invocationCwd?: string;
   nodeRunner?: string;
   inspectGitTarget?: UpdateRunnerOptions["inspectGitTarget"];
@@ -509,6 +510,8 @@ export async function updateGitInstall(params: {
       deferConfiguredPluginInstallRepair: true,
       allowGatewayServiceRepair: params.allowGatewayServiceRepair,
       allowGatewayActivation: params.allowGatewayActivation,
+      getDoctorEnv: params.getManagedServiceEnv,
+      getUpdateRecoveryBackup: params.getUpdateRecoveryBackup,
       beforeGitMutation: params.beforeGitMutation,
       inspectGitTarget: params.inspectGitTarget,
       publishGitCheckout,
@@ -535,6 +538,7 @@ export async function updateGitInstall(params: {
                 runPackageUpdateDoctor({
                   ...params,
                   managedServiceEnv: params.getManagedServiceEnv(),
+                  updateRecoveryBackup: params.getUpdateRecoveryBackup?.(),
                   root,
                   timeoutMs: effectiveTimeout,
                 }),

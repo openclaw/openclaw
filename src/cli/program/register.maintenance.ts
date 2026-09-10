@@ -1,5 +1,5 @@
 // Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -63,6 +63,8 @@ export function registerMaintenanceCommands(program: Command) {
       false,
     )
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
+    .addOption(new Option("--update-recovery-owner <owner>").choices(["driver"]).hideHelp())
+    .addOption(new Option("--update-recovery-backup <reference>").hideHelp())
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option(
       "--allow-exec",
@@ -179,8 +181,10 @@ export function registerMaintenanceCommands(program: Command) {
           (err) => exitDoctorError(formatError(err), opts.json === true || !process.stdout.isTTY),
         );
       }
+      const { doctorUpdateRecoveryRuntime } =
+        await import("../../commands/doctor-update-recovery.js");
       await runCommandWithRuntime(
-        defaultRuntime,
+        doctorUpdateRecoveryRuntime(defaultRuntime),
         async () => {
           const { doctorCommand } = await import("../../commands/doctor.js");
           const stateSqlite = parseDoctorStateSqliteMode(opts.stateSqlite, opts.json === true);
@@ -189,6 +193,10 @@ export function registerMaintenanceCommands(program: Command) {
             opts.json === true,
           );
           await doctorCommand(defaultRuntime, {
+            ...(opts.updateRecoveryOwner === "driver" ? { updateRecoveryOwner: "driver" } : {}),
+            ...(typeof opts.updateRecoveryBackup === "string"
+              ? { updateRecoveryBackup: opts.updateRecoveryBackup }
+              : {}),
             workspaceSuggestions: opts.workspaceSuggestions,
             yes: Boolean(opts.yes),
             repair: Boolean(opts.repair) || Boolean(opts.fix),

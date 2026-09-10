@@ -6,6 +6,7 @@ read_when:
   - You want scheduled, versioned database backups in an operator-owned Git repository
   - You want to preview which paths would be included before reset or uninstall
   - You want to restore from a `.tar.gz` archive previously created by `openclaw backup`
+  - You need to locate the state backup retained by a failed update
 title: "Backup"
 ---
 
@@ -51,6 +52,52 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 - Full archives refuse unresolved include graphs, files that change during config capture, and include aliases that cannot be represented safely. Fix missing or unreadable files, use regular-file include paths, or pause concurrent edits and retry. `--no-include-workspace` still includes required config dependencies, even within an excluded workspace.
 - `openclaw backup create --only-config` backs up just the active JSON config file, **not** its `$include` dependencies. It is a root-file export, not a complete modular-config recovery point.
 - Config files are pinned before database capture. SQLite snapshots retain their existing per-database consistency and sanitization; the archive is not one atomic snapshot across config and all databases. Later writes remain live and may not appear in the archive.
+
+## Update recovery sets
+
+Before update-time Doctor migrations, the current updater creates and verifies
+an `update-recovery` set under
+`<stateDir>/updates/<install-hash>/<run-id>/backup/`. The update run records its
+manifest path. This internal backup kind uses the existing backup inventory and
+SQLite snapshot machinery; it does not change the commands, archive layout, or
+sanitization behavior of `openclaw backup`.
+
+The inventory covers the active config and its `$include` files, shared state,
+configured and registered per-agent databases, Skill Workshop state, and local
+resources declared by plugin Doctor migrations, including memory databases. It
+also retains inventoried workspace and migration-input files. SQLite files use
+the online backup API so committed WAL contents are included. Recovery copies
+are unsanitized: delivery rows, TTL records, original row IDs, and other database
+contents are preserved without snapshot pruning or `VACUUM`. No migration is
+required before capturing an older database.
+
+The manifest records every inventoried file with its size and SHA-256, along
+with directory, symbolic-link, and missing-path entries needed for restoration.
+The updater verifies the inventory and SQLite copies before migrations proceed
+and again before restoring. A missing or mismatched payload is a hard failure.
+These sets can contain original credentials and private state; protect them like
+the live state directory.
+
+Writing a new set prunes sets older than the newest three sets for
+that installation. Pending or failed recoveries whose owners are still running
+or cannot be inspected are retained even when older, so active recovery can
+leave more than three sets. This is a fixed product
+default, with no configuration option. Update recovery sets are separate from
+the archive/SQLite/Git backup repositories and from historical unsupported
+checkpoint-recovery records.
+
+Coverage is limited to the local resources in the manifest. Remote services and
+external resources that an older plugin does not declare are outside this
+recovery boundary. Keep an independent backup for those resources and for
+long-term recovery; the three retained update sets are not a disaster-recovery
+history.
+
+The current updater restores the set together with the previous package and
+verifies the previous managed Gateway before reporting `rolled-back`. If restore
+fails, preserve the named set, keep the Gateway stopped, and run
+`npx openclaw@latest doctor --fix` from the same installation environment after
+the update processes exit. See [Rollback and recovery](/install/updating/rollback-and-recovery#full-state-recovery-requires-a-backup)
+for older-updater behavior and manual recovery.
 
 ## Restore a full archive
 

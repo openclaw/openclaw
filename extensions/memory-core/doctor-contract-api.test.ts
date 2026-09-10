@@ -1751,6 +1751,54 @@ describe("memory-core doctor dreaming migration", () => {
     await fs.access(`${legacyPath}.migrated`);
   });
 
+  it("inventories external legacy databases and absent migration targets without changing state", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(rootDir, "external", "index.db");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    const config = {
+      memory: { search: { store: { path: legacyPath, vector: { enabled: false } } } },
+      agents: { list: [{ id: "main", workspace: workspaceDir }] },
+    };
+    const before = await fs.readFile(legacyPath);
+
+    const resources = await legacyMemoryIndexMigration().collectBackupResources?.({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(resources ?? []).toEqual(
+      expect.arrayContaining([
+        { path: legacyPath, kind: "sqlite" },
+        { path: agentPath, kind: "sqlite" },
+        { path: `${legacyPath}.migrated`, kind: "file" },
+        { path: `${legacyPath}-wal.migrated`, kind: "file" },
+      ]),
+    );
+    expect(await fs.readFile(legacyPath)).toEqual(before);
+    await expect(fs.stat(agentPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${legacyPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a recovery inventory when an external database cannot be inspected", async () => {
+    const legacyPath = path.join(rootDir, "loop.db");
+    await fs.symlink(legacyPath, legacyPath);
+    const config = {
+      memory: { search: { store: { path: legacyPath, vector: { enabled: false } } } },
+      agents: { list: [{ id: "main", workspace: workspaceDir }] },
+    };
+    await expect(
+      Promise.resolve(
+        legacyMemoryIndexMigration().collectBackupResources?.({
+          config,
+          env,
+          stateDir: path.join(rootDir, "state"),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "ELOOP" });
+  });
+
   it("migrates retired configured legacy memory sidecar paths", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(rootDir, "custom-memory", "main.sqlite");

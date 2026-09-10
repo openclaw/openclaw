@@ -5,6 +5,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { normalizeUpdatePostInstallDoctorWarnings } from "../../infra/update-doctor-result.js";
+import {
+  persistUpdateRecoveryConfigWrites,
+  withUpdateRecoveryConfigWrites,
+} from "../../infra/update-recovery-config-writes.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -22,7 +26,34 @@ import {
 } from "./update-command-post-core.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
-export async function convergeUpdatePlugins(params: {
+export async function convergeUpdatePlugins(
+  params: Parameters<typeof convergeUpdatePluginsInternal>[0],
+  assertCurrent?: () => void,
+): ReturnType<typeof convergeUpdatePluginsInternal> {
+  const backup = params.updateRecoveryBackup;
+  if (!backup) {
+    return await convergeUpdatePluginsInternal(params);
+  }
+  if (!assertCurrent) {
+    throw new Error("Backed plugin convergence requires its finalization authority.");
+  }
+  assertCurrent();
+  return await withUpdateRecoveryConfigWrites(backup, { assertOwned: assertCurrent }, () =>
+    convergeUpdatePluginsInternal({
+      ...params,
+      beforeDoctor: async () => {
+        await params.beforeDoctor?.();
+        assertCurrent();
+        await persistUpdateRecoveryConfigWrites(backup, { assertOwned: assertCurrent });
+        assertCurrent();
+      },
+    }),
+  );
+}
+
+async function convergeUpdatePluginsInternal(params: {
+  updateRecoveryBackup?: import("../../infra/update-recovery-backup.js").UpdateRecoveryBackupRef;
+  candidateUpdateRecovery?: "parent-v1";
   coreAlreadyCurrent?: boolean;
   result: UpdateRunResult;
   root: string;
@@ -160,6 +191,10 @@ export async function convergeUpdatePlugins(params: {
         // Release the plugin lease before fresh Doctor. The finalizer either
         // retains its stopped interval or parks an already-current core here.
         const completedPluginUpdate = await completePostCorePluginUpdate({
+          updateRecoveryBackup:
+            params.candidateUpdateRecovery === "parent-v1"
+              ? params.updateRecoveryBackup
+              : undefined,
           root: postUpdateRoot,
           pluginUpdate: postCorePluginUpdate,
           freshDoctorRequired: postCorePluginUpdate.changed,

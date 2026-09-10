@@ -56,6 +56,9 @@ describe("memory-lancedb doctor migration", () => {
     };
     const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
 
+    expect((await migration.collectBackupResources?.(params)) ?? []).toEqual([
+      { path: getDbPath(), kind: "directory" },
+    ]);
     await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
       preview: [expect.stringContaining("assign 1 legacy row")],
     });

@@ -20,6 +20,7 @@ import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-com
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { formatErrorMessage } from "./errors.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
 import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
@@ -35,6 +36,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
     process.stdout.write(
       JSON.stringify({
         executorDelegation: "pid-start-v1",
+        updateRecovery: "parent-v1",
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
       }),
@@ -161,16 +163,48 @@ async function finalizeInput(
         : {}),
     });
   } catch (error) {
-    if (!(error instanceof UpdateCommandFailure)) {
+    if (error instanceof UpdateCommandFailure) {
+      result = error.result;
+      exitCode = error.exitCode;
+      automaticTriage = error.automaticTriage;
+    } else if (input.params.updateRecoveryBackup) {
+      result = {
+        ...input.params.result,
+        status: "error" as const,
+        reason: "post-update-failed",
+        steps: [
+          ...input.params.result.steps,
+          {
+            name: "candidate finalization",
+            command: "openclaw update",
+            cwd: input.params.result.root ?? input.params.root,
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: formatErrorMessage(error),
+          },
+        ],
+      };
+      exitCode = 1;
+    } else {
       throw error;
     }
-    result = error.result;
-    exitCode = error.exitCode;
-    automaticTriage = error.automaticTriage;
   } finally {
     await windowsRecovery?.complete(result?.status === "ok");
   }
   executorFence?.assertCurrent();
+  if (input.params.updateRecoveryBackup && result.status === "error") {
+    // The parent owns the package transaction. Return before a terminal write
+    // so it can restore both package and state after this process has exited.
+    const response: MigratedUpdateFinalizationResult = {
+      result: { ...result, runId: run.runId },
+      exitCode: exitCode || 1,
+      recoveryRequired: true,
+      ...(executorFence ? { executorDelegation: "pid-start-v1" as const } : {}),
+    };
+    await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
+    executorFence?.assertCurrent();
+    return;
+  }
   const terminal = getUpdateRun(run.runId, { env: run.env });
   if (!terminal || terminal.status === "running") {
     throw new Error("Candidate finalization left the update run nonterminal.");
