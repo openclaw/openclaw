@@ -269,7 +269,11 @@ export function createNodeWorkspaceTransferService(options: {
       }
       const root = await fsp.realpath(params.localPath);
       params.signal.throwIfAborted();
-      const actual = await readActualWorkspaceManifest({ root, baseCommit: null });
+      const actual = await readActualWorkspaceManifest({
+        root,
+        baseCommit: null,
+        signal: params.signal,
+      });
       params.signal.throwIfAborted();
       if (!isCurrentContext(context) || !params.isAuthorized()) {
         throw new Error("Worker attachment transfer authority closed");
