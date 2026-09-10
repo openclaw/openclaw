@@ -1253,7 +1253,12 @@ describe("createGatewayCloseHandler", () => {
     const run = chatRunState.getOrCreate("run-1");
     run.buffer = "partial reply";
     run.deltaSentAt = Date.now();
-    run.assistantScope = { itemId: "assistant-1", prefix: "" };
+    run.assistantScope = {
+      itemId: "assistant-1",
+      prefix: "",
+      boundaryNewlines: 0,
+      separatorLength: 0,
+    };
     run.deltaLastBroadcastText = "par";
     run.agentText = {
       assistant: {
