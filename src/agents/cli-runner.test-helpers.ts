@@ -18,6 +18,8 @@ import {
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
@@ -429,6 +431,9 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       }
       databasePaths.clear();
       for (const dir of tempDirs) {
+        closeOpenClawStateDatabaseByPath(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
+        );
         fs.rmSync(dir, { recursive: true, force: true });
       }
       tempDirs.clear();
