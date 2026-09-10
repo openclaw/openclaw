@@ -9,6 +9,14 @@ import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 
+/**
+ * @deprecated Import from `openclaw/plugin-sdk/secret-ref-readonly`. This alias
+ * keeps published Firecrawl plugins through 2026.7.1 loadable. Remove it only
+ * after supported releases no longer import the legacy subpath and the normal
+ * Plugin SDK deprecation window has elapsed.
+ */
+export { canResolveEnvSecretRefInReadOnlyPath } from "./secret-ref-readonly.js";
+
 type PassiveChannelStatusSnapshot = {
   configured?: boolean;
   running?: boolean;
