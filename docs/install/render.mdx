@@ -136,9 +136,19 @@ Reproduce the Render container locally from a checkout of the repository:
 
 ```bash
 docker build -t openclaw:local -f Dockerfile .
-docker run --rm -p 8080:8080 -e OPENCLAW_GATEWAY_PORT=8080 openclaw:local \
-  node openclaw.mjs gateway --allow-unconfigured
+docker run --rm -p 8080:8080 \
+  -e OPENCLAW_GATEWAY_PORT=8080 \
+  -e OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)" \
+  -e OPENCLAW_STATE_DIR=/data/.openclaw \
+  -e OPENCLAW_WORKSPACE_DIR=/data/workspace \
+  openclaw:local node openclaw.mjs gateway --allow-unconfigured
 ```
+
+The token is required, not optional: in a container the Gateway selects the
+auto bind mode, and it refuses to bind a non-loopback address without a shared
+secret. `--allow-unconfigured` waives the configuration prerequisite, not that
+guard. Render supplies the value from the blueprint's `generateValue: true`; a
+throwaway one is fine locally.
 
 See [Docker](/install/docker) for the full local container workflow.
 
