@@ -133,6 +133,13 @@ describe("SQLite transcript archive worker", () => {
             : `${index}:${randomBytes(576 * 1024).toString("base64")}`,
       ),
     );
+    events.splice(
+      1,
+      0,
+      ...Array.from({ length: 1_000 }, (_, index) =>
+        createTranscriptEvent(`small-${index}`, `你好 🦞\n${"small row ".repeat(16)}`),
+      ),
+    );
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
 
     let heartbeatCount = 0;
