@@ -190,11 +190,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   }
 
   private patchDraft(patch: Partial<CloudWorkerProfileDraft>) {
-    this.draft = {
-      ...this.draft,
-      ...patch,
-      ...(patch.setup !== undefined && !patch.setup.trim() ? { setupEnv: "" } : {}),
-    };
+    this.draft = { ...this.draft, ...patch };
     this.formError = null;
   }
 

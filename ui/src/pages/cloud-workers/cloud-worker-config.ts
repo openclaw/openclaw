@@ -32,6 +32,7 @@ export type CloudWorkerDraftError =
   | "profileMissing"
   | "backend"
   | "target"
+  | "warmImage"
   | "machineClass"
   | "ttl"
   | "idleTimeout"
@@ -141,6 +142,9 @@ export function validateCloudWorkerDraft(
   }
   if (draft.target !== draft.target.trim() || draft.target.length > 64) {
     return "target";
+  }
+  if (draft.warmImage === "on" && draft.target && draft.target !== "linux") {
+    return "warmImage";
   }
   const machineClass = draft.machineClass.trim();
   if (!machineClass || machineClass.length > 128) {

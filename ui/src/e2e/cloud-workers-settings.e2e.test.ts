@@ -206,6 +206,8 @@ suite.define(() => {
       await page
         .getByLabel("Setup environment names", { exact: true })
         .fill("BUILD_TAG, CACHE_DIR");
+      await page.getByLabel("Setup command", { exact: true }).fill("");
+      await page.getByLabel("Setup command", { exact: true }).fill("install-node");
       await page.getByLabel("Ready workers", { exact: true }).fill("2");
       await page.getByLabel("Suspend after", { exact: true }).fill("2h");
       await waitForSettledFormControls(page, [

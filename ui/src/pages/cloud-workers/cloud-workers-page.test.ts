@@ -191,6 +191,21 @@ describe("Cloud Workers mutation requests", () => {
           setup.dispatchEvent(new Event("input", { bubbles: true }));
           await waitForFast(() => expect(actionButton(page, "Save").disabled).toBe(false));
           actionButton(page, "Save").click();
+          await waitForFast(() =>
+            expect(page.textContent).toContain(
+              "Enter a setup command or clear the setup environment names.",
+            ),
+          );
+          expect(patches).toHaveLength(0);
+          const setupEnv = expectDefined(
+            page.querySelector<HTMLInputElement>('input[aria-label="Setup environment names"]'),
+            "Setup environment names editor",
+          );
+          expect(setupEnv.value).toBe("QA_WORKER_FLAG");
+          setupEnv.value = "";
+          setupEnv.dispatchEvent(new Event("input", { bubbles: true }));
+          await waitForFast(() => expect(actionButton(page, "Save").disabled).toBe(false));
+          actionButton(page, "Save").click();
         }
         await waitForFast(() => expect(patches).toHaveLength(1));
         expect(patches[0]).toMatchObject({

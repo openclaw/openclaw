@@ -90,6 +90,9 @@ describe("cloud worker settings state", () => {
     ["backend", { backend: " " }],
     ["target", { target: "x".repeat(65) }],
     ["target", { target: " linux " }],
+    ...["macos", "windows/wsl2", "windows/normal"].map(
+      (target) => ["warmImage", { target, warmImage: "on" }] as const,
+    ),
     ["machineClass", { machineClass: "" }],
     ["machineClass", { machineClass: "x".repeat(129) }],
     ["ttl", { ttl: "tomorrow" }],
@@ -396,6 +399,29 @@ describe("cloud worker settings state", () => {
           "cloudWorkers.profiles.production.settings.warmImage",
           warmImage === "on",
         );
+      }
+    },
+  );
+
+  it.each(["", "linux", "macos", "windows/wsl2", "windows/normal"])(
+    "validates warm images after changing an existing profile target to %s",
+    (target) => {
+      const config = { cloudWorkers: { profiles: { production: configuredProfile } } };
+      for (const warmImage of ["auto", "on", "off"] as const) {
+        const draft = {
+          ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]),
+          target,
+          warmImage,
+        };
+        const built = buildCloudWorkerUpsertPatch(config, draft, "production");
+        if (warmImage === "on" && target && target !== "linux") {
+          expect(built).toEqual({ error: "warmImage" });
+        } else {
+          expect(requirePatch(built).patch).toHaveProperty(
+            "cloudWorkers.profiles.production.settings.warmImage",
+            warmImage === "auto" ? null : warmImage === "on",
+          );
+        }
       }
     },
   );

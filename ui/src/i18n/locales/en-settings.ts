@@ -132,6 +132,7 @@ const enSettings = {
       backend: "Enter a Crabbox backend, such as aws, azure, or hetzner.",
       target:
         "Use an operating system ID of up to 64 characters without surrounding spaces, or choose Provider default.",
+      warmImage: "Warm images require Linux. Choose Linux, Auto, or Off before saving.",
       machineClass: "Enter a machine class of 1 to 128 characters.",
       ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
       idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
@@ -146,7 +147,7 @@ const enSettings = {
         "Choose an existing cloud worker profile. Add a profile first if none are configured.",
       preparedPool: "Enter a non-negative whole number or leave the field empty.",
       settingsSaveFailed: "These settings were not saved. Reload the config and try again.",
-      setupEnvRequiresSetup: "Enter a setup command before adding setup environment names.",
+      setupEnvRequiresSetup: "Enter a setup command or clear the setup environment names.",
       readyWorkers: "Enter a whole number of zero or more, or leave ready workers empty.",
       suspendAfter:
         "Enter a duration of at least 1m, such as 45m or 2h, or leave suspend after empty.",
