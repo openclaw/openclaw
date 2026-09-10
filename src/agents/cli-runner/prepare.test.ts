@@ -1478,7 +1478,7 @@ describe("prepareCliRunContext", () => {
         resolveApiKeyForProfile,
       });
 
-      await fixture.prepare({
+      const context = await fixture.prepare({
         sessionKey: "agent:main:main",
         agentDir,
         provider: "claude-cli",
@@ -1492,6 +1492,9 @@ describe("prepareCliRunContext", () => {
         expect.objectContaining({ authProfileId: undefined, authCredential: undefined }),
       );
       expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
+      // Native ownership clears the selected profile below, so the subscription
+      // semantics must already be captured for failover copy.
+      expect(context.cliAuthMode).toBe(credential.type);
     },
   );
 

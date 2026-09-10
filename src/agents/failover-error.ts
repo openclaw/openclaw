@@ -656,7 +656,7 @@ export function describeFailoverError(err: unknown): {
   };
 }
 
-type FailoverErrorContext = {
+export type FailoverErrorContext = {
   provider?: string;
   model?: string;
   profileId?: string;

@@ -21,6 +21,7 @@ import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/au
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
 import { coerceToFailoverError, isFailoverError } from "../failover-error.js";
+import type { FailoverErrorContext } from "../failover-error.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { runCliCleanup } from "./cleanup.js";
@@ -685,7 +686,7 @@ export function settleCliBackendOutcome(params: {
   cleanupError: Error | undefined;
   deliveredMessagingSideEffect: boolean;
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle;
-  failoverContext: { provider: string; model: string; sessionId: string; lane?: string };
+  failoverContext: FailoverErrorContext & { provider: string; model: string; sessionId: string };
 }): EmbeddedAgentRunResult {
   const {
     cleanupError,

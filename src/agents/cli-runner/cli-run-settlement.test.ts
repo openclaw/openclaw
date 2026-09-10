@@ -8,7 +8,14 @@ import {
 } from "../cli-runner.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
-import { buildBlockedCliRunResult, buildCliRunResult } from "./cli-run-settlement.js";
+import { renderBillingReplyCopy } from "../failover/user-copy.js";
+import { appendFailedCandidateAttempt } from "../model-fallback-attempt.js";
+import type { FallbackAttempt } from "../model-fallback.types.js";
+import {
+  buildBlockedCliRunResult,
+  buildCliRunResult,
+  settleCliBackendOutcome,
+} from "./cli-run-settlement.js";
 
 describe("isCliBindingFlushed", () => {
   const workspaceDir = "/tmp/openclaw-workspace";
@@ -180,4 +187,68 @@ describe("CLI native continuity projection", () => {
       );
     },
   );
+});
+
+describe("settleCliBackendOutcome failover auth mode", () => {
+  const billingRunError = new Error("Credit balance is too low");
+
+  const settle = (failoverContext: {
+    provider: string;
+    model: string;
+    sessionId: string;
+    authMode?: string;
+  }): unknown => {
+    try {
+      settleCliBackendOutcome({
+        runResult: undefined,
+        runError: billingRunError,
+        runFailed: true,
+        cleanupError: undefined,
+        deliveredMessagingSideEffect: false,
+        failoverContext,
+      });
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  };
+
+  it("carries the selected credential's auth mode into the thrown failover error", () => {
+    expect(
+      settle({
+        provider: "claude-cli",
+        model: "claude-sonnet-5",
+        sessionId: "sess-1",
+        authMode: "oauth",
+      }),
+    ).toMatchObject({ reason: "billing", authMode: "oauth" });
+  });
+
+  it("leaves the auth mode unset for unprofiled runs", () => {
+    expect(
+      settle({
+        provider: "claude-cli",
+        model: "claude-sonnet-5",
+        sessionId: "sess-1",
+      }),
+    ).toMatchObject({ reason: "billing", authMode: undefined });
+  });
+
+  it("renders subscription billing copy for a subscription-auth CLI run", () => {
+    const error = settle({
+      provider: "claude-cli",
+      model: "claude-sonnet-5",
+      sessionId: "sess-1",
+      authMode: "oauth",
+    });
+    const attempts: FallbackAttempt[] = [];
+    appendFailedCandidateAttempt({
+      attempts,
+      candidate: { provider: "claude-cli", model: "claude-sonnet-5" },
+      error,
+    });
+    expect(renderBillingReplyCopy({ attempts })).toContain(
+      "check your account for subscription or usage limits",
+    );
+  });
 });
