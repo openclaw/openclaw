@@ -98,13 +98,43 @@ OpenClaw does not infer classifier activity from the assistant's wording.
 Buffering means the provider is still processing the request. Its notice clears
 when assistant output starts or the turn ends. A blocked notice remains until
 the next turn or a session reset. A reroute notice reports the model selected
-by the provider. Notices do not retry requests or change the selected model.
+by the provider.
 
 Gateway agent-event consumers receive these updates on the `notice` stream
 with `phase: "provider_policy"`, `provider: "openai"`, `category: "cyber"`, and
-a `state` of `buffering`, `blocked`, `fallback`, or `cleared`. Model fields are
-present when the upstream event provides them. A suggested fallback model is
-informational and does not prove that the account can use it.
+a `state` of `buffering`, `blocked`, `fallback`, `escalated`, `unavailable`, or
+`cleared`. Model fields are present when the upstream event provides them. A
+suggested fallback model is informational and does not prove that the account
+can use it.
+
+## Automatic Daybreak escalation
+
+OpenAI declines some defensive-cyber work on its general models and directs
+approved workspaces to a Daybreak model instead. When a turn ends in a
+cyber-policy refusal, OpenClaw retries it once on the configured Daybreak model
+so the refused work reaches the tier allowed to answer it. This is on by
+default and is configured under
+`plugins.entries.codex.config.appServer.cyberFailover`.
+
+Daybreak trails the general models in capability, so escalation stays scoped to
+work that was actually refused:
+
+- At most one escalated attempt per turn. A second refusal under Daybreak keeps
+  the block and stops.
+- A turn already running on the configured Daybreak model is never escalated.
+- After an attempt, the session enters a `cooloffMs` window. If Daybreak
+  answered, turns in that window start there directly so related work does not
+  spend another refusal round-trip. If Daybreak was unauthorized, the window
+  instead suppresses further attempts. The window expires back to the selected
+  model in both cases.
+- Escalation never changes the session's stored model selection, and the window
+  is process-local rather than persisted.
+
+Authorization stays server-owned. `model/list` advertises Daybreak to every
+client, so catalog presence does not prove entitlement: an unentitled workspace
+still receives `401`/`403` on use. OpenClaw therefore treats the retry itself as
+the only evidence, reports an `unavailable` notice rather than a silent block,
+and does not retry that target again inside the window.
 
 ## Parallel chats and thread ownership
 

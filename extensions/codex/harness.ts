@@ -296,13 +296,70 @@ export function createCodexAppServerAgentHarness(
       // Keep app-server runtime code behind lazy imports so plugin discovery and
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
-      return runCodexAppServerAttempt(params, {
-        bindingStore: options.bindingStore,
-        pluginConfig: resolveAttemptPluginConfig(params.config),
-        runtime: sessionRuntime,
-        runtimeModelId: readCodexRuntimeModelId(params.model, params.modelId),
-        nativeHookRelay: { enabled: true },
+      const {
+        isCodexCyberRefusalResult,
+        isCodexDaybreakUnavailableResult,
+        planCodexCyberEscalation,
+        recordCodexCyberEscalation,
+        resolveCodexCyberFailoverConfig,
+        resolveCodexCyberStickyModel,
+      } = await import("./src/app-server/cyber-failover.js");
+      const { emitCodexCyberNotice } = await import("./src/app-server/cyber-failover-notice.js");
+      const pluginConfig = resolveAttemptPluginConfig(params.config);
+      // The attempt resolves its turn model from runtimeModelId, so escalation
+      // reroutes one turn without touching the session's stored selection.
+      const attemptModel = readCodexRuntimeModelId(params.model, params.modelId);
+      const runAttemptOnModel = (model: string) =>
+        runCodexAppServerAttempt(params, {
+          bindingStore: options.bindingStore,
+          pluginConfig,
+          runtime: sessionRuntime,
+          runtimeModelId: model,
+          nativeHookRelay: { enabled: true },
+        });
+
+      const cyberFailover = resolveCodexCyberFailoverConfig(pluginConfig);
+      // An open window from an answered escalation routes follow-up work straight
+      // to Daybreak so related turns do not each spend a refusal round-trip.
+      const stickyModel = resolveCodexCyberStickyModel({
+        config: cyberFailover,
+        sessionKey: params.sessionKey,
+        currentModel: attemptModel,
       });
+      const requestedModel = stickyModel ?? attemptModel;
+      const result = await runAttemptOnModel(requestedModel);
+      if (!isCodexCyberRefusalResult(result)) {
+        return result;
+      }
+      const plan = planCodexCyberEscalation({
+        config: cyberFailover,
+        sessionKey: params.sessionKey,
+        currentModel: requestedModel,
+      });
+      if (plan.kind !== "escalate") {
+        return result;
+      }
+      const escalated = await runAttemptOnModel(plan.model);
+      // Catalog presence never proves entitlement, so the retry itself is the
+      // only evidence. An unauthorized target must not be attempted again inside
+      // the window: each try costs the transport's full reconnect ladder.
+      const unavailable = isCodexDaybreakUnavailableResult(escalated);
+      // Only a Daybreak reply earns sticky routing. If Daybreak refused too,
+      // sending later turns to the weaker model would buy nothing.
+      const answered = !unavailable && !isCodexCyberRefusalResult(escalated);
+      recordCodexCyberEscalation({
+        sessionKey: params.sessionKey,
+        outcome: answered ? "answered" : "suppressed",
+        cooloffMs: cyberFailover.cooloffMs,
+      });
+      await emitCodexCyberNotice(params, {
+        state: unavailable ? "unavailable" : "escalated",
+        model: requestedModel,
+        fallbackModel: plan.model,
+      });
+      // A Daybreak target the workspace cannot use leaves the original refusal as
+      // the honest outcome for this turn.
+      return unavailable ? result : escalated;
     },
     runIsolatedCompletionV2: async (params) => {
       if (params.authorization.owner === "host") {

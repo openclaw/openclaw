@@ -4735,6 +4735,10 @@ export const en: TranslationMap & {
       fallbackTitle: "Provider changed the model",
       fallbackBody: "OpenAI routed this response to {model}.",
       fallbackUnknownBody: "OpenAI routed this response to another model.",
+      escalatedTitle: "Retried on Daybreak",
+      escalatedBody: "OpenAI declined this request, so it was retried on {model}.",
+      unavailableTitle: "Daybreak is not available",
+      unavailableBody: "OpenAI declined this request and {model} is not authorized here.",
     },
     diskSpace: {
       warningTitle: "Cloud session disk space is low",

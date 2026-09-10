@@ -297,6 +297,8 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
       state !== "buffering" &&
       state !== "blocked" &&
       state !== "fallback" &&
+      state !== "escalated" &&
+      state !== "unavailable" &&
       state !== "cleared"
     ) {
       return true;
@@ -322,9 +324,16 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
     }
     (host.activityEventSeqById ??= new Map()).set(identity, payload.seq);
     const currentNotice = host.providerPolicyNotice;
+    // A block is terminal for the provider's own outcome, but an automatic
+    // Daybreak escalation happens after it and is the newer, truer result. The
+    // escalation outcome is then terminal for the turn in its own right.
+    const escalationOutcome = state === "escalated" || state === "unavailable";
+    const settledByEscalation =
+      currentNotice?.state === "escalated" || currentNotice?.state === "unavailable";
     if (
       currentNotice?.runId === payload.runId &&
-      (currentNotice.state === "blocked" ||
+      (settledByEscalation ||
+        (currentNotice.state === "blocked" && !escalationOutcome) ||
         (currentNotice.state === "fallback" && state === "buffering"))
     ) {
       return true;

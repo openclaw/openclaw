@@ -46,7 +46,7 @@ export type RunOutputUsage = { outputTokens: number; seq: number };
 export type ProviderPolicyNotice = {
   runId: string;
   seq: number;
-  state: "buffering" | "blocked" | "fallback";
+  state: "buffering" | "blocked" | "fallback" | "escalated" | "unavailable";
   model?: string;
   fallbackModel?: string;
 };

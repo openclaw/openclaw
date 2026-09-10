@@ -170,12 +170,12 @@ function renderProviderPolicyNotice(notice: ProviderPolicyNotice | null | undefi
   if (!notice) {
     return nothing;
   }
-  const blocked = notice.state === "blocked";
+  const blocked = notice.state === "blocked" || notice.state === "unavailable";
   const model = notice.fallbackModel ?? notice.model;
   const body =
-    notice.state === "fallback"
+    notice.state === "fallback" || notice.state === "escalated" || notice.state === "unavailable"
       ? model
-        ? t("chat.providerPolicy.fallbackBody", { model })
+        ? t(`chat.providerPolicy.${notice.state}Body`, { model })
         : t("chat.providerPolicy.fallbackUnknownBody")
       : t(`chat.providerPolicy.${notice.state}Body`);
   return html`
