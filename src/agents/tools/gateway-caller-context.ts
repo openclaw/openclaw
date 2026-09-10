@@ -187,6 +187,24 @@ export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | unde
   return gatewayToolCallerStorage.getStore();
 }
 
+/** Add an individual tool request's cancellation fence to downstream admitted work. */
+export function withGatewayToolCallerApprovalSignal<T>(
+  signal: AbortSignal | undefined,
+  run: () => T,
+): T {
+  const caller = getGatewayToolCallerIdentity();
+  if (!caller || !signal) {
+    return run();
+  }
+  return gatewayToolCallerStorage.run(
+    {
+      ...caller,
+      approvalSignals: [...(caller.approvalSignals ?? []), signal],
+    },
+    run,
+  );
+}
+
 /** Retains explicit cancellation and lifecycle fences without pinning foreground completion. */
 export function captureGatewayToolCallerContinuationAssertion(): (() => void) | undefined {
   const caller = getGatewayToolCallerIdentity();

@@ -76,6 +76,7 @@ import {
 import { ToolInputError } from "../tool-input-error.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import { withGatewayToolCallerApprovalSignal } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
@@ -525,10 +526,17 @@ export function createSessionsSendTool(opts?: {
     parameters: SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
     prepareArguments: normalizeSessionsSendArguments,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const promptedAt = Date.now();
       const params = normalizeSessionsSendArguments(args);
-      const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
+      const executionSignal =
+        signal && opts?.signal ? AbortSignal.any([signal, opts.signal]) : (signal ?? opts?.signal);
+      const baseGatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
+      const gatewayCall: GatewayCaller = async <T>(request: Parameters<GatewayCaller>[0]) =>
+        await baseGatewayCall<T>({
+          ...request,
+          ...(executionSignal ? { signal: executionSignal } : {}),
+        });
       const message = readToolStringParam(params, "message", { required: true, trim: false });
       if (!message.trim()) {
         throw new ToolInputError("message required");
@@ -960,7 +968,7 @@ export function createSessionsSendTool(opts?: {
         cfg,
         agentId: targetAgentId,
         expectedSessionId,
-        ...(opts?.signal ? { signal: opts.signal } : {}),
+        ...(executionSignal ? { signal: executionSignal } : {}),
         targetSessionKey: resolvedKey,
         run: async () => {
           if (visibleSession.missing) {
@@ -1244,7 +1252,9 @@ export function createSessionsSendTool(opts?: {
   return {
     ...tool,
     execute: (...args) =>
-      runWithRequesterToolCap(opts?.sessionSendToolCapRef?.current, () => tool.execute(...args)),
+      withGatewayToolCallerApprovalSignal(args[2], () =>
+        runWithRequesterToolCap(opts?.sessionSendToolCapRef?.current, () => tool.execute(...args)),
+      ),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

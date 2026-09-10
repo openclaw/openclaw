@@ -23,9 +23,10 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { agentCommandMock, testState } from "./test-helpers.js";
 
 export const sessionSendAuthorityCases = [
-  { mode: "allowed", denyWrite: false, cancelAfterAdmission: false },
-  { mode: "denied", denyWrite: true, cancelAfterAdmission: false },
-  { mode: "cancelled", denyWrite: false, cancelAfterAdmission: true },
+  { mode: "allowed", denyWrite: false, cancelSignal: undefined },
+  { mode: "denied", denyWrite: true, cancelSignal: undefined },
+  { mode: "run-cancelled", denyWrite: false, cancelSignal: "run" },
+  { mode: "request-cancelled", denyWrite: false, cancelSignal: "execute" },
 ] as const;
 
 type SessionSendAuthorityCase = (typeof sessionSendAuthorityCases)[number];
@@ -83,6 +84,7 @@ export async function runSessionsSendAuthorityScenario(params: {
   };
   const sourceRunId = `source-effect-${testCase.mode}`;
   const sourceAbort = new AbortController();
+  const executeAbort = new AbortController();
   const sourceAdmission = prepareAgentRunAdmission({
     cfg: config,
     operationalRunInstance: createOperationalRunInstanceRef(sourceRunId),
@@ -137,8 +139,10 @@ export async function runSessionsSendAuthorityScenario(params: {
       );
       const writeTool = receiverTools.find((tool) => tool.name === "write");
       receiverWriteAvailable = Boolean(writeTool);
-      if (testCase.cancelAfterAdmission) {
+      if (testCase.cancelSignal === "run") {
         sourceAbort.abort(new Error("source send cancelled"));
+      } else if (testCase.cancelSignal === "execute") {
+        executeAbort.abort(new Error("source tool request cancelled"));
       }
       if (writeTool) {
         try {
@@ -185,11 +189,15 @@ export async function runSessionsSendAuthorityScenario(params: {
           return await withGatewayToolCallerIdentity(sourceIdentity, async () =>
             sourceTools
               .find((tool) => tool.name === "sessions_send")!
-              .execute("capped-gateway-effect", {
-                sessionKey: "main",
-                message: "perform the delegated file effect",
-                timeoutSeconds: 5,
-              }),
+              .execute(
+                "capped-gateway-effect",
+                {
+                  sessionKey: "main",
+                  message: "perform the delegated file effect",
+                  timeoutSeconds: 5,
+                },
+                executeAbort.signal,
+              ),
           );
         },
       );
@@ -205,8 +213,8 @@ export async function runSessionsSendAuthorityScenario(params: {
       await expect(fs.readFile(effectPath, "utf8")).resolves.toBe("allowed\n");
     } else {
       expect(sendError === undefined).toBe(testCase.mode === "denied");
-      expect(receiverWriteAvailable).toBe(testCase.mode === "cancelled");
-      if (testCase.mode === "cancelled") {
+      expect(receiverWriteAvailable).toBe(testCase.mode !== "denied");
+      if (testCase.cancelSignal) {
         expect(targetEffectError).toBeInstanceOf(Error);
         expect(targetEffectResult).toBeUndefined();
       }
