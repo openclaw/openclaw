@@ -13,6 +13,45 @@ Reach the Gateway and paired nodes from plugin code, and the events a long-lived
 ## Gateway and node namespaces
 
 <AccordionGroup>
+  <Accordion title="api.runtime.crossSessionGrants">
+    Create and enforce persistent, exact grants for a trusted plugin that transports work between
+    sessions. Core owns storage, lifecycle revalidation, standing authorization, and revocation;
+    the plugin supplies only its authenticated subject binding and target session incarnation.
+
+    ```typescript
+    api.runtime.crossSessionGrants.create(
+      {
+        grantId,
+        subjectId,
+        subjectBinding,
+        role: "issuer",
+        targetSessionKey,
+        targetSessionId,
+        generation: 0,
+      },
+      lifecycleSignal,
+    );
+
+    const authorized = api.runtime.crossSessionGrants.authorize({
+      grantId,
+      subjectId,
+      subjectBinding,
+      targetSessionId,
+      generation,
+      signal: lifecycleSignal,
+    });
+    ```
+
+    Supply the current lifecycle signal to every operation. Call `authorize(...)` immediately before
+    privileged work and `allowStanding(...)` immediately after awaited approval work. For agent
+    dispatch, repeat authorization inside `gateway.request`'s `assertAdmissionCurrent` callback:
+    asynchronous preparation can outlive the initial grant check. Operations
+    fail closed when the plugin registry or supplied lifecycle is no longer live. `revoke(...)`
+    advances issuer generations; `applyRevocation(...)` accepts only a newer generation for the
+    exact holder subject and target binding. Retained runtime references cannot authorize after
+    plugin replacement.
+
+  </Accordion>
   <Accordion title="api.runtime.gateway">
     Call another Gateway method in process while preserving the current plugin's trusted runtime
     identity. This is intended for bundled or trusted official plugins that compose plugin-owned
@@ -29,9 +68,19 @@ Reach the Gateway and paired nodes from plugin code, and the events a long-lived
     ```
 
     Requests use `operator.write` scope and do not grant admin scope. Calls from arbitrary external
-    plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
-    `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
-    before choosing this path from tools that can also run in standalone agent processes.
+    plugins are rejected. Pass `signal` to bind a pending dispatch to the plugin lifecycle. A local
+    timeout or abort can occur after method execution starts, so idempotent callers must retain their
+    operation key and reconcile instead of recording a terminal failure. Failed methods throw a
+    `GatewayClientRequestError`, preserving structured `details`, retry metadata, and the Gateway
+    error code for recovery flows. Use `isAvailable()` before choosing this path from tools that can
+    also run in standalone agent processes.
+
+    For authority that can change during agent preparation, pass a synchronous
+    `assertAdmissionCurrent: () => void` callback. It must recheck the exact live grant, target, and
+    lifecycle and throw when they no longer authorize the input. The Gateway repeats this narrowing
+    check before durable session mutations and input acceptance, including after asynchronous work.
+    It grants no additional permissions. Once agent input is accepted, the host run owns it;
+    later source revocation does not retract that accepted input.
 
   </Accordion>
   <Accordion title="api.runtime.nodes">

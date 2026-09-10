@@ -67,7 +67,6 @@ describe("configured Zalo gateway with a pre-aborted lifecycle", () => {
       );
     });
     process.env.ZALO_API_URL = await listen(server);
-    setZaloRuntime({} as PluginRuntime);
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
@@ -98,6 +97,7 @@ describe("configured Zalo gateway with a pre-aborted lifecycle", () => {
     abort.abort();
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
+    setZaloRuntime({} as PluginRuntime);
 
     await requireStartAccount()(
       createStartAccountContext({

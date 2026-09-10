@@ -1,5 +1,9 @@
 // Runtime store exports expose plugin runtime type contracts without loading runtime code.
-import { getNamedPluginRuntimeStoreSlot } from "./runtime-store-registry.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getNamedPluginRuntimeStoreSlot,
+  getScopedPluginRuntimeStoreSlot,
+} from "./runtime-store-registry.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 type PluginRuntimeStoreKeyOptions = {
   /** Explicit global registry key for shared runtime slots. */
@@ -39,10 +43,12 @@ function resolvePluginRuntimeStoreOptions(
 }
 
 /**
- * Create a process-local runtime slot that throws when accessed before initialization.
+ * Create an owner-local runtime slot that throws when accessed before initialization.
  *
  * String keys create isolated module-local stores; option objects create global
  * named slots so duplicate SDK module instances share the same plugin runtime.
+ * Plugin-id slots follow the current registration/request/active registry; explicit
+ * keys retain process-local ownership.
  */
 export function createPluginRuntimeStore<T>(errorMessage: string): {
   setRuntime: (next: T) => void;
@@ -50,7 +56,7 @@ export function createPluginRuntimeStore<T>(errorMessage: string): {
   tryGetRuntime: () => T | null;
   getRuntime: () => T;
 };
-/** Create a globally shared runtime slot keyed by plugin id or explicit registry key. */
+/** Share a runtime within its plugin registry, or process-wide for an explicit key. */
 export function createPluginRuntimeStore<T>(options: PluginRuntimeStoreOptions): {
   setRuntime: (next: T) => void;
   clearRuntime: () => void;
@@ -65,26 +71,33 @@ export function createPluginRuntimeStore<T>(options: string | PluginRuntimeStore
   getRuntime: () => T;
 } {
   const resolved = resolvePluginRuntimeStoreOptions(options);
-  const slot =
-    typeof options === "string"
-      ? { runtime: null }
-      : (() => {
-          // Store named slots on globalThis so duplicate SDK module instances
-          // still share one runtime for the same plugin id or explicit key.
-          return getNamedPluginRuntimeStoreSlot(resolved.key);
-        })();
+  const namedSlot =
+    typeof options === "string" ? undefined : getNamedPluginRuntimeStoreSlot(resolved.key);
+  const standaloneSlot = namedSlot ?? { runtime: null };
+  const resolveSlot = () => {
+    const registry =
+      typeof options !== "string" && "pluginId" in options ? getPluginRegistryForContext() : null;
+    return registry && namedSlot
+      ? getScopedPluginRuntimeStoreSlot(namedSlot, registry)
+      : standaloneSlot;
+  };
 
   return {
     setRuntime(next: T) {
-      slot.runtime = next;
+      resolveSlot().runtime = next;
+      // Standalone CLI callbacks have no registry scope. Preserve their existing
+      // last-registration slot; owned calls never fall back to this value.
+      standaloneSlot.runtime = next;
     },
     clearRuntime() {
-      slot.runtime = null;
+      resolveSlot().runtime = null;
+      standaloneSlot.runtime = null;
     },
     tryGetRuntime() {
-      return (slot.runtime as T | null) ?? null;
+      return (resolveSlot().runtime as T | null) ?? null;
     },
     getRuntime() {
+      const slot = resolveSlot();
       if (slot.runtime === null) {
         throw new Error(resolved.errorMessage);
       }

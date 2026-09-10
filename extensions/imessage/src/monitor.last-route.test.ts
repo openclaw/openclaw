@@ -666,6 +666,8 @@ describe("iMessage monitor last-route updates", () => {
         },
       ]),
     );
+    // The binding fixture owns a new registry, so install its runtime before monitoring.
+    installIMessageStateRuntimeForTest();
     return {
       ...overrides,
       agents: { list: [{ id: "main" }, { id: "codex" }] },

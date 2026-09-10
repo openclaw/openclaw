@@ -4,15 +4,26 @@
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [
-      { "id": "reef-keys-json-to-plugin-state" },
-      { "id": "reef-registration-json-to-plugin-state" },
-      { "id": "reef-audit-jsonl-to-plugin-state" },
-      { "id": "reef-runtime-files-to-plugin-state" },
-      { "id": "reef-config-trust-to-plugin-state" }
+      {
+        "id": "reef-keys-json-to-plugin-state"
+      },
+      {
+        "id": "reef-registration-json-to-plugin-state"
+      },
+      {
+        "id": "reef-audit-jsonl-to-plugin-state"
+      },
+      {
+        "id": "reef-runtime-files-to-plugin-state"
+      },
+      {
+        "id": "reef-config-trust-to-plugin-state"
+      }
     ]
   },
   "name": "Reef",
   "description": "Guarded end-to-end encrypted claw channel",
+  "enabledByDefault": false,
   "cliCommands": [
     {
       "name": "reef",
@@ -38,5 +49,11 @@
     {
       "name": "reef"
     }
-  ]
+  ],
+  "controlUi": {
+    "entry": "dist/control-ui/6b3fc1f4b54d12625d00a0e559f975625e1a694e6dcfcfcff3f86f4c4fd84de7/index.js",
+    "styles": [
+      "dist/control-ui/6b3fc1f4b54d12625d00a0e559f975625e1a694e6dcfcfcff3f86f4c4fd84de7/index.css"
+    ]
+  }
 }

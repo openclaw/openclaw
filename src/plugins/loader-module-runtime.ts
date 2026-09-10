@@ -52,6 +52,7 @@ const LAZY_RUNTIME_PROPERTIES = {
   webSearch: true,
   tasks: true,
   modelConfig: true,
+  crossSessionGrants: true,
 } satisfies Record<keyof PluginRuntime, true>;
 
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {

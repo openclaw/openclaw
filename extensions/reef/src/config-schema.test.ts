@@ -92,9 +92,19 @@ describe("Reef configuration boundary", () => {
 
   it("keeps config mutation off the agent message surface and gates owner commands", async () => {
     const registerCommand = vi.fn();
-    // tool-discovery registration runs only registerFull, which owns /reef.
-    reefChannelEntry.register({ registrationMode: "tool-discovery", registerCommand } as never);
+    const registerControlUiDescriptor = vi.fn();
+    // Tool-discovery registration runs only registerFull, which owns /reef and
+    // its operator-only Control UI surface.
+    reefChannelEntry.register({
+      registrationMode: "tool-discovery",
+      registerCommand,
+      registerGatewayMethod: vi.fn(),
+      session: { controls: { registerControlUiDescriptor } },
+    } as never);
     expect(registerCommand).toHaveBeenCalledOnce();
+    expect(registerControlUiDescriptor).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "reef", requiredScopes: ["operator.admin"] }),
+    );
     const command = registerCommand.mock.calls[0]![0];
     expect(command).toMatchObject({
       name: "reef",
@@ -121,7 +131,7 @@ describe("Reef configuration boundary", () => {
       reviews: { list: vi.fn(), decide },
     } as never);
     const ownerRequired = {
-      text: "Only an owner in commands.ownerAllowFrom can change Reef friends or decide reviews. Ask a configured owner; friendship changes can also use openclaw reef locally.",
+      text: "Only an owner in commands.ownerAllowFrom can change Reef friends, decide reviews, or share, prompt, and revoke session mounts. Ask a configured owner; friendship changes can also use openclaw reef locally.",
     };
     await expect(
       command.handler({ args: "friend autonomy peer extended", senderIsOwner: false }),

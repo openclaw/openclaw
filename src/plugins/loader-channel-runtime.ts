@@ -134,7 +134,12 @@ export function loadSetupRuntimeChannelCandidate(params: {
     }
     if (runtimeRegistration.setChannelRuntime) {
       try {
-        runtimeRegistration.setChannelRuntime(api.runtime);
+        runPluginRegisterSyncInRegistry(
+          () => runtimeRegistration.setChannelRuntime?.(api.runtime),
+          api,
+          registryBuilder.registry,
+          record.id,
+        );
         runtimeSetterApplied = true;
       } catch (error) {
         recordSetupFailure(error, "load", "failed to apply setup-runtime channel runtime");
@@ -191,7 +196,12 @@ export function loadSetupRuntimeChannelCandidate(params: {
   }
   if (!runtimeSetterApplied) {
     try {
-      mergedSetupRegistration.setChannelRuntime?.(api.runtime);
+      runPluginRegisterSyncInRegistry(
+        () => mergedSetupRegistration.setChannelRuntime?.(api.runtime),
+        api,
+        registryBuilder.registry,
+        record.id,
+      );
     } catch (error) {
       recordSetupFailure(error, "load", "failed to apply setup channel runtime");
       return true;

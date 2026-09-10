@@ -2,11 +2,57 @@
  * Tests runtime store singleton behavior.
  */
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { clearNamedPluginRuntimeStoresForTest } from "./runtime-store-registry.js";
 import { createPluginRuntimeStore } from "./runtime-store.js";
 
+afterEach(resetPluginRuntimeStateForTest);
+
 describe("createPluginRuntimeStore", () => {
+  test("isolates registry ownership while retaining standalone and explicit-key behavior", async () => {
+    const root = createEmptyPluginRegistry();
+    const discovery = createEmptyPluginRegistry();
+    const empty = createEmptyPluginRegistry();
+    const store = createPluginRuntimeStore<string>({
+      pluginId: "owner-test",
+      errorMessage: "owner missing",
+    });
+    const active = createPluginRuntimeStore<string>({
+      key: "owner-test:active",
+      errorMessage: "active missing",
+    });
+    withPluginRegistrationContext(root, "owner-test", () => {
+      store.setRuntime("root");
+      active.setRuntime("root-flow");
+    });
+    setActivePluginRegistry(root);
+    withPluginRegistrationContext(discovery, "owner-test", () => store.setRuntime("discovery"));
+    expect(store.getRuntime()).toBe("root");
+    await withPluginRuntimeRegistryScope(discovery, async () => {
+      await Promise.resolve();
+      expect(store.getRuntime()).toBe("discovery");
+      expect(active.getRuntime()).toBe("root-flow");
+      store.clearRuntime();
+      expect(store.tryGetRuntime()).toBeNull();
+      store.setRuntime("standalone");
+    });
+    withPluginRuntimeRegistryScope(empty, () => {
+      expect(store.tryGetRuntime()).toBeNull();
+      expect(() => store.getRuntime()).toThrow("owner missing");
+    });
+    expect(store.getRuntime()).toBe("root");
+    expect(withPluginRuntimeRegistryScope({ ...root }, () => store.getRuntime())).toBe("root");
+    resetPluginRuntimeStateForTest();
+    expect(store.getRuntime()).toBe("standalone");
+  });
+
   test("shares runtime slots for the same plugin id", () => {
     const firstStore = createPluginRuntimeStore<{ value: string }>({
       pluginId: "shared-plugin",

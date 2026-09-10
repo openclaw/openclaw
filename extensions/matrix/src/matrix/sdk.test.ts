@@ -495,10 +495,13 @@ function makeKeyBackupTrust(overrides: Record<string, unknown> = {}) {
   };
 }
 
+beforeEach(() => {
+  resetPluginStateStoreForTests();
+  installMatrixTestRuntime();
+});
+
 describe("MatrixClient request hardening", () => {
   beforeEach(() => {
-    resetPluginStateStoreForTests();
-    installMatrixTestRuntime();
     matrixJsClient = createMatrixJsClientStub();
     lastCreateClientOpts = null;
     vi.useRealTimers();
@@ -2718,8 +2721,6 @@ describe("MatrixClient crypto bootstrapping", () => {
   });
 
   it("does not persist or start sync when startup aborts during crypto initialization", async () => {
-    resetPluginStateStoreForTests();
-    installMatrixTestRuntime();
     const tempDir = tempDirs.make("matrix-idb-startup-abort-");
     const databasePrefix = "openclaw-matrix-startup-abort";
     const initCrypto = createDeferred<void>();
@@ -3099,8 +3100,6 @@ describe("MatrixClient crypto bootstrapping", () => {
   });
 
   it("awaits and cancels active periodic crypto persistence during discard shutdown", async () => {
-    resetPluginStateStoreForTests();
-    installMatrixTestRuntime();
     const tempDir = tempDirs.make("matrix-idb-interval-");
     const pendingDatabases = createDeferred<IDBDatabaseInfo[]>();
     const databasesSpy = vi

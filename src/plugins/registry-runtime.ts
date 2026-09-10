@@ -13,9 +13,11 @@ import {
   type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { createCrossSessionGrantRuntime } from "./cross-session-grants.js";
 import { formatPluginTrustRefusal } from "./plugin-trust.js";
 import {
   activatePluginRecordLifecycleEpoch,
+  capturePluginLifecycleAuthority,
   isPluginRecordLifecycleEpochActive,
   isPluginRegistryActivated,
   isPluginRegistryRetired,
@@ -34,6 +36,7 @@ import type { PluginRuntime } from "./runtime/types.js";
 export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
   const pluginRuntimeById = new Map<string, PluginRuntime>();
+  const pluginRuntimeByRecord = new WeakMap<PluginRecord, PluginRuntime>();
   const pluginRuntimeRecordById = new Map<string, PluginRecord>();
   const activePluginRuntimeRecords = new WeakSet<PluginRecord>();
   const recordChannelRuntime = new WeakMap<PluginRecord, PluginRuntime["channel"]>();
@@ -153,8 +156,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     return scoped;
   };
 
-  const resolvePluginRuntime = (pluginId: string): PluginRuntime => {
-    const cached = pluginRuntimeById.get(pluginId);
+  const resolvePluginRuntime = (pluginId: string, boundRecord?: PluginRecord): PluginRuntime => {
+    const cached = boundRecord
+      ? pluginRuntimeByRecord.get(boundRecord)
+      : pluginRuntimeById.get(pluginId);
     if (cached) {
       return cached;
     }
@@ -164,6 +169,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       (module) => module.createPluginSessionOwnership(state, pluginId),
     );
     let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
+    const crossSessionGrantsByRecord = new WeakMap<
+      PluginRecord,
+      PluginRuntime["crossSessionGrants"]
+    >();
     const assertTrustedPluginRuntime = (
       methodName:
         | "dispatchHookAgentTurn"
@@ -171,9 +180,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         | "openKeyedStore"
         | "openSyncKeyedStore"
         | "openChannelIngressQueue"
-        | "openChannelIngressDrain",
+        | "openChannelIngressDrain"
+        | "crossSessionGrants",
     ) => {
       const record =
+        boundRecord ??
         pluginRuntimeRecordById.get(pluginId) ??
         registry.plugins.find((entry) => entry.id === pluginId);
       if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
@@ -191,6 +202,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       get(target, prop, receiver) {
         const runWithPluginScope = <T>(run: () => T): T => {
           const record =
+            boundRecord ??
             pluginRuntimeRecordById.get(pluginId) ??
             registry.plugins.find((entry) => entry.id === pluginId);
           return record?.source
@@ -212,6 +224,31 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             return addPluginRuntimeResolutionContext({ error, pluginId, prop });
           }
         };
+        if (prop === "crossSessionGrants") {
+          assertTrustedPluginRuntime("crossSessionGrants");
+          const record = boundRecord ?? pluginRuntimeRecordById.get(pluginId);
+          if (!record) {
+            return createCrossSessionGrantRuntime(pluginId, () => false);
+          }
+          const cachedGrants = crossSessionGrantsByRecord.get(record);
+          if (cachedGrants) {
+            return cachedGrants;
+          }
+          const ownsLifecycle = capturePluginLifecycleAuthority(registry, record, {
+            scopedRuntime: true,
+          });
+          // Bind retained authority to this exact plugin record and lifecycle. A replacement or
+          // reactivation must never revive an old plugin's persistent cross-session grants.
+          const scopedGrants = createCrossSessionGrantRuntime(pluginId, () => {
+            return Boolean(
+              ownsLifecycle?.() &&
+              pluginRuntimeRecordById.get(pluginId) === record &&
+              activePluginRuntimeRecords.has(record),
+            );
+          });
+          crossSessionGrantsByRecord.set(record, scopedGrants);
+          return scopedGrants;
+        }
         if (prop === "state") {
           const baseState = getRuntimeProperty();
           return {
@@ -306,10 +343,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           return {
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
             request: async (method, params, options) => {
+              // Retain the caller's admission fence before asynchronous ownership preparation.
+              const requestOptions = options ? { ...options } : undefined;
               const { assertGatewaySessionRequestOwned } = await loadSessionOwnership();
               return await runWithPluginScope(async () => {
                 assertGatewaySessionRequestOwned(method, params);
-                return await gateway.request(method, params, options);
+                return await gateway.request(method, params, requestOptions);
               });
             },
           } satisfies PluginRuntime["gateway"];
@@ -609,7 +648,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         } satisfies PluginRuntime["subagent"];
       },
     });
-    pluginRuntimeById.set(pluginId, runtime);
+    if (boundRecord) {
+      pluginRuntimeByRecord.set(boundRecord, runtime);
+    } else {
+      pluginRuntimeById.set(pluginId, runtime);
+    }
     return runtime;
   };
 

@@ -33,7 +33,7 @@ import {
 } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { beforeAll, describe, it, vi } from "vitest";
+import { beforeEach, describe, it, vi } from "vitest";
 import {
   createMatrixHandlerTestHarness,
   createMatrixTextMessageEvent,
@@ -45,7 +45,7 @@ const ROOM_ID = "!room:example.org";
 const BOT_USER_ID = "@openclaw:example.org";
 const INBOUND_EVENT_ID = "$inbound-1";
 
-beforeAll(() => {
+beforeEach(() => {
   // send.ts/replies.ts read text helpers and the monitor's mention gating from
   // the module runtime slot; bind the real chunking/table implementations so
   // rendered wire content is part of the recorded lifecycle (mirrors the

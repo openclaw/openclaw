@@ -496,20 +496,20 @@ describe("buildButtonProps attachments", () => {
   });
 });
 
-describe("createMattermostInteractionHandler", () => {
-  function setInteractionRuntime(
-    enqueueSystemEvent: (
-      text: string,
-      options: { sessionKey?: string | null; sessionId?: string | null; userId?: string | null },
-    ) => boolean = () => true,
-  ) {
-    setMattermostRuntime({
-      system: {
-        enqueueSystemEvent,
-      },
-    } as unknown as PluginRuntime);
-  }
+function setInteractionRuntime(
+  enqueueSystemEvent: (
+    text: string,
+    options: { sessionKey?: string | null; sessionId?: string | null; userId?: string | null },
+  ) => boolean = () => true,
+) {
+  setMattermostRuntime({
+    system: {
+      enqueueSystemEvent,
+    },
+  } as unknown as PluginRuntime);
+}
 
+describe("createMattermostInteractionHandler", () => {
   function createMattermostClientMock(
     requestImpl: (path: string, init?: { method?: string }) => Promise<unknown>,
   ): MattermostClient {
@@ -984,6 +984,10 @@ describe("createMattermostInteractionHandler", () => {
 });
 
 describe("createMattermostInteractionHandler body limits", () => {
+  beforeEach(() => {
+    setInteractionRuntime();
+  });
+
   // The 10s read deadline makes the sibling 408 case too slow to drive here; slash-http
   // and Synology Chat cover that half of the same branch.
   it("delivers 413 for an over-limit callback body and then closes the connection", async () => {

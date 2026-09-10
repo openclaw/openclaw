@@ -433,6 +433,7 @@ it("keeps version and injected instance surfaces independent of the broad runtim
     "webSearch",
     "tasks",
     "modelConfig",
+    "crossSessionGrants",
   ]);
   expect(Reflect.ownKeys(runtime)).toEqual(Object.keys(descriptors));
   for (const key of Object.keys(descriptors)) {

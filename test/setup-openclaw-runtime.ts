@@ -1,5 +1,5 @@
 // OpenClaw runtime test setup installs runtime mocks and cleanup.
-import { afterAll, afterEach, beforeAll, vi } from "vitest";
+import { afterAll, afterEach, aroundEach, beforeAll, vi } from "vitest";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
@@ -366,7 +366,16 @@ afterEach(async () => {
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   await resetPreparedModelRuntimeSnapshotsForTest();
-  await installDefaultPluginRegistry();
+});
+
+aroundEach(async (runTest) => {
+  try {
+    await runTest();
+  } finally {
+    // Finish hooks still persist fixture state. Retire the registry only after
+    // those hooks finish, while keeping every test/retry isolated.
+    await installDefaultPluginRegistry();
+  }
 });
 
 afterAll(async () => {

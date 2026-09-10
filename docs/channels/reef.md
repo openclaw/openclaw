@@ -50,6 +50,35 @@ openclaw reef friend remove @friend
 
 A friendship you requested is adopted automatically once the peer accepts. Inbound requests still require `openclaw pairing approve reef <CODE>`.
 
+## Prototype: remote session prompts
+
+Two paired Gateways can test host-approved prompts against one host session. This prototype carries text prompts only. It does not mirror the transcript, stream output to the guest, or transfer attachments.
+
+Session federation frames do not pass through the ordinary Reef chat guard. They use pinned peer identity, a session mount, and host approval or a standing grant instead. Configuring a guard is still required to start Reef; do not assume it screens guest session prompts.
+
+On the host Gateway, send this owner command in a channel that supports `/reef`:
+
+```text
+/reef session share @guest agent:main:session-key
+```
+
+The command returns a mount ID and sends the mount to the guest Gateway. Mounts expire after seven days, and each peer may hold at most 32 mounts. On the guest Gateway, list mounts and submit a prompt:
+
+```text
+/reef session list
+/reef session prompt reef-mount-... Check the current build
+```
+
+The host sees the existing approval card inline above that session's composer and in **Inbox → Approvals**. **Allow once** admits only that prompt. **Always allow** admits later prompts from that exact peer and mount until revocation. **Deny** rejects the prompt.
+
+Revoke the mount from the host Gateway:
+
+```text
+/reef session revoke reef-mount-...
+```
+
+The host remains the only execution authority. Session resets, Reef key changes, and grant-generation changes invalidate stale prompt proposals.
+
 ## Configuration
 
 Reef lives under `channels.reef`:

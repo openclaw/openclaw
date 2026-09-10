@@ -4,10 +4,21 @@ import {
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { registerReefCliMetadata } from "./cli-metadata.js";
+import { registerReefControlUiGatewayMethods } from "./src/control-ui-gateway.js";
 
 const loadReefCommandsRuntime = createLazyRuntimeModule(() => import("./commands.runtime.js"));
 
 function registerReefFullRuntime(api: OpenClawPluginApi): void {
+  api.session.controls.registerControlUiDescriptor({
+    surface: "tab",
+    id: "reef",
+    label: "Reef",
+    description: "Pair claws and manage shared session proposals.",
+    icon: "waves",
+    group: "control",
+    requiredScopes: ["operator.admin"],
+  });
+  registerReefControlUiGatewayMethods(api);
   api.registerCommand({
     name: "reef",
     description: "Manage Reef friends and owner review approvals",
