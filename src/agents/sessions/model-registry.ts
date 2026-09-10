@@ -37,7 +37,7 @@ import {
   normalizeProviderMapKeys,
   type ProviderModelCatalog,
 } from "../models-config.merge.js";
-import { materializeConfiguredProviderCatalogModels } from "../models-config.providers.normalize.js";
+import { materializeConfiguredProviderCatalogModels } from "../models-config.providers.catalog.js";
 import {
   filterGeneratedPluginModelCatalogProviders,
   isGeneratedPluginModelCatalog,
