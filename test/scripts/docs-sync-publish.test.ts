@@ -423,7 +423,8 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     expect(english).toBeDefined();
     expect(simplifiedChinese).toBeDefined();
     expect(german).toBeDefined();
-    expect(english!.tabs.slice(-4).map((tab) => tab.tab)).toEqual([
+    expect(english!.tabs.slice(-5).map((tab) => tab.tab)).toEqual([
+      "Gateway & Ops",
       "Reference",
       "Releases",
       "Contributing",
@@ -469,17 +470,65 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     ];
     expect(collectPages(releaseTab)).toEqual(releaseRoutes);
     expect(new Set(releaseRoutes)).toHaveLength(releaseRoutes.length);
-    const contributingRoutes = collectPages(contributingTab);
-    expect(contributingRoutes).toEqual(
-      expect.arrayContaining([
-        "maturity/scorecard",
-        "maturity/taxonomy",
-        "reference/test",
-        "ci",
-        "help/testing",
-        "concepts/mantis",
-      ]),
-    );
+    const contributingRoutes = [
+      "maturity/scorecard",
+      "maturity/taxonomy",
+      "reference/test",
+      "reference/test/local",
+      "reference/test/lanes",
+      "reference/test/docker",
+      "reference/test/performance",
+      "reference/test/runner-internals",
+      "reference/test/remote-proof",
+      "ci",
+      "ci/pipeline",
+      "ci/watching-runs",
+      "ci/checkout",
+      "ci/scope-and-routing",
+      "ci/scope-and-routing/selection",
+      "ci/scope-and-routing/node-test-lanes",
+      "ci/scope-and-routing/job-budgets",
+      "ci/scope-and-routing/manual-dispatches",
+      "ci/runners",
+      "ci/capacity",
+      "ci/release-validation",
+      "ci/release-validation/full-release-validation",
+      "ci/release-validation/live-and-e2e-shards",
+      "ci/release-validation/package-acceptance",
+      "ci/release-validation/install-smoke-and-docker-e2e",
+      "ci/release-validation/plugin-prerelease",
+      "ci/scheduled-workflows",
+      "ci/local-proof",
+      "help/scripts",
+      "concepts/qa-e2e-automation",
+      "concepts/qa-e2e-automation/command-surface",
+      "concepts/qa-e2e-automation/operator-flow",
+      "concepts/qa-e2e-automation/scenario-coverage",
+      "concepts/qa-e2e-automation/channel-qa-reference",
+      "concepts/qa-e2e-automation/slack-qa",
+      "concepts/qa-e2e-automation/whatsapp-and-credentials",
+      "concepts/qa-e2e-automation/extending-the-stack",
+      "concepts/qa-e2e-automation/qa-reporting",
+      "concepts/personal-agent-benchmark-pack",
+      "help/testing",
+      "help/testing/suites",
+      "help/testing/live-workflows",
+      "help/testing/docker",
+      "help/testing/qa-runners",
+      "help/testing/contracts",
+      "help/testing/writing-tests",
+      "help/testing-updates-plugins",
+      "help/testing-live",
+      "help/testing-live/quick-smokes",
+      "help/testing-live/model-smoke",
+      "help/testing-live/cli-backends",
+      "help/testing-live/acp-and-codex",
+      "help/testing-live/long-context-and-matrix",
+      "help/testing-live/media-providers",
+      "concepts/mantis",
+      "concepts/mantis-slack-desktop-runbook",
+    ];
+    expect(collectPages(contributingTab)).toEqual(contributingRoutes);
     expect(new Set(contributingRoutes)).toHaveLength(contributingRoutes.length);
 
     const englishWithoutClawHub = {
