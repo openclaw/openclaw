@@ -1151,6 +1151,27 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
+  it("accepts Bun built-in modules without npm dependency declarations", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.9.9",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "bun-sqlite-library.js"),
+        'import { Database } from "bun:sqlite";\nconst { dlopen } = require("bun:ffi");\nexport { Database, dlopen };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   const companionSource = 'const voice = require("@discordjs/voice");\nexport { voice };\n';
   const companionOwnership = {
     chunks: {

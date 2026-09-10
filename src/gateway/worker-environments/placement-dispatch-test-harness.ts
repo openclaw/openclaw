@@ -365,6 +365,9 @@ export function createHarness(
   };
   const environments: WorkerDispatchEnvironmentService &
     Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> = {
+    bindPreparedWorkspace: vi.fn(async () => {
+      throw new Error("Prepared workspace fixture is not configured");
+    }),
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     create: vi.fn(async () => {

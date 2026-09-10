@@ -436,3 +436,4 @@ openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-mi
 - [Media playback](/nodes/media-playback)
 - [Talk mode](/nodes/talk)
 - [Voice wake](/nodes/voicewake)
+- [Media overview](/tools/media-overview) — how the media tools fit together

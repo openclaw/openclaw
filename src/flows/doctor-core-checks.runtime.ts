@@ -1,6 +1,6 @@
 // Doctor runtime checks inspect tool names, browser residue, and runtime state.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { nodeRuntimeFailure, nodeRuntimeNote } from "../../node-sqlite.mjs";
+import { formatUnsupportedNodeVersionMessage } from "../../node-version.mjs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
@@ -55,7 +55,6 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { detectRuntime } from "../infra/runtime-guard.js";
 import {
   formatLocalAudioSelection,
   inspectLocalAudioSelection,
@@ -207,25 +206,6 @@ function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): strin
   return runtime?.status ?? runtime?.state ?? runtime?.subState;
 }
 
-export function collectNodeRuntimeFindings(): readonly HealthFinding[] {
-  const runtime = detectRuntime();
-  if (runtime.kind !== "node" || !runtime.sqliteProbe) {
-    return [];
-  }
-  const failure = nodeRuntimeFailure(runtime.version, runtime.sqliteProbe);
-  const message = failure ?? nodeRuntimeNote(runtime.version, runtime.sqliteProbe);
-  return message
-    ? [
-        {
-          checkId: "core/doctor/node-runtime",
-          severity: failure ? "error" : "info",
-          message,
-          target: runtime.execPath ?? undefined,
-        },
-      ]
-    : [];
-}
-
 export async function collectGatewayDaemonFindings(
   ctx: Pick<HealthCheckContext, "cfg">,
 ): Promise<readonly HealthFinding[]> {
@@ -272,7 +252,14 @@ export async function collectGatewayDaemonFindings(
         path: state.command?.sourcePath,
         target: nodePath,
         ...(runtime.status !== "supported"
-          ? { fixHint: "Repair the Node runtime, then run `openclaw gateway install`." }
+          ? {
+              fixHint: [
+                ...(runtime.status === "unsupported"
+                  ? [formatUnsupportedNodeVersionMessage(runtime.version)]
+                  : []),
+                "Repair the Node runtime, then run `openclaw gateway install`.",
+              ].join("\n"),
+            }
           : {}),
       });
     }

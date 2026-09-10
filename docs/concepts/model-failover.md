@@ -404,6 +404,7 @@ See [Gateway configuration](/gateway/configuration) for:
 - `auth.profiles` / `auth.order`
 - `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel` routing
+- [`openclaw models`](/cli/models) — inspect resolved defaults and fallbacks
 
 See [Models](/concepts/models) for the broader model selection and fallback overview.
 

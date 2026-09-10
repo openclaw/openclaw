@@ -653,7 +653,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       typeof opts.limit === "number" ? opts.limit : 200,
     );
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
-    const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
+    const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars();
     const historyPage = await readChatHistoryPage({
       entry,
       provider: resolvedSessionModel.provider,

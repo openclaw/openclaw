@@ -730,6 +730,7 @@ function exactKeys(value: unknown, keys: string[]): value is Record<string, unkn
 export function dispatchInputsDigest(inputs: DispatchInputs): string {
   const wireInputs = Object.fromEntries(
     Object.keys(inputs)
+      .filter((key) => String(inputs[key]) !== "")
       .toSorted()
       .map((key) => [key, String(inputs[key])]),
   );

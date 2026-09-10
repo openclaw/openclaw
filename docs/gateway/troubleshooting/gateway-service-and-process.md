@@ -190,7 +190,7 @@ What to do:
 
 Related:
 
-- [macOS platform notes](/platforms/mac/bundled-gateway)
+- [Gateway on macOS](/platforms/mac/bundled-gateway)
 - [Doctor](/gateway/doctor)
 - [Gateway CLI](/cli/gateway)
 

@@ -172,4 +172,8 @@ exception), so the agent can self-correct:
   <Card title="xAI provider" href="/providers/xai" icon="microchip">
     Grok models, web/x search, and code execution config.
   </Card>
+  <Card title="Code Mode" href="/tools/code-mode" icon="code">
+    A separate surface: JavaScript/TypeScript orchestration of enabled tools in
+    OpenClaw's own worker, not this remote Python tool.
+  </Card>
 </CardGroup>

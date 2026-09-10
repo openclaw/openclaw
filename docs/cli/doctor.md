@@ -75,3 +75,4 @@ Each entry points at the page that now holds the content.
 
 - [CLI reference](/cli)
 - [Gateway doctor](/gateway/doctor)
+- [`openclaw policy`](/cli/policy) — the policy rules `doctor --lint` reports on

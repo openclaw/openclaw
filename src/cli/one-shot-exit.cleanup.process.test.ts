@@ -1,24 +1,30 @@
-import { spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { it } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 
-it.each([
+it.concurrent.for([
   { mode: "automatic", exitCode: 0, disposed: true },
   { mode: "requested", exitCode: 7, disposed: false },
   { mode: "deferred", exitCode: 7, disposed: false },
   { mode: "failure", exitCode: 9, disposed: false },
   { mode: "worker", exitCode: 0, disposed: true },
-])("preserves native cleanup and the $mode exit policy", ({ mode, exitCode, disposed }) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-cleanup-exit-"));
-  const databasePath = path.join(directory, "observations.sqlite");
-  const exitPath = path.join(directory, "exit.json");
-  const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
-  const cleanupUrl = new URL("./runtime-cleanup.ts", import.meta.url).href;
-  const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
-  const script = `
+])(
+  "preserves native cleanup and the $mode exit policy",
+  async ({ mode, exitCode, disposed }, { expect, signal, onTestFinished }) => {
+    const fixture = createFixtureLifetime();
+    onTestFinished(() => fixture.cleanup());
+    await fixture.run(async () => {
+      const directory = fixture.createTempDir("openclaw-cli-cleanup-exit-");
+      const databasePath = path.join(directory, "observations.sqlite");
+      const exitPath = path.join(directory, "exit.json");
+      const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
+      const cleanupUrl = new URL("./runtime-cleanup.ts", import.meta.url).href;
+      const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
+      const script = `
     import fs from "node:fs";
     import { DatabaseSync } from "node:sqlite";
     import { setTimeout as delay } from "node:timers/promises";
@@ -70,53 +76,57 @@ it.each([
     finalizationReturnedBeforeCleanup = database.isOpen;
   `;
 
-  try {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--disable-warning=ExperimentalWarning",
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "--eval",
-        script,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          PATH: process.env.PATH,
-          SystemRoot: process.env.SystemRoot,
-          HOME: directory,
-          USERPROFILE: directory,
-          TERM: "dumb",
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          TSX_DISABLE_CACHE: "1",
-        },
-        timeout: 20_000,
-      },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.signal).toBeNull();
-    expect(result.status).toBe(exitCode);
-    expect(JSON.parse(result.stdout)).toEqual({ mode, outcome: "recorded" });
-    expect(result.stderr).toContain("CLI cleanup timed out: native-write after 5000ms");
-    expect(JSON.parse(fs.readFileSync(exitPath, "utf8"))).toEqual({
-      code: exitCode,
-      disposals: disposed ? 1 : 0,
-      nativeOpen: !disposed,
-      returnedBeforeCleanup: true,
-      finalizationReturnedBeforeCleanup: mode !== "automatic",
-      reportedErrors: mode === "failure" ? 1 : 0,
-    });
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(database.prepare("SELECT value FROM observations ORDER BY value").all()).toEqual(
-        (disposed ? [42, 99] : [42]).map((value) => ({ value })),
+      let child: ChildProcess | undefined;
+      const result = await fixture.track(
+        runNodeScript(
+          [
+            "--disable-warning=ExperimentalWarning",
+            "--import",
+            "tsx",
+            "--input-type=module",
+            "--eval",
+            script,
+          ],
+          {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            HOME: directory,
+            USERPROFILE: directory,
+            TERM: "dumb",
+            NODE_DISABLE_COMPILE_CACHE: "1",
+            TSX_DISABLE_CACHE: "1",
+          },
+          20_000,
+          {
+            signal,
+            maxBuffer: 1024 * 1024,
+            onReady: (startedChild) => {
+              child = startedChild;
+            },
+          },
+        ),
       );
-    } finally {
-      database.close();
-    }
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
+      expect(result.error).toBeUndefined();
+      expect(child?.signalCode).toBeNull();
+      expect(result.status).toBe(exitCode);
+      expect(JSON.parse(result.stdout)).toEqual({ mode, outcome: "recorded" });
+      expect(result.stderr).toContain("CLI cleanup timed out: native-write after 5000ms");
+      expect(JSON.parse(fs.readFileSync(exitPath, "utf8"))).toEqual({
+        code: exitCode,
+        disposals: disposed ? 1 : 0,
+        nativeOpen: !disposed,
+        returnedBeforeCleanup: true,
+        finalizationReturnedBeforeCleanup: mode !== "automatic",
+        reportedErrors: mode === "failure" ? 1 : 0,
+      });
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare("SELECT value FROM observations ORDER BY value").all()).toEqual(
+          (disposed ? [42, 99] : [42]).map((value) => ({ value })),
+        );
+      } finally {
+        database.close();
+      }
+    });
+  },
+);

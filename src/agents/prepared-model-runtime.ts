@@ -50,17 +50,17 @@ import {
   notifyPreparedModelRuntimePublication,
   resetPreparedModelRuntimePublicationListenersForTest,
 } from "./prepared-model-runtime.publication-events.js";
-import { projectPublishedModelRuntimeOwner } from "./prepared-model-runtime.published-owner.js";
+import {
+  projectPublishedModelRuntimeOwner,
+  retainPublishedModelRuntimeOwner,
+} from "./prepared-model-runtime.published-owner.js";
 import {
   isPreparedModelRuntimeOwnerInRefreshScope,
   listConfiguredRefreshInputs,
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
-import {
-  closeEphemeralPreparedModelRuntimeResources,
-  retainPreparedModelRuntimeGenerationResources,
-} from "./prepared-model-runtime.resources.js";
+import { closeEphemeralPreparedModelRuntimeResources } from "./prepared-model-runtime.resources.js";
 import { PreparedModelRuntimeOwnerRetention } from "./prepared-model-runtime.retention.js";
 import type {
   PreparedModelRuntimeCatalogMode,
@@ -175,14 +175,18 @@ export async function loadPreparedModelRuntimeSnapshot(
 export async function acquirePublishedPreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
 ): Promise<PreparedModelRuntimeLease> {
-  return await loadPreparedModelRuntimeOwner(rawInput, (owner, snapshot) => {
-    const pluginGeneration = owner.pluginGeneration;
-    if (!pluginGeneration) {
-      throw new Error("Published model runtime has no plugin generation");
-    }
-    const claim = retainPreparedModelRuntimeGenerationResources(pluginGeneration);
-    return { snapshot, pluginGeneration, release: () => claim?.release() };
-  });
+  return await loadPreparedModelRuntimeOwner(rawInput, retainPublishedModelRuntimeOwner);
+}
+
+/** Retains the selected publication without activating an unpublished owner. */
+export async function acquirePreparedModelRuntimeSnapshot(
+  rawInput: PreparedModelRuntimeInput,
+): Promise<PreparedModelRuntimeLease> {
+  return await projectPublishedModelRuntimeOwner(
+    rawInput,
+    preparedModelRuntimeLeaseContext,
+    retainPublishedModelRuntimeOwner,
+  );
 }
 
 async function loadPreparedModelRuntimeOwner<T>(

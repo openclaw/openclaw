@@ -26,6 +26,60 @@ title: "State schema history"
 | 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
 | 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
 | 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
+| 17      | Prepared worker lifecycle facts and one-use node workspace bindings                                                                                                                                                                                                                                                             | Unreleased          |
+
+### State schema 17
+
+Schema 17 adds the complete prepared-worker storage contract. The nullable
+`worker_environments` columns `preparation_key`, `preparation_demand_at_ms`,
+`preparation_expires_at_ms`, and `preparation_consumed_at_ms` form one constrained
+tuple for one-use capacity. The separate nullable `last_activated_at_ms` column
+stores successful activation time. These Gateway fields reserve storage for the
+ready-pool lifecycle and remain `NULL` in this release; completed-checkout
+adoption does not allocate reserves. Existing workers keep all five values
+`NULL`. Migration does
+not infer demand, activation, or unused capacity from historical rows.
+
+Dedicated nodes register fixed build paths in the first-use
+`node_worker_prepared_workspaces` table. It records the exact environment and
+completed `preparation_key`, a required `cache_key` identifying compatible
+project/runtime contents, and fixed workspace and HOME paths. Separate required
+`source_manifest_ref` and `prepared_manifest_ref` digests identify the clean Git
+baseline and completed setup tree. Initial binding verifies the completed tree;
+replay preserves the bound session's edits. Binding records the session and
+owner epoch once. Retirement keeps that binding until machine teardown, so
+retired paths cannot be claimed by another session.
+
+Registration creates the node-only table inside its existing synchronous write
+transaction. An aborted registration rolls back that DDL, and a later attempt
+can create it again. Ordinary database open and migration leave the table
+absent. Per-agent schemas and native companion tables do not change; native
+clients can continue validating and reading their existing owned tables at
+state schema 17 without performing migrations.
+
+Startup and `openclaw doctor --fix` apply the schema-16 Skill Workshop migration
+before the prepared-worker migration when opening a schema-15 database. A
+schema-16 database receives only the prepared-worker migration. The tuple
+constraint belongs to the last added column, so migration scans existing
+environments once and preserves the table instead of rebuilding it. Leases,
+credentials, placements, inference turns, unknown additive data, and uncertain
+cleanup remain intact. No provider operation runs in the migration transaction.
+
+Migration content and its version facts commit together; failure rolls back all
+database changes from that attempt. Both published markers normally advance to
+17 in that transaction. When an older updater still owns trailing ledger reads,
+the existing [version-publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+keeps the published markers at their earlier version and records applied content
+17 separately. Reopening does not repeat that content migration. Workshop
+directory relocation runs afterward, outside the schema transaction.
+
+Before upgrading, stop older writers and create a verified, WAL-aware backup.
+Builds supporting state schema 16 or earlier refuse the published schema 17.
+To roll back, complete cloud cleanup with a compatible build, stop all writers,
+then restore the pre-upgrade backup into a separate state directory. Restoring
+does not retain changes made after that backup. Do not lower either version
+marker or erase a consumed binding. Unresolved provider cleanup can continue
+incurring charges until deletion is confirmed.
 
 ### State schema 16
 

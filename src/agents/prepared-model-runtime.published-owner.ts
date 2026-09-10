@@ -4,12 +4,26 @@ import {
   preparedModelRuntimeConfigsMatch,
   resolvePublishedOwner,
 } from "./prepared-model-runtime.owner.js";
+import { retainPreparedModelRuntimeGenerationResources } from "./prepared-model-runtime.resources.js";
 import type {
   PreparedModelRuntimeInput,
+  PreparedModelRuntimeLease,
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeReplacement,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
+
+export function retainPublishedModelRuntimeOwner(
+  owner: PreparedModelRuntimeOwner,
+  snapshot: PreparedModelRuntimeSnapshot,
+): PreparedModelRuntimeLease {
+  const pluginGeneration = owner.pluginGeneration;
+  if (!pluginGeneration) {
+    throw new Error("Published model runtime has no plugin generation");
+  }
+  const claim = retainPreparedModelRuntimeGenerationResources(pluginGeneration);
+  return { snapshot, pluginGeneration, release: () => claim?.release() };
+}
 
 type PublishedModelRuntimeContext = {
   captureLifetime(): () => void;

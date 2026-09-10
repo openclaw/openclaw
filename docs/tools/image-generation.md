@@ -610,3 +610,4 @@ Other bundled providers report `background: "transparent"` as ignored.
 - [xAI](/providers/xai) - Grok image, video, search, code execution, and TTS setup
 - [Configuration reference](/gateway/config-agents#agent-defaults) - `agents.defaults.mediaModels.image` config
 - [Models](/concepts/models) - model configuration and failover
+- [Media overview](/tools/media-overview) - how the media tools fit together

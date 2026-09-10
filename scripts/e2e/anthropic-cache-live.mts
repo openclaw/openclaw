@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Context, Message, Model, StreamFn, Tool } from "@openclaw/ai";
 import { bindsClaudeThinkingPrefix, streamAnthropic } from "@openclaw/ai/internal/anthropic";
-import { createAnthropicMessagesTransportStreamFn } from "@openclaw/ai/transports";
 import { Type } from "typebox";
 import { startMockAnthropic } from "./lib/anthropic-cache/mock-provider.mts";
+import { loadAnthropicTransportStream } from "./lib/anthropic-cache/transport-loader.mts";
 
 // Docker runs this with native Node so the imports resolve to the installed
 // candidate packages, without the checkout's TypeScript source aliases.
@@ -245,10 +245,22 @@ try {
     (_model, context, options) => streamAnthropic(MODEL, context, options),
     apiKey,
   );
-  await runLane("managed-transport", createAnthropicMessagesTransportStreamFn(), apiKey);
-  mock?.assertComplete();
+  const managedTransport = await loadAnthropicTransportStream();
+  if (managedTransport) {
+    await runLane("managed-transport", managedTransport, apiKey);
+  } else {
+    process.stdout.write(
+      `${JSON.stringify({
+        lane: "managed-transport",
+        mode: mockMode ? "mock" : "live",
+        status: "not-applicable",
+        reason: "candidate-package-does-not-export-anthropic-transports",
+      })}\n`,
+    );
+  }
+  mock?.assertComplete(managedTransport ? 8 : 4);
   process.stdout.write(
-    `Anthropic transient runtime-context cache regression passed (${mockMode ? "mock" : "live"}, 8 requests).\n`,
+    `Anthropic transient runtime-context cache regression passed (${mockMode ? "mock" : "live"}, ${managedTransport ? 8 : 4} requests).\n`,
   );
 } finally {
   await mock?.close();

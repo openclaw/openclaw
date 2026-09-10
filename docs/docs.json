@@ -2384,6 +2384,15 @@
                     "group": "Configuration",
                     "pages": [
                       "gateway/configuration",
+                      {
+                        "group": "Configuration",
+                        "pages": [
+                          "gateway/configuration/common-tasks",
+                          "gateway/configuration/hot-reload",
+                          "gateway/configuration/config-rpc",
+                          "gateway/configuration/environment-variables"
+                        ]
+                      },
                       "gateway/configuration-reference",
                       "gateway/config-agents",
                       {
@@ -2441,6 +2450,16 @@
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
+                      {
+                        "group": "Secrets management",
+                        "pages": [
+                          "gateway/secrets/runtime-model",
+                          "gateway/secrets/secretref-contract",
+                          "gateway/secrets/secret-store-and-egress",
+                          "gateway/secrets/integration-examples",
+                          "gateway/secrets/operations"
+                        ]
+                      },
                       "gateway/1password",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth"
@@ -2543,6 +2562,22 @@
                       "gateway/security/dependency-locking",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
+                      {
+                        "group": "Sandboxing",
+                        "pages": [
+                          "gateway/sandboxing/what-gets-sandboxed",
+                          "gateway/sandboxing/modes-scope-and-backend",
+                          "gateway/sandboxing/supported-capability-matrix",
+                          "gateway/sandboxing/docker-backend",
+                          "gateway/sandboxing/podman-backend",
+                          "gateway/sandboxing/ssh-backend",
+                          "gateway/sandboxing/openshell-backend",
+                          "gateway/sandboxing/workspace-access",
+                          "gateway/sandboxing/multiple-folders-for-one-agent",
+                          "gateway/sandboxing/images-and-setup",
+                          "gateway/sandboxing/setup-command"
+                        ]
+                      },
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated",
                       "gateway/permission-modes"
@@ -2559,6 +2594,11 @@
                           "gateway/protocol/handshake",
                           "gateway/protocol/presence",
                           "gateway/protocol/rpc-methods",
+                          "gateway/protocol/rpc-system-and-channels",
+                          "gateway/protocol/rpc-talk-config-and-agents",
+                          "gateway/protocol/rpc-session-control",
+                          "gateway/protocol/rpc-devices-nodes-and-approvals",
+                          "gateway/protocol/rpc-bootstrap-and-events",
                           "gateway/protocol/ledgers",
                           "gateway/protocol/operator-methods",
                           "gateway/protocol/versioning",
@@ -2602,6 +2642,14 @@
                   "security/network-proxy",
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
+                  "security/THREAT-MODEL-ATLAS/reconnaissance",
+                  "security/THREAT-MODEL-ATLAS/initial-access",
+                  "security/THREAT-MODEL-ATLAS/execution",
+                  "security/THREAT-MODEL-ATLAS/persistence",
+                  "security/THREAT-MODEL-ATLAS/defense-evasion",
+                  "security/THREAT-MODEL-ATLAS/discovery",
+                  "security/THREAT-MODEL-ATLAS/collection-and-exfiltration",
+                  "security/THREAT-MODEL-ATLAS/impact",
                   "security/CONTRIBUTING-THREAT-MODEL"
                 ]
               },
@@ -2900,7 +2948,21 @@
                       "plugins/codex-harness-reference/workspace-bootstrap-files"
                     ]
                   },
-                  "plugins/codex-harness-runtime"
+                  "plugins/codex-harness-runtime",
+                  {
+                    "group": "Codex harness runtime",
+                    "pages": [
+                      "plugins/codex-harness-runtime/recovery",
+                      "plugins/codex-harness-runtime/threads",
+                      "plugins/codex-harness-runtime/replies",
+                      "plugins/codex-harness-runtime/hooks",
+                      "plugins/codex-harness-runtime/sandbox-streaming",
+                      "plugins/codex-harness-runtime/v1-support-contract",
+                      "plugins/codex-harness-runtime/permissions",
+                      "plugins/codex-harness-runtime/queue-and-feedback",
+                      "plugins/codex-harness-runtime/compaction"
+                    ]
+                  }
                 ]
               },
               {

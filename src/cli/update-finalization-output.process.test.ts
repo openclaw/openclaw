@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { listUpdateRuns } from "../infra/update-run-ledger.js";
@@ -14,6 +14,8 @@ import {
 } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Keep source transforms reusable across fresh children; each case still owns its state.
+const childTempDir = useAutoCleanupTempDirTracker(afterAll).make("openclaw-update-child-tmp-");
 const fixture = fileURLToPath(
   new URL("./update-finalization-output.test-support.ts", import.meta.url),
 );
@@ -140,7 +142,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           XDG_CACHE_HOME: path.join(root, "xdg-cache"),
           XDG_STATE_HOME: path.join(root, "xdg-state"),
           XDG_RUNTIME_DIR: path.join(root, "xdg-runtime"),
-          TMPDIR: root,
+          TMPDIR: childTempDir,
           NODE_DISABLE_COMPILE_CACHE: "1",
           NO_COLOR: "1",
           TERM: "dumb",

@@ -4,7 +4,11 @@ import {
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
-import { CRABBOX_WORKER_PROVIDER_ID, findCrabboxBinary } from "./crabbox-worker-profile.js";
+import {
+  CRABBOX_OS_LABELS,
+  CRABBOX_WORKER_PROVIDER_ID,
+  findCrabboxBinary,
+} from "./crabbox-worker-profile.js";
 import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
@@ -66,8 +70,10 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
       const findings: HealthFinding[] = [];
       for (const [profileId, profile] of profiles) {
         const settings = readRecord(profile.settings);
-        const wsl2 = nonEmptyString(settings?.target) === "windows/wsl2";
-        const minimumVersion = wsl2 ? doctorRuntime.CRABBOX_WSL2_MIN_VERSION : "0.41.1";
+        const target = nonEmptyString(settings?.target);
+        const nonLinux = target === "windows/wsl2" || target === "macos";
+        const targetLabel = nonLinux ? CRABBOX_OS_LABELS[target] : undefined;
+        const minimumVersion = nonLinux ? doctorRuntime.CRABBOX_NON_LINUX_MIN_VERSION : "0.41.1";
         const explicitBinary = nonEmptyString(settings?.binary);
         const binary = findCrabboxBinary({
           ...(explicitBinary ? { explicit: explicitBinary } : {}),
@@ -97,14 +103,14 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
         if (
           result.status !== "indeterminate" &&
           (result.status === "outdated" ||
-            (wsl2 && !doctorRuntime.supportsCrabboxWsl2(result.version)))
+            (nonLinux && !doctorRuntime.supportsCrabboxNonLinuxTargets(result.version)))
         ) {
           findings.push(
             finding({
               profileId,
               minimumVersion,
               binary,
-              message: `uses Crabbox ${result.version}, but ${wsl2 ? "Windows (WSL2) " : ""}cloud workers require Crabbox ${minimumVersion} or newer.`,
+              message: `uses Crabbox ${result.version}, but ${targetLabel ? `${targetLabel} ` : ""}cloud workers require Crabbox ${minimumVersion} or newer.`,
               fixHint: repairHint(profileId, explicitBinary, minimumVersion),
             }),
           );
@@ -114,9 +120,9 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
               profileId,
               minimumVersion,
               binary,
-              severity: wsl2 ? "warning" : "info",
+              severity: nonLinux ? "warning" : "info",
               message: `has an executable Crabbox binary, but Doctor could not determine its version: ${result.reason}.`,
-              fixHint: `Run \`${binary} --version\` and confirm it reports Crabbox ${minimumVersion} or newer${wsl2 ? " for Windows (WSL2) cloud workers" : ""}, then rerun \`openclaw doctor --json --severity-min info\`.`,
+              fixHint: `Run \`${binary} --version\` and confirm it reports Crabbox ${minimumVersion} or newer${targetLabel ? ` for ${targetLabel} cloud workers` : ""}, then rerun \`openclaw doctor --json --severity-min info\`.`,
             }),
           );
         }

@@ -136,7 +136,7 @@ if (
     loadCliDotEnv({ quiet: true });
     await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   }
-  await assertSupportedRuntime();
+  await assertSupportedRuntime(undefined, undefined, process.argv, false);
   gatewayEntryStartupTrace.mark("bootstrap");
 
   const waitingForCompileCacheRespawn = await respawnWithoutOpenClawCompileCacheIfNeeded({
@@ -178,6 +178,8 @@ if (
     }
 
     if (!(await ensureCliRespawnReady())) {
+      // Only the final child emits the diagnostic warning; parents still enforce admission.
+      await assertSupportedRuntime(undefined, undefined, process.argv);
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
         await writeCapturedCliArgumentError(parsedContainer.error);

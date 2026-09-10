@@ -562,3 +562,4 @@ openclaw config set agents.defaults.mediaModels.video.primary "qwen/wan2.6-t2v"
 - [Tools overview](/tools)
 - [Vydra](/providers/vydra)
 - [xAI](/providers/xai)
+- [Media overview](/tools/media-overview) - how the media tools fit together
