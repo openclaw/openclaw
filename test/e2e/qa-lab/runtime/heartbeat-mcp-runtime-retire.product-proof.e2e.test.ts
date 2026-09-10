@@ -26,7 +26,8 @@ import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const RESPONSE_TEXT = "HEARTBEAT_OK";
 const HEARTBEAT_RUNS = 3;
-const SETTLE_MS = 5_000;
+// Bounded wait for post-run process state; a matching sample returns at once.
+const SETTLE_TIMEOUT_MS = 30_000;
 const TEST_TIMEOUT_MS = 600_000;
 const VARIANT =
   process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF_VARIANT === "main" ? "main" : "fixed";
@@ -54,7 +55,8 @@ type CronJob = {
   payload: { kind: string };
 };
 type CronRunEntry = { error?: string; runId?: string; status?: string };
-type ProofCount = { stage: string; count: number; pids: number[]; at: string };
+type ProbeCount = { count: number; pids: number[] };
+type ProofCount = ProbeCount & { stage: string; at: string };
 
 function writeTextResponse(response: ServerResponse, text: string): void {
   const message = {
@@ -190,7 +192,7 @@ async function writeMcpProbeScript(repoRoot: string, marker: string) {
 }
 
 /** Counts live processes whose cmdline carries the probe marker (pgrep excludes itself). */
-async function countProbeProcesses(marker: string): Promise<{ count: number; pids: number[] }> {
+async function countProbeProcesses(marker: string): Promise<ProbeCount> {
   const pattern = `[${marker[0]}]${marker.slice(1)}`;
   try {
     const { stdout } = await execFileAsync("pgrep", ["-f", pattern]);
@@ -254,12 +256,38 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
         cleanups.push(() => provider.stop());
 
         const counts: ProofCount[] = [];
-        const record = async (stage: string) => {
-          const probe = await countProbeProcesses(marker);
-          const entry = { stage, ...probe, at: new Date().toISOString() };
+        const record = async (stage: string, probe?: ProbeCount) => {
+          const entry = {
+            stage,
+            ...(probe ?? (await countProbeProcesses(marker))),
+            at: new Date().toISOString(),
+          };
           counts.push(entry);
           console.log(JSON.stringify({ phase: "hb-mcp-count", variant: LABEL, ...entry }));
           return entry;
+        };
+        // Run settlement is not a process-closure barrier: the agent cleanup
+        // step can return on its reporting timeout while the child is still
+        // tearing down. Poll for the expected state instead of sampling once
+        // after a fixed delay; the deadline sample is recorded as-is so the
+        // assertions below judge whatever state the wait left behind.
+        const settle = async (stage: string, isExpected: (probe: ProbeCount) => boolean) => {
+          const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+          let probe = await countProbeProcesses(marker);
+          while (!isExpected(probe) && Date.now() < deadline) {
+            await sleep(100);
+            probe = await countProbeProcesses(marker);
+          }
+          return record(stage, probe);
+        };
+        // The shared control keeps its first child for every run; the fixed
+        // isolated build retires it; the main baseline keeps one child per run.
+        let sharedPid: number | undefined;
+        const expectedAfterRun = (run: number) => (probe: ProbeCount) => {
+          if (SESSION_MODE === "shared") {
+            return probe.pids.length === 1 && probe.pids[0] === sharedPid;
+          }
+          return probe.count === (VARIANT === "fixed" ? 0 : run);
         };
 
         await record("before-gateway-start");
@@ -392,6 +420,7 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
               await sleep(100);
             }
           }
+          sharedPid ??= peak.pids[0];
           counts.push({
             stage: `during-heartbeat-${run}-peak`,
             ...peak,
@@ -409,8 +438,7 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
           console.log(JSON.stringify({ phase: "hb-mcp-heartbeat", variant: LABEL, ...status }));
           expect(status.status).toBe("ok");
           expect(status.providerRequests).toBeGreaterThan(0);
-          await sleep(SETTLE_MS);
-          await record(`after-heartbeat-${run}`);
+          await settle(`after-heartbeat-${run}`, expectedAfterRun(run));
         }
 
         const logs = await readLogFiles(gateway);
@@ -445,8 +473,7 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
         const gatewayVersion = `${packageVersion ?? "unknown"}@${gitHead}`;
 
         await stopQaGatewayFixture(gatewayOwner);
-        await sleep(1_000);
-        await record("after-gateway-stop");
+        await settle("after-gateway-stop", (probe) => probe.count === 0);
 
         const proof = {
           variant: LABEL,
@@ -487,7 +514,6 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
         }
         if (SESSION_MODE === "shared") {
           // One persistent runtime serves every shared run: same child, never retired mid-life.
-          const sharedPid = peaks[0]?.pids[0];
           expect(sharedPid).toBeDefined();
           for (const entry of [...peaks, ...afterRuns]) {
             expect(entry.pids, `${entry.stage} should reuse the shared MCP child`).toEqual([
