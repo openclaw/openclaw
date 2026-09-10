@@ -5,25 +5,21 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
+import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import * as handles from "../state/openclaw-state-db-handle.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import * as sqlite from "./node-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "./update-checkpoint.js";
 import { hasManagedUpdateRecoveryRecord } from "./update-managed-service-recovery-presence.js";
-import { createUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
 import {
-  acceptUpdateRecoveryHandoff,
-  beginUpdateRecovery,
-  claimUpdateRecovery,
-  bindUpdateRecoveryCheckpoint,
-  recordUpdateRecoveryIntent,
-  loadUpdateRecovery,
-  prepareUpdateRecoveryHandoff,
-} from "./update-run-recovery.js";
+  createRetainedUpdateRecovery,
+  storeRetainedUpdateRecovery,
+} from "./update-retained-recovery.test-support.js";
+import { createUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -32,7 +28,6 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 // These tests own every writer in their disposable state roots.
-const fence = { assertCurrent() {} };
 function source() {
   const root = dirs.make("openclaw-handoff-before-migration-");
   const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
@@ -44,11 +39,9 @@ function source() {
     buildId: "old",
   };
   const to = { ...from, root: path.join(root, "candidate"), version: "2.0.0", buildId: "new" };
-  const prepared = prepareUpdateRecoveryHandoff(
-    beginUpdateRecovery({ runId: run.runId, from, to }, fence, options),
-    fence,
-    options,
-  );
+  const record = createRetainedUpdateRecovery({ runId: run.runId, from, to }, options);
+  record.handoff = { handoffId: randomUUID(), state: "prepared" };
+  storeRetainedUpdateRecovery(record, options);
   const pathname = openOpenClawStateDatabase(options).path;
   closeOpenClawStateDatabaseForTest();
   const legacy = openNodeSqliteDatabase(pathname);
@@ -64,7 +57,7 @@ function source() {
   } finally {
     legacy.close();
   }
-  return { root, options, run, to, prepared, pathname };
+  return { root, options, run, to, record, pathname };
 }
 function shape(pathname: string) {
   const db = openNodeSqliteDatabase(pathname, { readOnly: true });
@@ -80,151 +73,12 @@ function shape(pathname: string) {
     db.close();
   }
 }
-it("accepts the exact handoff without migrating the previous runtime's state", () => {
-  const f = source();
-  const before = shape(f.pathname);
-  const accepted = acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options);
-  closeOpenClawStateDatabaseForTest();
-  expect(shape(f.pathname)).toEqual(before);
-  expect(accepted.handoff?.state).toBe("accepted");
-  expect(accepted.claimId).not.toBe(f.prepared.record.claimId);
-  expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(accepted);
-  expect(() => acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options)).toThrow();
-  expect(shape(f.pathname)).toEqual(before);
-});
-it("prepares another candidate handoff without migrating an owned previous schema", () => {
-  const f = source();
-  const accepted = acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options);
-  const before = shape(f.pathname);
-  const next = prepareUpdateRecoveryHandoff(accepted, fence, f.options);
-  closeOpenClawStateDatabaseForTest();
-  expect(shape(f.pathname)).toEqual(before);
-  expect(next.record.handoff?.state).toBe("prepared");
-  expect(next.record.claimId).not.toBe(accepted.claimId);
-  expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(next.record);
-  expect(() => prepareUpdateRecoveryHandoff(accepted, fence, f.options)).toThrow();
-  expect(acceptUpdateRecoveryHandoff(next.handoff, f.to, fence, f.options).handoff?.state).toBe(
-    "accepted",
-  );
-  expect(shape(f.pathname)).toEqual(before);
-});
-it("records candidate mutation intent before any schema migration", async () => {
-  const f = source();
-  let record = acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options);
-  const configPath = path.join(f.root, "openclaw.json");
-  fs.writeFileSync(configPath, "{}");
-  const access = {
-    artifactRoot: path.join(f.root, "artifacts"),
-    binding: {
-      runId: record.runId,
-      stateDir: f.root,
-      configPath,
-      fromRuntime: {
-        root: record.from.root,
-        nodePath: record.from.nodePath,
-        version: record.from.version,
-      },
-    },
-  };
-  const ref = await captureUpdateCheckpoint({
-    ...access,
-    assertQuiescent: () => fence.assertCurrent(),
-    resources: [{ sourcePath: configPath, kind: "config", restore: "replace" }],
-    exclusions: [],
-  });
-  const checkpoint = await reopenUpdateCheckpoint(ref, access);
-  record = bindUpdateRecoveryCheckpoint(
-    record,
-    { ref: checkpoint.ref, binding: checkpoint.manifest.binding },
-    fence,
-    f.options,
-  );
-  closeOpenClawStateDatabaseForTest();
-  const previous = openNodeSqliteDatabase(f.pathname);
-  try {
-    previous.exec(`PRAGMA foreign_keys=OFF;
-      DROP TABLE IF EXISTS skill_workshop_proposal_events;
-      DROP TABLE IF EXISTS skill_workshop_proposal_rollbacks;
-      DROP TABLE IF EXISTS skill_workshop_collection_reviews;
-      DROP TABLE IF EXISTS skill_workshop_proposals;
-      PRAGMA user_version=15;
-      UPDATE schema_meta SET schema_version=15 WHERE meta_key='primary';`);
-  } finally {
-    previous.close();
-  }
-  const before = shape(f.pathname);
-  const next = recordUpdateRecoveryIntent(
-    record,
-    {
-      effectId: randomUUID(),
-      kind: "runtime-mutation",
-      runtime: "candidate",
-      resourceId: "doctor",
-    },
-    fence,
-    f.options,
-  );
-  closeOpenClawStateDatabaseForTest();
-  expect(shape(f.pathname)).toEqual(before);
-  expect(loadUpdateRecovery(record.runId, f.options)?.effects).toEqual(next.effects);
-  expect(next.effects.at(-1)).toMatchObject({ kind: "runtime-mutation", state: "intent" });
-  expect(() => prepareUpdateRecoveryHandoff(next, fence, f.options)).toThrow(/outstanding effects/);
-  expect(shape(f.pathname)).toEqual(before);
-});
-it("refuses candidate writes before checkpoint handoff without migrating state", () => {
-  const f = source();
-  const record = acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options);
-  const before = shape(f.pathname);
-  expect(() =>
-    recordUpdateRecoveryIntent(
-      record,
-      {
-        effectId: randomUUID(),
-        kind: "runtime-mutation",
-        runtime: "candidate",
-        resourceId: "doctor",
-      },
-      fence,
-      f.options,
-    ),
-  ).toThrow(/checkpoint handoff/);
-  expect(shape(f.pathname)).toEqual(before);
-  expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
-});
-it.each(["claim", "runtime", "fence"])(
-  "refuses %s mismatch without schema or record mutation",
-  (mismatch) => {
-    const f = source();
-    const before = shape(f.pathname);
-    expect(() =>
-      acceptUpdateRecoveryHandoff(
-        mismatch === "claim"
-          ? { ...f.prepared.handoff, claimId: randomUUID() }
-          : f.prepared.handoff,
-        mismatch === "runtime" ? { ...f.to, buildId: "different" } : f.to,
-        mismatch === "fence"
-          ? {
-              assertCurrent() {
-                throw new Error("owner lost");
-              },
-            }
-          : fence,
-        f.options,
-      ),
-    ).toThrow();
-    closeOpenClawStateDatabaseForTest();
-    expect(shape(f.pathname)).toEqual(before);
-    expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.prepared.record);
-  },
-);
-it("refuses acceptance while another owner excludes the physical state file", () => {
+it("refuses existing-state writes while another owner excludes the physical state file", () => {
   const f = source();
   const before = fs.readFileSync(f.pathname);
   const held = acquireOpenClawStateDatabaseFileExclusion(f.pathname);
   try {
-    expect(() => acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options)).toThrow(
-      /state-handles/,
-    );
+    expect(() => probeExistingWriter(f)).toThrow(/state-handles/);
     expect(fs.readFileSync(f.pathname)).toEqual(before);
   } finally {
     held.release();
@@ -234,12 +88,12 @@ it("refuses acceptance while another owner excludes the physical state file", ()
 it("does not create a canonical database when a prepared handoff loses its source", () => {
   const f = source();
   fs.renameSync(f.pathname, f.pathname + ".retained");
-  expect(() => acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options)).toThrow();
+  expect(() => probeExistingWriter(f)).toThrow();
   expect(fs.existsSync(f.pathname)).toBe(false);
   expect(shape(f.pathname + ".retained").version).toEqual({ user_version: 15 });
 });
 it.each(["future", "metadata", "trigger"])(
-  "refuses %s state without consuming a prepared handoff",
+  "refuses %s state without changing a retained handoff",
   (scenario) => {
     const f = source();
     const raw = openNodeSqliteDatabase(f.pathname);
@@ -259,7 +113,7 @@ it.each(["future", "metadata", "trigger"])(
       raw.close();
     }
     const before = shape(f.pathname);
-    expect(() => acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options)).toThrow();
+    expect(() => probeExistingWriter(f)).toThrow();
     expect(shape(f.pathname)).toEqual(before);
     const read = openNodeSqliteDatabase(f.pathname, { readOnly: true });
     try {
@@ -270,33 +124,12 @@ it.each(["future", "metadata", "trigger"])(
         .get();
       // Match the exact retained row without opening it through a schema-mutating runtime.
       expect(row).toBeDefined();
-      expect(JSON.parse(String(row?.value_json))).toEqual(f.prepared.record);
+      expect(JSON.parse(String(row?.value_json))).toEqual(f.record);
     } finally {
       read.close();
     }
   },
 );
-it("rolls back acceptance when live ownership is lost after its write", () => {
-  const f = source();
-  const before = shape(f.pathname);
-  let assertions = 0;
-  expect(() =>
-    acceptUpdateRecoveryHandoff(
-      f.prepared.handoff,
-      f.to,
-      {
-        assertCurrent() {
-          if (++assertions === 3) {
-            throw new Error("owner lost before commit");
-          }
-        },
-      },
-      f.options,
-    ),
-  ).toThrow("owner lost before commit");
-  expect(shape(f.pathname)).toEqual(before);
-  expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.prepared.record);
-});
 
 it("does not recreate canonical state displaced immediately before the ownership probe", () => {
   const f = source();
@@ -315,7 +148,7 @@ it("does not recreate canonical state displaced immediately before the ownership
     return open(location, options);
   });
   try {
-    expect(() => acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options)).toThrow();
+    expect(() => probeExistingWriter(f)).toThrow();
   } finally {
     spy.mockRestore();
   }
@@ -335,7 +168,7 @@ it("does not recreate canonical state displaced immediately before the tracked w
       return open(pathname, options);
     });
   try {
-    expect(() => acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options)).toThrow();
+    expect(() => probeExistingWriter(f)).toThrow();
   } finally {
     spy.mockRestore();
   }
@@ -398,24 +231,25 @@ it.each(["missing", "metadata", "run", "future"])(
   },
 );
 
-it.each(["claim", "ledger", "stale-claim"] as const)(
-  "preserves the restored runtime schema during %s bookkeeping",
-  (operation) => {
-    const f = source();
-    const accepted = acceptUpdateRecoveryHandoff(f.prepared.handoff, f.to, fence, f.options);
-    const before = shape(f.pathname);
-    if (operation === "claim") {
-      const next = claimUpdateRecovery(accepted, fence, f.options);
-      expect(next.claimKind).toBe("recovery");
-      expect(next.claimId).not.toBe(accepted.claimId);
-    } else if (operation === "ledger") {
-      expect(recordUpdateRunPhase(f.run.runId, "verifying", {}, f.options).phase).toBe("verifying");
-    } else {
-      expect(() =>
-        claimUpdateRecovery({ ...accepted, revision: accepted.revision + 1 }, fence, f.options),
-      ).toThrow();
-    }
-    closeOpenClawStateDatabaseForTest();
-    expect(shape(f.pathname)).toEqual(before);
-  },
-);
+function probeExistingWriter(f: ReturnType<typeof source>) {
+  return runExistingOpenClawStateWriteTransaction(() => undefined, f.options, {
+    schemaSql: ["schema_meta", "config_machine_state", "update_runs"]
+      .map((table) => {
+        const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
+        const marker = ") STRICT;";
+        return OPENCLAW_STATE_SCHEMA_SQL.slice(
+          start,
+          OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start) + marker.length,
+        );
+      })
+      .join("\n"),
+    operationLabel: "retained-test-owner",
+  });
+}
+it("preserves the previous runtime schema during ledger bookkeeping", () => {
+  const f = source();
+  const before = shape(f.pathname);
+  expect(recordUpdateRunPhase(f.run.runId, "verifying", {}, f.options).phase).toBe("verifying");
+  closeOpenClawStateDatabaseForTest();
+  expect(shape(f.pathname)).toEqual(before);
+});

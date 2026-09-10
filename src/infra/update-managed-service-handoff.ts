@@ -48,10 +48,6 @@ import {
 } from "./update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
-import type {
-  ManagedServiceNativeHandoff,
-  ManagedServiceNativePreparation,
-} from "./update-managed-service-native-control.js";
 import { resolveManagedUpdateRequester } from "./update-requester-authority.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
@@ -62,7 +58,6 @@ const PARENT_EXIT_SHUTDOWN_RESERVE_MS = 30_000;
 const HANDOFF_READY_TIMEOUT_MS = 30_000;
 const HANDOFF_READY_MARKER = "OPENCLAW_UPDATE_HANDOFF_READY\n";
 const HANDOFF_BUSY_MARKER = "HANDOFF_BUSY ";
-const HANDOFF_ACTIVATION_MARKER = "park\n";
 const HANDOFF_NOTICE_MARKER = "before-park\n";
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
@@ -2627,51 +2622,6 @@ export async function transferManagedServiceUpdateHandoff(
   child.unref();
   child.stdin.unref();
   child.stdout.unref();
-  return true;
-}
-
-/** Internal helper/orchestrator pipe protocol; standalone updates own their service stop. */
-export async function activateManagedServiceUpdateHandoff(params?: {
-  native: ManagedServiceNativePreparation;
-  admission: ManagedServiceNativeHandoff;
-}): Promise<boolean> {
-  if (params) {
-    await params.admission.activate(params.native);
-    return true;
-  }
-  if (process.env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1") {
-    return false;
-  }
-  await new Promise<void>((resolve, reject) => {
-    let buffered = "";
-    const cleanup = () => {
-      process.stdin.off("data", onData).off("end", onEnd).off("error", onError);
-      process.stdin.pause();
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onEnd = () => onError(new Error("managed update activation control closed"));
-    const onData = (chunk: Buffer) => {
-      buffered += chunk.toString();
-      if (!buffered.includes("\n") && buffered.length < 64) {
-        return;
-      }
-      cleanup();
-      if (buffered === "parked\n") {
-        resolve();
-      } else {
-        reject(new Error("managed update activation was not confirmed"));
-      }
-    };
-    process.stdin.on("data", onData).once("end", onEnd).once("error", onError);
-    process.stdout.write(HANDOFF_ACTIVATION_MARKER, (error) => {
-      if (error) {
-        onError(error);
-      }
-    });
-  });
   return true;
 }
 

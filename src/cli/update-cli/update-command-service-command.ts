@@ -38,7 +38,7 @@ function formatCommandFailure(stdout: string, stderr: string): string {
 export async function runUpdatedInstallGatewayCommand(
   params: {
     result: { root?: string; mode?: UpdateRunResult["mode"] };
-    opts: Pick<UpdateCommandOptions, "json">;
+    opts: Pick<UpdateCommandOptions, "json" | "run">;
     invocationEnv: NodeJS.ProcessEnv;
     serviceEnv?: NodeJS.ProcessEnv;
     serviceInstallEnv?: NodeJS.ProcessEnv | null;
@@ -52,9 +52,20 @@ export async function runUpdatedInstallGatewayCommand(
   action: "install" | "restart" | "stop",
   preserveDefinition = false,
 ): Promise<"accepted" | "unverified"> {
-  params.signal?.throwIfAborted();
+  const run = params.opts.run;
+  const executor = run?.executorFence;
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    if (params.opts.run !== run || run?.executorFence !== executor) {
+      throw new Error("Native command lost its original update executor.");
+    }
+    executor?.assertCurrent();
+    params.assertCurrent?.();
+  };
+  assertCurrent();
   const installing = action === "install";
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
+  assertCurrent();
   if (!entrypoint) {
     if (
       !params.serviceLoadBoundary &&
@@ -62,10 +73,10 @@ export async function runUpdatedInstallGatewayCommand(
       !isPackageManagerUpdateMode(params.result.mode ?? "unknown")
     ) {
       params.signal?.throwIfAborted();
-      params.assertCurrent?.();
+      assertCurrent();
       await runDaemonInstall({ force: true, json: params.opts.json || undefined });
       params.signal?.throwIfAborted();
-      params.assertCurrent?.();
+      assertCurrent();
       return "unverified";
     }
     throw new Error(
@@ -89,7 +100,7 @@ export async function runUpdatedInstallGatewayCommand(
     invocationCwd: params.invocationCwd,
   });
   params.signal?.throwIfAborted();
-  params.assertCurrent?.();
+  assertCurrent();
   const boundary = params.serviceLoadBoundary;
   if (installing && boundary) {
     return await runGatewayInstallWithLoadBoundary({
@@ -101,7 +112,7 @@ export async function runUpdatedInstallGatewayCommand(
         ...boundary,
         // The handoff adds an executor fence; it must not replace the repair owner.
         assertCurrent: () => {
-          params.assertCurrent?.();
+          assertCurrent();
           boundary.assertCurrent();
         },
       },
@@ -114,10 +125,12 @@ export async function runUpdatedInstallGatewayCommand(
     env: commandEnv,
     // Restart owns migration-aware readiness; only refresh has the fixed watchdog.
     timeoutMs: installing ? SERVICE_REFRESH_TIMEOUT_MS : params.timeoutMs,
-    ...(params.signal ? { signal: params.signal, killProcessTree: true } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
+    killProcessTree: true,
+    requireProcessTreeExtinction: true,
   });
   params.signal?.throwIfAborted();
-  params.assertCurrent?.();
+  assertCurrent();
   const exited =
     res.termination === "exit" &&
     res.signal === null &&

@@ -1,29 +1,13 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { inspectCheckpointFile } from "../../infra/update-checkpoint-files.js";
-import { reopenUpdateCheckpointRestorePlan } from "../../infra/update-checkpoint-restore.js";
-import { buildCheckpointReaderRuntime } from "../../infra/update-checkpoint-runtime.test-support.js";
-import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "../../infra/update-checkpoint.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { createUpdateRecoveryCheckpointAdapter } from "../../infra/update-run-recovery-checkpoint.js";
-import {
-  beginUpdateRecovery,
-  bindUpdateRecoveryCheckpoint,
-  bindUpdateRecoveryAfterImage,
-  recordUpdateRecoveryIntent,
-  recordUpdateRecoveryObservation,
-  recordUpdateRecoveryFailure,
-} from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
-import { acquireOpenClawStateDatabaseFileExclusion } from "../../state/openclaw-state-db-cache.js";
-import { assertCurrentStateRuntimeSchema } from "../../state/openclaw-state-db-fast-path.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import * as updateShared from "./shared.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
@@ -32,7 +16,6 @@ import {
   finishSuccessfulPackageSwitch,
   taskRecovery,
 } from "./update-command-post-update.test-support.js";
-import type { UpdateCommandRecovery } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
@@ -45,181 +28,22 @@ afterEach(() => {
 
 async function fixture() {
   const root = fs.realpathSync(dirs.make("pending-finalizer-"));
-  const env = { HOME: root, OPENCLAW_STATE_DIR: root };
-  const options = { env };
-  const file = path.join(root, "state", "openclaw.sqlite");
-  const configPath = path.join(root, "openclaw.json");
-  const runtime = { ...(await buildCheckpointReaderRuntime(root)).runtime, buildId: null };
-  const run = { runId: createUpdateRun({ trigger: "cli" }, options).runId, env };
-  let released = false;
-  const prepared = await withOpenClawStateLease(
-    {
-      scope: "core:test-pending-finalizer",
-      key: run.runId,
-      database: { scope: "shared", options },
-      leaseMs: 60_000,
-      waitMs: 0,
-      heartbeat: "worker",
-    },
-    async (lease) => {
-      const fence = {
-        assertCurrent() {
-          if (released) {
-            throw new Error("fixture owner released; replay remains pending");
-          }
-          lease.assertOwned();
-        },
-      };
-      let record = beginUpdateRecovery(
-        { runId: run.runId, from: runtime, to: runtime },
-        fence,
-        options,
-      );
-      const access = {
-        artifactRoot: path.join(root, "artifacts"),
-        binding: {
-          runId: run.runId,
-          stateDir: root,
-          configPath,
-          fromRuntime: { root: runtime.root, nodePath: runtime.nodePath, version: runtime.version },
-        },
-      };
-      const capture = async (content: string) => {
-        fs.writeFileSync(configPath, content);
-        const state = await inspectCheckpointFile(configPath);
-        if (!lease.withDatabaseFileExclusion) {
-          throw new Error("capture owner unavailable");
-        }
-        const ref = await lease.withDatabaseFileExclusion((assertCurrent) =>
-          captureUpdateCheckpoint({
-            ...access,
-            assertQuiescent: assertCurrent,
-            exclusions: [],
-            expectedSources: [{ sourcePath: configPath, state }],
-            resources: [
-              { sourcePath: file, kind: "sqlite", restore: "replace" },
-              { sourcePath: configPath, kind: "config", restore: "replace" },
-            ],
-          }),
-        );
-        return { ref, binding: (await reopenUpdateCheckpoint(ref, access)).manifest.binding };
-      };
-      const before = await capture("original");
-      record = bindUpdateRecoveryCheckpoint(record, before, fence, options);
-      const effectId = randomUUID();
-      record = recordUpdateRecoveryIntent(
-        record,
-        { effectId, kind: "package-activation", resourceId: "fixture", runtime: "candidate" },
-        fence,
-        options,
-      );
-      record = recordUpdateRecoveryObservation(
-        record,
-        { effectId, observedIdentity: "candidate" },
-        fence,
-        options,
-      );
-      const after = await capture("candidate");
-      record = bindUpdateRecoveryAfterImage(
-        record,
-        { checkpointRef: before.ref, afterUpdate: after, effectIds: [effectId] },
-        fence,
-        options,
-      );
-      record = recordUpdateRecoveryFailure(
-        record,
-        { code: "candidate-failed", effectId: null },
-        fence,
-        options,
-      );
-      record = recordUpdateRecoveryIntent(
-        record,
-        {
-          effectId: randomUUID(),
-          kind: "checkpoint-restore",
-          resourceId: before.ref.checkpointId,
-          runtime: "previous",
-        },
-        fence,
-        options,
-      );
-      const publish = lease.withDatabaseFilePublication;
-      if (!publish) {
-        throw new Error("fixture publication capability absent");
-      }
-      return { record, access, fence, publish };
-    },
-  );
-  released = true;
-  closeOpenClawStateDatabaseForTest();
-  const validateStagedDatabase = (
-    db: Parameters<typeof assertCurrentStateRuntimeSchema>[0],
-  ): undefined => {
-    assertCurrentStateRuntimeSchema(db, file);
-  };
-  const assertMatchingRuntime = (): undefined => {
-    throw new Error("prior-runtime reopen is not authorized by this refusal fixture");
-  };
-  const physical = acquireOpenClawStateDatabaseFileExclusion(file);
-  let displaced: string;
-  try {
-    displaced = await physical.runWithSourceReads(async () => {
-      const adapter = createUpdateRecoveryCheckpointAdapter({
-        expected: prepared.record,
-        ...prepared.access,
-        database: options,
-        fence: { assertCurrent: physical.assertCurrent },
-        validateStagedDatabase,
-        assertMatchingRuntime,
-      });
-      const plan = await adapter.prepare();
-      if (plan.status !== "ready") {
-        throw new Error("fixture plan unavailable");
-      }
-      await adapter.seal(plan.planRef);
-      prepared.record = adapter.record;
-      const reopened = await reopenUpdateCheckpointRestorePlan(plan.planRef, prepared.access);
-      const shared = reopened.plan.resources.find((resource) => resource.sourcePath === file);
-      if (!shared) {
-        throw new Error("shared resource absent");
-      }
-      const target = path.join(shared.stageDirectory, "displaced");
-      // Simulate interruption at the actual sealed resource's displacement boundary.
-      fs.renameSync(file, target);
-      return target;
-    });
-  } finally {
-    physical.release();
-  }
-  let entries = 0;
-  const recovery: UpdateCommandRecovery = {
+  const retained = createRetainedCheckpointFixture(root);
+  const { env, options, file, run, runtime, record, displaced } = retained;
+  retained.displace();
+  const recovery = {
     options,
-    fence: prepared.fence,
-    getRecord: () => prepared.record,
-    onRecord: (record) => {
-      prepared.record = record;
-    },
-    assertReady: () => {
-      throw new Error("serving proof unavailable");
-    },
-    checkpointReplay: {
-      // This is the actual lease capability, intentionally expired when invoked
-      // by the refusal test. It must not reopen the missing canonical path.
-      withDatabaseFilePublication(operation) {
-        entries++;
-        return prepared.publish(operation);
+    fence: {
+      assertCurrent() {
+        throw new Error("prior owner released");
       },
-      access: {
-        artifactRoot: prepared.access.artifactRoot,
-        validateStagedDatabase,
-        assertMatchingRuntime,
-        prepareCanonicalWrite: async () => {
-          throw new Error("canonical writer unavailable");
-        },
-        closeCanonicalDatabase: async () => {
-          closeOpenClawStateDatabaseForTest();
-        },
-      },
+    },
+    getRecord: () => record,
+    onRecord() {
+      throw new Error("retained record must not change");
+    },
+    assertReady() {
+      throw new Error("no readiness authority");
     },
   };
   const opts: UpdateCommandOptions = { run, recovery };
@@ -237,7 +61,7 @@ async function fixture() {
     windows,
     rollback,
     complete,
-    entries: () => entries,
+    entries: () => 0,
     invoke: (previousInstallRoot = runtime.root) =>
       finishSuccessfulPackageSwitch(
         { packageRoot: runtime.root, run },
@@ -283,7 +107,7 @@ describe("pending recovery finalizer", () => {
       withOwnedManagedUpdateEnv({ ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: config }, () =>
         updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
       ),
-    ).rejects.toThrow("publication requires reconciliation");
+    ).rejects.toThrow("full-state recovery is deferred");
     expect(resolveRoot).not.toHaveBeenCalled();
     expect(fs.existsSync(f.file)).toBe(false);
     expect(fs.readFileSync(f.displaced)).toEqual(before);
@@ -310,7 +134,7 @@ describe("pending recovery finalizer", () => {
           recovery: { serviceRestartSafe: false },
         },
       });
-      expect(f.entries()).toBe(context ? 1 : 0);
+      expect(f.entries()).toBe(0);
       expect(fs.existsSync(f.file)).toBe(false);
       expect(fs.readFileSync(f.displaced)).toEqual(before);
       expect(f.rollback).not.toHaveBeenCalled();
@@ -319,7 +143,7 @@ describe("pending recovery finalizer", () => {
       expect(f.windows.complete).not.toHaveBeenCalled();
     },
   );
-  it("replays the admitted managed root rather than the original caller root", async () => {
+  it("refuses retained recovery without touching either the managed or caller root", async () => {
     const f = await fixture();
     const failure = await f.invoke(path.join(f.root, "caller-install")).then(
       () => undefined,
@@ -329,7 +153,7 @@ describe("pending recovery finalizer", () => {
       name: "UpdateCommandPendingRecoveryFailure",
       result: { reason: "candidate-failed" },
     });
-    expect(f.entries()).toBe(1);
+    expect(f.entries()).toBe(0);
     expect(fs.existsSync(f.file)).toBe(false);
     expect(f.rollback).not.toHaveBeenCalled();
     expect(f.windows.restore).not.toHaveBeenCalled();

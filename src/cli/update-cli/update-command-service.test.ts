@@ -1,14 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
-import {
-  beginUpdateRecovery,
-  claimUpdateRecovery,
-  recordUpdateRecoveryFailure,
-  recordUpdateRecoveryIntent,
-  recordUpdateRecoveryObservation,
-  loadUpdateRecovery,
-} from "../../infra/update-run-recovery.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -92,23 +86,16 @@ describe("maybeRestartService", () => {
   it.each([
     "current",
     "revoked",
-    "reclaimed",
-    "advanced",
-    "ack-advanced",
     "aborted",
-    "boot-changed",
-    "stopped",
-    "missing-boot",
-    "final-revoked",
     "initial-stopped",
     "initial-stopped-reachable",
     "initial-plugin-error",
     "initial-channel-error",
     "initial-readyz-error",
   ] as const)(
-    "persists private readiness proof only for the original recovery record: %s",
+    "accepts readiness only for the original live executor and healthy service: %s",
     async (change) => {
-      const home = tempDirs.make("readiness-recovery-consumer-");
+      const home = tempDirs.make("readiness-live-executor-");
       const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
       const admitted = createUpdateRun({ trigger: "cli" }, options);
       let current = true;
@@ -119,68 +106,6 @@ describe("maybeRestartService", () => {
           }
         },
       };
-      const runtime = {
-        root: home,
-        nodePath: process.execPath,
-        version: gateway.version,
-        buildId: gateway.buildId,
-      };
-      let record = beginUpdateRecovery(
-        { runId: admitted.runId, from: runtime, to: runtime },
-        fence,
-        options,
-      );
-      record = recordUpdateRecoveryIntent(
-        record,
-        {
-          effectId: crypto.randomUUID(),
-          kind: "service-restart",
-          resourceId: "gateway",
-          runtime: "candidate",
-        },
-        fence,
-        options,
-      );
-      record = recordUpdateRecoveryObservation(
-        record,
-        { effectId: record.effects.at(-1)!.effectId, observedIdentity: gateway.bootId },
-        fence,
-        options,
-      );
-      const proof = {
-        kind: "readiness",
-        runId: admitted.runId,
-        transactionId: record.transactionId,
-        claimId: record.claimId,
-        revision: record.revision,
-        effectId: record.effects.at(-1)!.effectId,
-        runtime: "candidate",
-        gateway,
-        checks: {
-          serviceRunning: true,
-          pluginsReady: true,
-          channelsReady: true,
-          settled: true,
-          readyz: true,
-        },
-      };
-      if (["boot-changed", "stopped", "missing-boot", "final-revoked"].includes(change)) {
-        mocks.inspectGatewayRestart.mockImplementationOnce(async () => {
-          if (change === "final-revoked") {
-            current = false;
-          }
-          return {
-            ...(await mocks.waitForGatewayHealthyRestart()),
-            gatewayBootId:
-              change === "boot-changed"
-                ? "new-boot"
-                : change === "missing-boot"
-                  ? undefined
-                  : gateway.bootId,
-            runtime: { status: change === "stopped" ? "stopped" : "running", pid: 8000 },
-          };
-        });
-      }
       const initialFailure = change.startsWith("initial-");
       if (initialFailure) {
         const health = await mocks.waitForGatewayHealthyRestart();
@@ -205,62 +130,27 @@ describe("maybeRestartService", () => {
           controller.abort();
         }
         current = change !== "revoked";
-        if (change === "reclaimed") {
-          record = claimUpdateRecovery(record, fence, options);
-        } else if (change === "advanced") {
-          record = recordUpdateRecoveryFailure(
-            record,
-            { code: "execution-interrupted", effectId: null },
-            fence,
-            options,
-          );
-        }
         return { healthz: 200, readyz: change === "initial-readyz-error" ? 503 : 200 };
       });
-      const onVerified = vi.fn(() => {
-        expect(loadUpdateRecovery(admitted.runId, options)?.verification?.receipt).toMatchObject(
-          proof,
-        );
-        expect(
-          loadUpdateRecovery(admitted.runId, options)?.verification?.receipt,
-        ).not.toHaveProperty("transcript");
-      });
+      const onVerified = vi.fn();
       const opts = {
         json: true,
-        run: { runId: admitted.runId, env: options.env },
-        recovery: {
-          getRecord: () => record,
-          onRecord: (next: typeof record) => {
-            record = next;
-            if (change === "ack-advanced") {
-              record = recordUpdateRecoveryFailure(
-                record,
-                { code: "execution-interrupted", effectId: null },
-                fence,
-                options,
-              );
-            }
-          },
-          fence,
-          options,
-          assertReady: () => fence.assertCurrent(),
-        },
+        run: { runId: admitted.runId, env: options.env, executorFence: fence },
       };
       const verification = verifyUpdatedGateway({
         opts,
         signal: controller.signal,
+        requireRunningService: true,
         result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
         serviceEnv: options.env,
         gatewayPort: 18789,
-        expectedVersion: runtime.version,
-        expectedBuildId: runtime.buildId,
+        expectedVersion: gateway.version,
+        expectedBuildId: gateway.buildId,
         onVerified,
       });
       if (initialFailure) {
         await expect(verification).resolves.toMatchObject({ ok: false });
-        expect(mocks.inspectGatewayRestart).not.toHaveBeenCalled();
         expect(onVerified).not.toHaveBeenCalled();
-        expect(loadUpdateRecovery(admitted.runId, options)?.verification).toBeNull();
         expect(recordUpdateRunStep).toHaveBeenCalledWith(
           admitted.runId,
           expect.objectContaining({ step: "gateway verification", status: "failed" }),
@@ -268,17 +158,9 @@ describe("maybeRestartService", () => {
         );
       } else if (change !== "current") {
         await expect(verification).rejects.toMatchObject({
-          name:
-            change === "aborted"
-              ? "AbortError"
-              : change === "revoked" || change === "final-revoked"
-                ? "Error"
-                : ["boot-changed", "stopped", "missing-boot"].includes(change)
-                  ? "UpdateCommandRecoveryPendingError"
-                  : "UpdateRecoveryConflictError",
+          name: change === "aborted" ? "AbortError" : "Error",
         });
         expect(onVerified).not.toHaveBeenCalled();
-        expect(loadUpdateRecovery(admitted.runId, options)?.verification).toBeNull();
         expect(recordUpdateRunStep).not.toHaveBeenCalledWith(
           admitted.runId,
           expect.objectContaining({ step: "gateway verification", status: "completed" }),
@@ -288,8 +170,43 @@ describe("maybeRestartService", () => {
         await expect(verification).resolves.toMatchObject({ ok: true });
         expect(onVerified).toHaveBeenCalledOnce();
       }
+      expect(loadUpdateRecovery(admitted.runId, options)).toBeUndefined();
     },
   );
+
+  it("refuses a supplied legacy readiness context before any probe or acknowledgement", async () => {
+    const home = tempDirs.make("readiness-retained-refusal-");
+    const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
+    const admitted = createUpdateRun({ trigger: "cli" }, options);
+    const runtime = {
+      root: home,
+      nodePath: process.execPath,
+      version: gateway.version,
+      buildId: gateway.buildId,
+    };
+    const record = createRetainedUpdateRecovery(
+      { runId: admitted.runId, from: runtime, to: runtime },
+      options,
+    );
+    const onVerified = vi.fn();
+    await expect(
+      verifyUpdatedGateway({
+        opts: {
+          json: true,
+          run: { runId: admitted.runId, env: options.env },
+          recovery: { getRecord: () => record },
+        },
+        result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+        serviceEnv: options.env,
+        gatewayPort: 18789,
+        onVerified,
+      }),
+    ).rejects.toMatchObject({ name: "UpdateCommandRecoveryPendingError" });
+    expect(mocks.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+    expect(mocks.waitForGatewayHttpReadiness).not.toHaveBeenCalled();
+    expect(onVerified).not.toHaveBeenCalled();
+    expect(loadUpdateRecovery(record.runId, options)).toEqual(record);
+  });
 
   it.each(["seal refused", "target install failed", "missing entrypoint"])(
     "never falls back to restart after gated install failure: %s",

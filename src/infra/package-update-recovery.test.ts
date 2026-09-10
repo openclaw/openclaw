@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
-  reopenPackageUpdateTransaction,
+  createPackageRecoveryTransaction,
   type PackageRecoveryEffect,
   type PackageRecoveryHooks,
   type PackageTransactionDescriptor,
@@ -45,14 +45,7 @@ async function reopened(
   hooks = accepted,
 ) {
   const descriptor = recovery.descriptor();
-  return reopenPackageUpdateTransaction({
-    descriptor: JSON.stringify(descriptor),
-    expectedLiveRoot: descriptor.liveRoot,
-    expectedBinDir: descriptor.binDir,
-    expectedTransactionId: descriptor.transactionId,
-    pendingEffect: recovery.pendingEffect(),
-    hooks,
-  });
+  return observeFixtureOwner({ descriptor, pendingEffect: recovery.pendingEffect(), hooks });
 }
 
 it("preserves recovery material through rollback and finalizer completion", async () => {
@@ -119,33 +112,24 @@ it.each([false, true])(
   },
 );
 
-it.each(["changed", "missing", "wrong resource", "unknown version"] as const)(
-  "refuses %s descriptor evidence without an effect",
+it.each(["changed", "missing"] as const)(
+  "refuses %s retained package material before any effect",
   async (failure) => {
-    await withTestDir({ prefix: "openclaw-package-reopen-refusal-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-refusal-" }, async (base) => {
       const f = await retained(base);
-      const beforeEffect = vi.fn(accepted.beforeEffect);
       const descriptor = f.recovery.descriptor();
+      const beforeEffect = vi.fn(accepted.beforeEffect);
       if (failure === "changed") {
         await fs.writeFile(path.join(descriptor.backupRoot, "dist", "index.js"), "changed");
+      } else {
+        await fs.rename(descriptor.backupRoot, descriptor.backupRoot + ".preserved");
       }
-      if (failure === "missing") {
-        await fs.rename(descriptor.backupRoot, `${descriptor.backupRoot}.preserved`);
-      }
-      const result = await reopenPackageUpdateTransaction({
-        descriptor:
-          failure === "unknown version"
-            ? { ...descriptor, version: 99 }
-            : JSON.stringify(descriptor),
-        expectedLiveRoot:
-          failure === "wrong resource" ? `${descriptor.liveRoot}.other` : descriptor.liveRoot,
-        expectedTransactionId: descriptor.transactionId,
-        expectedBinDir: descriptor.binDir,
-        hooks: { ...accepted, beforeEffect },
+      const transaction = createPackageRecoveryTransaction(descriptor, {
+        ...accepted,
+        beforeEffect,
       });
-      expect(result.status).toBe(
-        failure === "changed" || failure === "wrong resource" ? "conflict" : "unavailable",
-      );
+      const result = await transaction.observe();
+      expect(result.status).toBe(failure === "changed" ? "conflict" : "unavailable");
       expect(beforeEffect).not.toHaveBeenCalled();
       await expect(
         fs.readFile(path.join(f.packageRoot, "package.json"), "utf8"),
@@ -153,6 +137,19 @@ it.each(["changed", "missing", "wrong resource", "unknown version"] as const)(
     });
   },
 );
+it("rejects an unsupported descriptor version before constructing an owner", async () => {
+  await withTestDir({ prefix: "openclaw-package-version-" }, async (base) => {
+    const f = await retained(base);
+    const beforeEffect = vi.fn(accepted.beforeEffect);
+    expect(() =>
+      createPackageRecoveryTransaction(
+        { ...f.recovery.descriptor(), version: 99 } as unknown as PackageTransactionDescriptor,
+        { ...accepted, beforeEffect },
+      ),
+    ).toThrow();
+    expect(beforeEffect).not.toHaveBeenCalled();
+  });
+});
 
 it("awaits durable descriptor preparation before service preparation and mutation", async () => {
   await withTestDir({ prefix: "openclaw-package-intent-" }, async (base) => {
@@ -244,29 +241,6 @@ it.each([
     });
   },
 );
-
-it("reports conflicting pending descriptor evidence without effects", async () => {
-  await withTestDir({ prefix: "openclaw-package-pending-conflict-" }, async (base) => {
-    const f = await retained(base);
-    const descriptor = f.recovery.descriptor();
-    const beforeEffect = vi.fn(accepted.beforeEffect);
-    const result = await reopenPackageUpdateTransaction({
-      descriptor,
-      pendingEffect: {
-        effectId: randomUUID(),
-        action: "restore",
-        descriptor: { ...descriptor, transactionId: randomUUID() },
-      },
-      expectedLiveRoot: descriptor.liveRoot,
-      expectedBinDir: descriptor.binDir,
-      expectedTransactionId: descriptor.transactionId,
-      hooks: { ...accepted, beforeEffect },
-    });
-    expect(result.status).toBe("conflict");
-    expect(beforeEffect).not.toHaveBeenCalled();
-    await expect(fs.readFile(f.launcher, "utf8")).resolves.toBe("candidate launcher\n");
-  });
-});
 
 it("reports and preserves the displaced candidate when rollback compensation also fails", async () => {
   await withTestDir({ prefix: "openclaw-package-double-rename-failure-" }, async (base) => {
@@ -630,14 +604,7 @@ it("reconciles an interrupted activation before admitting a separate restore eff
       copy.mockRestore();
     }
     const open = () =>
-      reopenPackageUpdateTransaction({
-        descriptor: saved.descriptor,
-        pendingEffect: saved.pending,
-        expectedLiveRoot: f.packageRoot,
-        expectedBinDir: path.dirname(f.launcher),
-        expectedTransactionId: hooks.transactionId,
-        hooks,
-      });
+      observeFixtureOwner({ descriptor: saved.descriptor, pendingEffect: saved.pending, hooks });
     const loaded = await open();
     if (loaded.status !== "ready") {
       throw new Error(loaded.reason);
@@ -704,3 +671,23 @@ it("reconciles an explicitly missing launcher during a pending restore", async (
     await expect(fs.readFile(f.launcher, "utf8")).resolves.toBe("old launcher\n");
   });
 });
+
+async function observeFixtureOwner(params: {
+  descriptor: PackageTransactionDescriptor | undefined;
+  hooks: PackageRecoveryHooks;
+  pendingEffect?: PackageRecoveryEffect | null;
+}) {
+  if (!params.descriptor) {
+    throw new Error("Fixture did not receive its package descriptor.");
+  }
+  const transaction = createPackageRecoveryTransaction(
+    params.descriptor,
+    params.hooks,
+    undefined,
+    params.pendingEffect ?? undefined,
+  );
+  const observed = await transaction.observe();
+  return observed.status === "verified"
+    ? { status: "ready" as const, transaction, observed }
+    : observed;
+}

@@ -42,10 +42,7 @@ import {
   type UpdateRunPhase,
   type UpdateRunStep,
 } from "./update-run-record.js";
-import {
-  isUpdateRecoveryPending,
-  type UpdateRecoveryReadinessReceipt,
-} from "./update-run-recovery-schema.js";
+import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { hasStoredUpdateRecovery, readRecoveries } from "./update-run-recovery-store.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
@@ -65,7 +62,7 @@ if (schemaStart < 0 || schemaEnd < 0) {
 const schema = OPENCLAW_STATE_SCHEMA_SQL.slice(schemaStart, schemaEnd + schemaEndMarker.length);
 const readyDatabases = new WeakSet<DatabaseSync>();
 
-/** Canonical additive history table, also used in private checkpoint copies. */
+/** Canonical additive history table. */
 export function ensureUpdateRunLedgerSchema(db: DatabaseSync): void {
   db.exec(schema); // sqlite-allow-raw -- Canonical lazy additive DDL bootstrap only.
 }
@@ -569,56 +566,54 @@ export function finishInterruptedUpdatePreview(
   );
 }
 
-/** Caller holds fresh local admission, a live executor and recovery exclusion. */
-export function finishInterruptedUpdateBeforeActivationInTransaction(
-  db: DatabaseSync,
+/** Caller holds fresh local admission and a live executor; retained recovery stays refused. */
+export function finishInterruptedUpdateBeforeActivation(
   expected: UpdateRunRecord,
+  assertCurrent: () => void,
   options: LedgerOptions,
 ): void {
   if (
-    !db.isTransaction ||
     expected.status !== "running" ||
     !["requested", "staging", "validating"].includes(expected.phase)
   ) {
     throw new Error("Update interruption requires its live pre-activation transaction");
   }
-  mutateRunInTransaction(
-    db,
-    expected.runId,
-    (record) => {
-      if (isDeepStrictEqual(record, expected)) {
-        finishUpdateRunRecord(record, { status: "failed", reason: "interrupted" });
+  // The same canonical subset previously checked by the recovery writer. No bootstrap or migration.
+  const interruptionSchema = ["schema_meta", "config_machine_state", "update_runs"]
+    .map((table) => {
+      const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
+      const marker = ") STRICT;";
+      const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+      if (start < 0 || end < 0) {
+        throw new Error("Interrupted update schema is unavailable.");
       }
-    },
-    options,
-  );
-}
-
-/** Recovery owns the real source/executor interval and commits its historical
- * preparation marker in this same existing-schema transaction. */
-export function finishAbortedUpdatePreparationInTransaction(
-  db: DatabaseSync,
-  runId: string,
-  options: LedgerOptions,
-  nativeRestored = false,
-): void {
-  if (!db.isTransaction) {
-    throw new Error("Preparation settlement requires its recovery transaction");
-  }
-  mutateRunInTransaction(
-    db,
-    runId,
-    (record) => {
+      return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length);
+    })
+    .join("\n");
+  assertCurrent();
+  runExistingOpenClawStateWriteTransaction(
+    ({ db }) => {
+      assertCurrent();
       if (
-        record.status !== "running" ||
-        (!["requested", "staging", "validating"].includes(record.phase) &&
-          !(nativeRestored && record.phase === "activating"))
+        !readRecoveries(db).some(
+          (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
+        )
       ) {
-        throw new Error("Preparation settlement requires unfinished pre-activation history");
+        mutateRunInTransaction(
+          db,
+          expected.runId,
+          (record) => {
+            if (isDeepStrictEqual(record, expected)) {
+              finishUpdateRunRecord(record, { status: "failed", reason: "interrupted" });
+            }
+          },
+          options,
+        );
       }
-      finishUpdateRunRecord(record, { status: "failed", reason: "interrupted-preparation" });
+      assertCurrent();
     },
     options,
+    { schemaSql: interruptionSchema, operationLabel: "update.interrupted" },
   );
 }
 
@@ -695,57 +690,4 @@ export function findActiveUpdateRun(
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord | undefined {
   return listUpdateRuns({ limit: 1, active: true }, options)[0];
-}
-
-/** Recovery owns the enclosing transaction: outcome, history and pair selection commit together. */
-export function finishVerifiedUpdateRunInTransaction(
-  db: DatabaseSync,
-  runId: string,
-  result: {
-    status: "succeeded" | "rolled-back";
-    receipt: UpdateRecoveryReadinessReceipt;
-    reason?: string;
-  },
-  options: LedgerOptions = {},
-): void {
-  if (!db.isTransaction) {
-    throw new Error("Verified history requires the recovery transaction");
-  }
-  mutateRunInTransaction(
-    db,
-    runId,
-    (record) => {
-      if (record.status !== "running") {
-        throw new Error("Update history already has a terminal outcome");
-      }
-      const now = Date.now();
-      for (const step of record.steps) {
-        if (step.status === "in_progress") {
-          step.status = "completed";
-          step.endedAtMs = now;
-        }
-      }
-      record.status = result.status;
-      record.phase = "finished";
-      record.reason = result.reason ?? null;
-      record.finishedAtMs = now;
-      record.confirmedAtMs = now;
-      const { gateway, checks } = result.receipt;
-      record.after = { ...record.after, version: gateway.version };
-      record.verification = {
-        ...record.verification,
-        runningVersion: gateway.version,
-        runningBuildId: gateway.buildId ?? undefined,
-        booted: true,
-        serviceRunning: checks.serviceRunning,
-        versionMatch: true,
-        settled: checks.settled,
-        readyz: checks.readyz,
-        channelsReady: checks.channelsReady,
-        // The validated receipt requires pluginsReady; earlier failures are superseded.
-        pluginErrors: [],
-      };
-    },
-    options,
-  );
 }

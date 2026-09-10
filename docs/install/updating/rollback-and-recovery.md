@@ -91,39 +91,25 @@ openclaw doctor --lint --json
 openclaw update cleanup --dry-run
 ```
 
-### Automatic checkpoint recovery
+<a id="automatic-checkpoint-recovery" />
 
-A supported npm package update of an owned, running managed Gateway retains a
-package/checkpoint pair when the validated candidate advertises the checkpoint
-continuation contract. It captures original config and service files before
-suppression, then seals the shared database, affected agent databases,
-config/includes and inventoried plugin resources while stopped under live writer
-exclusion. Workspaces and undeclared external resources are not covered.
+### Full-state recovery requires a backup
 
-Candidate Doctor, config and plugin mutations are owned and their after-images
-are recorded. On failure, recovery can restore both the retained code and matching
-state even after schema migration. It refuses conflicting operator edits, unknown
-or changed native identities, lost ownership, and inconsistent publication
-artifacts instead of overwriting them. Sealed interrupted publication can be
-reconciled by the next `openclaw update` invocation before ordinary update writes.
-Other unresolved recovery remains pending with diagnostics.
+`openclaw update` does not create or replay a full-state checkpoint. It can
+restore a retained package only under the compatibility checks below. It cannot
+reverse a database migration by replacing the package. Use a verified pre-update
+backup with its matching release when migration has made state incompatible.
 
-Success or rollback requires a fresh running-service observation, runtime/boot-bound
-Gateway handshake, and HTTP 200 readiness, not inference or a saved receipt. A
-successful rollback preserves the original failure and returns a nonzero exit.
-The current pair is retained until a later verified serving update supersedes it.
-Unverifiable or interrupted retirement preserves the remaining material and stays
-pending; do not remove those artifacts to force a clean status.
-
-This serving-recovery path does not apply to `--no-restart`, absent or stopped
-services, Git checkouts, shared-project pnpm/Bun installs, or candidates without
-the continuation contract. These keep their existing behavior and the narrower
-compatibility rules below. Automatic recovery is not a substitute for an independent
-verified backup.
+An existing pending checkpoint-recovery record blocks further mutable updates.
+The updater reports that it is unsupported and leaves its records, backups, and
+state unchanged. Do not remove or alter retained artifacts to force a clean
+status, and do not use `update finalize` to bypass the refusal. Preserve the
+reported locations for a compatible recovery implementation or an independent
+verified backup. An interrupted or refused restore is not a successful rollback.
 
 ### Automatic schema-neutral rollback
 
-For update paths outside checkpoint recovery, if a newly activated package fails verification, `openclaw update` compares the
+If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
 pre-activation values and checks that the config file still matches the content
 reported by the candidate’s activation Doctor writer.
@@ -195,10 +181,9 @@ A refusal before the live swap restarts the unchanged Gateway and preserves the 
 
 ### Before updating: create a verified backup
 
-`openclaw update` preserves an automatic pre-update config copy. Supported serving
-updates also retain the bounded checkpoint described above, but other update paths
-do not create a state recovery point. Before a significant update, create an
-independent verified backup explicitly:
+`openclaw update` preserves an automatic pre-update config copy, not a full-state
+recovery point. Before a significant update, create an independent verified backup
+explicitly:
 
 ```bash
 mkdir -p ~/Backups/openclaw

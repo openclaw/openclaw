@@ -47,3 +47,6 @@ openclaw reset --scope full --yes --non-interactive
 ## Related
 
 - [CLI reference](/cli)
+- [`openclaw backup`](/cli/backup) — archive state before resetting it
+- [`openclaw onboard`](/cli/onboard) — set the install up again after a reset
+- [`openclaw uninstall`](/cli/uninstall) — remove the install instead of resetting it

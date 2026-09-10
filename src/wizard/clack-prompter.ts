@@ -213,41 +213,26 @@ export function createClackPrompter(
             params.navigation,
             async (promptSignal) => {
               if (params.searchable) {
-                return params.navigation
-                  ? await autocompleteWithNavigationFooter({
-                      message,
-                      options,
-                      initialValue: params.initialValue,
-                      filter: tokenizedOptionFilter,
-                      signal: promptSignal,
-                      navigation: params.navigation,
-                      output,
-                    })
-                  : await autocomplete({
-                      message,
-                      options,
-                      initialValue: params.initialValue,
-                      filter: tokenizedOptionFilter,
-                      signal: promptSignal,
-                      output,
-                    });
+                const prompt = params.navigation ? autocompleteWithNavigationFooter : autocomplete;
+                return await prompt({
+                  message,
+                  options,
+                  initialValue: params.initialValue,
+                  filter: tokenizedOptionFilter,
+                  signal: promptSignal,
+                  ...(params.navigation ? { navigation: params.navigation } : {}),
+                  output,
+                });
               }
-              return params.navigation
-                ? await selectWithNavigationFooter({
-                    message,
-                    options,
-                    initialValue: params.initialValue,
-                    signal: promptSignal,
-                    navigation: params.navigation,
-                    output,
-                  })
-                : await select({
-                    message,
-                    options,
-                    initialValue: params.initialValue,
-                    signal: promptSignal,
-                    output,
-                  });
+              const prompt = params.navigation ? selectWithNavigationFooter : select;
+              return await prompt({
+                message,
+                options,
+                initialValue: params.initialValue,
+                signal: promptSignal,
+                ...(params.navigation ? { navigation: params.navigation } : {}),
+                output,
+              });
             },
             output,
             signal,
@@ -265,41 +250,28 @@ export function createClackPrompter(
             params.navigation,
             async (promptSignal) => {
               if (params.searchable) {
-                return params.navigation
-                  ? await autocompleteMultiselectWithNavigationFooter({
-                      message,
-                      options,
-                      initialValues: params.initialValues,
-                      filter: tokenizedOptionFilter,
-                      signal: promptSignal,
-                      navigation: params.navigation,
-                      output,
-                    })
-                  : await autocompleteMultiselect({
-                      message,
-                      options,
-                      initialValues: params.initialValues,
-                      filter: tokenizedOptionFilter,
-                      signal: promptSignal,
-                      output,
-                    });
+                const prompt = params.navigation
+                  ? autocompleteMultiselectWithNavigationFooter
+                  : autocompleteMultiselect;
+                return await prompt({
+                  message,
+                  options,
+                  initialValues: params.initialValues,
+                  filter: tokenizedOptionFilter,
+                  signal: promptSignal,
+                  ...(params.navigation ? { navigation: params.navigation } : {}),
+                  output,
+                });
               }
-              return params.navigation
-                ? await multiselectWithNavigationFooter({
-                    message,
-                    options,
-                    initialValues: params.initialValues,
-                    signal: promptSignal,
-                    navigation: params.navigation,
-                    output,
-                  })
-                : await multiselect({
-                    message,
-                    options,
-                    initialValues: params.initialValues,
-                    signal: promptSignal,
-                    output,
-                  });
+              const prompt = params.navigation ? multiselectWithNavigationFooter : multiselect;
+              return await prompt({
+                message,
+                options,
+                initialValues: params.initialValues,
+                signal: promptSignal,
+                ...(params.navigation ? { navigation: params.navigation } : {}),
+                output,
+              });
             },
             output,
             signal,
@@ -319,39 +291,25 @@ export function createClackPrompter(
                 ? (value: string | undefined) => validate(value ?? "")
                 : undefined;
               if (params.sensitive) {
-                return params.navigation
-                  ? await passwordWithNavigationFooter({
-                      message,
-                      validate: validateInput,
-                      navigation: params.navigation,
-                      signal: promptSignal,
-                      output,
-                    })
-                  : await password({
-                      message,
-                      validate: validateInput,
-                      signal: promptSignal,
-                      output,
-                    });
+                const prompt = params.navigation ? passwordWithNavigationFooter : password;
+                return await prompt({
+                  message,
+                  validate: validateInput,
+                  ...(params.navigation ? { navigation: params.navigation } : {}),
+                  signal: promptSignal,
+                  output,
+                });
               }
-              return params.navigation
-                ? await textWithNavigationFooter({
-                    message,
-                    initialValue: params.initialValue,
-                    placeholder: params.placeholder,
-                    validate: validateInput,
-                    navigation: params.navigation,
-                    signal: promptSignal,
-                    output,
-                  })
-                : await text({
-                    message,
-                    initialValue: params.initialValue,
-                    placeholder: params.placeholder,
-                    validate: validateInput,
-                    signal: promptSignal,
-                    output,
-                  });
+              const prompt = params.navigation ? textWithNavigationFooter : text;
+              return await prompt({
+                message,
+                initialValue: params.initialValue,
+                placeholder: params.placeholder,
+                validate: validateInput,
+                ...(params.navigation ? { navigation: params.navigation } : {}),
+                signal: promptSignal,
+                output,
+              });
             },
             output,
             params.signal && signal
@@ -368,20 +326,12 @@ export function createClackPrompter(
             params.navigation,
             async (promptSignal) => {
               const message = stylePromptMessage(params.message);
-              if (params.navigation) {
-                return await confirmWithNavigationFooter({
-                  message,
-                  initialValue: params.initialValue,
-                  vertical: params.layout === "vertical",
-                  navigation: params.navigation,
-                  signal: promptSignal,
-                  output,
-                });
-              }
-              return await confirm({
+              const prompt = params.navigation ? confirmWithNavigationFooter : confirm;
+              return await prompt({
                 message,
                 initialValue: params.initialValue,
                 vertical: params.layout === "vertical",
+                ...(params.navigation ? { navigation: params.navigation } : {}),
                 signal: promptSignal,
                 output,
               });

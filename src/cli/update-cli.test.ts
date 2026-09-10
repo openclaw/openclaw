@@ -91,7 +91,6 @@ const managedUpdateHandoff = vi.hoisted(() => ({
   start: vi.fn(),
   transfer: vi.fn(),
   cancel: vi.fn(),
-  activate: vi.fn(async () => false),
 }));
 const candidateValidation = vi.hoisted(() => vi.fn());
 const pluginAvailabilityPreflight = vi.hoisted(() => vi.fn());
@@ -185,7 +184,6 @@ vi.mock("../infra/update-managed-service-handoff.js", () => ({
   startManagedServiceUpdateHandoff: managedUpdateHandoff.start,
   transferManagedServiceUpdateHandoff: managedUpdateHandoff.transfer,
   cancelManagedServiceUpdateHandoff: managedUpdateHandoff.cancel,
-  activateManagedServiceUpdateHandoff: managedUpdateHandoff.activate,
   isCurrentManagedServiceUpdateHandoffProcess: async () => false,
 }));
 vi.mock("../infra/update-repair-agent.js", () => ({
@@ -1977,7 +1975,6 @@ describe("update-cli", () => {
     expect(getFileLockProcessStartTime(process.pid)).not.toBeNull();
     pluginAvailabilityPreflight.mockResolvedValue(undefined);
     triageAfterFailure.mockResolvedValue(undefined);
-    managedUpdateHandoff.activate.mockResolvedValue(false);
     unattendedRepair.mockResolvedValue({
       status: "unavailable",
       attempts: [],
@@ -8533,7 +8530,7 @@ describe("update-cli", () => {
   );
 
   it.each(["owned-running", "no-restart", "stopped", "legacy-target"] as const)(
-    "selects durable startup at the registered CLI package boundary (%s)",
+    "uses compatibility-checked package update without full-state startup (%s)",
     async (mode) => {
       const root = await mockPackageInstallAtCaseDir("openclaw-update-startup-admission");
       mockFileBackedPathExists();
@@ -8554,31 +8551,7 @@ describe("update-cli", () => {
         ...(await validate(options)),
         checkpointContinuation: mode !== "legacy-target",
       }));
-      const packageOwner = await import("./update-cli/update-command-package.js");
-      let admittedRun: string | undefined;
-      const selectStartup = packageOwner.selectUpdateCommandStartup;
-      const begin = vi.fn(
-        async (
-          opts: Parameters<typeof updateCommand>[0],
-          source: Parameters<NonNullable<ReturnType<typeof selectStartup>>>[0],
-        ) => {
-          // The real selector and package owner must admit this callback after the
-          // actual executor is acquired. Stop before persistence or native effects.
-          opts.run?.executorFence?.assertCurrent();
-          expect(opts.run?.executorFence).toBeDefined();
-          expect(source.liveRoot).toBe(root);
-          expect(source.stageRoot).not.toBe(root);
-          expect(source.previous?.version).toBe("1.0.0");
-          expect(source.candidate.version).toBe("9999.0.0");
-          admittedRun = opts.run?.runId;
-          throw new Error("startup-boundary-observed");
-        },
-      );
-      vi.spyOn(packageOwner, "selectUpdateCommandStartup").mockImplementation((params, context) => {
-        const selected = selectStartup(params, context);
-        return selected ? (source) => begin(params.opts, source) : undefined;
-      });
-      const outcome = await invokeUpdateCli({
+      await invokeUpdateCli({
         yes: true,
         json: true,
         restart: mode !== "no-restart",
@@ -8586,17 +8559,11 @@ describe("update-cli", () => {
         () => null,
         (error: unknown) => error,
       );
-      if (mode === "owned-running") {
-        expect(begin).toHaveBeenCalledOnce();
-        expect(admittedRun).toBeDefined();
-        expect(outcome).toBeInstanceOf(Error);
-        expect(doctorCommandCall()).toBeUndefined();
-        expect(serviceStop).not.toHaveBeenCalled();
-      } else {
-        expect(begin).not.toHaveBeenCalled();
-        expect(candidateValidation).toHaveBeenCalled();
-        expect(doctorCommandCall()).toBeDefined();
-      }
+      expect(candidateValidation).toHaveBeenCalled();
+      expect(doctorCommandCall()).toBeDefined();
+      expect(await fs.readdir(path.dirname(profileStateDir()))).not.toContain(
+        `.${path.basename(profileStateDir())}-update-checkpoints`,
+      );
     },
   );
 

@@ -334,3 +334,7 @@ openclaw memory index --force   # Rebuild the index
 - [Active memory](/concepts/active-memory): sub-agent memory for interactive chat sessions.
 - [User model](/concepts/user-model): directive-based durable preferences and profile facts.
 - [Standing intents](/concepts/standing-intents): event-conditioned prospective memory.
+
+## Related
+
+- [`openclaw memory`](/cli/memory) — command reference for inspecting and editing memory

@@ -5,41 +5,30 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { hasNodeErrorCode } from "./path-guards.js";
 import { assertNoPendingUpdateRecovery } from "./update-run-recovery.js";
 
-/** Read-only admission: a missing canonical DB is not proof of a fresh install. */
+/** Read-only admission; neither a missing nor a replaced DB retires old recovery. */
 export async function assertUpdateRecoveryAdmission(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<void> {
   const databasePath = path.resolve(
     options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
   );
+  const parent = path.dirname(databasePath);
   try {
-    await fs.lstat(databasePath);
+    await fs.lstat(parent);
   } catch (error) {
     if (!hasNodeErrorCode(error, "ENOENT")) {
       throw error;
     }
-    // An entirely absent state directory is a normal first invocation. Do not
-    // swallow ENOENT from discovery itself: a changing family is not admission.
-    try {
-      await fs.lstat(path.dirname(databasePath));
-    } catch (parentError) {
-      if (!hasNodeErrorCode(parentError, "ENOENT")) {
-        throw parentError;
-      }
-      return;
-    }
-    const { discoverUpdateCheckpointRestoreFamilies } =
-      await import("./update-checkpoint-restore.js");
-    const families = await discoverUpdateCheckpointRestoreFamilies(databasePath);
-    if (families.length > 0) {
-      // Locators are not authority. In particular, never create a new DB when a
-      // staged/displaced record cannot be read. Checkpoint must reconcile the
-      // exact bound plan and DB family before any claim or history writes.
-      throw new Error(
-        "Interrupted shared-database publication requires reconciliation before updating",
-        { cause: error },
-      );
-    }
+    return;
+  }
+  // A family may hold the only original DB even when another canonical file
+  // exists. Locators confer no authority to inspect, repair, or retire it.
+  // Do not swallow discovery races or recreate an absent canonical database.
+  const families = await fs.readdir(parent);
+  if (families.some((name) => name.startsWith(".openclaw-restore-"))) {
+    throw new Error(
+      "Interrupted shared-database publication is read-only while full-state recovery is deferred",
+    );
   }
   assertNoPendingUpdateRecovery(options);
 }

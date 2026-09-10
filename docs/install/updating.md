@@ -318,7 +318,7 @@ openclaw health
 - <a id="auto-updater" />[Auto-updater](/install/updating/automatic-updates#auto-updater)
   - <a id="update-campaigns" />[Update campaigns](/install/updating/automatic-updates#update-campaigns)
 - <a id="downgrade" />[Downgrade](/install/updating/rollback-and-recovery#downgrade)
-  - <a id="automatic-checkpoint-recovery" />[Automatic checkpoint recovery](/install/updating/rollback-and-recovery#automatic-checkpoint-recovery)
+  - <a id="automatic-checkpoint-recovery" />[Full-state recovery requires a backup](/install/updating/rollback-and-recovery#automatic-checkpoint-recovery)
   - <a id="automatic-schema-neutral-rollback" />[Automatic schema-neutral rollback](/install/updating/rollback-and-recovery#automatic-schema-neutral-rollback)
   - <a id="before-updating%3A-create-a-verified-backup" /><a id="before-updating-create-a-verified-backup" />[Before updating: create a verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
 - <a id="if-you-are-stuck" />[If you are stuck](/install/updating/rollback-and-recovery#if-you-are-stuck)

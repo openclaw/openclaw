@@ -184,3 +184,4 @@ Flows coordinate tasks, not replace them. A single flow may drive multiple backg
 - [CLI: tasks](/cli/tasks) - CLI command reference for `openclaw tasks flow`
 - [Automation Overview](/automation) - all automation mechanisms at a glance
 - [Automations](/automation/cron-jobs) - scheduled jobs that may feed into flows
+- [Goal](/tools/goal) - durable per-session objectives and the `/goal` controls

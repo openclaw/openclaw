@@ -27,10 +27,12 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import type { PreManagedServiceStop } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 /** Terminal worker diagnostics do not participate in recovery decisions. */
 export function formatUpdateFinalizationError(error: unknown): string {
@@ -302,4 +304,26 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
       defaultRuntime.log(theme.warn(message));
     }
   }
+}
+
+export function recordUpdateResultNextAction(
+  params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
+  result: UpdateRunResult,
+) {
+  const run = params.opts.run;
+  const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
+  const nextAction = resolveUpdateResultNextAction({
+    result,
+    restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
+    serviceRunning: active?.verification.serviceRunning,
+    runningVersion: active?.verification.runningVersion,
+    verificationFailure: active?.steps.findLast(
+      (step) => step.step === "gateway verification" && step.status === "failed",
+    )?.detail,
+    env: run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
+  });
+  if (run && active?.status === "running" && active.origin.nextAction !== nextAction) {
+    recordUpdateRunPhase(run.runId, active.phase, { origin: { nextAction } }, { env: run.env });
+  }
+  return nextAction;
 }

@@ -33,6 +33,7 @@ import type {
   SessionTranscriptWriteScope,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
+import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "./store-writer-state.js";
@@ -139,6 +140,7 @@ export function withSqliteSessionDatabase<T>(
 export async function runExclusiveSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
+  operation: SqliteSessionWriteOperation,
   reclamation?: SqliteSessionReclamationDiagnostics,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
@@ -149,6 +151,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
     pid: process.pid,
     threadId,
     isMainThread,
+    operation,
     ...(reclamation?.kind ? { reclamationKind: reclamation.kind } : {}),
     ...(reclamation?.workerThreadId !== undefined
       ? { workerThreadId: reclamation.workerThreadId }

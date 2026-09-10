@@ -124,7 +124,7 @@ describe("update candidate canary", () => {
       });
       expect(result.status).toBe("ok");
       expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
-      expect(result.checkpointContinuation).toBe(false);
+      expect(result).not.toHaveProperty("checkpointContinuation");
     },
   );
   it("reports unavailable validation when the candidate predates the migration-continuation contract", async () => {
@@ -144,7 +144,7 @@ describe("update candidate canary", () => {
     });
     expect(result).toMatchObject({ status: "ok", phase: "runtime" });
     expect(result.candidateSchemaVersions).toBeUndefined();
-    expect(result.checkpointContinuation).not.toBe(true);
+    expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps).toEqual([
       expect.objectContaining({
         name: "candidate migration continuation",
@@ -205,7 +205,7 @@ describe("update candidate canary", () => {
     });
     expect(result.status).toBe("ok");
     expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
-    expect(result.checkpointContinuation).toBe(true);
+    expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps.map((step) => step.name)).toEqual([
       "candidate migration rehearsal",
       "candidate doctor lint",

@@ -18,7 +18,6 @@ import {
   type PackageRetentionDecision,
   type PackageRecoveryVerified,
   type PackageRecoveryResult,
-  PackageRecoveryEffectSchema,
   type PackageRecoveryEffect,
   type PackageRecoveryEffectReceipt,
   type PackageRecoveryHooks,
@@ -564,56 +563,3 @@ export type PackageRecoveryTransaction = Pick<
   ReturnType<typeof createPackageRecoveryTransaction>,
   "descriptor" | "pendingEffect" | "observe" | "reconcile" | "rollback" | "retain" | "retire"
 >;
-
-/** Read-only reconciliation first; a fresh live owner is still required for effects. */
-export async function reopenPackageUpdateTransaction(params: {
-  descriptor: unknown;
-  expectedLiveRoot: string;
-  expectedBinDir: string;
-  expectedTransactionId: string;
-  pendingEffect?: unknown;
-  hooks: PackageRecoveryHooks;
-  timeoutMs?: number;
-}): Promise<
-  | { status: "ready"; transaction: PackageRecoveryTransaction; observed: PackageRecoveryVerified }
-  | { status: "conflict" | "unavailable"; reason: string; pendingEffect: unknown }
-> {
-  let descriptor: PackageTransactionDescriptor;
-  let pending: PackageRecoveryEffect | undefined;
-  try {
-    descriptor = parsePackageTransactionDescriptor(params.descriptor);
-    if (params.pendingEffect != null) {
-      const parsed = PackageRecoveryEffectSchema.parse(params.pendingEffect);
-      if (!isDeepStrictEqual(parsed.descriptor, descriptor)) {
-        conflict("Pending package descriptor changed");
-      }
-      pending = parsed;
-    }
-  } catch (error) {
-    return {
-      status: error instanceof PackageRecoveryConflict ? "conflict" : "unavailable",
-      reason: formatErrorMessage(error),
-      pendingEffect: params.pendingEffect,
-    };
-  }
-  if (
-    descriptor.liveRoot !== params.expectedLiveRoot ||
-    descriptor.binDir !== params.expectedBinDir ||
-    descriptor.transactionId !== params.expectedTransactionId ||
-    descriptor.transactionId !== params.hooks.transactionId
-  ) {
-    return {
-      status: "conflict",
-      reason: "Package descriptor does not match the admitted resource",
-      pendingEffect: params.pendingEffect,
-    };
-  }
-  const transaction = createPackageRecoveryTransaction(
-    descriptor,
-    params.hooks,
-    params.timeoutMs,
-    pending,
-  );
-  const observed = await transaction.observe();
-  return observed.status === "verified" ? { status: "ready", transaction, observed } : observed;
-}

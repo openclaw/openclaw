@@ -13,9 +13,9 @@ import {
   resolveSystemdUnitPath,
 } from "../../daemon/systemd-service-files.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
-  beginUpdateRecovery,
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
@@ -78,9 +78,8 @@ function pendingRecovery() {
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
   const from = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
   // This fixture owns every writer of its disposable state directory.
-  const record = beginUpdateRecovery(
+  const record = createRetainedUpdateRecovery(
     { runId: run.runId, from, to: { ...from, version: "2.0.0" } },
-    { assertCurrent() {} },
     { env },
   );
   closeOpenClawStateDatabaseForTest();
@@ -142,7 +141,7 @@ it.each(["displaced", "replacement", "both", "unreadable"] as const)(
     }
     const before = snapshot();
     await expect(admitUpdateCommandRun({ opts: {}, root }).then(() => "admitted")).rejects.toThrow(
-      "Interrupted shared-database publication requires reconciliation",
+      "Interrupted shared-database publication is read-only while full-state recovery is deferred",
     );
     expect(fs.existsSync(file)).toBe(false);
     expect(snapshot()).toEqual(before);
@@ -203,7 +202,7 @@ it.skipIf(process.platform === "win32").each([
       import fs from 'node:fs';
       import { registerSignalExitGate } from ${JSON.stringify(new URL("../signal-exit-barrier.ts", import.meta.url).href)};
       import { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } from ${JSON.stringify(new URL("../../infra/update-run-ledger.ts", import.meta.url).href)};
-      import { beginUpdateRecovery } from ${JSON.stringify(new URL("../../infra/update-run-recovery.ts", import.meta.url).href)};
+      import { createRetainedUpdateRecovery } from ${JSON.stringify(new URL("../../infra/update-retained-recovery.test-support.ts", import.meta.url).href)};
       import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(new URL("../../state/openclaw-state-db.ts", import.meta.url).href)};
       import { admitUpdateCommandRun, withUpdatePreviewSignals } from ${JSON.stringify(new URL("./update-command-run.ts", import.meta.url).href)};
       const opts = { dryRun: true };
@@ -219,7 +218,7 @@ it.skipIf(process.platform === "win32").each([
         if (mode === 'handoff') process.env.OPENCLAW_UPDATE_RUN_HANDOFF = '1';
         if (mode === 'pending' || mode === 'missing') {
           const from = { root: ${JSON.stringify(root)}, nodePath: process.execPath, version: '1.0.0', buildId: null };
-          beginUpdateRecovery({ runId: run.runId, from, to: { ...from, version: '2.0.0' } }, { assertCurrent() {} }, { env: run.env });
+          createRetainedUpdateRecovery({ runId: run.runId, from, to: { ...from, version: '2.0.0' } }, { env: run.env });
         }
         if (mode === 'changed') recordUpdateRunPhase(run.runId, 'staging');
         if (mode === 'completed') finishUpdateRun(run.runId, { status: 'skipped', reason: 'dry-run' });
@@ -392,13 +391,12 @@ it.each([
     OPENCLAW_STATE_DIR: serviceState,
     OPENCLAW_CONFIG_PATH: path.join(serviceState, "openclaw.json"),
   };
-  let pending: ReturnType<typeof beginUpdateRecovery> | undefined;
+  let pending: ReturnType<typeof createRetainedUpdateRecovery> | undefined;
   if (scenario === "owned-pending") {
     const runId = createUpdateRun({ trigger: "cli" }, { env: serviceEnv }).runId;
     const from = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
-    pending = beginUpdateRecovery(
+    pending = createRetainedUpdateRecovery(
       { runId, from, to: { ...from, version: "2.0.0" } },
-      { assertCurrent() {} },
       { env: serviceEnv },
     );
     closeOpenClawStateDatabaseForTest();

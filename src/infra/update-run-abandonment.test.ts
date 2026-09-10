@@ -6,6 +6,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import {
@@ -18,7 +19,7 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
-import { beginUpdateRecovery, loadUpdateRecovery } from "./update-run-recovery.js";
+import { loadUpdateRecovery } from "./update-run-recovery.js";
 import { ABANDONED_UPDATE_RUN_MS, UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import { runStep } from "./update-runner-command.js";
 import type { CommandRunner } from "./update-runner-types.js";
@@ -71,9 +72,8 @@ describe("abandoned update runs", () => {
         buildId: null,
       };
       // This fixture owns every writer of its disposable database; the transaction is real.
-      const recovery = beginUpdateRecovery(
+      const recovery = createRetainedUpdateRecovery(
         { runId: run.runId, from, to: { ...from, version: "2.0.0" } },
-        { assertCurrent() {} },
         options,
       );
       vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);

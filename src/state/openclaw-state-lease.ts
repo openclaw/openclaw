@@ -7,13 +7,11 @@ import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator
 import { isSqliteLockError } from "../infra/sqlite-transaction.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { loggingState } from "../logging/state.js";
-import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
 import { createOpenClawStateLeaseExclusion } from "./openclaw-state-lease-exclusion.js";
 import { startOpenClawStateLeaseHeartbeat } from "./openclaw-state-lease-heartbeat.js";
 import {
-  assertExistingLeasePublicationSchema,
   readLeaseDatabase,
   resolveLeaseDatabasePath,
   withLeaseWriteTransaction,
@@ -576,25 +574,6 @@ export async function withOpenClawStateLease<T>(
       }
       return expiresAt;
     },
-    readPublicationExpiry: (databasePath) => {
-      const expiresAt = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => {
-          // A retained reader accepting the payload does not allow this executor
-          // to migrate it merely to renew a lease. Refuse incompatible reopen.
-          if (validated.database.schemaPolicy === "existing") {
-            assertExistingLeasePublicationSchema(db, databasePath);
-          } else if (!isOpenClawStateSchemaFastPathEligible(db, databasePath)) {
-            throw invalidInput("published state database requires startup repair before rebind");
-          }
-          return assertLeaseOwnedInDatabase(db, identity);
-        },
-        { ...validated.database.options, path: databasePath },
-      );
-      if (expiresAt === undefined) {
-        throw invalidInput("published state database is absent");
-      }
-      return expiresAt;
-    },
     pause: async () => {
       clearInterval(heartbeat);
       clearTimeout(expiryTimer);
@@ -637,7 +616,6 @@ export async function withOpenClawStateLease<T>(
         run({
           withDatabaseFileExclusion: (operation, bindCaptured) =>
             fileExclusion.run(operation, bindCaptured),
-          withDatabaseFilePublication: (operation) => fileExclusion.runPublication(operation),
           withDatabaseFileMutation: (operation) => fileExclusion.runMutation(operation),
           signal: operationSignal,
           renew: renewOperation,

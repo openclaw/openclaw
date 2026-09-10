@@ -342,17 +342,22 @@ async function revokeDuringWriterWait(
   const resolved = resolveSqliteScope(scope);
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const heldWriter = runExclusiveSqliteSessionWrite(resolved, async () => {
-    entered.resolve();
-    await release.promise;
-  });
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      entered.resolve();
+      await release.promise;
+    },
+    "session.transcript.batch",
+  );
   await entered.promise;
   const enqueueWrite = sqliteSessionScope.runExclusiveSqliteSessionWrite;
   let sourceWriteQueued = false;
   const writer = vi
     .spyOn(sqliteSessionScope, "runExclusiveSqliteSessionWrite")
-    .mockImplementation((writeScope, operation) => {
-      const pending = enqueueWrite(writeScope, operation);
+    .mockImplementation((...args) => {
+      const [writeScope] = args;
+      const pending = enqueueWrite(...args);
       if ("sessionKey" in writeScope && writeScope.sessionKey === scope.sessionKey) {
         sourceWriteQueued = true;
       }

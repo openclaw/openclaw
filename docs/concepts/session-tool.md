@@ -244,3 +244,4 @@ and prompt hints; they do not grant access.
 
 - [Session management](/concepts/session)
 - [Session pruning](/concepts/session-pruning)
+- [Goal](/tools/goal) — durable per-session objectives, read and updated through the dedicated `get_goal`, `create_goal`, and `update_goal` tools

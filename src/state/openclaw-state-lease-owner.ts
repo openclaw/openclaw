@@ -2,7 +2,6 @@ export type LeaseExclusionParams = {
   databasePath: () => string;
   assertActive: () => void;
   readExpiry: (databasePath: string) => number;
-  readPublicationExpiry: (databasePath: string) => number;
   readMutationExpiry: (databasePath: string) => number;
   pause: () => Promise<void>;
   resume: (expiresAt: number) => Promise<void>;

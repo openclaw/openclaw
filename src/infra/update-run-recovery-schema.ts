@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -27,7 +26,7 @@ const runtime = z.strictObject({
  * Deliberately no legacy transform: transcript receipts cannot establish readiness,
  * and rewriting them during read would also invalidate publication commitments.
  */
-export const UpdateRecoveryReadinessReceiptSchema = z.strictObject({
+const UpdateRecoveryReadinessReceiptSchema = z.strictObject({
   kind: z.literal("readiness", {
     error:
       "Legacy update verification is not readiness evidence; explicit reconciliation is required.",
@@ -52,7 +51,6 @@ export const UpdateRecoveryReadinessReceiptSchema = z.strictObject({
   }),
   verifiedAtMs: counter,
 });
-export type UpdateRecoveryReadinessReceipt = z.infer<typeof UpdateRecoveryReadinessReceiptSchema>;
 
 const UpdateRecoveryEffectSchema = z
   .strictObject({
@@ -83,7 +81,7 @@ const UpdateRecoveryEffectSchema = z
         : effect.cancelledByNativeEffectId === undefined),
   );
 
-export const UpdateRecoveryRestoreProgressSchema = z
+const UpdateRecoveryRestoreProgressSchema = z
   .strictObject({
     restoreId: z.uuid(),
     checkpointId: z.uuid(),
@@ -96,10 +94,9 @@ export const UpdateRecoveryRestoreProgressSchema = z
     phase: z.enum(["preparing", "intent", "observed"]),
   })
   .refine((progress) => progress.phase === "preparing" || progress.planSha256 !== null);
-export type UpdateRecoveryRestoreProgress = z.infer<typeof UpdateRecoveryRestoreProgressSchema>;
 
 /** Exact storage projection of the checkpoint owner's ref and manifest binding.
- * Artifact verification stays with reopenUpdateCheckpoint; these facts grant no authority.
+ * Retained locators are inspection data only; these facts grant no restoration authority.
  */
 const checkpointRef = z.strictObject({
   checkpointId: z.uuid(),
@@ -124,7 +121,6 @@ const afterImage = z.strictObject({
   effectIds: z.array(z.uuid()).min(1).max(4096),
   boundAtRevision: counter,
 });
-export type UpdateRecoveryAfterImage = z.infer<typeof afterImage>;
 
 // Decode-only compatibility for receipts persisted before readiness replaced model
 // probes. This is the exact retired storage shape, not an inference producer or a
@@ -556,7 +552,7 @@ const recoveryInspectionRecordSchema = z
   });
 /** Execution/mutation decoding remains readiness-only. The inspection shape is
  * intentionally wider, so an inspected legacy row is not a mutation input. */
-export const UpdateRecoveryRecordSchema = recoveryInspectionRecordSchema.safeExtend({
+const UpdateRecoveryRecordSchema = recoveryInspectionRecordSchema.safeExtend({
   verification: recoveryInspectionRecordSchema.shape.verification
     .unwrap()
     .extend({
@@ -597,93 +593,12 @@ export function inspectUpdateRecovery(raw: string, runId: string): UpdateRecover
     record,
   };
 }
-
-export type UpdateRecoveryEffect = z.infer<typeof UpdateRecoveryEffectSchema>;
-
-export class UpdateRecoveryConflictError extends Error {
-  constructor() {
-    super("Update recovery changed; reload and reconcile before continuing.");
-    this.name = "UpdateRecoveryConflictError";
-  }
-}
 export class UpdateRecoveryRequiredError extends Error {
   constructor(readonly record: UpdateRecoveryRecord) {
     super(
       `Update ${record.runId} has unfinished recovery; reconcile it before starting another update.`,
     );
     this.name = "UpdateRecoveryRequiredError";
-  }
-}
-
-/** Pure validation of checkpoint facts before the owning fenced transaction persists them. */
-export function parseUpdateRecoveryCheckpoint(
-  record: UpdateRecoveryRecord,
-  input: NonNullable<UpdateRecoveryRecord["checkpoint"]>,
-): NonNullable<UpdateRecoveryRecord["checkpoint"]> {
-  if (record.nativeManager && !currentUpdateRecoveryNativeFacts(record.nativeManager).stopped) {
-    throw new Error("Full checkpoint binding requires an observed native stop");
-  }
-  const captured = checkpoint.parse(input);
-  const { binding } = captured;
-  if (
-    record.effects.length !== 0 ||
-    !record.source ||
-    binding.stateDir !== record.source.stateDir ||
-    binding.configPath !== record.source.configPath ||
-    binding.runId !== record.runId ||
-    binding.fromRuntime.root !== record.from.root ||
-    binding.fromRuntime.nodePath !== record.from.nodePath ||
-    binding.fromRuntime.version !== record.from.version
-  ) {
-    throw new Error("Checkpoint binding must match the admitted source before update effects");
-  }
-  if (record.checkpoint && JSON.stringify(record.checkpoint) !== JSON.stringify(captured)) {
-    throw new UpdateRecoveryConflictError();
-  }
-  return captured;
-}
-
-/** Canonical complete publication preimage; the commitment field alone is omitted. */
-function publicationDigest(record: UpdateRecoveryRecord): string {
-  const parsed = UpdateRecoveryRecordSchema.parse(record);
-  delete parsed.publication;
-  return createHash("sha256").update(JSON.stringify(parsed)).digest("hex");
-}
-
-/** Called only inside fenced carry-forward, after revision/time and sealed plan are fixed. */
-export function sealUpdateRecoveryPublication(record: UpdateRecoveryRecord): void {
-  if (record.restore?.phase === "intent") {
-    record.publication = { revision: record.revision, sha256: publicationDigest(record) };
-  }
-}
-
-/** A prior row is evidence only if it matches the commitment retained by current recovery. */
-export function assertUpdateRecoveryPublicationRecord(
-  current: UpdateRecoveryRecord,
-  prior: UpdateRecoveryRecord,
-): void {
-  const anchor = current.publication;
-  const restore = prior.restore;
-  if (
-    !anchor ||
-    !prior.publication ||
-    !restore ||
-    restore.phase !== "intent" ||
-    !restore.planSha256 ||
-    current.runId !== prior.runId ||
-    current.transactionId !== prior.transactionId ||
-    current.revision < prior.revision ||
-    anchor.revision !== prior.revision ||
-    prior.publication.revision !== anchor.revision ||
-    prior.publication.sha256 !== anchor.sha256 ||
-    publicationDigest(prior) !== anchor.sha256 ||
-    current.restore?.restoreId !== restore.restoreId ||
-    current.restore.checkpointId !== restore.checkpointId ||
-    current.restore.planPath !== restore.planPath ||
-    current.restore.planSha256 !== restore.planSha256 ||
-    current.restore.resourceCursor < restore.resourceCursor
-  ) {
-    throw new UpdateRecoveryConflictError();
   }
 }
 
@@ -698,13 +613,6 @@ export function decodeUpdateRecovery(raw: string, runId: string): UpdateRecovery
     throw new Error("Update recovery record does not match its history run");
   }
   return record;
-}
-export function encodeUpdateRecovery(record: UpdateRecoveryRecord): string {
-  const raw = JSON.stringify(UpdateRecoveryRecordSchema.parse(record));
-  if (Buffer.byteLength(raw) > MAX_RECOVERY_BYTES) {
-    throw new Error("Update recovery record exceeds its storage limit");
-  }
-  return raw;
 }
 
 /** Only decoded records may be tested: an aborted preparation is historical,

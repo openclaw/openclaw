@@ -5,7 +5,6 @@ import { expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   createPackageRecoveryTransaction,
-  reopenPackageUpdateTransaction,
   type PackageRecoveryEffect,
   type PackageRecoveryHooks,
   type PackageTransactionDescriptor,
@@ -67,12 +66,9 @@ it("does not compensate after Recovery revocation during activation", async () =
       '"version":"1.0.0"',
     );
     await expect(fs.readFile(f.launcher, "utf8")).resolves.toBe("old launcher\n");
-    const reopened = await reopenPackageUpdateTransaction({
+    const reopened = await observeFixtureOwner({
       descriptor,
       pendingEffect,
-      expectedLiveRoot: f.packageRoot,
-      expectedBinDir: path.dirname(f.launcher),
-      expectedTransactionId: hooks.transactionId,
       hooks: {
         ...hooks,
         beforeEffect: async () => ({ assertCurrent: () => {}, afterEffect: async () => {} }),
@@ -173,12 +169,9 @@ it("keeps the existing launcher when a copy is interrupted and reopens the origi
     expect(await fs.readdir(path.dirname(f.launcher))).not.toContainEqual(
       expect.stringMatching(/^\.openclaw-shim-stage-/),
     );
-    const reopened = await reopenPackageUpdateTransaction({
+    const reopened = await observeFixtureOwner({
       descriptor: transaction.descriptor(),
       pendingEffect: transaction.pendingEffect(),
-      expectedLiveRoot: f.packageRoot,
-      expectedBinDir: path.dirname(f.launcher),
-      expectedTransactionId: hooks.transactionId,
       hooks,
     });
     if (reopened.status !== "ready") {
@@ -354,3 +347,23 @@ it.each([false, true])(
     });
   },
 );
+
+async function observeFixtureOwner(params: {
+  descriptor: PackageTransactionDescriptor | undefined;
+  hooks: PackageRecoveryHooks;
+  pendingEffect?: PackageRecoveryEffect | null;
+}) {
+  if (!params.descriptor) {
+    throw new Error("Fixture did not receive its package descriptor.");
+  }
+  const transaction = createPackageRecoveryTransaction(
+    params.descriptor,
+    params.hooks,
+    undefined,
+    params.pendingEffect ?? undefined,
+  );
+  const observed = await transaction.observe();
+  return observed.status === "verified"
+    ? { status: "ready" as const, transaction, observed }
+    : observed;
+}

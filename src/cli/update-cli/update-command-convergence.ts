@@ -151,7 +151,7 @@ export async function convergeUpdatePlugins(params: {
         });
       }
 
-      if (postCorePluginUpdate) {
+      if (postCorePluginUpdate && (!params.coreAlreadyCurrent || postCorePluginUpdate.changed)) {
         // Release the plugin lease before fresh Doctor. The finalizer either
         // retains its stopped interval or parks an already-current core here.
         const completedPluginUpdate = await completePostCorePluginUpdate({

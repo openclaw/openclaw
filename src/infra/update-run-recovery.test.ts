@@ -7,56 +7,37 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { retainedCheckpointBinding } from "./update-retained-checkpoint.test-support.js";
+import {
+  createRetainedUpdateRecovery,
+  storeRetainedUpdateRecovery,
+  retainedReadinessRecord,
+  retainedTerminalRecord,
+} from "./update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
-import { defineUpdateRecoveryArtifactTests } from "./update-run-recovery-after-image.test-support.js";
-import { RecoveryNativeIdentitySchema } from "./update-run-recovery-native-schema.js";
-import {
-  recordUpdateRecoveryNativeIntent,
-  recordUpdateRecoveryNativeObservation,
-  type UpdateRecoveryNativeIdentity,
-} from "./update-run-recovery-native.js";
-import { setupNativeManagerFixture } from "./update-run-recovery-native.test-support.js";
-import { defineUpdateRecoveryPackageTests } from "./update-run-recovery-package.test-support.js";
+import { legacyRecord } from "./update-run-recovery-legacy.test-support.js";
 import {
   decodeUpdateRecovery,
-  encodeUpdateRecovery,
   inspectUpdateRecovery,
-  type UpdateRecoveryReadinessReceipt,
+  type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
 import {
-  acceptUpdateRecoveryHandoff,
   assertNoPendingUpdateRecovery,
-  assertExactUpdateRecoveryClaim,
-  beginUpdateRecovery,
-  bindUpdateRecoveryCheckpoint,
-  claimUpdateRecovery,
   inspectUpdateRecoveries,
   loadUpdateRecovery,
-  prepareUpdateRecoveryHandoff,
-  recordUpdateRecoveryFailure,
-  recordUpdateRecoveryIntent,
-  recordUpdateRecoveryObservation,
-  recordUpdateRecoveryVerification,
-  UpdateRecoveryConflictError,
   UpdateRecoveryRequiredError,
 } from "./update-run-recovery.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
-// Test owns every writer of these disposable databases.
-const fence = { assertCurrent() {} };
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseForTest());
 function setup() {
-  const root = tempDirs.make("openclaw-update-recovery-");
-  const options = { env: { OPENCLAW_STATE_DIR: root, HOME: root } };
+  const root = dirs.make("retained-recovery-");
+  const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
   const run = createUpdateRun({ trigger: "cli" }, options);
   const from = {
     root: path.join(root, "old"),
@@ -65,400 +46,65 @@ function setup() {
     buildId: "old-build",
   };
   const to = { ...from, root: path.join(root, "new"), version: "2.0.0", buildId: "new-build" };
-  return { root, options, run, from, to };
+  let record = createRetainedUpdateRecovery({ runId: run.runId, from, to }, options);
+  record.checkpoint = retainedCheckpointBinding(record);
+  record = storeRetainedUpdateRecovery(record, options);
+  return { root, options, run, from, to, record };
 }
-function checkpointFor(fixture: ReturnType<typeof setup>) {
-  const checkpointId = randomUUID();
-  return {
-    ref: {
-      checkpointId,
-      manifestPath: path.join(fixture.root, "checkpoints", checkpointId, "manifest.json"),
-      manifestSha256: "c".repeat(64),
-    },
-    binding: {
-      runId: fixture.run.runId,
-      stateDir: fixture.root,
-      configPath: path.join(fixture.root, "openclaw.json"),
-      fromRuntime: {
-        root: fixture.from.root,
-        version: fixture.from.version,
-        nodePath: fixture.from.nodePath,
-      },
-    },
-  };
-}
-function beginCapturedRecovery(fixture: ReturnType<typeof setup>) {
-  const record = beginUpdateRecovery(
-    { runId: fixture.run.runId, from: fixture.from, to: fixture.to },
-    fence,
-    fixture.options,
-  );
-  return bindUpdateRecoveryCheckpoint(record, checkpointFor(fixture), fence, fixture.options);
-}
-function setupReadiness(runtime: "candidate" | "previous" = "candidate") {
-  const fixture = setup();
-  const record = beginCapturedRecovery(fixture);
-  const restartEffectId = randomUUID();
-  const intent = recordUpdateRecoveryIntent(
-    record,
-    {
-      effectId: restartEffectId,
-      kind: "service-restart",
-      resourceId: "gateway",
-      runtime,
-    },
-    fence,
-    fixture.options,
-  );
-  const observed = recordUpdateRecoveryObservation(
-    intent,
-    {
-      effectId: restartEffectId,
-      observedIdentity: "serving-boot",
-    },
-    fence,
-    fixture.options,
-  );
-  const identity = runtime === "candidate" ? fixture.to : fixture.from;
-  const receipt: UpdateRecoveryReadinessReceipt = {
-    kind: "readiness",
-    runId: fixture.run.runId,
-    transactionId: observed.transactionId,
-    claimId: observed.claimId,
-    revision: observed.revision,
-    effectId: restartEffectId,
-    runtime,
-    gateway: { bootId: "serving-boot", version: identity.version, buildId: identity.buildId },
-    checks: {
-      serviceRunning: true,
-      pluginsReady: true,
-      channelsReady: true,
-      settled: true,
-      readyz: true,
-    },
-    verifiedAtMs: Date.now(),
-  };
-  return { ...fixture, observed, receipt, runtime, restartEffectId };
-}
-function snapshot(root: string) {
+function snapshot(root: string): unknown {
   return fs
-    .readdirSync(root, { recursive: true })
-    .map((entry) => String(entry))
-    .toSorted((left, right) => left.localeCompare(right))
+    .readdirSync(root)
+    .toSorted()
     .map((name) => {
       const file = path.join(root, name);
-      const stat = fs.statSync(file);
+      const stat = fs.lstatSync(file);
       return {
         name,
         ino: stat.ino,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-        digest: stat.isFile()
-          ? createHash("sha256").update(fs.readFileSync(file)).digest("hex")
-          : null,
+        mtime: stat.mtimeMs,
+        ctime: stat.ctimeMs,
+        content: stat.isDirectory()
+          ? snapshot(file)
+          : createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
       };
     });
 }
-
-describe("durable update recovery", () => {
-  it("pins source paths at admission instead of deriving them from a later checkpoint", () => {
-    const fixture = setup();
-    const { options, run, from, to } = fixture;
-    const selectedConfig = path.join(fixture.root, "selected.json");
-    const selectedOptions = { env: { ...options.env, OPENCLAW_CONFIG_PATH: selectedConfig } };
-    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, selectedOptions);
-    expect(record.source).toEqual({
-      stateDir: fixture.root,
-      configPath: selectedConfig,
-      profile: null,
-    });
-    const checkpoint = checkpointFor(fixture);
-    expect(() => bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options)).toThrow(
-      "admitted source",
-    );
-    checkpoint.binding.configPath = selectedConfig;
-    // The admitted identity survives a changed environment and database reopen.
-    closeOpenClawStateDatabaseForTest();
-    expect(bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options).source).toEqual(
-      record.source,
-    );
-  });
-
-  it("preserves exact checkpoint identity across reopen without diagnostic disclosure", () => {
-    const fixture = setup();
-    const { root, options, run, from, to } = fixture;
-    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
-    const checkpoint = checkpointFor(fixture);
-    checkpoint.ref.manifestPath = path.join(root, "x".repeat(900), "manifest.json");
-    const first = bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options);
-    // A fresh consumer may reconstruct the same facts with different property order.
-    const bound = bindUpdateRecoveryCheckpoint(
-      first,
-      { binding: checkpoint.binding, ref: checkpoint.ref },
-      fence,
-      options,
-    );
-    closeOpenClawStateDatabaseForTest();
-    const before = snapshot(root);
-    expect(loadUpdateRecovery(run.runId, options)?.checkpoint).toEqual(checkpoint);
-    expect(snapshot(root)).toEqual(before);
-    expect(JSON.stringify(getUpdateRun(run.runId, options))).not.toContain(
-      checkpoint.ref.manifestPath,
-    );
-    const intent = recordUpdateRecoveryIntent(
-      bound,
-      {
-        effectId: randomUUID(),
-        kind: "package-activation",
-        resourceId: to.root,
-        runtime: "candidate",
-      },
-      fence,
-      options,
-    );
-    expect(intent.checkpoint).toEqual(checkpoint);
-    expect(() => bindUpdateRecoveryCheckpoint(bound, checkpoint, fence, options)).toThrow(
-      UpdateRecoveryConflictError,
-    );
-    expect(() => bindUpdateRecoveryCheckpoint(intent, checkpoint, fence, options)).toThrow(
-      "before update effects",
-    );
-  });
-
-  it.each(["run", "root", "version", "node", "state", "config"])(
-    "rejects a checkpoint for another %s without changing the record",
-    (mismatch) => {
-      const fixture = setup();
-      const { options, run, from, to } = fixture;
-      const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
-      const checkpoint = checkpointFor(fixture);
-      if (mismatch === "state") {
-        checkpoint.binding.stateDir = path.join(fixture.root, "other-state");
-      }
-      if (mismatch === "config") {
-        checkpoint.binding.configPath = path.join(fixture.root, "other-config.json");
-      }
-      if (mismatch === "run") {
-        checkpoint.binding.runId = randomUUID();
-      }
-      if (mismatch === "root") {
-        checkpoint.binding.fromRuntime.root = to.root;
-      }
-      if (mismatch === "version") {
-        checkpoint.binding.fromRuntime.version = to.version;
-      }
-      if (mismatch === "node") {
-        checkpoint.binding.fromRuntime.nodePath = path.join(fixture.root, "other-node");
-      }
-      expect(() => bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options)).toThrow(
-        "admitted source",
-      );
-      expect(loadUpdateRecovery(run.runId, options)).toEqual(record);
+function nativeRecord(record: UpdateRecoveryRecord): UpdateRecoveryRecord {
+  const preimages = { ...retainedCheckpointBinding(record), boundAtRevision: 0 };
+  const next = { ...record, preimages };
+  delete next.checkpoint;
+  next.nativeManager = {
+    identity: {
+      platform: "linux",
+      scope: "user",
+      uid: 1000,
+      unitName: "openclaw.service",
+      runId: record.runId,
+      stateDir: record.source!.stateDir,
+      configPath: record.source!.configPath,
+      profile: record.source!.profile!,
     },
-  );
+    original: { exists: true, enabled: true, loaded: true, stopped: false },
+    boundAtRevision: 0,
+    effects: [],
+  };
+  return next;
+}
 
-  it("rejects checkpoint replacement and rolls back binding when the live fence is lost", () => {
-    const fixture = setup();
-    const { options, run, from, to } = fixture;
-    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
-    const checkpoint = checkpointFor(fixture);
-    let calls = 0;
-    expect(() =>
-      bindUpdateRecoveryCheckpoint(
-        record,
-        checkpoint,
-        {
-          assertCurrent() {
-            if (++calls === 3) {
-              throw new Error("exclusion lost");
-            }
-          },
-        },
-        options,
-      ),
-    ).toThrow("exclusion lost");
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(record);
-    const bound = bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options);
-    expect(() =>
-      bindUpdateRecoveryCheckpoint(bound, checkpointFor(fixture), fence, options),
-    ).toThrow(UpdateRecoveryConflictError);
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(bound);
-  });
-
-  it("refuses package activation without a durable checkpoint binding", () => {
-    const { options, run, from, to } = setup();
-    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
-    expect(() =>
-      recordUpdateRecoveryIntent(
-        record,
-        {
-          effectId: randomUUID(),
-          kind: "package-activation",
-          resourceId: to.root,
-          runtime: "candidate",
-        },
-        fence,
-        options,
-      ),
-    ).toThrow("durable checkpoint binding");
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(record);
-  });
-
-  it("fences the parent before a single-use handoff and accepts the fresh candidate after reopening", () => {
-    const { root, options, run, observed, receipt, to } = setupReadiness();
-    const verified = recordUpdateRecoveryVerification(
-      observed,
-      { runtime: "candidate", receipt },
-      fence,
-      options,
-    );
-    const prepared = prepareUpdateRecoveryHandoff(verified, fence, options);
-    expect(prepared.record.verification).toBeNull();
-    expect(() => assertExactUpdateRecoveryClaim(verified, fence, options)).toThrow(
-      UpdateRecoveryConflictError,
-    );
-    // Reloading correlation IDs cannot turn a prepared transfer into execution authority.
-    expect(() => assertExactUpdateRecoveryClaim(prepared.record, fence, options)).toThrow(
-      UpdateRecoveryConflictError,
-    );
-    expect(() =>
-      recordUpdateRecoveryFailure(
-        prepared.record,
-        { code: "late-parent", effectId: null },
-        fence,
-        options,
-      ),
-    ).toThrow(UpdateRecoveryConflictError);
-    closeOpenClawStateDatabaseForTest();
-    const before = snapshot(root);
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(prepared.record);
-    expect(snapshot(root)).toEqual(before);
-    const handoffInput = JSON.stringify(prepared.handoff);
-    const accepted = acceptUpdateRecoveryHandoff(JSON.parse(handoffInput), to, fence, options);
-    expect(accepted.claimKind).toBe("handoff");
-    expect(accepted.handoff?.state).toBe("accepted");
-    expect(accepted.claimId).not.toBe(prepared.record.claimId);
-    expect(() => assertExactUpdateRecoveryClaim(accepted, fence, options)).not.toThrow();
-    expect(() => acceptUpdateRecoveryHandoff(prepared.handoff, to, fence, options)).toThrow(
-      UpdateRecoveryConflictError,
-    );
-    expect(JSON.stringify(getUpdateRun(run.runId, options))).not.toContain(
-      prepared.handoff.handoffId,
-    );
-  });
-
-  it("distinguishes an abandoned handoff from normal continuation and rejects the late worker", () => {
-    const { options, run, from, to } = setup();
-    const initial = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
-    expect(initial.claimKind).toBe("initial");
-    const prepared = prepareUpdateRecoveryHandoff(initial, fence, options);
-    closeOpenClawStateDatabaseForTest();
-    const resumed = claimUpdateRecovery(prepared.record, fence, options);
-    expect(resumed.claimKind).toBe("recovery");
-    expect(resumed.handoff).toBeNull();
-    expect(() => acceptUpdateRecoveryHandoff(prepared.handoff, to, fence, options)).toThrow(
-      UpdateRecoveryConflictError,
-    );
-    expect(() => assertExactUpdateRecoveryClaim(resumed, fence, options)).not.toThrow();
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(resumed);
-  });
-
-  it("rejects misbound worker identity without consuming the prepared handoff", () => {
-    const { options, run, from, to } = setup();
-    const initial = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
-    const { record, handoff } = prepareUpdateRecoveryHandoff(initial, fence, options);
-    for (const wrong of [
-      { ...handoff, handoffId: randomUUID() },
-      { ...handoff, transactionId: randomUUID() },
-      { ...handoff, claimId: randomUUID() },
-      { ...handoff, runId: randomUUID() },
-    ]) {
-      expect(() => acceptUpdateRecoveryHandoff(wrong, to, fence, options)).toThrow(
-        UpdateRecoveryConflictError,
-      );
-    }
-    for (const wrong of [
-      { ...to, root: from.root },
-      { ...to, nodePath: path.join(from.root, "node") },
-      { ...to, version: from.version },
-      { ...to, buildId: null },
-    ]) {
-      expect(() => acceptUpdateRecoveryHandoff(handoff, wrong, fence, options)).toThrow(
-        UpdateRecoveryConflictError,
-      );
-    }
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(record);
-    expect(acceptUpdateRecoveryHandoff(handoff, to, fence, options).claimKind).toBe("handoff");
-  });
-
-  it("does not transfer unresolved effects or consume a handoff after losing live exclusion", () => {
-    const fixture = setup();
-    const { options, run, to } = fixture;
-    const initial = beginCapturedRecovery(fixture);
-    const effectId = randomUUID();
-    const intent = recordUpdateRecoveryIntent(
-      initial,
-      {
-        effectId,
-        kind: "package-activation",
-        resourceId: to.root,
-        runtime: "candidate",
-      },
-      fence,
-      options,
-    );
-    expect(() => prepareUpdateRecoveryHandoff(intent, fence, options)).toThrow(
-      "Reconcile outstanding effects",
-    );
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(intent);
-    const observed = recordUpdateRecoveryObservation(
-      intent,
-      { effectId, observedIdentity: "verified-candidate" },
-      fence,
-      options,
-    );
-    const { record, handoff } = prepareUpdateRecoveryHandoff(observed, fence, options);
-    let calls = 0;
-    expect(() =>
-      acceptUpdateRecoveryHandoff(
-        handoff,
-        to,
-        {
-          assertCurrent() {
-            if (++calls === 3) {
-              throw new Error("exclusion lost");
-            }
-          },
-        },
-        options,
-      ),
-    ).toThrow("exclusion lost");
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(record);
-  });
-
+describe("retained recovery read-only compatibility", () => {
   it.each(["candidate", "previous"] as const)(
-    "reopens private %s proof bound to the observed boot without exposing it in history",
+    "reopens private %s proof without exposing it in history",
     (runtime) => {
-      const { options, run, observed, receipt, restartEffectId } = setupReadiness(runtime);
-      const recorded = recordUpdateRecoveryVerification(
-        observed,
-        { runtime, receipt },
-        fence,
-        options,
-      );
+      const f = setup();
+      const record = retainedReadinessRecord(f.record, runtime);
+      storeRetainedUpdateRecovery(record, f.options);
       closeOpenClawStateDatabaseForTest();
-      expect(loadUpdateRecovery(run.runId, options)?.verification).toEqual({
-        runtime,
-        effectId: restartEffectId,
-        receipt,
-      });
-      expect(JSON.stringify(getUpdateRun(run.runId, options))).not.toContain(
-        receipt.gateway.bootId,
-      );
-      expect(recorded.revision).toBe(observed.revision + 1);
+      const before = snapshot(f.root);
+      expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(record);
+      expect(snapshot(f.root)).toEqual(before);
+      expect(JSON.stringify(getUpdateRun(f.run.runId, f.options))).not.toContain("retained-boot");
     },
   );
-
   it.each([
     "run",
     "version",
@@ -469,442 +115,464 @@ describe("durable update recovery", () => {
     "claim",
     "revision",
     "effect",
-  ] as const)("rejects proof from a different %s without changing persisted state", (mismatch) => {
-    const { options, run, observed, receipt } = setupReadiness();
-    if (mismatch === "transaction") {
-      receipt.transactionId = randomUUID();
-    }
-    if (mismatch === "claim") {
-      receipt.claimId = randomUUID();
-    }
-    if (mismatch === "revision") {
-      receipt.revision++;
-    }
-    if (mismatch === "effect") {
-      receipt.effectId = randomUUID();
-    }
-    if (mismatch === "run") {
-      receipt.runId = randomUUID();
-    }
-    if (mismatch === "version") {
-      receipt.gateway.version = "3.0.0";
-    }
-    if (mismatch === "build") {
-      receipt.gateway.buildId = null;
-    }
-    if (mismatch === "boot") {
-      receipt.gateway.bootId = "another-boot";
-    }
-    expect(() =>
-      recordUpdateRecoveryVerification(
-        observed,
-        {
-          runtime: mismatch === "runtime" ? "previous" : "candidate",
-          receipt,
-        },
-        fence,
-        options,
-      ),
-    ).toThrow("final observed update runtime");
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(observed);
-  });
-
+  ] as const)(
+    "rejects retained readiness from a different %s without changing stored state",
+    (mismatch) => {
+      const f = setup();
+      const record = retainedReadinessRecord(f.record);
+      const receipt = record.verification!.receipt;
+      if (mismatch === "run") {
+        receipt.runId = randomUUID();
+      }
+      if (mismatch === "version") {
+        receipt.gateway.version = "3.0.0";
+      }
+      if (mismatch === "build") {
+        receipt.gateway.buildId = null;
+      }
+      if (mismatch === "boot") {
+        receipt.gateway.bootId = "other-boot";
+      }
+      if (mismatch === "runtime") {
+        record.verification!.runtime = "previous";
+      }
+      if (mismatch === "transaction") {
+        receipt.transactionId = randomUUID();
+      }
+      if (mismatch === "claim") {
+        receipt.claimId = randomUUID();
+      }
+      if (mismatch === "revision") {
+        receipt.revision++;
+      }
+      if (mismatch === "effect") {
+        receipt.effectId = randomUUID();
+      }
+      expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow();
+      expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
+    },
+  );
   it.each(["serviceRunning", "pluginsReady", "channelsReady", "settled", "readyz"] as const)(
-    "refuses incomplete %s evidence without persisting verification",
+    "refuses incomplete retained %s evidence",
     (check) => {
-      const { options, run, observed, receipt } = setupReadiness();
+      const f = setup();
+      const record = retainedReadinessRecord(f.record);
       for (const value of [false, undefined]) {
-        const input = { ...receipt, checks: { ...receipt.checks, [check]: value } };
-        expect(() =>
-          recordUpdateRecoveryVerification(
-            observed,
-            {
-              runtime: "candidate",
-              receipt: input as UpdateRecoveryReadinessReceipt,
+        const invalid = {
+          ...record,
+          verification: {
+            ...record.verification,
+            receipt: {
+              ...record.verification!.receipt,
+              checks: { ...record.verification!.receipt.checks, [check]: value },
             },
-            fence,
-            options,
-          ),
-        ).toThrow();
-        expect(loadUpdateRecovery(run.runId, options)).toEqual(observed);
+          },
+        };
+        expect(() => decodeUpdateRecovery(JSON.stringify(invalid), record.runId)).toThrow();
+        expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
       }
     },
   );
-
   it("inspects retained legacy transcript verification without rewriting or admitting work", () => {
-    const { options, run, observed, receipt } = setupReadiness();
-    const legacy = {
-      runId: run.runId,
-      gateway: receipt.gateway,
-      verifiedAtMs: receipt.verifiedAtMs,
-      agentId: "main",
-      sessionKey: "agent:main:legacy",
-      sessionId: "legacy-session",
-      agentRunId: randomUUID(),
-      transcript: {
-        generation: "legacy",
-        maxSeq: 2,
-        user: { entryId: "u", seq: 1 },
-        assistant: { entryId: "a", seq: 2 },
-      },
-    };
-    const raw = JSON.stringify({
-      ...observed,
-      verification: {
-        runtime: "candidate",
-        effectId: receipt.effectId,
-        receipt: legacy,
-      },
-    });
-    const { db } = openOpenClawStateDatabase(options);
-    const key = "update.recovery." + run.runId;
+    const f = setup();
+    const record = retainedReadinessRecord(f.record);
+    const raw = JSON.stringify(legacyRecord(record), null, 2);
+    const db = openOpenClawStateDatabase(f.options).db;
+    const key = "update.recovery." + record.runId;
     db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?").run(raw, key);
-    const inspected = inspectUpdateRecoveries(options);
-    expect(inspected).toHaveLength(1);
-    expect(inspected[0]).toEqual({ format: "legacy-serving", raw, record: JSON.parse(raw) });
-    expect(() => loadUpdateRecovery(run.runId, options)).toThrow(/legacy.*readiness/i);
-    expect(() => assertNoPendingUpdateRecovery(options)).toThrow(/legacy.*readiness/i);
-    expect(
-      db.prepare("SELECT value_json FROM config_machine_state WHERE state_key=?").get(key)
-        ?.value_json,
-    ).toBe(raw);
-    // Neither silently discarding proof nor translating a transcript into readiness is allowed.
-    expect(inspectUpdateRecovery(raw, run.runId)).toEqual(inspected[0]);
-    expect(() => decodeUpdateRecovery(raw, run.runId)).toThrow(/legacy.*readiness/i);
-    expect(() => claimUpdateRecovery(observed, fence, options)).toThrow();
-    expect(() =>
-      recordUpdateRecoveryVerification(observed, { runtime: "candidate", receipt }, fence, options),
-    ).toThrow();
-    expect(
-      db.prepare("SELECT value_json FROM config_machine_state WHERE state_key=?").get(key)
-        ?.value_json,
-    ).toBe(raw);
+    closeOpenClawStateDatabaseForTest();
+    const before = snapshot(f.root);
+    const inspected = inspectUpdateRecoveries(f.options);
+    expect(inspected).toEqual([{ format: "legacy-serving", raw, record: JSON.parse(raw) }]);
+    expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i);
+    expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(/legacy.*readiness/i);
+    expect(snapshot(f.root)).toEqual(before);
+    expect(inspectUpdateRecovery(raw, record.runId)).toEqual(inspected[0]);
+    expect(() => decodeUpdateRecovery(raw, record.runId)).toThrow(/legacy.*readiness/i);
     const corrupt = JSON.parse(raw);
     corrupt.verification.receipt.transcript.assistant.seq = 0;
-    expect(() => inspectUpdateRecovery(JSON.stringify(corrupt), run.runId)).toThrow();
+    expect(() => inspectUpdateRecovery(JSON.stringify(corrupt), record.runId)).toThrow();
     const stale = JSON.parse(raw);
     stale.effects.push({
-      ...observed.effects.at(-1),
+      ...record.effects.at(-1),
       effectId: randomUUID(),
       observedIdentity: "later-boot",
     });
-    expect(() => inspectUpdateRecovery(JSON.stringify(stale), run.runId)).toThrow();
-    corrupt.verification.receipt = { ...legacy, kind: "readiness" };
-    expect(() => inspectUpdateRecovery(JSON.stringify(corrupt), run.runId)).toThrow();
+    expect(() => inspectUpdateRecovery(JSON.stringify(stale), record.runId)).toThrow();
+    corrupt.verification.receipt = { ...JSON.parse(raw).verification.receipt, kind: "readiness" };
+    expect(() => inspectUpdateRecovery(JSON.stringify(corrupt), record.runId)).toThrow();
     expect(() => inspectUpdateRecovery(raw, randomUUID())).toThrow("history run");
-    const bare = { ...observed, verification: null };
-    expect(encodeUpdateRecovery(decodeUpdateRecovery(JSON.stringify(bare), run.runId))).toBe(
-      JSON.stringify(bare),
+    expect(JSON.stringify(decodeUpdateRecovery(JSON.stringify(f.record), f.record.runId))).toBe(
+      JSON.stringify(f.record),
     );
   });
-
-  it("cannot reuse same-boot readiness after the claim is reclaimed", () => {
-    const { options, run, observed, receipt } = setupReadiness();
-    const claimed = claimUpdateRecovery(observed, fence, options);
-    expect(() =>
-      recordUpdateRecoveryVerification(
-        claimed,
-        {
-          runtime: "candidate",
-          receipt,
-        },
-        fence,
-        options,
-      ),
-    ).toThrow();
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(claimed);
-  });
-
-  it.each([
-    "service-restart",
-    "checkpoint-restore",
-    "package-activation",
-    "package-restore",
-    "claim",
-  ] as const)(
-    "invalidates readiness proof before %s and rejects a stale revision",
-    (transition) => {
-      const { options, run, observed, receipt } = setupReadiness();
-      const verified = recordUpdateRecoveryVerification(
-        observed,
-        { runtime: "candidate", receipt },
-        fence,
-        options,
-      );
-      const next =
-        transition === "claim"
-          ? claimUpdateRecovery(verified, fence, options)
-          : recordUpdateRecoveryIntent(
-              verified,
-              {
-                effectId: randomUUID(),
-                kind: transition,
-                resourceId: "gateway",
-                runtime: "candidate",
-              },
-              fence,
-              options,
-            );
-      expect(loadUpdateRecovery(run.runId, options)?.verification).toBeNull();
-      expect(() =>
-        recordUpdateRecoveryVerification(
-          verified,
-          { runtime: "candidate", receipt },
-          fence,
-          options,
-        ),
-      ).toThrow(UpdateRecoveryConflictError);
-      if (transition !== "claim") {
-        expect(() =>
-          recordUpdateRecoveryVerification(next, { runtime: "candidate", receipt }, fence, options),
-        ).toThrow("final observed update runtime");
-      }
-    },
-  );
-
   it("keeps missing-state reads non-creating", () => {
-    const root = tempDirs.make("openclaw-update-recovery-empty-");
+    const root = dirs.make("retained-empty-");
     const options = { env: { OPENCLAW_STATE_DIR: root } };
     expect(loadUpdateRecovery("missing-run", options)).toBeUndefined();
     expect(inspectUpdateRecoveries(options)).toEqual([]);
     expect(() => assertNoPendingUpdateRecovery(options)).not.toThrow();
     expect(fs.readdirSync(root)).toEqual([]);
   });
-
-  it("reopens exact identity and detects interruption without writing any database artifact", () => {
-    const fixture = setup();
-    const { root, options, run, from } = fixture;
-    const record = beginCapturedRecovery(fixture);
-    const effectId = randomUUID();
-    const pending = recordUpdateRecoveryIntent(
-      record,
-      {
-        effectId,
-        kind: "package-activation",
-        resourceId: from.root,
-        runtime: "candidate",
-      },
-      fence,
-      options,
-    );
-    recordUpdateRunStep(
-      run.runId,
-      { step: "private", status: "completed", detail: from.root },
-      options,
-    );
-    // Closing all owner handles and reopening must not need a transaction closure.
-    closeOpenClawStateDatabaseForTest();
-    const before = snapshot(root);
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(pending);
-    expect(() => assertNoPendingUpdateRecovery(options)).toThrow(UpdateRecoveryRequiredError);
-    expect(snapshot(root)).toEqual(before);
-    expect(JSON.stringify(getUpdateRun(run.runId, options))).not.toContain(from.root);
-  });
-
-  it("fences a stale claimant and will not skip an unresolved effect", () => {
-    const { options, run, from, to } = setup();
-    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
-    const claimed = claimUpdateRecovery(record, fence, options);
-    expect(claimed.claimId).not.toBe(record.claimId);
-    expect(() => claimUpdateRecovery(record, fence, options)).toThrow(UpdateRecoveryConflictError);
-    const effectId = randomUUID();
-    const pending = recordUpdateRecoveryIntent(
-      claimed,
-      {
-        effectId,
-        kind: "checkpoint-restore",
-        resourceId: "shared-db",
-        runtime: "previous",
-      },
-      fence,
-      options,
-    );
-    expect(() =>
-      recordUpdateRecoveryIntent(
-        pending,
+  it("reopens exact interrupted identity without writing database artifacts or exposing source paths", () => {
+    const f = setup();
+    const record = {
+      ...f.record,
+      primaryFailure: { code: "candidate-failed", effectId: null },
+      effects: [
         {
           effectId: randomUUID(),
-          kind: "service-restart",
-          resourceId: "gateway",
-          runtime: "previous",
+          kind: "package-activation" as const,
+          resourceId: f.from.root,
+          runtime: "candidate" as const,
+          state: "intent" as const,
+          observedIdentity: null,
         },
-        fence,
-        options,
-      ),
-    ).toThrow("outstanding recovery effect");
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(pending);
-    const observed = recordUpdateRecoveryObservation(
-      pending,
-      {
-        effectId,
-        observedIdentity: "sha256:" + "a".repeat(64),
-      },
-      fence,
-      options,
+      ],
+    };
+    storeRetainedUpdateRecovery(record, f.options);
+    recordUpdateRunStep(
+      f.run.runId,
+      { step: "private", status: "completed", detail: f.from.root },
+      f.options,
     );
-    expect(observed.effects.at(-1)).toMatchObject({ state: "observed" });
-    expect(() =>
-      recordUpdateRecoveryObservation(
-        pending,
-        {
-          effectId,
-          observedIdentity: "sha256:" + "b".repeat(64),
-        },
-        fence,
-        options,
-      ),
-    ).toThrow(UpdateRecoveryConflictError);
+    closeOpenClawStateDatabaseForTest();
+    const before = snapshot(f.root);
+    expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
+    expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
+    expect(snapshot(f.root)).toEqual(before);
+    expect(JSON.stringify(getUpdateRun(record.runId, f.options))).not.toContain(f.from.root);
   });
-
-  it("keeps recovery active despite diagnostic terminal writes and rejects another transaction", () => {
-    const { options, run, from, to } = setup();
-    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
-    finishUpdateRun(run.runId, { status: "failed", reason: "interrupted" }, options);
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(record);
-    expect(() => beginUpdateRecovery({ runId: run.runId, from, to }, fence, options)).toThrow(
-      UpdateRecoveryRequiredError,
-    );
+  it("does not retire recovery through diagnostic terminal writes", () => {
+    const f = setup();
+    finishUpdateRun(f.run.runId, { status: "failed", reason: "interrupted" }, f.options);
+    expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
+    expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
   });
-
-  it("preserves the primary failure and rolls back a lost live fence", () => {
-    const { options, run, from, to } = setup();
-    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
-    const failed = recordUpdateRecoveryFailure(
-      record,
-      { code: "verification-failed", effectId: null },
-      fence,
-      options,
-    );
-    const again = recordUpdateRecoveryFailure(
-      failed,
-      { code: "restore-conflict", effectId: null },
-      fence,
-      options,
-    );
-    expect(again.primaryFailure?.code).toBe("verification-failed");
-    let calls = 0;
-    expect(() =>
-      claimUpdateRecovery(
-        again,
-        {
-          assertCurrent() {
-            if (++calls === 3) {
-              throw new Error("exclusion lost");
-            }
-          },
-        },
-        options,
-      ),
-    ).toThrow("exclusion lost");
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(again);
-  });
-
-  it("preserves the entire schema while persisting private records alongside history", () => {
-    const { options, run, from, to } = setup();
-    const { db } = openOpenClawStateDatabase(options);
+  it("preserves schema, version and history during retained reads", () => {
+    const f = setup();
+    const db = openOpenClawStateDatabase(f.options).db;
     const schema = () => db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all();
     const before = schema();
     const version = db.prepare("PRAGMA user_version").get();
-    const history = getUpdateRun(run.runId, options);
-    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(record);
-    expect(getUpdateRun(run.runId, options)).toEqual(history);
+    const history = getUpdateRun(f.run.runId, f.options);
+    expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
     expect(schema()).toEqual(before);
     expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
+    expect(getUpdateRun(f.run.runId, f.options)).toEqual(history);
   });
-
-  it("rejects corrupt operational records without erasing them or admitting new work", () => {
-    const { options, run } = setup();
-    const { db } = openOpenClawStateDatabase(options);
-    const key = "update.recovery." + run.runId;
-    db.prepare(
-      "INSERT INTO config_machine_state (value_json,state_key,updated_at_ms) VALUES (?,?,0)",
-    ).run('{"revision":1}', key);
-    expect(() => assertNoPendingUpdateRecovery(options)).toThrow();
+  it("refuses corrupt records without erasing them or admitting new work", () => {
+    const f = setup();
+    const db = openOpenClawStateDatabase(f.options).db;
+    const key = "update.recovery." + f.run.runId;
+    db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?").run(
+      '{"revision":1}',
+      key,
+    );
+    expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow();
     expect(
-      db.prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?").get(key)
+      db.prepare("SELECT value_json FROM config_machine_state WHERE state_key=?").get(key)
         ?.value_json,
     ).toBe('{"revision":1}');
   });
-});
-
-defineUpdateRecoveryArtifactTests();
-defineUpdateRecoveryPackageTests();
-
-describe("systemd native identity binding", () => {
-  it.each(["scope", "uid", "unit", "unit-space"] as const)(
-    "rejects a different systemd %s during pending readback without advancing its record",
-    async (field) => {
-      const f = await setupNativeManagerFixture(
-        fs.realpathSync(tempDirs.make("recovery-systemd-")),
-        "linux",
-        true,
-      );
-      let record = await f.bind();
-      if (f.identity.platform !== "linux" || f.identity.scope !== "user") {
-        throw new Error("Expected user-manager fixture");
+  it("requires a numeric user-manager UID and forbids it on system scope in retained records", () => {
+    const f = setup();
+    const record = nativeRecord(f.record);
+    const identity = record.nativeManager!.identity;
+    for (const uid of [undefined, null, "0", -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const invalid = {
+        ...record,
+        nativeManager: { ...record.nativeManager, identity: { ...identity, uid } },
+      };
+      expect(() => decodeUpdateRecovery(JSON.stringify(invalid), record.runId)).toThrow();
+    }
+    expect(() =>
+      decodeUpdateRecovery(
+        JSON.stringify({
+          ...record,
+          nativeManager: { ...record.nativeManager, identity: { ...identity, scope: "system" } },
+        }),
+        record.runId,
+      ),
+    ).toThrow();
+    const { uid: _uid, ...withoutUid } = identity as typeof identity & { uid: number };
+    expect(() =>
+      decodeUpdateRecovery(
+        JSON.stringify({
+          ...record,
+          nativeManager: { ...record.nativeManager, identity: { ...withoutUid, scope: "system" } },
+        }),
+        record.runId,
+      ),
+    ).not.toThrow();
+  });
+  it.each(["run", "state", "config", "profile", "revision"] as const)(
+    "rejects misbound retained native %s facts",
+    (mismatch) => {
+      const f = setup();
+      const record = nativeRecord(f.record);
+      const native = record.nativeManager!;
+      if (mismatch === "run") {
+        native.identity.runId = randomUUID();
       }
-      const target = { ...f.original, stopped: true };
-      const effectId = randomUUID();
-      record = (
-        await recordUpdateRecoveryNativeIntent(
-          record,
-          { effectId, action: "stop", target, observe: f.observe },
-          f.fence,
-          f.options,
-        )
-      ).record;
-      const { uid: _uid, ...system } = f.identity;
-      const identity: UpdateRecoveryNativeIdentity =
-        field === "scope"
-          ? { ...system, scope: "system" }
-          : field === "uid"
-            ? { ...f.identity, uid: 1001 }
-            : {
-                ...f.identity,
-                unitName: f.identity.unitName + (field === "unit" ? "-other" : " "),
-              };
-      f.setFacts(target);
-      await expect(
-        recordUpdateRecoveryNativeObservation(
-          record,
-          effectId,
-          async () => ({ identity, facts: target }),
-          f.fence,
-          f.options,
-        ),
-      ).rejects.toThrow();
-      expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
-      const observed = await recordUpdateRecoveryNativeObservation(
-        record,
-        effectId,
-        f.observe,
-        f.fence,
-        f.options,
-      );
-      expect(observed.status).toBe("after");
-      expect(observed.record.nativeManager!.effects.at(-1)?.state).toBe("observed");
+      if (mismatch === "state") {
+        native.identity.stateDir += "-different";
+      }
+      if (mismatch === "config") {
+        native.identity.configPath += "-different";
+      }
+      if (mismatch === "profile") {
+        native.identity.profile = "different";
+      }
+      if (mismatch === "revision") {
+        native.boundAtRevision++;
+      }
+      expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow();
     },
   );
+  it.each([false, true])(
+    "inspects legacy terminal roles without granting readiness (rollback=%s)",
+    (rollback) => {
+      const f = setup();
+      const record = retainedTerminalRecord(f.record, rollback);
+      const legacy = legacyRecord(record);
+      const raw = JSON.stringify(legacy, null, 2);
+      expect(inspectUpdateRecovery(raw, record.runId)).toEqual({
+        format: "legacy-serving",
+        raw,
+        record: legacy,
+      });
+      expect(() => decodeUpdateRecovery(raw, record.runId)).toThrow(/legacy.*readiness/i);
+      for (const field of ["version", "buildId", "bootId"] as const) {
+        const invalid = structuredClone(legacy);
+        invalid.terminal!.receipt.gateway[field] = "wrong";
+        expect(() => inspectUpdateRecovery(JSON.stringify(invalid), record.runId)).toThrow();
+      }
+      const wrongPair = structuredClone(legacy);
+      wrongPair.terminal!.pairId = randomUUID();
+      expect(() => inspectUpdateRecovery(JSON.stringify(wrongPair), record.runId)).toThrow();
+      const wrongRole = structuredClone(legacy);
+      wrongRole.effects.at(-1)!.runtime = rollback ? "candidate" : "previous";
+      expect(() => inspectUpdateRecovery(JSON.stringify(wrongRole), record.runId)).toThrow();
+    },
+  );
+});
 
-  it("requires an explicit numeric user-manager UID and rejects one on system scope", async () => {
-    const f = await setupNativeManagerFixture(
-      fs.realpathSync(tempDirs.make("recovery-systemd-")),
-      "linux",
-      true,
-    );
-    if (f.identity.platform !== "linux" || f.identity.scope !== "user") {
-      throw new Error("Expected user-manager fixture");
-    }
-    const { uid: _uid, ...withoutUid } = f.identity;
-    for (const uid of [undefined, null, "0", -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-      expect(RecoveryNativeIdentitySchema.safeParse({ ...withoutUid, uid }).success).toBe(false);
-    }
-    expect(RecoveryNativeIdentitySchema.safeParse({ ...f.identity, scope: "system" }).success).toBe(
-      false,
-    );
-    expect(RecoveryNativeIdentitySchema.safeParse({ ...withoutUid, scope: "system" }).success).toBe(
-      true,
-    );
+// Retained decoder negatives migrated from the removed journal writer tests.
+it.each([
+  "facts",
+  "revision",
+  "action",
+  "original-after",
+  "missing-marker",
+  "intent-marker",
+  "missing-failure",
+] as const)("rejects corrupt retained suppression reconciliation: %s", (change) => {
+  const f = setup();
+  const record = nativeRecord(f.record);
+  const native = record.nativeManager!;
+  const running = native.original;
+  const stopped = { ...running, stopped: true };
+  const suppressed = { ...running, enabled: false };
+  const restartId = randomUUID();
+  native.effects = [
+    {
+      effectId: randomUUID(),
+      action: "stop",
+      before: running,
+      after: stopped,
+      state: "observed",
+      intentRevision: 1,
+      observedRevision: 2,
+    },
+    {
+      effectId: restartId,
+      action: "restore",
+      before: stopped,
+      after: running,
+      state: "observed",
+      intentRevision: 3,
+      observedRevision: 4,
+    },
+    {
+      effectId: randomUUID(),
+      action: "suppress",
+      before: running,
+      after: suppressed,
+      state: "reconciled",
+      intentRevision: 5,
+      reconciledStop: { facts: { ...suppressed, stopped: true }, revision: 6 },
+    },
+  ];
+  record.revision = 6;
+  record.checkpoint = retainedCheckpointBinding(record);
+  record.primaryFailure = { code: "candidate-failed", effectId: restartId };
+  record.effects = [
+    {
+      effectId: restartId,
+      kind: "service-restart",
+      runtime: "candidate",
+      resourceId: "gateway",
+      state: "intent",
+      observedIdentity: null,
+    },
+  ];
+  expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).not.toThrow();
+  const invalid = structuredClone(record);
+  const effect = invalid.nativeManager!.effects.at(-1)!;
+  if (change === "facts") {
+    effect.reconciledStop!.facts.stopped = false;
+  }
+  if (change === "revision") {
+    effect.reconciledStop!.revision = effect.intentRevision;
+  }
+  if (change === "action") {
+    effect.action = "restore";
+  }
+  if (change === "original-after") {
+    effect.after.loaded = false;
+  }
+  if (change === "missing-marker") {
+    effect.state = "reconciled";
+    delete effect.reconciledStop;
+  }
+  if (change === "intent-marker") {
+    effect.state = "intent";
+  }
+  if (change === "missing-failure") {
+    invalid.primaryFailure = null;
+  }
+  expect(() => decodeUpdateRecovery(JSON.stringify(invalid), record.runId)).toThrow();
+});
+it("refuses a retained not-applied native effect without failure or with an unchanged target", () => {
+  const f = setup();
+  const record = nativeRecord(f.record);
+  const native = record.nativeManager!;
+  const before = { ...native.original, stopped: true };
+  native.original = before;
+  native.effects = [
+    {
+      effectId: randomUUID(),
+      action: "restore",
+      before,
+      after: { ...before, stopped: false },
+      state: "not-applied",
+      intentRevision: 1,
+      observedRevision: 2,
+    },
+  ];
+  // Restoration target must equal the captured running job; keep the earlier stop in history.
+  native.original = { ...before, stopped: false };
+  native.effects.unshift({
+    effectId: randomUUID(),
+    action: "stop",
+    before: native.original,
+    after: before,
+    state: "observed",
+    intentRevision: 1,
+    observedRevision: 2,
   });
+  native.effects[1]!.intentRevision = 3;
+  native.effects[1]!.observedRevision = 4;
+  record.revision = 4;
+  record.primaryFailure = { code: "failed-start", effectId: null };
+  expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).not.toThrow();
+  expect(() =>
+    decodeUpdateRecovery(JSON.stringify({ ...record, primaryFailure: null }), record.runId),
+  ).toThrow();
+  const impossible = structuredClone(record);
+  impossible.nativeManager!.effects.at(-1)!.after = { ...before };
+  expect(() => decodeUpdateRecovery(JSON.stringify(impossible), record.runId)).toThrow();
+});
+it.each(["run", "state", "config", "root", "node", "version", "revision"] as const)(
+  "rejects retained preimage misbinding: %s",
+  (field) => {
+    const f = setup();
+    const record = nativeRecord(f.record);
+    delete record.nativeManager;
+    const early = record.preimages!;
+    expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).not.toThrow();
+    if (field === "run") {
+      early.binding.runId = randomUUID();
+    }
+    if (field === "state") {
+      early.binding.stateDir += "-other";
+    }
+    if (field === "config") {
+      early.binding.configPath += "-other";
+    }
+    if (field === "root") {
+      early.binding.fromRuntime.root += "-other";
+    }
+    if (field === "node") {
+      early.binding.fromRuntime.nodePath += "-other";
+    }
+    if (field === "version") {
+      early.binding.fromRuntime.version = "0.0.0";
+    }
+    if (field === "revision") {
+      early.boundAtRevision++;
+    }
+    expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow();
+  },
+);
+it("rejects early-file references reused as a full checkpoint", () => {
+  const f = setup();
+  const record = nativeRecord(f.record);
+  delete record.nativeManager;
+  const early = record.preimages!;
+  record.checkpoint = { ref: early.ref, binding: early.binding, preimageRef: early.ref };
+  expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow();
+});
+it("inspects selected and superseded legacy pairs byte-exactly without admitting work", () => {
+  const f = setup();
+  const nextRun = createUpdateRun({ trigger: "cli" }, f.options);
+  const a = retainedTerminalRecord(f.record);
+  const b = retainedTerminalRecord(
+    createRetainedUpdateRecovery(
+      { runId: nextRun.runId, from: f.to, to: { ...f.to, version: "3.0.0" } },
+      f.options,
+    ),
+  );
+  a.retainedPair = { ...a.retainedPair!, state: "superseded", replacementRunId: b.runId };
+  a.package!.descriptor.retention = {
+    state: "superseded",
+    pairId: a.retainedPair.pairId,
+    ownerRevision: 4,
+    replacement: {
+      pairId: b.retainedPair!.pairId,
+      transactionId: b.transactionId,
+      live: b.package!.descriptor.candidate,
+      retainedRoot: b.package!.descriptor.backupRoot,
+      retained: b.package!.descriptor.previous!,
+      launchers: [],
+    },
+  };
+  a.package!.observed.descriptor = a.package!.descriptor;
+  const records = [a, b].map(legacyRecord);
+  const raw = records.map((record) => JSON.stringify(record, null, 2));
+  const db = openOpenClawStateDatabase(f.options).db;
+  records.forEach((record, i) =>
+    db
+      .prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
+      .run(raw[i]!, "update.recovery." + record.runId),
+  );
+  closeOpenClawStateDatabaseForTest();
+  const before = snapshot(f.root);
+  const inspected = inspectUpdateRecoveries(f.options);
+  expect(inspected).toHaveLength(2);
+  records.forEach((record, i) =>
+    expect(inspected.find((entry) => entry.record.runId === record.runId)).toEqual({
+      format: "legacy-serving",
+      raw: raw[i],
+      record,
+    }),
+  );
+  expect(
+    inspected
+      .filter((entry) => entry.record.retainedPair?.state === "selected")
+      .map((entry) => entry.record.runId),
+  ).toEqual([b.runId]);
+  expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(/legacy.*readiness/i);
+  expect(snapshot(f.root)).toEqual(before);
 });

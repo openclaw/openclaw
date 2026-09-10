@@ -1,22 +1,16 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
-import { createPackageRecoveryTransaction } from "../../infra/package-update-recovery.js";
-import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { legacyRecord } from "../../infra/update-run-recovery-legacy.test-support.js";
-import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
 import {
-  beginUpdateRecovery,
-  bindUpdateRecoveryCheckpoint,
-  bindUpdateRecoveryAfterImage,
-  recordUpdateRecoveryIntent,
-  recordUpdateRecoveryObservation,
-  recordUpdateRecoveryFailure,
-  loadUpdateRecovery,
-} from "../../infra/update-run-recovery.js";
+  createRetainedUpdateRecovery,
+  storeRetainedUpdateRecovery,
+  retainedReadinessRecord,
+  retainedTerminalRecord,
+} from "../../infra/update-retained-recovery.test-support.js";
+import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { legacyRecord } from "../../infra/update-run-recovery-legacy.test-support.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -27,10 +21,6 @@ import {
   finishSuccessfulPackageSwitch,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
-import {
-  finalizeUpdateCommandRecovery,
-  persistUpdateCommandServingReceipt,
-} from "./update-command-recovery.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -53,7 +43,6 @@ async function fixture(rollback = false) {
       JSON.stringify({ name: "openclaw", version }),
     );
   }
-  const reader = createPackageIntegrityReader();
   const run = createUpdateRun({ trigger: "cli" }, options);
   const from = { root: live, nodePath: process.execPath, version: "1.0.0", buildId: null };
   const to = { ...from, version: "2.0.0" };
@@ -65,7 +54,7 @@ async function fixture(rollback = false) {
       }
     },
   };
-  let record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
+  let record = createRetainedUpdateRecovery({ runId: run.runId, from, to }, options);
   const recovery = {
     getRecord: () => record,
     onRecord: (next: typeof record) => {
@@ -76,122 +65,18 @@ async function fixture(rollback = false) {
     assertReady: () => fence.assertCurrent(),
   };
   const opts: UpdateCommandOptions = { json: true, run: { runId: run.runId, env }, recovery };
-  const owner = createPackageRecoveryTransaction(
-    {
-      version: 1,
-      transactionId: record.transactionId,
-      packageName: "openclaw",
-      liveRoot: live,
-      stageRoot: stage,
-      backupRoot: backup,
-      binDir: path.join(root, "bin"),
-      shimBackupRoot: null,
-      shimBackupIdentity: null,
-      previous: await reader.tree(live),
-      candidate: await reader.tree(stage, live),
-      launchers: [],
-      interruptedLaunchers: [],
-      retention: null,
-    },
-    createUpdateRecoveryPackageHooks(recovery),
-  );
-  await owner.prepare();
-  // Checkpoint owner facts are supplied at its persistence seam. These tests
-  // exercise real package roles and SQLite consumers, not artifact capture or exclusion.
-  const checkpoint = {
-    ref: {
-      checkpointId: randomUUID(),
-      manifestPath: path.join(root, "before", "manifest.json"),
-      manifestSha256: "a".repeat(64),
-    },
-    binding: {
-      runId: run.runId,
-      stateDir: root,
-      configPath: path.join(root, "openclaw.json"),
-      fromRuntime: { root: from.root, nodePath: from.nodePath, version: from.version },
-    },
-  };
-  record = bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options);
-  const activation = await owner.beforeActivation();
-  await fs.rename(live, backup);
-  await fs.rename(stage, live);
-  await owner.afterActivation(activation);
-  record = bindUpdateRecoveryAfterImage(
-    record,
-    {
-      checkpointRef: checkpoint.ref,
-      afterUpdate: {
-        binding: checkpoint.binding,
-        ref: {
-          checkpointId: randomUUID(),
-          manifestPath: path.join(root, "after", "manifest.json"),
-          manifestSha256: "b".repeat(64),
-        },
-      },
-      effectIds: record.effects.map((effect) => effect.effectId),
-    },
-    fence,
-    options,
-  );
+  record = retainedReadinessRecord(record, rollback ? "previous" : "candidate");
   if (rollback) {
-    record = recordUpdateRecoveryFailure(
-      record,
-      { code: "candidate-failed", effectId: null },
-      fence,
-      options,
-    );
-    const restoreId = randomUUID();
-    record = recordUpdateRecoveryIntent(
-      record,
-      {
-        effectId: restoreId,
-        kind: "checkpoint-restore",
-        resourceId: checkpoint.ref.checkpointId,
-        runtime: "previous",
-      },
-      fence,
-      options,
-    );
-    record = recordUpdateRecoveryObservation(
-      record,
-      { effectId: restoreId, observedIdentity: "checkpoint-owner-restored" },
-      fence,
-      options,
-    );
-    expect((await owner.rollback()).status).toBe("verified");
+    record.primaryFailure = { code: "candidate-failed", effectId: null };
   }
-  const runtime = rollback ? "previous" : "candidate";
-  const restartId = randomUUID();
-  record = recordUpdateRecoveryIntent(
-    record,
-    { effectId: restartId, kind: "service-restart", resourceId: "gateway", runtime },
-    fence,
-    options,
-  );
-  record = recordUpdateRecoveryObservation(
-    record,
-    { effectId: restartId, observedIdentity: "boot" },
-    fence,
-    options,
-  );
-  persistUpdateCommandServingReceipt(opts, {
-    runId: run.runId,
-    gateway: { bootId: "boot", version: rollback ? from.version : to.version, buildId: null },
-    kind: "readiness",
-    transactionId: record.transactionId,
-    claimId: record.claimId,
-    revision: record.revision,
-    effectId: restartId,
-    runtime,
-    checks: {
-      serviceRunning: true,
-      pluginsReady: true,
-      channelsReady: true,
-      settled: true,
-      readyz: true,
-    },
-    verifiedAtMs: Date.now(),
-  });
+  if (!rollback) {
+    await fs.rename(live, backup);
+    await fs.rename(stage, live);
+  } else {
+    await fs.mkdir(backup, { recursive: true });
+    await fs.writeFile(path.join(backup, "package.json"), '{"name":"openclaw","version":"2.0.0"}');
+  }
+  storeRetainedUpdateRecovery(record, options);
   return {
     opts,
     recovery,
@@ -247,113 +132,43 @@ describe("durable terminal finalizer consumer", () => {
     expect(f.reload()?.terminal).toBeUndefined();
   });
 
-  it("commits history and selection, then retains the previous package without deletion", async () => {
-    const f = await fixture();
-    const complete = () => {
-      throw new Error("legacy cleanup must not run");
-    };
-    await finishSuccessfulPackageSwitch(
-      { packageRoot: f.live, run: f.opts.run },
-      {
-        opts: f.opts,
-        packageTransaction: {
-          backupRoot: f.backup,
-          complete,
-          rollback: async () => {
-            throw new Error("legacy rollback must not run");
-          },
-        },
-      },
-    );
-    const committed = f.reload();
-    expect(committed?.retainedPair?.state).toBe("selected");
-    expect(committed?.package?.descriptor.retention?.state).toBe("selected");
-    expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("succeeded");
-    expect(await fs.readFile(path.join(f.backup, "package.json"), "utf8")).toContain("1.0.0");
-    expect(JSON.stringify(getUpdateRun(f.run.runId, f.options))).not.toContain("pluginsReady");
-  });
-
-  it("leaves rolled-back material for explicit retirement without selecting a replacement", async () => {
-    const f = await fixture(true);
-    await expect(
-      finishSuccessfulPackageSwitch(
-        { packageRoot: f.live, run: f.opts.run },
-        {
-          opts: f.opts,
-          result: {
-            status: "error",
-            mode: "npm",
-            root: f.live,
-            steps: [],
-            durationMs: 0,
-            reason: "candidate-failed",
-          },
-        },
-      ),
-    ).rejects.toMatchObject({ name: "UpdateCommandFailure" });
-    expect(f.reload()?.terminal?.status).toBe("rolled-back");
-    expect(f.record.retainedPair).toBeUndefined();
-    expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("rolled-back");
-    expect(await fs.readFile(path.join(f.live, "package.json"), "utf8")).toContain("1.0.0");
-    expect(await fs.stat(f.backup + ".candidate")).toBeDefined();
-  });
-
-  it("rolls back the terminal transaction when readiness is lost at its final check", async () => {
-    const f = await fixture();
-    let checks = 0;
-    f.recovery.assertReady = () => {
-      if (++checks === 2) {
-        throw new Error("readiness lost");
+  it.each(["pending", "lost readiness", "unavailable package"] as const)(
+    "refuses retained full-state finalization (%s) without committing or cleaning",
+    async (mode) => {
+      const f = await fixture();
+      if (mode === "lost readiness") {
+        f.revoke();
       }
-    };
-    const before = f.record;
-    await expect(finalizeUpdateCommandRecovery(f.opts, "succeeded")).rejects.toMatchObject({
-      name: "UpdateCommandRecoveryPendingError",
-    });
-    expect(f.reload()).toEqual(before);
-    expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
-    expect(await fs.stat(f.backup)).toBeDefined();
-  });
-
-  it("keeps a committed selection after a lost acknowledgement and resumes retention once", async () => {
-    const f = await fixture();
-    const accept = f.recovery.onRecord;
-    let loseAck = true;
-    f.recovery.onRecord = (next) => {
-      accept(next);
-      if (next.terminal && loseAck) {
-        loseAck = false;
-        throw new Error("ack lost");
+      if (mode === "unavailable package") {
+        await fs.rename(f.backup, f.backup + "-unavailable");
       }
-    };
-    await expect(finalizeUpdateCommandRecovery(f.opts, "succeeded")).rejects.toMatchObject({
-      name: "UpdateCommandRecoveryPendingError",
-    });
-    const pairId = f.reload()?.retainedPair?.pairId;
-    expect(pairId).toBeTruthy();
-    await finalizeUpdateCommandRecovery(f.opts, "succeeded");
-    expect(f.reload()?.retainedPair?.pairId).toBe(pairId);
-    expect(await fs.stat(f.backup)).toBeDefined();
-  });
-
-  it("does not commit or clean when fresh package inspection is unavailable", async () => {
-    const f = await fixture();
-    await fs.rename(f.backup, f.backup + "-unavailable");
-    const before = f.record;
-    await expect(finalizeUpdateCommandRecovery(f.opts, "succeeded")).rejects.toMatchObject({
-      name: "UpdateCommandRecoveryPendingError",
-    });
-    expect(f.reload()).toEqual(before);
-    expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
-    expect(await fs.stat(f.live)).toBeDefined();
-  });
+      const before = f.reload();
+      await expect(
+        finishSuccessfulPackageSwitch({ packageRoot: f.live, run: f.opts.run }, { opts: f.opts }),
+      ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure" });
+      expect(f.reload()).toEqual(before);
+      expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
+      expect(await fs.stat(f.live)).toBeDefined();
+      expect(
+        await fs.stat(mode === "unavailable package" ? f.backup + "-unavailable" : f.backup),
+      ).toBeDefined();
+    },
+  );
 });
 
 describe("historical terminal completion diagnostics", () => {
   async function historical(rollback: boolean, terminal = true) {
     const f = await fixture(rollback);
     if (terminal) {
-      await finalizeUpdateCommandRecovery(f.opts, rollback ? "rolled-back" : "succeeded");
+      f.recovery.onRecord(retainedTerminalRecord(f.record, rollback));
+      finishUpdateRun(
+        f.run.runId,
+        {
+          status: rollback ? "rolled-back" : "succeeded",
+          ...(rollback ? { reason: "candidate-failed" } : {}),
+        },
+        f.options,
+      );
     }
     const saved = JSON.stringify(legacyRecord(f.record), null, 2);
     const source = openOpenClawStateDatabase(f.options);

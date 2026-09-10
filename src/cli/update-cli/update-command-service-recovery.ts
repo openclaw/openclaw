@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   readGatewayServiceState,
   resolveGatewayService,
@@ -39,6 +40,7 @@ type PostUpdateGatewayHealthRecoveryDeps = {
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   updateRun?: UpdateCommandOptions["run"];
+  assertCurrent?: () => void;
   preserveDefinition?: boolean;
   health: GatewayRestartSnapshot;
   service: GatewayService;
@@ -51,6 +53,12 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   health: GatewayRestartSnapshot;
   launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
 }> {
+  const executor = params.updateRun?.executorFence;
+  const assertCurrent = () => {
+    executor?.assertCurrent();
+    params.assertCurrent?.();
+  };
+  assertCurrent();
   if (params.health.healthy || params.preserveDefinition) {
     return { health: params.health, launchAgentRecovery: null };
   }
@@ -58,10 +66,24 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   const recoverLaunchAgent =
     params.deps?.recoverLaunchAgent ?? recoverInstalledLaunchAgentAfterUpdate;
   const startedAtMs = Date.now();
-  const launchAgentRecovery = await recoverLaunchAgent({
-    service: params.service,
-    env: params.env,
-  });
+  const launchAgentRecovery = await withGatewayServiceOperationLock(
+    params.env ?? process.env,
+    async (assertNative) => {
+      const assertRecovery = () => {
+        assertCurrent();
+        assertNative();
+      };
+      assertRecovery();
+      const recovery = await recoverLaunchAgent({
+        service: params.service,
+        env: params.env,
+        assertCurrent: assertRecovery,
+      });
+      assertRecovery();
+      return recovery;
+    },
+  );
+  assertCurrent();
   // Native repair can succeed while readiness still fails; retain both observed outcomes.
   if (launchAgentRecovery.attempted && params.updateRun) {
     const endedAtMs = Date.now();
@@ -95,6 +117,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     supervisorKeepsAlive: true,
     settle: { probes: 12 },
   });
+  assertCurrent();
   return { health, launchAgentRecovery };
 }
 

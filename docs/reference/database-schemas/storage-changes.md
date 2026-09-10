@@ -193,7 +193,6 @@ is compatibility proof. Other outcomes exit nonzero and require no writes.
 
 Shared-state preflight cannot validate agent databases. Older retained payloads
 without `preflight-agent` remain unsupported; installing a newer CLI elsewhere
-does not make those payloads compatible. Checkpoint publication invokes the actual
-retained reader after staging commits and before replacement, with current exclusion
-and file identities revalidated after the child exits. Runtime/package identity and
-serving health are separate checks from database compatibility.
+does not make those payloads compatible. Runtime/package identity and serving
+health are separate checks from database compatibility. A successful read-only
+preflight does not authorize checkpoint replay or replacement of live databases.

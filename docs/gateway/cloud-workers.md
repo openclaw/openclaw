@@ -158,3 +158,6 @@ the page that now holds the content.
 - [Sandboxing](/gateway/sandboxing) — reducing blast radius for local tool execution
 - [Sessions CLI](/cli/sessions) — inspecting stored sessions
 - [Configuration reference](/gateway/configuration-reference)
+- [`openclaw worker`](/cli/worker) — the restricted runtime entry point a Gateway-owned launcher starts inside a prepared worker environment
+- [Gateway RPC methods](/gateway/protocol/rpc-methods) — RPC method families, discovery, and event families
+- [Operator scopes](/gateway/operator-scopes) — the scopes these worker calls are authorized against

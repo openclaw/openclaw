@@ -328,10 +328,14 @@ describe("worker workspace recovery transcript reporting", () => {
         const release = new Promise<void>((resolve) => {
           releaseWriter = resolve;
         });
-        const blocker = runExclusiveSqliteSessionWrite({ agentId: IDENTITY.agentId }, async () => {
-          signalWriterHeld();
-          await release;
-        });
+        const blocker = runExclusiveSqliteSessionWrite(
+          { agentId: IDENTITY.agentId },
+          async () => {
+            signalWriterHeld();
+            await release;
+          },
+          "session.transcript.batch",
+        );
         await writerHeld;
 
         const rebound = upsertSessionEntryCore(IDENTITY, {

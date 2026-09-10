@@ -2384,6 +2384,15 @@
                     "group": "Configuration",
                     "pages": [
                       "gateway/configuration",
+                      {
+                        "group": "Configuration",
+                        "pages": [
+                          "gateway/configuration/common-tasks",
+                          "gateway/configuration/hot-reload",
+                          "gateway/configuration/config-rpc",
+                          "gateway/configuration/environment-variables"
+                        ]
+                      },
                       "gateway/configuration-reference",
                       "gateway/config-agents",
                       {
@@ -2900,7 +2909,21 @@
                       "plugins/codex-harness-reference/workspace-bootstrap-files"
                     ]
                   },
-                  "plugins/codex-harness-runtime"
+                  "plugins/codex-harness-runtime",
+                  {
+                    "group": "Codex harness runtime",
+                    "pages": [
+                      "plugins/codex-harness-runtime/recovery",
+                      "plugins/codex-harness-runtime/threads",
+                      "plugins/codex-harness-runtime/replies",
+                      "plugins/codex-harness-runtime/hooks",
+                      "plugins/codex-harness-runtime/sandbox-streaming",
+                      "plugins/codex-harness-runtime/v1-support-contract",
+                      "plugins/codex-harness-runtime/permissions",
+                      "plugins/codex-harness-runtime/queue-and-feedback",
+                      "plugins/codex-harness-runtime/compaction"
+                    ]
+                  }
                 ]
               },
               {

@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import {
-  finishInterruptedUpdateBeforeActivationInTransaction,
+  finishInterruptedUpdateBeforeActivation,
   getUpdateRun,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
-import { readRecoveries, writeRecovery } from "../../infra/update-run-recovery-store.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { waitForSignalExitBarriers } from "../signal-exit-barrier.js";
@@ -71,23 +69,7 @@ export async function withMutableUpdateSignals<T>(
     assertCurrent();
     // This non-creating transaction cannot migrate or reopen a displaced family.
     // Pending operational recovery keeps exclusive ownership of its outcome.
-    writeRecovery(
-      { assertCurrent },
-      (db) => {
-        assertCurrent();
-        if (
-          readRecoveries(db).some(
-            (entry) => entry.runId === run.runId || isUpdateRecoveryPending(entry),
-          )
-        ) {
-          return;
-        }
-        finishInterruptedUpdateBeforeActivationInTransaction(db, expected, { env });
-        assertCurrent();
-      },
-      { env },
-      "existing-schema",
-    );
+    finishInterruptedUpdateBeforeActivation(expected, assertCurrent, { env });
   };
   let shutdown: Promise<void> | undefined;
   const onSignal = (code: number) => {

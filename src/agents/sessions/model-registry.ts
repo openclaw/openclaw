@@ -798,6 +798,7 @@ export class ModelRegistry {
         ? undefined
         : await this.authStorage.getApiKey(model.provider, {
             includeFallback: false,
+            baseUrl: model.baseUrl,
           });
       const apiKey =
         apiKeyFromAuthStorage ??

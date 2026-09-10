@@ -1,10 +1,8 @@
-import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
 import { withSqliteSourceHandleAsync } from "../infra/sqlite-source-handle.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
-import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "../infra/update-checkpoint.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-cache.js";
@@ -69,36 +67,23 @@ describe("owner-held SQLite source reads", () => {
     });
   });
 
-  it("captures a real checkpoint under current physical exclusion", async () => {
+  it("reads a private SQLite copy under current physical exclusion", async () => {
     await withOpenClawTestState({ label: "excluded-checkpoint" }, async (state) => {
       const pathname = populate(state.env);
-      const access = {
-        artifactRoot: path.join(state.stateDir, "checkpoints"),
-        binding: {
-          runId: "excluded-checkpoint",
-          stateDir: state.stateDir,
-          configPath: path.join(state.stateDir, "openclaw.json"),
-          fromRuntime: { root: state.stateDir, version: "2026.9.1", nodePath: process.execPath },
-        },
-      };
       const exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
       try {
-        const ref = await exclusion.runWithSourceReads(async (assertCurrent) => {
+        await exclusion.runWithSourceReads(async (assertCurrent) => {
           expect(() => openOpenClawStateDatabase({ env: state.env })).toThrow(/state-handles/);
-          return captureUpdateCheckpoint({
-            ...access,
-            assertQuiescent: assertCurrent,
-            resources: [{ sourcePath: pathname, kind: "sqlite", restore: "replace" }],
-            exclusions: [],
-          });
+          const copy = await prepareSqliteReadOnlyLocation(pathname);
+          try {
+            assertCurrent();
+            expect(readValue(copy.location)).toBe("original");
+            expect(copy.location).not.toBe(pathname);
+          } finally {
+            copy.cleanup();
+          }
         });
         exclusion.assertCurrent();
-        const reopened = await reopenUpdateCheckpoint(ref, access);
-        const artifact = reopened.manifest.resources[0]?.artifact;
-        if (!artifact) {
-          throw new Error("Checkpoint did not capture its database");
-        }
-        expect(readValue(path.join(path.dirname(ref.manifestPath), artifact))).toBe("original");
       } finally {
         exclusion.release();
       }

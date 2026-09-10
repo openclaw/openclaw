@@ -15,7 +15,7 @@ const binding = {
     .nullable(),
 };
 /** Canonical daemon-selected identity; never a command, credential or authority. */
-export const RecoveryNativeIdentitySchema = z.discriminatedUnion("platform", [
+const RecoveryNativeIdentitySchema = z.discriminatedUnion("platform", [
   z.strictObject({ ...binding, platform: z.literal("win32"), taskName: text }),
   z.strictObject({ ...binding, platform: z.literal("darwin"), domain: text, label: text }),
   // Scope and the daemon-observed user-manager UID are identity, not defaults
@@ -36,7 +36,7 @@ export const RecoveryNativeIdentitySchema = z.discriminatedUnion("platform", [
     }),
   ]),
 ]);
-export const RecoveryNativeFactsSchema = z
+const RecoveryNativeFactsSchema = z
   .strictObject({
     exists: z.boolean(),
     enabled: z.boolean().nullable(),
@@ -48,16 +48,7 @@ export const RecoveryNativeFactsSchema = z
       ? facts.enabled !== null && (facts.loaded || facts.stopped)
       : facts.enabled === null && !facts.loaded && facts.stopped,
   );
-export const RecoveryNativeObservationSchema = z.strictObject({
-  identity: RecoveryNativeIdentitySchema,
-  facts: RecoveryNativeFactsSchema,
-});
-export const RecoveryNativeActionSchema = z.enum([
-  "suppress",
-  "stop",
-  "restore",
-  "enable-for-start",
-]);
+const RecoveryNativeActionSchema = z.enum(["suppress", "stop", "restore", "enable-for-start"]);
 const effect = z.strictObject({
   effectId: z.uuid(),
   action: RecoveryNativeActionSchema,
@@ -123,13 +114,12 @@ export const RecoveryNativeManagerSchema = z
       last = entry.reconciledStop?.revision ?? entry.observedRevision ?? entry.intentRevision;
     }
   });
-export type UpdateRecoveryNativeIdentity = z.infer<typeof RecoveryNativeIdentitySchema>;
-export type UpdateRecoveryNativeFacts = z.infer<typeof RecoveryNativeFactsSchema>;
-export type UpdateRecoveryNativeObservation = z.infer<typeof RecoveryNativeObservationSchema>;
-export type UpdateRecoveryNativeAction = z.infer<typeof RecoveryNativeActionSchema>;
+type UpdateRecoveryNativeIdentity = z.infer<typeof RecoveryNativeIdentitySchema>;
+type UpdateRecoveryNativeFacts = z.infer<typeof RecoveryNativeFactsSchema>;
+type UpdateRecoveryNativeAction = z.infer<typeof RecoveryNativeActionSchema>;
 
 /** Native stop may unload or remain loaded, but cannot change enable policy or load a job. */
-export function validNativeTransition(
+function validNativeTransition(
   action: UpdateRecoveryNativeAction,
   before: UpdateRecoveryNativeFacts,
   after: UpdateRecoveryNativeFacts,

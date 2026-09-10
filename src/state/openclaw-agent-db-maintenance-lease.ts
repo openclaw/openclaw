@@ -10,7 +10,6 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateMutationOperation } from "./openclaw-state-lease-context.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
-import type { OpenClawStatePublicationOperation } from "./openclaw-state-publication-types.js";
 
 type MaintenanceScope = {
   databasePath: string;
@@ -105,14 +104,6 @@ async function runMaintenanceScope<T>(
                 },
               }),
             );
-          },
-        }
-      : {}),
-    ...(owner.withDatabaseFilePublication
-      ? {
-          withDatabaseFilePublication<R>(operation: OpenClawStatePublicationOperation<R>) {
-            assertAdmission();
-            return track(owner.withDatabaseFilePublication!<R>(operation));
           },
         }
       : {}),

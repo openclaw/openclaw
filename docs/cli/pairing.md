@@ -7,7 +7,7 @@ title: "Pairing CLI"
 
 # `openclaw pairing`
 
-Approve or inspect DM pairing requests for channels that support pairing (chat DMs only - node/device pairing uses `openclaw devices`).
+Approve or inspect DM pairing requests for channels that support pairing (chat DMs only - node/device pairing uses [`openclaw devices`](/cli/devices)).
 
 Related: [Pairing flow](/channels/pairing)
 
@@ -65,9 +65,10 @@ If `commands.ownerAllowFrom` is empty when you approve a pairing code, the CLI a
 
 The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions such as `/diagnostics`, `/export-session`, `/export-trajectory`, `/config`, and exec approvals. Pairing only lets a sender talk to the agent; it does not by itself grant owner privileges beyond this one-time bootstrap.
 
-If you approved a sender before the first-owner bootstrap shipped in 2026.4.29, run `openclaw doctor`; it warns when no command owner is configured and shows the exact `openclaw config set commands.ownerAllowFrom ...` command to fix it.
+If you approved a sender before the first-owner bootstrap shipped in 2026.4.29, run [`openclaw doctor`](/cli/doctor); it warns when no command owner is configured and shows the exact `openclaw config set commands.ownerAllowFrom ...` command to fix it.
 
 ## Related
 
 - [CLI reference](/cli)
 - [Channel pairing](/channels/pairing)
+- [`openclaw qr`](/cli/qr) — mobile/device bootstrap QR and setup code, not a channel DM pairing code

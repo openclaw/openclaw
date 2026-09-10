@@ -46,7 +46,6 @@ import {
   resolveNodeRunner,
   runUpdateStep,
   UpdatePreMutationError,
-  type UpdateCommandOptions,
 } from "./shared.js";
 import {
   createUpdateConfigSnapshot,
@@ -54,49 +53,6 @@ import {
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
-import { beginUpdateCommandStartup } from "./update-command-startup.js";
-
-/** Resolve only at the validated staged boundary, after the normal CLI acquires
- * its executor. Saved capability data alone never grants startup authority. */
-export function selectUpdateCommandStartup(
-  params: {
-    opts: UpdateCommandOptions;
-    root: string;
-    installKind: "git" | "package" | "unknown";
-    updateInstallKind: "git" | "package" | "unknown";
-    shouldRestart: boolean;
-    updateStepTimeoutMs: number;
-    packageUpdateNodeRunner?: string;
-  },
-  context: {
-    env: NodeJS.ProcessEnv;
-    checkpointContinuation: boolean;
-    servingManagedService: boolean;
-  },
-): PreparePackageRecovery | undefined {
-  if (
-    !context.checkpointContinuation ||
-    !context.servingManagedService ||
-    !params.shouldRestart ||
-    params.installKind !== "package" ||
-    params.updateInstallKind !== "package" ||
-    params.opts.recovery ||
-    !params.opts.run?.executorFence
-  ) {
-    return undefined;
-  }
-  return (source) =>
-    beginUpdateCommandStartup({
-      opts: params.opts,
-      root: params.root,
-      env: context.env,
-      source,
-      managedService: true,
-      timeoutMs: params.updateStepTimeoutMs,
-      nodeRunner: params.packageUpdateNodeRunner,
-    }).then(({ hooks }) => hooks);
-}
-
 export async function readPackageUpdateIdentity(root: string) {
   const [version, buildId] = await Promise.all([
     readPackageVersion(root),

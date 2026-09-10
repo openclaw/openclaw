@@ -8,8 +8,16 @@
     "target": "macOS 平台说明"
   },
   {
+    "source": "Gateway on macOS",
+    "target": "macOS 上的 Gateway"
+  },
+  {
     "source": "Logging",
     "target": "日志"
+  },
+  {
+    "source": "Prometheus metrics",
+    "target": "Prometheus 指标"
   },
   {
     "source": "iMessage",
@@ -42,6 +50,18 @@
   {
     "source": "Secrets management",
     "target": "密钥管理"
+  },
+  {
+    "source": "1Password",
+    "target": "1Password"
+  },
+  {
+    "source": "Ask user",
+    "target": "询问用户"
+  },
+  {
+    "source": "Audit history",
+    "target": "审计历史"
   },
   {
     "source": "Channel troubleshooting",
@@ -102,6 +122,26 @@
   {
     "source": "OpenAI provider",
     "target": "OpenAI provider"
+  },
+  {
+    "source": "xAI provider",
+    "target": "xAI provider"
+  },
+  {
+    "source": "MiniMax provider",
+    "target": "MiniMax provider"
+  },
+  {
+    "source": "Inworld provider",
+    "target": "Inworld provider"
+  },
+  {
+    "source": "ElevenLabs provider",
+    "target": "ElevenLabs provider"
+  },
+  {
+    "source": "CLI backends",
+    "target": "CLI 后端"
   },
   {
     "source": "Mantis",
@@ -176,6 +216,18 @@
     "target": "Gateway 网关"
   },
   {
+    "source": "Gateway integrations for external apps",
+    "target": "面向外部应用的 Gateway 集成"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "Gateway 协议"
+  },
+  {
+    "source": "Gateway RPC methods",
+    "target": "Gateway RPC 方法"
+  },
+  {
     "source": "Gateway health",
     "target": "Gateway 健康"
   },
@@ -200,6 +252,10 @@
     "target": "会话"
   },
   {
+    "source": "Cloud Workers",
+    "target": "Cloud Workers"
+  },
+  {
     "source": "Session permission modes",
     "target": "会话权限模式"
   },
@@ -220,6 +276,10 @@
     "target": "代码模式"
   },
   {
+    "source": "Code Mode",
+    "target": "代码模式"
+  },
+  {
     "source": "Swarm",
     "target": "Swarm"
   },
@@ -234,6 +294,42 @@
   {
     "source": "Codex harness runtime",
     "target": "Codex harness runtime"
+  },
+  {
+    "source": "Codex process recovery",
+    "target": "Codex 进程恢复"
+  },
+  {
+    "source": "Codex thread bindings and supervision",
+    "target": "Codex 线程绑定与监督"
+  },
+  {
+    "source": "Codex replies and final answers",
+    "target": "Codex 回复与最终答案"
+  },
+  {
+    "source": "Codex hook boundaries",
+    "target": "Codex 钩子边界"
+  },
+  {
+    "source": "Codex sandbox process streaming",
+    "target": "Codex 沙箱进程流式输出"
+  },
+  {
+    "source": "Codex runtime v1 support contract",
+    "target": "Codex 运行时 v1 支持契约"
+  },
+  {
+    "source": "Codex native permissions and elicitations",
+    "target": "Codex 原生权限与征询"
+  },
+  {
+    "source": "Codex queue steering and feedback upload",
+    "target": "Codex 队列引导与反馈上传"
+  },
+  {
+    "source": "Codex compaction and transcript mirror",
+    "target": "Codex 压缩与转录镜像"
   },
   {
     "source": "Native Codex plugins",
@@ -286,6 +382,14 @@
   {
     "source": "Steer",
     "target": "Steer"
+  },
+  {
+    "source": "Slash commands",
+    "target": "斜杠命令"
+  },
+  {
+    "source": "Goal",
+    "target": "目标"
   },
   {
     "source": "Models",
@@ -346,6 +450,10 @@
   {
     "source": "Tailscale",
     "target": "Tailscale"
+  },
+  {
+    "source": "Stable HTTPS URL",
+    "target": "稳定的 HTTPS URL"
   },
   {
     "source": "Getting Started",
@@ -546,6 +654,14 @@
   {
     "source": "Diffs",
     "target": "Diffs"
+  },
+  {
+    "source": "Browser login",
+    "target": "浏览器登录"
+  },
+  {
+    "source": "Web fetch",
+    "target": "网页抓取"
   },
   {
     "source": "Dreaming",
@@ -754,6 +870,10 @@
   {
     "source": "Tokenjuice",
     "target": "Tokenjuice"
+  },
+  {
+    "source": "Kimi search",
+    "target": "Kimi 搜索"
   },
   {
     "source": "WhatsApp",
@@ -1232,6 +1352,14 @@
     "target": "插件参考"
   },
   {
+    "source": "Lobster plugin reference",
+    "target": "Lobster 插件参考"
+  },
+  {
+    "source": "A2A plugin reference",
+    "target": "A2A 插件参考"
+  },
+  {
     "source": "Community plugins",
     "target": "社区插件"
   },
@@ -1572,8 +1700,16 @@
     "target": "子智能体"
   },
   {
+    "source": "Thinking levels",
+    "target": "思考级别"
+  },
+  {
     "source": "ACP agents",
     "target": "ACP 智能体"
+  },
+  {
+    "source": "ACP agents — setup",
+    "target": "ACP 智能体 — 设置"
   },
   {
     "source": "Tools and custom providers",
@@ -1724,6 +1860,14 @@
     "target": "Control UI"
   },
   {
+    "source": "Control UI URLs",
+    "target": "Control UI 地址"
+  },
+  {
+    "source": "Tools invoke API",
+    "target": "工具调用 API"
+  },
+  {
     "source": "Models CLI",
     "target": "模型 CLI"
   },
@@ -1793,6 +1937,10 @@
   },
   {
     "source": "Channels Overview",
+    "target": "渠道概览"
+  },
+  {
+    "source": "Channels overview",
     "target": "渠道概览"
   },
   {
@@ -1882,6 +2030,10 @@
   {
     "source": "Media overview",
     "target": "媒体概览"
+  },
+  {
+    "source": "Music generation",
+    "target": "音乐生成"
   },
   {
     "source": "Text to speech",
@@ -2034,6 +2186,18 @@
   {
     "source": "Configuration examples",
     "target": "配置示例"
+  },
+  {
+    "source": "Common tasks",
+    "target": "常见任务"
+  },
+  {
+    "source": "Config hot reload",
+    "target": "配置热重载"
+  },
+  {
+    "source": "Config RPC (programmatic updates)",
+    "target": "配置 RPC（程序化更新）"
   },
   {
     "source": "Configuration: hot reload",

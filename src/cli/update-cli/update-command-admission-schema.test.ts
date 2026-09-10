@@ -15,14 +15,12 @@ import {
   getUpdateRun,
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
-import { beginUpdateRecovery, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { runExistingOpenClawStateWriteTransaction } from "../../state/openclaw-state-db-existing-write.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { admitUpdateCommandRun, completeUpdateCommandRun } from "./update-command-run.js";
 
 vi.mock("../../daemon/service.js", () => ({
@@ -212,96 +210,3 @@ it.each(["compatible", "newer", "metadata"])(
     expect(database.db.isOpen).toBe(true);
   },
 );
-
-it("persists initial recovery before stopping an older live Gateway without migrating its schema", async () => {
-  const f = previousVersionState(true);
-  try {
-    const before = f.snapshot();
-    const run = await admitUpdateCommandRun({ opts: {}, root: f.root });
-    await withUpdateCommandExecutor(run.runId, async (executor) => {
-      const executorFence = await executor.enter(f.root);
-      const from = {
-        root: f.root,
-        nodePath: process.execPath,
-        version: "2026.9.2",
-        buildId: "fac4",
-      };
-      const input = {
-        runId: run.runId,
-        from,
-        to: { ...from, version: "2026.9.3", buildId: "140b" },
-      };
-      const record = beginUpdateRecovery(input, executorFence, { env: run.env });
-      expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
-      expect(record).toMatchObject({
-        runId: run.runId,
-        revision: 0,
-        claimKind: "initial",
-        effects: [],
-      });
-      expect(record.terminal).toBeUndefined();
-      const after = f.snapshot();
-      expect(after.meta).toEqual(before.meta);
-      expect(after.version).toEqual(before.version);
-      expect(after.schema).toEqual(before.schema);
-      expect(after.state).toEqual(expect.arrayContaining(before.state));
-      expect(after.state).toHaveLength(before.state.length + 1);
-      expect(() => beginUpdateRecovery(input, executorFence, { env: run.env })).toThrow();
-      expect(f.snapshot()).toEqual(after);
-      expect(() => openOpenClawStateDatabase({ env: f.env })).toThrow(
-        StateSchemaMutationConflictError,
-      );
-      expect(() => withStateSchemaFence({ databasePath: f.filename }, () => "migrated")).toThrow(
-        StateSchemaMutationConflictError,
-      );
-      expect(f.snapshot()).toEqual(after);
-    });
-  } finally {
-    f.owner.release();
-    f.db.close();
-  }
-});
-
-it("rolls back the initial recovery row when admitted executor authority is lost before commit", async () => {
-  const f = previousVersionState(true);
-  try {
-    const run = await admitUpdateCommandRun({ opts: {}, root: f.root });
-    await withUpdateCommandExecutor(run.runId, async (executor) => {
-      const executorFence = await executor.enter(f.root);
-      const before = f.snapshot();
-      let checks = 0;
-      const fence = {
-        assertCurrent() {
-          executorFence.assertCurrent();
-          if (++checks === 3) {
-            throw new Error("executor lost before commit");
-          }
-        },
-      };
-      const from = {
-        root: f.root,
-        nodePath: process.execPath,
-        version: "2026.9.2",
-        buildId: "fac4",
-      };
-      expect(() =>
-        beginUpdateRecovery(
-          { runId: run.runId, from, to: { ...from, version: "2026.9.3" } },
-          fence,
-          {
-            env: run.env,
-          },
-        ),
-      ).toThrow("executor lost before commit");
-      expect(f.snapshot()).toEqual(before);
-      expect(loadUpdateRecovery(run.runId, { env: run.env })).toBeUndefined();
-      expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
-      expect(() => withStateSchemaFence({ databasePath: f.filename }, () => "migrated")).toThrow(
-        StateSchemaMutationConflictError,
-      );
-    });
-  } finally {
-    f.owner.release();
-    f.db.close();
-  }
-});

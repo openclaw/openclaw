@@ -7,6 +7,7 @@ it.each([
   "install",
   "stop",
   "missing candidate",
+  "executor revoked",
   "restart revoked",
   "install revoked",
   "stop revoked",
@@ -58,11 +59,15 @@ it.each([
           await fs.mkdir(dist);
           const params = {
             result: { root, mode: "npm" },
-            opts: { json: true },
+            opts: { json: true, ...(scenario === "executor revoked" ? {
+              run: { runId: "original", env: process.env, executorFence: {
+                assertCurrent() { if (existsSync(receipt)) { throw new Error("Update authority revoked during native command"); } },
+              } },
+            } : {}) },
             invocationEnv: process.env,
             timeoutMs: 10_000,
             assertCurrent() {
-              if (scenario.endsWith("revoked") && existsSync(receipt)) {
+              if (scenario !== "executor revoked" && scenario.endsWith("revoked") && existsSync(receipt)) {
                 throw new Error("Update authority revoked during native command");
               }
             },

@@ -34,7 +34,7 @@ it.skipIf(process.platform === "win32").each([
       `
     import fs from 'node:fs';
     import { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } from ${JSON.stringify(new URL("../../infra/update-run-ledger.ts", import.meta.url).href)};
-    import { beginUpdateRecovery } from ${JSON.stringify(new URL("../../infra/update-run-recovery.ts", import.meta.url).href)};
+    import { createRetainedUpdateRecovery } from ${JSON.stringify(new URL("../../infra/update-retained-recovery.test-support.ts", import.meta.url).href)};
     import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(new URL("../../state/openclaw-state-db.ts", import.meta.url).href)};
     import { admitUpdateCommandRun, withUpdatePreviewSignals } from ${JSON.stringify(new URL("./update-command-run.ts", import.meta.url).href)};
     import { withUpdateCommandExecutor } from ${JSON.stringify(new URL("./update-command-executor.ts", import.meta.url).href)};
@@ -52,7 +52,7 @@ it.skipIf(process.platform === "win32").each([
         if (mode === 'completed') finishUpdateRun(run.runId, {status:'skipped',reason:'already-current'});
         if (mode === 'pending' || mode === 'missing') {
           const from = {root,nodePath:process.execPath,version:'1.0.0',buildId:null};
-          beginUpdateRecovery({runId:run.runId,from,to:{...from,version:'2.0.0'}},run.executorFence,{env:run.env});
+          createRetainedUpdateRecovery({runId:run.runId,from,to:{...from,version:'2.0.0'}},{env:run.env});
         }
         const expected = getUpdateRun(run.runId);
         if (mode === 'missing') {

@@ -10,7 +10,7 @@ import {
   readWindowsStartupFallbackRuntimeForUpdate,
 } from "../../daemon/schtasks-runtime.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
-import { suspendScheduledTaskAutoStartForUpdate } from "../../daemon/schtasks.js";
+import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceState,
@@ -25,14 +25,7 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
-import {
-  withUpdateCommandNativePreparation,
-  type UpdateCommandNativePreparation,
-} from "./update-command-native-preparation.js";
-import {
-  UpdateCommandRecoveryPendingError,
-  type UpdateCommandRecovery,
-} from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
@@ -344,7 +337,7 @@ export async function maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
 }
 
 type ManagedServiceStopParams = {
-  recovery?: UpdateCommandRecovery;
+  recovery?: unknown;
   updateRun?: UpdateCommandOptions["run"];
   updateInstallKind: "git" | "package";
   root: string;
@@ -364,26 +357,30 @@ type ManagedServiceStopParams = {
 export async function maybeStopManagedServiceBeforeMutableUpdate(
   params: ManagedServiceStopParams,
 ): Promise<PreManagedServiceStop> {
-  if (!params.recovery?.getRecord().nativeManager || params.phase === "inspect") {
+  if (params.recovery) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
+    );
+  }
+  if (params.phase === "inspect") {
     return await stopManagedServiceBeforeMutableUpdate(params);
   }
-  return await withUpdateCommandNativePreparation(
-    {
-      recovery: params.recovery,
-      env: params.updateRun?.env ?? process.env,
-      timeoutMs: params.timeoutMs,
-    },
-    (native) => stopManagedServiceBeforeMutableUpdate(params, native),
+  return await withGatewayServiceOperationLock(
+    params.expectedService?.serviceEnv ?? process.env,
+    (assertNative) => stopManagedServiceBeforeMutableUpdate(params, assertNative),
   );
 }
 
 async function stopManagedServiceBeforeMutableUpdate(
   params: ManagedServiceStopParams,
-  native?: UpdateCommandNativePreparation,
+  assertNative?: () => void,
 ): Promise<PreManagedServiceStop> {
   // Retain the original live owner across daemon awaits; history is not authority.
   const executorFence = params.updateRun?.executorFence;
-  const assertCurrent = () => executorFence?.assertCurrent();
+  const assertCurrent = () => {
+    assertNative?.();
+    executorFence?.assertCurrent();
+  };
   assertCurrent();
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
   const markInspectionUnavailable = (
@@ -491,9 +488,6 @@ async function stopManagedServiceBeforeMutableUpdate(
         "Gateway restart skipped: no Gateway service or listener is running.",
     };
   }
-  if (params.recovery && params.phase !== "inspect" && !native) {
-    throw new UpdateCommandRecoveryPendingError("Native service appeared after startup binding.");
-  }
   // Pure inventory inspection supplies no handoff callback. Execution supplies it
   // only after complete target admission, before online candidate validation.
   if (params.shouldRestart && serviceState.running && params.handoffFromGateway) {
@@ -522,24 +516,6 @@ async function stopManagedServiceBeforeMutableUpdate(
   }
   const updateRun = params.updateRun;
   const suspendTask = async () => {
-    if (native && process.platform === "win32") {
-      await native.suppress(async (assertNativeCurrent) => {
-        await suspendScheduledTaskAutoStartForUpdate(serviceState.env, {
-          restoreOnFailure: false,
-          assertCurrent: assertNativeCurrent,
-          beforeMutation: async () => {
-            assertNativeCurrent();
-            await createWindowsTaskAutoStartGuard({
-              root: params.root,
-              before: inspected,
-              timeoutMs: params.timeoutMs,
-            })();
-            assertNativeCurrent();
-          },
-        });
-      });
-      return undefined;
-    }
     return await maybeSuspendWindowsTaskAutoStartForUpdate({
       serviceEnv: serviceState.env,
       updateRun,
@@ -655,11 +631,7 @@ async function stopManagedServiceBeforeMutableUpdate(
         });
       }
     };
-    if (native) {
-      await native.stop(stop);
-    } else {
-      await stop(assertCurrent);
-    }
+    await stop(assertCurrent);
     assertCurrent();
     if (windowsTaskAutoStartRecovery) {
       await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);

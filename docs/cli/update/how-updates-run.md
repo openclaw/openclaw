@@ -39,8 +39,9 @@ A matching version alone does not establish artifact equality.
 
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.
-Once checkpoint recovery owns the run, interruption leaves that recovery pending
-until its recorded effects are reconciled.
+An interrupted update is not a successful update or a verified rollback.
+Unresolved effects remain visible in the update report. Unsupported pending
+checkpoint records block further mutable update work and remain unchanged.
 
 For targets that support candidate validation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the candidate entrypoint for Doctor lint
@@ -79,9 +80,9 @@ repair discards the candidate and leaves the serving Gateway untouched.
 Pre-activation repair uses disposable rehearsal state and configuration, then
 independently validates surviving candidate changes before activation, and
 `repair-requires-config-change` reports changed top-level keys that require
-operator-run `openclaw doctor --fix` or `openclaw triage`. Older, non-checkpoint
-finalization paths may use live post-activation repair; durable serving recovery
-uses the checkpoint path below. See
+operator-run `openclaw doctor --fix` or `openclaw triage`. Post-activation
+finalization may use live repair when compatibility-checked package rollback is
+unsafe or fails. See
 [Unattended repair](/install/updating#unattended-repair-on-your-own-inference) for
 budgets, permitted repairs, and attempt reports.
 
@@ -105,49 +106,32 @@ count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
 
-### Durable serving recovery
+<a id="durable-serving-recovery" />
 
-For an npm package update of an owned, running managed Gateway, candidates that
-advertise the checkpoint-continuation contract use durable recovery. The updater
-retains the previous package, captures original config and native-service files
-before suppression, and seals the stopped-state checkpoint before publishing the
-candidate. The checkpoint includes the shared and affected agent databases,
-config/include files, and inventoried plugin state. It excludes workspaces and
-cannot cover undeclared external resources.
+### Recovery limits
 
-The fresh candidate accepts a one-use handoff under the live executor. Doctor,
-config and plugin writes run under their actual maintenance owners; their
-resulting state is captured before those owners release. A failed candidate can
-restore the matching previous package and checkpoint, including across schema
-migration, only while the persisted identities and source state still match.
-Operator changes, conflicting publication artifacts, unknown service ownership,
-or lost executor ownership leave recovery pending; they do not authorize a
-restart or overwrite.
+Automatic rollback restores a retained package only when the current schema and
+configuration are compatible with the previous release. This update path does
+not capture or replay a full-state checkpoint and cannot reverse database
+migrations. Private snapshots used for validation are disposable and are not a
+recovery backup. Before a significant update, create an
+[independent verified backup](/install/updating#before-updating-create-a-verified-backup).
 
-Native policy restoration and service start are journaled before dispatch.
-Completion requires fresh service/port ownership, the expected runtime's Gateway
-handshake and boot identity, and HTTP 200 from `/readyz`. Stored readiness or a
-terminal history row is not current authority. The durable completion path does
-not use inference. A verified previous runtime finishes `rolled-back` and the
-command exits nonzero, retaining the candidate's original failure.
+Unknown or changed schema/configuration does not authorize a restore. When
+compatibility cannot be established, the updater refuses rollback, preserves
+state and retained package material, and reports the failed operation. Restoring
+an older package alone is not proof that the service can safely start.
 
-The selected package/checkpoint pair remains retained until a later successful
-serving update supersedes it. Retirement requires current serving authority; an
-interrupted or unverifiable deletion remains pending and preserves residual
-material. Re-running `openclaw update` checks pending recovery before ordinary
-mutable work. It can reconcile a matching sealed interrupted publication; missing,
-conflicting, legacy-only or unsealed evidence is reported rather than treated as a
-clean installation. `update finalize` does not bypass this admission.
+Existing pending records that require checkpoint replay are unsupported by this
+update path. `openclaw update` reports them before ordinary mutable update work;
+it does not replay, rewrite, retire, or clear their retained state. `update
+finalize` does not bypass that refusal. Preserve the records and any named
+recovery artifacts for recovery with a compatible implementation or a verified
+backup. A later invocation must not label an unresolved interrupted run successful.
 
-`--no-restart`, absent or stopped services, Git checkouts, shared-project pnpm/Bun
-installs, and targets without the checkpoint-continuation contract retain their
-existing update behavior. They do not gain durable serving-completion or full-state
-rollback guarantees. Their retained-package rollback still requires schema and
-configuration compatibility; see
-[Automatic rollback](/install/updating#automatic-schema-neutral-rollback).
-A disposable candidate rehearsal is not a user backup.
+<a id="legacy-package-rollback" />
 
-### Legacy package rollback
+### Compatibility-checked package rollback
 
 The previous package tree remains available until activation or package restoration
 is verified. If activation fails before a working package is confirmed and rollback

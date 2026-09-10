@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { OpenClawStatePublicationOperation } from "./openclaw-state-publication-types.js";
 
 export type OpenClawStateMutationOperation<T, R> = {
   /** Fresh executor authority. Checked by every coordinated canonical write. */
@@ -22,12 +21,6 @@ export type OpenClawStateLeaseContext = {
     this: void,
     operation: (assertCurrent: () => void) => Promise<T>,
     bindCaptured?: (captured: T, assertCurrent: () => void) => undefined,
-  ): Promise<T>;
-  /** Distinct checkpoint publication window. All effects/reconciliation precede
-   * rebind/renewal; failure disables ordinary cleanup on unverified canonical data. */
-  withDatabaseFilePublication?<T>(
-    this: void,
-    operation: OpenClawStatePublicationOperation<T>,
   ): Promise<T>;
   /** Renew or verify independent renewal before another blocking phase. */
   renew?(): void;

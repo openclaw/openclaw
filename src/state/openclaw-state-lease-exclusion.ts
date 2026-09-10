@@ -11,9 +11,6 @@ import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordin
 import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateMutationOperation } from "./openclaw-state-lease-context.js";
 import type { CaptureOwner, LeaseExclusionParams } from "./openclaw-state-lease-owner.js";
-import type { OpenClawStatePublicationOperation } from "./openclaw-state-publication-types.js";
-import { performOpenClawStatePublication } from "./openclaw-state-publication.js";
-export type { OpenClawStatePublicationOperation } from "./openclaw-state-publication-types.js";
 
 // Only live lexical owners are composed. Other tasks/processes remain foreign
 // handles; neither a pathname nor inherited serialized data grants admission.
@@ -310,19 +307,6 @@ export function createOpenClawStateLeaseExclusion(params: LeaseExclusionParams) 
   };
   return {
     canRelease: () => owner.cleanupAllowed,
-    runPublication<T>(operation: OpenClawStatePublicationOperation<T>): Promise<T> {
-      const scope = activeOwners.getStore();
-      if (!scope?.includes(owner)) {
-        throw new Error("publication requires the live lexical lease scope");
-      }
-      // A retained outer context can be called inside a newer nested owner.
-      // Join that CURRENT stack, so every participant also disables cleanup.
-      return admit(
-        (participants, databasePath) =>
-          performOpenClawStatePublication(participants, databasePath, operation),
-        scope,
-      );
-    },
     runMutation<T, R>(operation: OpenClawStateMutationOperation<T, R>): Promise<R> {
       const scope = activeOwners.getStore();
       if (!scope?.includes(owner)) {

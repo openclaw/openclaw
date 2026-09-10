@@ -6,12 +6,7 @@ import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   resolveManagedServiceUpdateFailureExitCode,
 } from "../../infra/update-control-plane-sentinel.js";
-import {
-  getUpdateRun,
-  finishUpdateRun,
-  recordUpdateRunPhase,
-  recordUpdateRunStep,
-} from "../../infra/update-run-ledger.js";
+import { finishUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
@@ -19,16 +14,20 @@ import { formatCliCommand } from "../command-format.js";
 import { printResult } from "./progress.js";
 import { tryWriteCompletionCache } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
-import { finishDurableUpdate } from "./update-command-durable-finalize.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import {
+  assertUpdateCommandPackageFinalization,
+  createUpdateCommandFinalizationFence,
+} from "./update-command-recovery.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   UpdateCommandFailure,
   resolveAutomaticUpdateTriage,
+  recordUpdateResultNextAction,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
@@ -45,7 +44,6 @@ import {
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
-import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 export type { FinishUpdateParams } from "./update-command-finish-types.js";
 
@@ -53,10 +51,10 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   if (params.serviceLoadBoundary && process.platform !== "linux") {
     throw new Error("Deferred native service loading is not supported on this platform.");
   }
-  const durableResult = await finishDurableUpdate(params);
-  if (durableResult) {
-    return durableResult;
-  }
+  const assertCurrent = createUpdateCommandFinalizationFence(params);
+  assertCurrent();
+  await assertUpdateCommandPackageFinalization(params);
+  assertCurrent();
   const shouldRestart =
     params.shouldRestart &&
     (!params.coreAlreadyCurrent || params.preManagedServiceStop?.running === true);
@@ -116,27 +114,14 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     durationMs: Math.max(0, Date.now() - params.startedAt),
   });
   const recordNextAction = (result: UpdateRunResult) => {
-    const run = params.opts.run;
-    const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
-    const nextAction = resolveUpdateResultNextAction({
-      result,
-      restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
-      serviceRunning: active?.verification.serviceRunning,
-      runningVersion: active?.verification.runningVersion,
-      verificationFailure: active?.steps.findLast(
-        (step) => step.step === "gateway verification" && step.status === "failed",
-      )?.detail,
-      env: run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
-    });
-    if (run && active?.status === "running" && active.origin.nextAction !== nextAction) {
-      recordUpdateRunPhase(run.runId, active.phase, { origin: { nextAction } }, { env: run.env });
-    }
-    return nextAction;
+    assertCurrent();
+    return recordUpdateResultNextAction(params, result);
   };
   // Restart can let the new Gateway finish the row before CLI finalization resumes.
   // Store the next action before that handoff, and refresh it if recovery changes the outcome.
   recordNextAction(params.result);
   const printFinalResult = (input: UpdateRunResult) => {
+    assertCurrent();
     const nextAction = recordNextAction(input);
     const run = params.opts.run;
     const downtimeMs = pendingRestartAtMs === undefined ? completedDowntimeMs : undefined;
@@ -156,6 +141,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     initialRecoverService: boolean,
     repair?: (result: UpdateRunResult) => Promise<UpdateRunResult>,
   ) => {
+    assertCurrent();
     let result = initialResult;
     let recoverService = initialRecoverService;
     if (
@@ -236,10 +222,12 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     initialRestoreFailure?: { cause: unknown },
     notify = true,
   ): Promise<UpdateRunResult> => {
+    assertCurrent();
     const { result, recoverService } = await recoverFailedResult(
       initialResult,
       initialRecoverService,
     );
+    assertCurrent();
     let restoreFailure = initialRestoreFailure;
     const finalResult = completedResult({
       ...result,
@@ -299,6 +287,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         },
       ];
     }
+    assertCurrent();
     const retireBackup =
       finalResult.status === "ok" || finalResult.recovery?.packageRollbackVerified === true;
     if (params.packageTransaction && !retireBackup) {
@@ -369,6 +358,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     const reportedResult = printFinalResult(
       recoverService ? completedResult(finalResult) : finalResult,
     );
+    assertCurrent();
     if (retireBackup) {
       await params.packageTransaction
         ?.complete({ activationVerified: finalResult.status === "ok" })

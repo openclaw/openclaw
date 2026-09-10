@@ -1,14 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "../infra/update-checkpoint.js";
-import { createUpdateRun } from "../infra/update-run-ledger.js";
-import {
-  beginUpdateRecovery,
-  bindUpdateRecoveryCheckpoint,
-  loadUpdateRecovery,
-} from "../infra/update-run-recovery.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -19,9 +12,9 @@ import {
 } from "./openclaw-state-db.js";
 import { withOpenClawStateLease } from "./openclaw-state-lease.js";
 
-describe("lease-backed checkpoint binding", () => {
+describe("lease-backed source binding", () => {
   it.each([false, true])(
-    "persists real checkpoint binding under exclusion (publisher failure: %s)",
+    "persists owner output under exclusion (publisher failure: %s)",
     async (publisherFailure) => {
       await withOpenClawTestState({ label: "lease-checkpoint-binding" }, async (state) => {
         const options = { env: state.env };
@@ -36,56 +29,31 @@ describe("lease-backed checkpoint binding", () => {
                 throw new Error("missing file exclusion");
               }
               const sourcePath = openOpenClawStateDatabase(options).path;
-              const run = createUpdateRun({ trigger: "cli" }, options);
-              const from = {
-                root: state.stateDir,
-                nodePath: process.execPath,
-                version: "2026.9.1",
-                buildId: null,
-              };
-              let record = beginUpdateRecovery(
-                { runId: run.runId, from, to: { ...from, version: "2026.9.2" } },
-                {
-                  assertCurrent: () => {
-                    plugin.assertOwned();
-                    maintenance.assertOwned();
-                  },
-                },
-                options,
-              );
-              const access = {
-                artifactRoot: path.join(state.stateDir, "checkpoints"),
-                binding: {
-                  runId: run.runId,
-                  stateDir: record.source!.stateDir,
-                  configPath: record.source!.configPath,
-                  fromRuntime: { root: from.root, nodePath: from.nodePath, version: from.version },
-                },
-              };
               const task = capture(
                 async (assertCurrent) => {
-                  const ref = await captureUpdateCheckpoint({
-                    ...access,
-                    assertQuiescent: assertCurrent,
-                    resources: [{ sourcePath, kind: "sqlite", restore: "replace" }],
-                    exclusions: [],
-                  });
-                  await reopenUpdateCheckpoint(ref, access);
-                  return ref;
+                  const copy = await prepareSqliteReadOnlyLocation(sourcePath);
+                  try {
+                    assertCurrent();
+                    return copy.location !== sourcePath;
+                  } finally {
+                    copy.cleanup();
+                  }
                 },
-                (ref, assertCurrent) => {
+                (copied, assertCurrent) => {
                   assertCurrent();
+                  plugin.assertOwned();
+                  maintenance.assertOwned();
                   expect(() =>
                     outsider.runInAsyncScope(() =>
                       runOpenClawStateWriteTransaction(() => undefined, options),
                     ),
                   ).toThrow(/state-handles/);
-                  record = bindUpdateRecoveryCheckpoint(
-                    record,
-                    { ref, binding: access.binding },
-                    { assertCurrent },
-                    options,
-                  );
+                  expect(copied).toBe(true);
+                  runOpenClawStateWriteTransaction(({ db }) => {
+                    db.exec(
+                      "INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES ('test:capture-bind','true',1)",
+                    );
+                  }, options);
                   bindingConnection = openOpenClawStateDatabase(options).db;
                   expect(bindingConnection.isOpen).toBe(true);
                   bound = true;
@@ -101,12 +69,12 @@ describe("lease-backed checkpoint binding", () => {
               }
               expect(bound).toBe(true);
               expect(bindingConnection?.isOpen).toBe(false);
-              const persisted = loadUpdateRecovery(run.runId, options);
-              expect(persisted?.checkpoint?.ref).toEqual(record.checkpoint?.ref);
-              expect(persisted?.checkpoint).toBeDefined();
-              if (persisted?.checkpoint) {
-                await reopenUpdateCheckpoint(persisted.checkpoint.ref, access);
-              }
+              const persisted = openOpenClawStateDatabase(options)
+                .db.prepare(
+                  "SELECT value_json FROM config_machine_state WHERE state_key='test:capture-bind'",
+                )
+                .get();
+              expect(persisted?.value_json).toBe("true");
             });
           });
         } catch (error) {
@@ -126,7 +94,7 @@ describe("lease-backed checkpoint binding", () => {
   );
 });
 
-describe("checkpoint binding admission", () => {
+describe("source binding admission", () => {
   it("drains invalid async binders and permanently revokes their inherited write scope", async () => {
     await withOpenClawTestState({ label: "lease-async-binding" }, async (state) => {
       const options = { env: state.env };

@@ -1,10 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
-import {
-  assertExistingOpenClawStateSchema,
-  runExistingOpenClawStateWriteTransaction,
-} from "./openclaw-state-db-existing-write.js";
+import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -31,10 +28,6 @@ const leaseSchema = ["schema_meta", "state_leases"]
     return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length);
   })
   .join("\n");
-
-export function assertExistingLeasePublicationSchema(db: DatabaseSync, databasePath: string): void {
-  assertExistingOpenClawStateSchema(db, databasePath, leaseSchema);
-}
 
 export function resolveLeaseDatabasePath(database: OpenClawStateLeaseDatabase): string {
   return database.schemaPolicy === "existing"

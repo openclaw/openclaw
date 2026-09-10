@@ -33,7 +33,7 @@ import {
 /** Validate only the stable storage subset used by an existing-schema owner.
  * This read neither repairs nor grants write authority; callers retain their
  * actual handle, generation, lease and publication checks. */
-export function assertExistingOpenClawStateSchema(
+function assertExistingOpenClawStateSchema(
   db: DatabaseSync,
   pathname: string,
   schemaSql: string,

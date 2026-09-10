@@ -3,12 +3,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { beginUpdateRecovery, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
@@ -185,9 +186,8 @@ describe("successful update finalization ordering", () => {
     const env = { HOME: home, OPENCLAW_STATE_DIR: home };
     const run = createUpdateRun({ trigger: "cli" }, { env });
     const runtime = { root: home, nodePath: process.execPath, version: "1.0.0", buildId: null };
-    const record = beginUpdateRecovery(
+    const record = createRetainedUpdateRecovery(
       { runId: run.runId, from: runtime, to: runtime },
-      { assertCurrent() {} },
       { env },
     );
     const complete = vi.fn(async () => undefined);

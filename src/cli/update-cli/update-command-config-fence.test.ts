@@ -5,15 +5,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
+import { withConfigWriteLock } from "../../config/write-lock.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { beginUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { captureUpdateCommandPreimages } from "./update-command-preimages.js";
-import type { UpdateCommandRecovery } from "./update-command-recovery.js";
-import { withUpdateCommandSourceOwnership } from "./update-command-source-ownership.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -64,25 +61,6 @@ it.each([
     let reachedCommit = false;
     const owned = withUpdateCommandExecutor(run.runId, async (executor) => {
       const fence = await executor.enter(home);
-      const runtime = { root: home, nodePath: process.execPath, version: "1.0.0", buildId: null };
-      let record = beginUpdateRecovery(
-        { runId: run.runId, from: runtime, to: runtime },
-        fence,
-        options,
-      );
-      const recovery: UpdateCommandRecovery = {
-        options,
-        fence,
-        getRecord: () => record,
-        onRecord: (next) => {
-          fence.assertCurrent();
-          record = next;
-        },
-        assertReady: () => {
-          throw new Error("Not a serving proof");
-        },
-      };
-      await captureUpdateCommandPreimages({ recovery, env });
       const io = createConfigIO({ configPath, env, observe: false, pluginValidation: "skip" });
       const revoke = () => {
         const db = openNodeSqliteDatabase(path.join(control, "managed-update-handoffs.sqlite"));
@@ -108,23 +86,34 @@ it.each([
           });
         }
       };
-      return await withUpdateCommandSourceOwnership({ recovery, env, mutation: true }, async () => {
-        const nextConfig = { gateway: { mode: "local" as const, port: 18791 } };
-        if (!included) {
-          return io.writeConfigFile(nextConfig, { beforeCommit });
-        }
-        const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
-        return replaceConfigFile({
-          snapshot,
-          baseHash: snapshot.hash,
-          nextConfig: {
-            ...snapshot.sourceConfig,
-            gateway: { ...snapshot.sourceConfig.gateway, port: 18791 },
-          },
-          writeOptions: { ...writeOptions, beforeCommit, skipPluginValidation: true },
-          io: { ...io, env },
-        });
-      });
+      return await withConfigWriteLock(
+        configPath,
+        async () =>
+          withConfigWriteLock(
+            includePath,
+            async () => {
+              const nextConfig = { gateway: { mode: "local" as const, port: 18791 } };
+              if (!included) {
+                return io.writeConfigFile(nextConfig, { beforeCommit });
+              }
+              const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+              return replaceConfigFile({
+                snapshot,
+                baseHash: snapshot.hash,
+                nextConfig: {
+                  ...snapshot.sourceConfig,
+                  gateway: { ...snapshot.sourceConfig.gateway, port: 18791 },
+                },
+                writeOptions: { ...writeOptions, beforeCommit, skipPluginValidation: true },
+                io: { ...io, env },
+              });
+            },
+            env,
+            () => fence.assertCurrent(),
+          ),
+        env,
+        () => fence.assertCurrent(),
+      );
     });
     if (revoked) {
       await expect(owned).rejects.toThrow(/executor|ownership/i);

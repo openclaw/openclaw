@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
-import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "../infra/update-checkpoint.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db.js";
@@ -52,38 +52,29 @@ describe("lease-backed file capture", () => {
           const pathname = openOpenClawStateDatabase({ env: state.env }).path;
           const first = workers.at(-1);
           expect(first?.threadId).toBeGreaterThan(0);
-          const access = {
-            artifactRoot: path.join(state.stateDir, "checkpoints"),
-            binding: {
-              runId: "lease-capture",
-              stateDir: state.stateDir,
-              configPath: path.join(state.stateDir, "openclaw.json"),
-              fromRuntime: {
-                root: state.stateDir,
-                version: "2026.9.1",
-                nodePath: process.execPath,
-              },
-            },
-          };
-          const ref = await requiredCapture(lease)(async (assertCurrent) => {
+          await requiredCapture(lease)(async (assertCurrent) => {
             retained = assertCurrent;
             expect(first?.threadId).toBe(-1);
             expect(() => openOpenClawStateDatabase({ env: state.env })).toThrow(/state-handles/);
             lease.assertOwned();
             lease.renew?.();
-            return captureUpdateCheckpoint({
-              ...access,
-              assertQuiescent: assertCurrent,
-              resources: [{ sourcePath: pathname, kind: "sqlite", restore: "replace" }],
-              exclusions: [],
-            });
+            const copy = await prepareSqliteReadOnlyLocation(pathname);
+            try {
+              assertCurrent();
+              expect(copy.location).not.toBe(pathname);
+              const db = new DatabaseSync(copy.location, { readOnly: true });
+              try {
+                expect(db.prepare("PRAGMA quick_check").get()?.quick_check).toBe("ok");
+              } finally {
+                db.close();
+              }
+            } finally {
+              copy.cleanup();
+            }
           });
           expect(workers.at(-1)).not.toBe(first);
           expect(workers.at(-1)?.threadId).toBeGreaterThan(0);
           lease.assertOwned();
-          const artifact = (await reopenUpdateCheckpoint(ref, access)).manifest.resources[0]
-            ?.artifact;
-          expect(artifact).toBeTruthy();
           expect(() => retained?.()).toThrow(/no longer current/);
           expect(openOpenClawStateDatabase({ env: state.env }).db.isOpen).toBe(true);
         });

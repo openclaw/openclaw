@@ -18,7 +18,6 @@ import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-version
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { CLI_NAME } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
-import { continueDurableUpdateInFreshProcess } from "./update-command-candidate-process.js";
 import {
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
@@ -111,7 +110,7 @@ export async function continueMigratedUpdateInFreshProcess(
   bufferedSteps: UpdateRunStep[],
 ): Promise<Omit<MigratedUpdateFinalizationResult, "terminalRunId">> {
   if (params.opts.recovery) {
-    return await continueDurableUpdateInFreshProcess(params, bufferedSteps);
+    throw new UpdateCommandRecoveryPendingError("Full-state checkpoint recovery is deferred.");
   }
   const run = params.opts.run;
   if (!run) {

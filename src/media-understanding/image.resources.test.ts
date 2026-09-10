@@ -250,6 +250,22 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
 }
 
+function acquireFixtureRuntime(fixture: ReturnType<typeof nativeImageFixture>, modelId: string) {
+  return acquireReadOnlyPreparedModelRuntime(
+    {
+      config: fixture.config,
+      agentId: "main",
+      agentDir: fixture.agentDir,
+      workspaceDir: fixture.dir,
+      loadRuntimePlugins: true,
+      skipCredentials: true,
+      runtimePluginSelections: [{ provider: fixture.id, modelId }],
+    },
+    undefined,
+    "static",
+  );
+}
+
 afterEach(async () => {
   vi.useRealTimers();
   await closePreparedModelRuntimeSnapshots();
@@ -286,19 +302,7 @@ it.each(["timeout", "cancellation", "late-rejection"] as const)(
             ),
           ).toEqual({ ok: true });
           setActivePluginRegistry(donor.registry);
-          const acquired = await acquireReadOnlyPreparedModelRuntime(
-            {
-              config: fixture.config,
-              agentId: "main",
-              agentDir: fixture.agentDir,
-              workspaceDir: fixture.dir,
-              loadRuntimePlugins: true,
-              skipCredentials: true,
-              runtimePluginSelections: [{ provider: fixture.id, modelId: "image-model" }],
-            },
-            undefined,
-            "static",
-          );
+          const acquired = await acquireFixtureRuntime(fixture, "image-model");
           lease = acquired;
           expect(fixture.state.connections).toHaveLength(2);
           const [donorConnection, primary] = fixture.state.connections;
@@ -387,19 +391,7 @@ it("releases only its borrow while the supplying generation remains open", async
   try {
     await fixture.environment(async () => {
       useNoBundledPlugins();
-      const lease = await acquireReadOnlyPreparedModelRuntime(
-        {
-          config: fixture.config,
-          agentId: "main",
-          agentDir: fixture.agentDir,
-          workspaceDir: fixture.dir,
-          loadRuntimePlugins: true,
-          skipCredentials: true,
-          runtimePluginSelections: [{ provider: fixture.id, modelId: "image-model" }],
-        },
-        undefined,
-        "static",
-      );
+      const lease = await acquireFixtureRuntime(fixture, "image-model");
       try {
         fixture.state.finish.resolve();
         expect(
@@ -428,19 +420,7 @@ it("leaves a raw supplied registry with its caller", async () => {
       useNoBundledPlugins();
       const raw = loadPluginRegistryHandle({ config: fixture.config });
       setActivePluginRegistry(raw);
-      const lease = await acquireReadOnlyPreparedModelRuntime(
-        {
-          config: fixture.config,
-          agentId: "main",
-          agentDir: fixture.agentDir,
-          workspaceDir: fixture.dir,
-          loadRuntimePlugins: true,
-          skipCredentials: true,
-          runtimePluginSelections: [{ provider: fixture.id, modelId: "image-model" }],
-        },
-        undefined,
-        "static",
-      );
+      const lease = await acquireFixtureRuntime(fixture, "image-model");
       try {
         fixture.state.finish.resolve();
         const snapshot = { ...lease.snapshot, pluginRegistry: raw };
@@ -466,19 +446,7 @@ it.each(["setup", "retry"] as const)(
     try {
       await fixture.environment(async () => {
         useNoBundledPlugins();
-        const lease = await acquireReadOnlyPreparedModelRuntime(
-          {
-            config: fixture.config,
-            agentId: "main",
-            agentDir: fixture.agentDir,
-            workspaceDir: fixture.dir,
-            loadRuntimePlugins: true,
-            skipCredentials: true,
-            runtimePluginSelections: [{ provider: fixture.id, modelId: "image-model" }],
-          },
-          undefined,
-          "static",
-        );
+        const lease = await acquireFixtureRuntime(fixture, "image-model");
         let closing: Promise<void> | undefined;
         let outcome: Promise<unknown> | undefined;
         try {
@@ -532,19 +500,7 @@ it.each(["parent", "normal", "admitted-tail"] as const)(
     try {
       await fixture.environment(async () => {
         useNoBundledPlugins();
-        const lease = await acquireReadOnlyPreparedModelRuntime(
-          {
-            config: fixture.config,
-            agentId: "main",
-            agentDir: fixture.agentDir,
-            workspaceDir: fixture.dir,
-            loadRuntimePlugins: true,
-            skipCredentials: true,
-            runtimePluginSelections: [{ provider: fixture.id, modelId: "image-model" }],
-          },
-          undefined,
-          "static",
-        );
+        const lease = await acquireFixtureRuntime(fixture, "image-model");
         const parent = new AsyncWorkScope();
         let result: Promise<unknown> | undefined;
         let closing: Promise<void> | undefined;
@@ -627,19 +583,7 @@ it.each(["success", "failure", "timeout"] as const)(
     try {
       await fixture.environment(async () => {
         useNoBundledPlugins();
-        const lease = await acquireReadOnlyPreparedModelRuntime(
-          {
-            config: fixture.config,
-            agentId: "main",
-            agentDir: fixture.agentDir,
-            workspaceDir: fixture.dir,
-            loadRuntimePlugins: true,
-            skipCredentials: true,
-            runtimePluginSelections: [{ provider: fixture.id, modelId: "image-model" }],
-          },
-          undefined,
-          "static",
-        );
+        const lease = await acquireFixtureRuntime(fixture, "image-model");
         const parent = new AsyncWorkScope();
         let outcome: Promise<unknown> | undefined;
         let closing: Promise<void> | undefined;
@@ -731,19 +675,7 @@ it.each(["open", "resolved", "fallback"] as const)(
     try {
       await fixture.environment(async () => {
         useNoBundledPlugins();
-        const lease = await acquireReadOnlyPreparedModelRuntime(
-          {
-            config: fixture.config,
-            agentId: "main",
-            agentDir: fixture.agentDir,
-            workspaceDir: fixture.dir,
-            loadRuntimePlugins: true,
-            skipCredentials: true,
-            runtimePluginSelections: [{ provider: fixture.id, modelId: fixture.request.model }],
-          },
-          undefined,
-          "static",
-        );
+        const lease = await acquireFixtureRuntime(fixture, fixture.request.model);
         const parent = new AsyncWorkScope();
         const read = () =>
           fixture.state.connections[0]!.database.prepare("SELECT value FROM proof").get()?.value;

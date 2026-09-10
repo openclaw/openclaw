@@ -36,7 +36,6 @@ type CanaryResult = {
   logTail: string[];
   steps: UpdateStepResult[];
   candidateSchemaVersions?: OpenClawSchemaVersions;
-  checkpointContinuation?: boolean;
 } & (
   | { status: "ok" }
   | {
@@ -128,7 +127,6 @@ export async function validateUpdateCandidateCanary(params: {
   const logTail: string[] = [];
   const steps: UpdateStepResult[] = [];
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
-  let checkpointContinuation = false;
   let phase: CanaryPhase = "snapshot";
   let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const capture = (chunk: Buffer | string) => {
@@ -351,10 +349,6 @@ export async function validateUpdateCandidateCanary(params: {
           ? undefined
           : JSON.parse(running.stdout());
         candidateSchemaVersions = parseOpenClawSchemaVersions(contract);
-        checkpointContinuation =
-          isRecord(contract) &&
-          contract.executorDelegation === "pid-start-v1" &&
-          contract.candidateMutation === "checkpoint-owned-v1";
         if (!candidateSchemaVersions) {
           code = 1;
           capture("Candidate migration continuation did not report its schema contract");
@@ -439,7 +433,6 @@ export async function validateUpdateCandidateCanary(params: {
       durationMs: Date.now() - started,
       logTail,
       candidateSchemaVersions,
-      checkpointContinuation,
       steps,
     };
   } catch (error) {
