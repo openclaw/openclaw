@@ -1,3 +1,4 @@
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { serializeConfigForm } from "../../lib/config-form-utils.ts";
@@ -467,6 +468,10 @@ export class InstallWizardController {
     try {
       await this.host.requestRestart(t("pluginsPage.installWizard.restartReason"));
     } catch (error) {
+      if (!this.host.isConnected() && !(error instanceof GatewayRequestError)) {
+        // The restart can close its socket before acknowledging; reconnect owns completion.
+        return;
+      }
       this.fail(
         attempt,
         catalogId,

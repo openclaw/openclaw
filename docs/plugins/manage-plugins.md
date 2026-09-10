@@ -56,6 +56,8 @@ Installing, updating, or removing plugin code requires a Gateway restart.
 Enablement changes for plugins in the startup inventory can be applied without
 a restart when the plugin and current Gateway runtime support it; otherwise
 the UI tells you a restart is required.
+The install dialog waits through the Gateway reconnect before confirming completion
+and offers a retry if the restart does not complete.
 The Control UI does not install from arbitrary npm, git, or local-path sources,
 or update plugin packages. Use the CLI workflows below for those operations.
 
