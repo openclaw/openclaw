@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -20,9 +21,11 @@ import {
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
+import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
@@ -31,12 +34,17 @@ import {
 } from "./session-accessor.js";
 import type { SessionEntryLifecycleMutationResult } from "./session-accessor.sqlite-contract.js";
 import {
+  applySessionEntryMaintenance,
+  finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
+} from "./session-accessor.sqlite-maintenance.js";
+import {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionStoreProjection,
 } from "./session-accessor.sqlite-projection.js";
 import {
   resolveSqliteScope,
+  resolveSqliteTranscriptArchiveDirectory,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -56,6 +64,7 @@ vi.mock("node:child_process", async (importOriginal) => {
     },
   };
 });
+
 vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
@@ -649,5 +658,207 @@ it.each([false, true])(
     expect(rollback).not.toHaveBeenCalled();
     probe.expectHealthy(1);
     expect(loadSessionEntryReadOnly(f.input)?.sessionId).toBe(revoked ? "original" : undefined);
+  },
+);
+
+function maintenanceFixture(native = false) {
+  const f = fixture();
+  const stale = { ...f.input, sessionKey: "agent:main:subagent:maintenance-old", sessionId: "old" };
+  replaceSessionEntrySync(stale, {
+    sessionId: stale.sessionId,
+    updatedAt: 1,
+    ...(native ? { agentHarnessId: "maintenance-native", lifecycleRevision: "generation-1" } : {}),
+  });
+  const events = [{ type: "session", id: "old", content: "retained maintenance history" }];
+  replaceTranscriptEventsSync(stale, events);
+  const config = {
+    session: { maintenance: { mode: "enforce" as const, maxEntries: 1, pruneAfter: "1000000d" } },
+  };
+  setRuntimeConfigSnapshot(config, config);
+  const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(f.scope);
+  return { ...f, stale, events, archiveDirectory };
+}
+
+function expectMaintenanceArchived(f: ReturnType<typeof maintenanceFixture>) {
+  expect(loadSessionEntryReadOnly(f.stale)).toBeUndefined();
+  expect(loadSessionEntryReadOnly(f.input)?.sessionId).toBe("original");
+  expect(loadTranscriptEventsSync(f.stale)).toEqual([]);
+  const archives = fs
+    .readdirSync(f.archiveDirectory)
+    .filter((name) => name.startsWith("old.jsonl.deleted."));
+  expect(archives).toHaveLength(1);
+  expect(
+    readSessionArchiveContentSync(path.join(f.archiveDirectory, archives[0]!))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+  ).toEqual(f.events);
+}
+
+it.each(
+  (["whole-store", "lifecycle", "replacement"] as const).flatMap((owner) =>
+    ([false, true] as const).map((cold) => ({ owner, cold })),
+  ),
+)(
+  "keeps $owner maintenance finalization in the writer FIFO (cold: $cold)",
+  async ({ owner, cold }) => {
+    const f = maintenanceFixture();
+    const probe = observeAdmission(f.databasePath, cold);
+    let preparationWriterRan = false;
+    hooks.afterMaterialize = async () => {
+      await runExclusiveSqliteSessionWrite(
+        f.scope,
+        async () => {
+          preparationWriterRan = true;
+        },
+        "session.transcript.batch",
+      );
+      if (cold) {
+        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+      }
+    };
+    const work = own<void | SessionEntryLifecycleMutationResult>(
+      owner === "whole-store"
+        ? applySessionStoreProjection({
+            storePath: f.databasePath,
+            update: (store) => {
+              store[f.input.sessionKey]!.label = "kept";
+              return { persist: true, result: undefined };
+            },
+          })
+        : owner === "replacement"
+          ? applySessionEntryReplacements({
+              storePath: f.databasePath,
+              sessionKeys: [f.input.sessionKey],
+              skipMaintenance: false,
+              update: (entries) => ({
+                result: undefined,
+                replacements: entries.map(({ entry, sessionKey }) => ({
+                  sessionKey,
+                  entry: { ...entry, label: "kept" },
+                })),
+              }),
+            })
+          : applySessionEntryLifecycleMutation({
+              storePath: f.databasePath,
+              upserts: [
+                {
+                  sessionKey: f.input.sessionKey,
+                  buildEntry: ({ currentEntry }) => ({ ...currentEntry!, label: "kept" }),
+                },
+              ],
+            }),
+    );
+    if (cold) {
+      await probe.expectPending(work);
+      let laterRan = false;
+      const later = own(
+        runExclusiveSqliteSessionWrite(
+          f.scope,
+          async () => {
+            laterRan = true;
+            expect(loadSessionEntryReadOnly(f.stale)).toBeUndefined();
+          },
+          "session.transcript.batch",
+        ),
+      );
+      await yieldToEventLoop();
+      expect(preparationWriterRan).toBe(true);
+      expect(laterRan).toBe(false);
+      expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
+      probe.release.resolve();
+      await work;
+      await later;
+    } else {
+      await work;
+    }
+    expect(preparationWriterRan).toBe(true);
+    expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
+    expectMaintenanceArchived(f);
+    probe.expectHealthy(cold ? 1 : 0);
+  },
+);
+
+function maintenancePlan(f: ReturnType<typeof maintenanceFixture>) {
+  return runOpenClawAgentWriteTransaction(
+    (database) =>
+      applySessionEntryMaintenance(database, {
+        activeSessionKey: f.input.sessionKey,
+        archiveDirectory: f.archiveDirectory,
+        storePath: f.databasePath,
+      }),
+    f.options,
+  );
+}
+
+it("rechecks maintenance lifetime after cold finalizer admission", async () => {
+  const f = maintenanceFixture();
+  const plan = maintenancePlan(f);
+  const probe = observeAdmission(f.databasePath, true);
+  hooks.afterMaterialize = async () => {
+    expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+  };
+  let current = true;
+  const work = own(
+    finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(f.scope, [plan], {
+      isCurrent: () => current,
+    }),
+  );
+  await probe.expectPending(work);
+  current = false;
+  probe.release.resolve();
+  await expect(work).resolves.toMatchObject({ capped: 0, archivedTranscripts: [] });
+  expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
+  expect(loadTranscriptEventsSync(f.stale)).toEqual(f.events);
+  probe.expectHealthy(1);
+});
+
+it.each([false, true])(
+  "rechecks native deletion ownership after cold maintenance admission (revoked: %s)",
+  async (revoked) => {
+    const f = maintenanceFixture(true);
+    const plan = maintenancePlan(f);
+    const registry = createEmptyPluginRegistry();
+    const commit = vi.fn();
+    const rollback = vi.fn();
+    const harness: AgentHarness = {
+      id: "maintenance-native",
+      label: "Maintenance native test",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused test harness");
+      },
+      withSessionDeletion: async (params, run) => {
+        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+        params.assertCurrent();
+        return await run({ commit, rollback });
+      },
+    };
+    const record = createPluginRecord({ id: "maintenance-native-owner" });
+    registry.plugins.push(record);
+    registry.agentHarnesses.push({ harness, pluginId: record.id, source: "runtime" });
+    markPluginRegistryActive(registry);
+    const probe = observeAdmission(f.databasePath, true);
+    const work = own(
+      withPluginRuntimeRegistryScope(registry, () =>
+        finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(f.scope, [plan]),
+      ),
+    );
+    await probe.expectPending(work);
+    expect(commit).not.toHaveBeenCalled();
+    if (revoked) {
+      markPluginRegistryRetired(registry);
+    }
+    probe.release.resolve();
+    await expect(work).resolves.toMatchObject({ capped: revoked ? 0 : 1 });
+    expect(commit).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    expect(rollback).not.toHaveBeenCalled();
+    probe.expectHealthy(1);
+    if (revoked) {
+      expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
+      expect(loadTranscriptEventsSync(f.stale)).toEqual(f.events);
+    } else {
+      expectMaintenanceArchived(f);
+    }
   },
 );
