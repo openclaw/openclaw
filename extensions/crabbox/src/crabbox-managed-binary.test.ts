@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal, createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as network from "openclaw/plugin-sdk/ssrf-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -189,7 +190,9 @@ describe("managed Crabbox", () => {
     test.fetch.mockImplementationOnce(async ({ signal }) => {
       started.resolve();
       await new Promise<void>((_resolve, reject) => {
-        signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+        signal!.addEventListener("abort", () => reject(toErrorObject(signal!.reason, "aborted")), {
+          once: true,
+        });
       });
       throw new Error("unreachable");
     });

@@ -3322,7 +3322,6 @@ describe("Crabbox worker provider", () => {
     } finally {
       acquisition.reject(new Error("fixture acquisition failed"));
       await rejected;
-      await provider.dispose();
       vi.useRealTimers();
     }
     expect(heartbeatCount).toBe(1);

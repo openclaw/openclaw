@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractArchive } from "openclaw/plugin-sdk/archive";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
@@ -226,6 +226,7 @@ async function publishInstallation(params: {
             throw new AggregateError(
               [error, restoreError],
               `Crabbox publication failed; previous installation is preserved at ${recovery}`,
+              { cause: restoreError },
             );
           }
         }
@@ -374,7 +375,7 @@ export async function ensureManagedCrabboxBinary(
       leave();
       // Other callers retain custody; only the last waiter must join cancellation cleanup.
       if (shared.waiters > 0) {
-        reject(signal?.reason);
+        reject(toErrorObject(signal?.reason, "Crabbox acquisition aborted"));
       }
     };
   });
