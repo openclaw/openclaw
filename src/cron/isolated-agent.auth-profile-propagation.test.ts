@@ -1,11 +1,20 @@
 // Auth profile propagation tests cover isolated agent auth profile forwarding.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileFailurePolicy } from "../agents/embedded-agent-runner/run/auth-profile-failure-policy.types.js";
 import {
   makeIsolatedAgentJobFixture,
   makeIsolatedAgentParamsFixture,
 } from "./isolated-agent/job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
+
+const resolveCliExecutionAuthProfileIdMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../agents/cli-execution-auth.js", () => ({
+  CliExecutionAuthProfileError: class CliExecutionAuthProfileError extends Error {},
+  cliBackendAcceptsAuthProfileForwarding: vi.fn(),
+  resolveCliExecutionAuthProfileId: resolveCliExecutionAuthProfileIdMock,
+}));
+
 import {
   loadRunCronIsolatedAgentTurn,
   isCliProviderMock,
@@ -31,7 +40,11 @@ function getEmbeddedAgentParams(): {
 }
 
 describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", () => {
-  setupRunCronIsolatedAgentTurnSuite();
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
+  beforeEach(() => {
+    resolveCliExecutionAuthProfileIdMock.mockReset();
+    resolveCliExecutionAuthProfileIdMock.mockReturnValue(undefined);
+  });
 
   it("uses transient-local auth cooldown policy for cron throttling failures", async () => {
     mockRunCronFallbackPassthrough();
@@ -110,6 +123,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       source: "auto",
       routeRequirement: "api-key",
     });
+    resolveCliExecutionAuthProfileIdMock.mockReturnValue("claude-cli:manual");
     runCliAgentMock.mockResolvedValue({
       payloads: [{ text: "check status" }],
       meta: { agentMeta: {} },
@@ -141,6 +155,16 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
 
     expect(result.status).toBe("ok");
     expect(runCliAgentMock).toHaveBeenCalledOnce();
+    expect(resolveCliExecutionAuthProfileIdMock).toHaveBeenCalledWith({
+      cliExecutionProvider: "claude-cli",
+      authProfileProvider: "claude-cli",
+      config: expect.any(Object),
+      agentDir: expect.any(String),
+      selected: {
+        authProfileId: "claude-cli:manual",
+        authProfileIdSource: "auto",
+      },
+    });
     expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
       authProfileId: "claude-cli:manual",
     });

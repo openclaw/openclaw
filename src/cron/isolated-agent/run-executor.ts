@@ -7,6 +7,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
+import { resolveCliExecutionAuthProfileId } from "../../agents/cli-execution-auth.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import { settleCliSessionResult } from "../../agents/cli-session-store.js";
 import {
@@ -536,6 +537,20 @@ function createCronPromptExecutor(
         }
         const { sessionRuntimeOverride, executionProvider, cliExecution } =
           resolveCandidateExecution(providerOverride, modelOverride);
+        // Fallback candidates may use a different CLI runtime than the initial
+        // model; resolve the credential at that candidate's owner boundary.
+        const cliAuthProfileId = cliExecution
+          ? resolveCliExecutionAuthProfileId({
+              cliExecutionProvider: executionProvider,
+              authProfileProvider: params.liveSelection.provider,
+              config: params.cfgWithAgentDefaults,
+              agentDir: params.agentDir,
+              selected: {
+                authProfileId: params.liveSelection.authProfileId,
+                authProfileIdSource: params.liveSelection.authProfileIdSource,
+              },
+            })
+          : undefined;
         const candidateRuntime = resolveEffectiveAgentRuntime({
           cfg: params.cfgWithAgentDefaults,
           provider: providerOverride,
@@ -674,7 +689,7 @@ function createCronPromptExecutor(
                 ),
                 provider: executionProvider,
                 model: modelOverride,
-                authProfileId: params.liveSelection.authProfileId,
+                authProfileId: cliAuthProfileId,
                 thinkLevel: candidateThinkLevel,
                 timeoutMs: params.timeoutMs,
                 runId,

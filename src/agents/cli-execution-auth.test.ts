@@ -220,6 +220,50 @@ describe("resolveCliExecutionAuthProfileId", () => {
     },
   );
 
+  it("keeps native Claude login for an automatic canonical Anthropic API key", () => {
+    mocks.profiles["anthropic:default"] = {
+      type: "api_key",
+      provider: "anthropic",
+      key: "test-anthropic-key",
+    };
+    mocks.order.push("anthropic:default");
+
+    expect(
+      resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "anthropic",
+        config: {},
+        agentDir: "/tmp/unused-agent",
+        selected: {
+          authProfileId: "anthropic:default",
+          authProfileIdSource: "auto",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not carry an automatic cross-provider profile into Claude CLI fallback", () => {
+    mocks.profiles["openai:default"] = {
+      type: "api_key",
+      provider: "openai",
+      key: "test-openai-key",
+    };
+    mocks.order.push("openai:default");
+
+    expect(
+      resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "openai",
+        config: {},
+        agentDir: "/tmp/unused-agent",
+        selected: {
+          authProfileId: "openai:default",
+          authProfileIdSource: "auto",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it.each(["claude-cli", "google-gemini-cli"])(
     "rejects an explicitly selected profile from another provider for %s",
     (cliExecutionProvider) => {
