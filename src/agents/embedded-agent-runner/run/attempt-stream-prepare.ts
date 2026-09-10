@@ -517,6 +517,7 @@ export function prepareEmbeddedAttemptStream(input: {
     input.markExternalAbort();
     if (reason === "cron_timeout") {
       input.abortRun(true, createTimeoutAbortReason());
+      attempt.onDeferredLifecycleAbort?.(reason);
       attempt.onAttemptAbort?.();
       return;
     }

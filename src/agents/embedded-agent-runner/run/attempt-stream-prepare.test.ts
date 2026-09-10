@@ -84,6 +84,9 @@ function prepareCatalogExecutor(
     sessionKey?: string;
     replyOperation?: ReplyOperation;
     onAttemptAbort?: () => void;
+    onDeferredLifecycleAbort?: (
+      reason?: "user_abort" | "restart" | "superseded" | "cron_timeout",
+    ) => void;
     abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
     markExternalAbort?: () => void;
     toolProgressDetail?: "explain" | "raw";
@@ -99,6 +102,7 @@ function prepareCatalogExecutor(
       sessionKey: options?.sessionKey ?? "agent:main:main",
       replyOperation: options?.replyOperation,
       onAttemptAbort: options?.onAttemptAbort,
+      onDeferredLifecycleAbort: options?.onDeferredLifecycleAbort,
       toolProgressDetail: options?.toolProgressDetail,
       onAgentEvent: options?.onAgentEvent,
       ...options?.attempt,
@@ -737,6 +741,9 @@ describe("prepareEmbeddedAttemptStream", () => {
     const markExternalAbort = vi.fn(() => {
       order.push("markExternalAbort");
     });
+    const onDeferredLifecycleAbort = vi.fn((reason?: string) => {
+      order.push(`onDeferredLifecycleAbort:${reason}`);
+    });
     const onAttemptAbort = vi.fn(() => {
       order.push("onAttemptAbort");
     });
@@ -745,6 +752,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     });
     const prepared = prepareCatalogExecutor([], {
       markExternalAbort,
+      onDeferredLifecycleAbort,
       onAttemptAbort,
       abortRun,
     });
@@ -753,8 +761,14 @@ describe("prepareEmbeddedAttemptStream", () => {
 
     expect(markExternalAbort).toHaveBeenCalledOnce();
     expect(abortRun).toHaveBeenCalledOnce();
+    expect(onDeferredLifecycleAbort).toHaveBeenCalledWith("cron_timeout");
     expect(onAttemptAbort).toHaveBeenCalledOnce();
-    expect(order).toEqual(["markExternalAbort", "abortRun", "onAttemptAbort"]);
+    expect(order).toEqual([
+      "markExternalAbort",
+      "abortRun",
+      "onDeferredLifecycleAbort:cron_timeout",
+      "onAttemptAbort",
+    ]);
     const call = abortRun.mock.calls[0];
     expect(call?.[0]).toBe(true);
     expect(call?.[1]).toBeInstanceOf(Error);
