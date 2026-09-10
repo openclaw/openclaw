@@ -298,6 +298,8 @@ export type WorkerProvider = {
         key: string;
         baseCommit: string;
         label?: string;
+        /** Gateway-local checkout root for display and explicit rebuild requests. */
+        root?: string;
         preparation?: {
           key: string;
           cacheKey: string;

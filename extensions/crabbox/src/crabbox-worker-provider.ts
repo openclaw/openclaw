@@ -331,7 +331,9 @@ export function createCrabboxWorkerProvider(
         profile: parsed,
         profileId: options?.profileId,
         nodeRuntimeIdentity,
-        ...(project ? { projectKey: project.key, projectLabel: project.label } : {}),
+        ...(project
+          ? { projectKey: project.key, projectLabel: project.label, projectRoot: project.root }
+          : {}),
         ...(project?.preparation ? { preparation: project.preparation } : {}),
         ...(project ? { assertCurrent: project.assertCurrent } : {}),
         signal: preparationSignal,

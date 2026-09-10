@@ -432,6 +432,7 @@ describe("worker provider project preparation ownership", () => {
         });
         expect(project.key).toMatch(/^[a-f0-9]{64}$/u);
         expect(project.baseCommit).toBe(git.baseCommit);
+        expect(project.root).toBe(git.root);
         expect(project.label).toBe("example.invalid/team/project");
         expect(() => project.assertCurrent()).not.toThrow();
         if (projects.length === 1) {
@@ -465,6 +466,7 @@ describe("worker provider project preparation ownership", () => {
       expect(operationIds[1]).toBe(operationIds[0]);
       expect(projects[1]?.key).toBe(projects[0]?.key);
       expect(projects[1]?.baseCommit).toBe(git.baseCommit);
+      expect(projects[1]?.root).toBe(git.root);
       expect(projects[1]?.label).toBe(projects[0]?.label);
       expect(projects[1]).not.toBe(projects[0]);
       expect(projects[1]?.signal.aborted).toBe(true);

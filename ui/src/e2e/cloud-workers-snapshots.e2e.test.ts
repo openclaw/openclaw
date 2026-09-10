@@ -9,15 +9,133 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
+function buildEnvironmentFixture() {
+  return {
+    id: "build-app",
+    type: "worker",
+    status: "starting",
+    preparation: { purpose: "build", key: "build-key" },
+    worker: {
+      profileId: "linux-build",
+      providerId: "crabbox",
+      leaseId: "lease-app",
+      state: "provisioning",
+      ageMs: 60_000,
+      attachedSessionIds: [],
+      tunnelStatus: "stopped",
+    },
+  };
+}
+
 suite.define(() => {
+  it("builds a snapshot for the selected profile and local repository", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "crabbox.images.list",
+        "environments.list",
+        "environments.prepare",
+        "environments.destroy",
+        "projects.list",
+        "worktrees.list",
+      ],
+      methodResponses: {
+        "crabbox.images.list": snapshotListFixture(),
+        "environments.list": { environments: [], profiles: [] },
+        "environments.prepare": {
+          environmentId: "build-app",
+          preparationKey: "build-key",
+          reused: false,
+        },
+        "projects.list": {
+          projects: [
+            {
+              id: "app",
+              displayName: "App",
+              repoRoot: "/projects/app",
+              source: "registered",
+            },
+          ],
+        },
+        "worktrees.list": { worktrees: [] },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.getByRole("button", { name: "Snapshots", exact: true }).click();
+      await page.getByRole("button", { name: "Build snapshot", exact: true }).click();
+      const dialog = page.locator('openclaw-modal-dialog[label="Build snapshot"]');
+      const submit = dialog.getByRole("button", { name: "Build snapshot", exact: true });
+      await dialog
+        .getByRole("combobox", { name: "Profile", exact: true })
+        .selectOption("linux-build");
+      await dialog
+        .getByRole("combobox", { name: "Repository", exact: true })
+        .selectOption("/projects/app");
+      expect(await gateway.getRequests("environments.prepare")).toHaveLength(0);
+      await gateway.setMethodResponse("environments.list", {
+        environments: [buildEnvironmentFixture()],
+        profiles: [],
+      });
+      await submit.click();
+      expect((await gateway.waitForRequest("environments.prepare")).params).toEqual({
+        profileId: "linux-build",
+        projectPath: "/projects/app",
+      });
+      await page.getByText("Build started", { exact: true }).waitFor();
+      await expect.poll(() => dialog.count()).toBe(0);
+      await page.getByRole("button", { name: "Cancel", exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("cancels a build only after confirmation and removes the reconciled build row", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["crabbox.images.list", "environments.list", "environments.destroy"],
+      methodResponses: {
+        "crabbox.images.list": snapshotListFixture(),
+        "environments.list": { environments: [buildEnvironmentFixture()], profiles: [] },
+        "environments.destroy": { ok: true },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.getByRole("button", { name: "Snapshots", exact: true }).click();
+      const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+      await cancel.click();
+      const dialog = await waitForConfirmModal(page);
+      expect(await dialog.getAttribute("label")).toBe("Cancel build");
+      expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect.poll(() => dialog.count()).toBe(0);
+      expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
+      await cancel.click();
+      const confirmation = await waitForConfirmModal(page);
+      await gateway.setMethodResponse("environments.list", { environments: [], profiles: [] });
+      await confirmation.getByRole("button", { name: "Cancel build", exact: true }).click();
+      expect((await gateway.waitForRequest("environments.destroy")).params).toEqual({
+        environmentId: "build-app",
+      });
+      await expect.poll(() => cancel.count()).toBe(0);
+      await page.getByText("github.com/acme/app", { exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
   it("requires provider cleanup acknowledgement before recovery and refreshes the snapshots", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const initial = snapshotListFixture();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["crabbox.images.list", "crabbox.images.recover"],
+      featureMethods: ["crabbox.images.list", "crabbox.images.recover", "environments.list"],
       methodResponses: {
         "crabbox.images.list": initial,
+        "environments.list": { environments: [] },
         "crabbox.images.recover": {
           images: [],
           legacyLeases: [],
@@ -83,6 +201,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       featureMethods: ["crabbox.images.list", "crabbox.images.pin", "crabbox.images.delete"],
       methodResponses: {
+        "environments.list": { environments: [] },
         "crabbox.images.list": listed,
         "crabbox.images.pin": pinned,
         "crabbox.images.delete": { status: "deleted" },

@@ -2285,6 +2285,7 @@ public struct RequiredNodeCommand: Codable, Sendable {
 }
 
 public struct WorkerEnvironmentMetadata: Codable, Sendable {
+    public let profileid: String?
     public let providerid: String
     public let leaseid: String?
     public let state: WorkerEnvironmentState
@@ -2297,6 +2298,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let desktopapps: [WorkerDesktopAppId]?
 
     public init(
+        profileid: String? = nil,
         providerid: String,
         leaseid: String? = nil,
         state: WorkerEnvironmentState,
@@ -2308,6 +2310,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         desktop: Bool? = nil,
         desktopapps: [WorkerDesktopAppId]? = nil)
     {
+        self.profileid = profileid
         self.providerid = providerid
         self.leaseid = leaseid
         self.state = state
@@ -2321,6 +2324,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
         case providerid = "providerId"
         case leaseid = "leaseId"
         case state

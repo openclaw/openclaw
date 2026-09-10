@@ -53,6 +53,7 @@ type AllocationContext = LeaseContext & {
   projectKey?: string;
   profileId?: string;
   projectLabel?: string;
+  projectRoot?: string;
   nodeRuntimeIdentity?: WarmAllocationRecord["runtimeIdentity"];
   preparation?: {
     key: string;
@@ -317,6 +318,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       machineClass: profile.class,
       os: profile.target,
       projectLabel: context.projectLabel,
+      projectRoot: context.projectRoot,
     };
     const replay = lookupLease(context.id);
     if (replay) {

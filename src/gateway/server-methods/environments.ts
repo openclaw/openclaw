@@ -147,6 +147,7 @@ export function summarizeWorkerEnvironment(
       ? { preparation: { purpose: record.preparation.purpose, key: record.preparation.key } }
       : {}),
     worker: {
+      profileId: record.profileId,
       providerId: record.providerId,
       ...(record.leaseId ? { leaseId: record.leaseId } : {}),
       state: record.state,

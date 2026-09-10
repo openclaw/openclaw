@@ -245,7 +245,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         return;
       }
       this.editor = null;
-      this.notice = t("labsPage.restartRequired");
+      this.notice = `${t("labsPage.restartRequired")} ${t("cloudWorkersPage.snapshots.buildAfterRestart")}`;
     } catch (error) {
       if (isCurrent()) {
         this.formError = formatUiError(error);

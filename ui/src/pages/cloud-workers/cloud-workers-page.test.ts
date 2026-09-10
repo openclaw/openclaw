@@ -219,6 +219,14 @@ describe("Cloud Workers mutation requests", () => {
           actionButton(page, "Save").click();
         }
         await waitForFast(() => expect(patches).toHaveLength(1));
+        if (action !== "delete") {
+          await waitForFast(() =>
+            expect(page.textContent).toContain(
+              "After the Gateway restarts, build a snapshot from the Snapshots view.",
+            ),
+          );
+          expect(request).not.toHaveBeenCalledWith("environments.prepare", expect.anything());
+        }
         expect(patches[0]).toMatchObject({
           baseHash: "before",
           replacePaths: ["cloudWorkers.profiles.pending.settings.setupEnv"],

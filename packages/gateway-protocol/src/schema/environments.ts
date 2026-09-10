@@ -85,6 +85,7 @@ export const RequiredNodeCommandSchema = closedObject({
 
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
+  profileId: Type.Optional(NonEmptyString),
   providerId: NonEmptyString,
   leaseId: Type.Optional(NonEmptyString),
   state: WorkerEnvironmentStateSchema,
