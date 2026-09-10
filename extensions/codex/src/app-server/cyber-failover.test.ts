@@ -26,11 +26,11 @@ function nextSession(): string {
   return `session-${sessionCounter}`;
 }
 
-function refusalResult(category: string) {
+function refusalResult(category: string, provider = "openai") {
   return {
-    lastAssistant: {
+    currentAttemptAssistant: {
       role: "assistant",
-      diagnostics: [{ type: "provider_refusal", details: { provider: "openai", category } }],
+      diagnostics: [{ type: "provider_refusal", details: { provider, category } }],
     },
   };
 }
@@ -68,6 +68,19 @@ describe("cyber refusal detection", () => {
     expect(isCodexCyberRefusalResult(refusalResult("misalignment"))).toBe(false);
     expect(isCodexCyberRefusalResult({ lastAssistant: { role: "assistant" } })).toBe(false);
     expect(isCodexCyberRefusalResult(undefined)).toBe(false);
+    // Another provider's cyber refusal must not reroute a prompt to OpenAI's tier.
+    expect(isCodexCyberRefusalResult(refusalResult("cyber", "other-provider"))).toBe(false);
+    // A previous turn's refusal must not escalate an attempt that produced no row.
+    expect(
+      isCodexCyberRefusalResult({
+        lastAssistant: {
+          role: "assistant",
+          diagnostics: [
+            { type: "provider_refusal", details: { provider: "openai", category: "cyber" } },
+          ],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("reads an unauthorized Daybreak target from the attempt outcome", () => {
@@ -280,7 +293,7 @@ describe("concurrency and damper release", () => {
         replaySafe: true,
         workspace,
       }),
-    ).toEqual({ kind: "skip", reason: "target_unavailable" });
+    ).toEqual({ kind: "skip", reason: "probe_in_flight" });
     release();
     expect(
       planCodexCyberEscalation({

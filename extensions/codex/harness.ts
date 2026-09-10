@@ -347,6 +347,15 @@ export function createCodexAppServerAgentHarness(
         workspace: cyberWorkspace,
       });
       if (plan.kind !== "escalate") {
+        // A known account-level denial is worth stating: without it these turns
+        // show only the generic block and never learn why escalation is silent.
+        if (plan.reason === "target_unavailable") {
+          await emitCodexCyberNotice(params, {
+            state: "unavailable",
+            model: attemptModel,
+            fallbackModel: cyberFailover.model,
+          });
+        }
         return result;
       }
       // Reserve the session before awaiting the retry so a sibling turn sees the

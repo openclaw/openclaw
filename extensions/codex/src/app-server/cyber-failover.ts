@@ -220,7 +220,8 @@ export type CodexCyberEscalationPlan =
         | "cooling_off"
         | "no_target"
         | "not_replay_safe"
-        | "target_unavailable";
+        | "target_unavailable"
+        | "probe_in_flight";
     };
 
 /** Decides whether a refused turn may be retried on Daybreak. */
@@ -248,13 +249,13 @@ export function planCodexCyberEscalation(params: {
   }
   const now = params.now ?? Date.now();
   // An unauthorized target is an account-level fact: no session may retry it and
-  // pay the transport's full reconnect ladder again. A probe already in flight
-  // for this workspace counts the same way until it reports back.
-  if (
-    isTargetUnavailable(config.model, params.workspace, now) ||
-    inFlightProbes.has(targetKey(config.model, params.workspace))
-  ) {
+  // pay the transport's full reconnect ladder again. Callers report this one to
+  // the user, so it stays distinct from a probe that has yet to report back.
+  if (isTargetUnavailable(config.model, params.workspace, now)) {
     return { kind: "skip", reason: "target_unavailable" };
+  }
+  if (inFlightProbes.has(targetKey(config.model, params.workspace))) {
+    return { kind: "skip", reason: "probe_in_flight" };
   }
   // One attempt per session per cooloff: a refused turn is retried once, and a
   // burst of them does not each pay for their own retry.
@@ -297,7 +298,7 @@ export function isCodexCyberEscalationReplaySafe(
 
 function hasRefusalDiagnostic(
   message: CyberRefusalMessage | undefined,
-  category?: string,
+  match?: { category: string; provider: string },
 ): boolean {
   if (message?.role !== "assistant") {
     return false;
@@ -306,7 +307,9 @@ function hasRefusalDiagnostic(
     message.diagnostics?.some(
       (diagnostic) =>
         diagnostic.type === "provider_refusal" &&
-        (category === undefined || diagnostic.details?.category === category),
+        (match === undefined ||
+          (diagnostic.details?.category === match.category &&
+            diagnostic.details?.provider === match.provider)),
     ) === true
   );
 }
@@ -316,9 +319,14 @@ function hasRefusalDiagnostic(
  * misalignment refusals carry their own categories and are never escalated.
  */
 export function isCodexCyberRefusalResult(result: CodexCyberAttemptOutcome | undefined): boolean {
-  // `lastAssistant` may carry an older turn's row, so it only speaks for this
-  // attempt when the attempt produced no row of its own.
-  return hasRefusalDiagnostic(result?.currentAttemptAssistant ?? result?.lastAssistant, "cyber");
+  // Only this attempt's own row may trigger a retry. `lastAssistant` can carry an
+  // older turn's refusal, and inheriting it would reroute a prompt the provider
+  // never refused. A refusal always populates the current-attempt row, so
+  // requiring it costs nothing.
+  return hasRefusalDiagnostic(result?.currentAttemptAssistant, {
+    category: "cyber",
+    provider: "openai",
+  });
 }
 
 /**

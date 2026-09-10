@@ -131,7 +131,14 @@ work that was actually refused:
 - After an attempt, that session is damped for `cooloffMs`, so a burst of
   refusals does not each pay for its own retry. A successful escalation clears
   that damper, so a later refusal in the same session still escalates.
-- The retry does not mirror the prompt into the transcript a second time.
+- The retry does not mirror the prompt into the transcript a second time. The
+  refused attempt's own terminal row is discarded with its result rather than
+  staged, so a successful escalation returns the Daybreak answer; the refused
+  turn still exists upstream in the native Codex thread, which OpenClaw does not
+  rewrite.
+- Only OpenAI's own cyber refusal on the current attempt escalates. Another
+  provider's refusal, another category, and a refusal inherited from an earlier
+  turn all leave the result untouched.
 - Escalation never changes the session's stored model selection, and all of this
   state is process-local rather than persisted.
 
