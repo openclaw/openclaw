@@ -1,6 +1,7 @@
 // Exercises core model selection, aliases, thinking defaults, and visibility policy.
 import { afterEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -1227,6 +1228,117 @@ describe("model-selection", () => {
         },
       ]);
     });
+
+    it.each([
+      { provider: "custom", id: "model", otherProvider: "custom", otherId: "custom/model" },
+      { provider: "custom", id: "team/Reader", otherProvider: "custom/team", otherId: "Reader" },
+      { provider: "custom", id: "Reader", otherProvider: "custom", otherId: "reader" },
+    ])("keeps metadata on $provider/$id and $otherProvider/$otherId", (entry) => {
+      const { provider, id, otherProvider, otherId } = entry;
+      const rows = [
+        { provider, id, name: "Configured primary", contextWindow: 32_000, reasoning: false },
+        {
+          provider: otherProvider,
+          id: otherId,
+          name: "Configured sibling",
+          contextWindow: 128_000,
+          reasoning: true,
+        },
+      ];
+      for (const configuredRows of [rows, rows.toReversed()]) {
+        const providers: Record<string, ModelProviderConfig> = {};
+        for (const row of configuredRows) {
+          const configured = (providers[row.provider] ??= {
+            baseUrl: "https://configured.example/v1",
+            models: [],
+          });
+          configured.models.push({
+            id: row.id,
+            name: row.name,
+            contextWindow: row.contextWindow,
+            reasoning: row.reasoning,
+            input: row.reasoning ? ["text", "image"] : ["text"],
+            maxTokens: 4_096,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          });
+        }
+        const result = buildAllowedModelSet({
+          cfg: { models: { providers } },
+          catalog: [
+            {
+              provider,
+              id,
+              name: "Runtime primary",
+              api: "openai-responses",
+              baseUrl: "https://captured.example/v1",
+            },
+          ],
+          defaultProvider: "custom",
+        });
+
+        expect(result.allowedCatalog).toMatchObject([
+          {
+            provider,
+            id,
+            name: "Configured primary",
+            contextWindow: 32_000,
+            reasoning: false,
+            input: ["text"],
+            api: "openai-responses",
+            baseUrl: "https://captured.example/v1",
+          },
+          {
+            provider: otherProvider,
+            id: otherId,
+            name: "Configured sibling",
+            contextWindow: 128_000,
+            reasoning: true,
+            input: ["text", "image"],
+          },
+        ]);
+      }
+    });
+
+    it.each(["custom/model", "unrelated"])(
+      "keeps synthetic entries sparse when configured metadata belongs to %s",
+      (configuredId) => {
+        const result = buildAllowedModelSet({
+          cfg: {
+            agents: {
+              defaults: {
+                models: { "custom/model": { alias: "Selected alias" } },
+                modelPolicy: { allow: ["custom/model"] },
+              },
+            },
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "https://configured.example/v1",
+                  models: [
+                    {
+                      id: configuredId,
+                      name: "Unrelated configured name",
+                      contextWindow: 128_000,
+                      reasoning: true,
+                      input: ["text", "image"],
+                      params: { temperature: 0.5 },
+                      maxTokens: 4_096,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+          catalog: [],
+          defaultProvider: "custom",
+        });
+
+        expect(result.allowedCatalog).toEqual([
+          { provider: "custom", id: "model", name: "model", alias: "Selected alias" },
+        ]);
+      },
+    );
 
     it("keeps compat catalog-owned while overlaying metadata after manifest normalization", () => {
       const cfg: OpenClawConfig = {
