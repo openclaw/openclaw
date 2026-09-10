@@ -1,15 +1,32 @@
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
-import type { AuthProfileStore, OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import type {
+  AuthProfileStore,
+  OAuthCredential,
+  ProviderAuthResult,
+} from "openclaw/plugin-sdk/provider-auth";
 import { decodeOpenAICodexJwtPayload } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexAuthCredential, CodexAuthSource } from "./auth.js";
 import { defaultCodexHome } from "./source.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 export const LEGACY_CODEX_PROFILE_ID = "openai:default";
+
+export type CodexAuthCredential =
+  | {
+      kind: "oauth";
+      provider: typeof OPENAI_PROVIDER_ID;
+      profileId: string;
+      result: ProviderAuthResult;
+    }
+  | {
+      kind: "api_key";
+      provider: typeof OPENAI_PROVIDER_ID;
+      profileId: string;
+      key: string;
+    };
 
 export function findMatchingOAuthProfile(
   store: AuthProfileStore,
@@ -58,7 +75,7 @@ export function itemProfileTarget(
   credential: CodexAuthCredential,
   store: AuthProfileStore,
   ctx: MigrationProviderContext,
-  source: CodexAuthSource,
+  source: { codexHome: string },
 ): { profileId: string; matchedExisting: boolean } {
   if (credential.kind === "oauth") {
     const profile = credential.result.profiles[0];

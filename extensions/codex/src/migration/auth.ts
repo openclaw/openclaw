@@ -20,7 +20,6 @@ import {
   resolveOpenAICodexImportProfileName,
   updateAuthProfileStoreWithLock,
   type OpenClawConfig,
-  type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   isRecord,
@@ -31,6 +30,7 @@ import {
   findMatchingOAuthProfile,
   itemProfileTarget,
   LEGACY_CODEX_PROFILE_ID,
+  type CodexAuthCredential,
 } from "./auth-profile-target.js";
 import { readCodexCliActiveApiKeyAsync, readCodexCliCredentialsAsync } from "./cli-credentials.js";
 import { readJsonObject } from "./helpers.js";
@@ -53,20 +53,6 @@ type CodexConfigPatchMode = "apply" | "none" | "return";
 
 type CodexMigrationTargets = ReturnType<typeof resolveCodexMigrationTargets>;
 export type CodexAuthSource = Pick<CodexSource, "codexHome" | "authPath" | "modelsCachePath">;
-
-export type CodexAuthCredential =
-  | {
-      kind: "oauth";
-      provider: typeof OPENAI_PROVIDER_ID;
-      profileId: string;
-      result: ProviderAuthResult;
-    }
-  | {
-      kind: "api_key";
-      provider: typeof OPENAI_PROVIDER_ID;
-      profileId: string;
-      key: string;
-    };
 
 type CodexAuthProfileConfig = {
   profileId: string;
