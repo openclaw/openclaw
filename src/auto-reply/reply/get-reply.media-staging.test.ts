@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
 import { beforeAll, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { waitForAbortSignal } from "../../infra/abort-signal.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import {
+  buildGetReplyCtx,
   buildGetReplyGroupCtx,
   createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
@@ -160,3 +163,100 @@ it.each(["remote preprocessing", "local staging"] as const)(
     );
   },
 );
+
+it.each([
+  { name: "ordinary session cwd", kind: "session", destination: "session-workspace" },
+  { name: "configured workspace", kind: "default", destination: "configured-workspace" },
+  { name: "inherited subagent workspace", kind: "spawned", destination: "inherited-workspace" },
+] as const)("stages inbound media in the $name", async ({ kind, destination }) => {
+  await withOpenClawTestState(
+    { label: "reply-media-workspace", env: { OPENCLAW_TEST_FAST: undefined } },
+    async (state) => {
+      const configuredWorkspace = state.path("configured-workspace");
+      const sessionCwd = state.path("session-workspace");
+      const inheritedWorkspace = state.path("inherited-workspace");
+      const sessionKey =
+        kind === "spawned" ? "agent:main:subagent:upload-workspace" : "agent:main:upload-workspace";
+      await Promise.all(
+        [configuredWorkspace, sessionCwd, inheritedWorkspace].map((directory) =>
+          fs.mkdir(directory, { recursive: true }),
+        ),
+      );
+      const sessionEntry: SessionEntry = {
+        sessionId: "session-media-workspace",
+        updatedAt: 1,
+        ...(kind !== "default" ? { spawnedCwd: sessionCwd } : {}),
+        ...(kind === "spawned"
+          ? {
+              spawnedBy: "agent:main:main",
+              spawnedWorkspaceDir: inheritedWorkspace,
+            }
+          : {}),
+      };
+      const ctx = buildGetReplyCtx({
+        Provider: "webchat",
+        Surface: "webchat",
+        SessionKey: sessionKey,
+        From: "webchat:owner",
+        To: "webchat:workspace",
+        media: [{ path: state.path("media/inbound/photo.png"), contentType: "image/png" }],
+      });
+      vi.mocked(stageSandboxMedia).mockReset().mockResolvedValue({ staged: new Map() });
+      vi.mocked(applyMediaUnderstanding).mockReset().mockResolvedValue({
+        outputs: [],
+        decisions: [],
+        extractedFileImages: [],
+        appliedImage: false,
+        appliedAudio: false,
+        appliedVideo: false,
+        appliedFile: false,
+      });
+      vi.mocked(runPreparedReply).mockReset().mockResolvedValue({ text: "ready" });
+      mocks.createInternalHookEvent.mockClear();
+      mocks.triggerInternalHook.mockClear();
+      mocks.initSessionState.mockReset().mockResolvedValue(
+        createGetReplySessionState({
+          sessionCtx: ctx,
+          sessionEntry,
+          sessionEntryHandle: createReplySessionEntryHandle({ sessionEntry, sessionKey }),
+          sessionKey,
+          sessionId: sessionEntry.sessionId,
+          storePath: state.path("sessions.json"),
+        }),
+      );
+      mocks.resolveReplySessionPreprocessingState.mockReset().mockReturnValue({
+        sessionEntry: undefined,
+        sessionKey,
+        storePath: state.path("sessions.json"),
+      });
+      mocks.resolveReplyDirectives.mockReset().mockResolvedValue(
+        createGetReplyContinueDirectivesResult({
+          body: "inspect this attachment",
+          abortKey: sessionKey,
+          from: "webchat:owner",
+          to: "webchat:workspace",
+          senderId: "owner",
+          commandSource: "message",
+          senderIsOwner: true,
+          resetHookTriggered: false,
+        }),
+      );
+      mocks.handleInlineActions.mockReset().mockResolvedValue({
+        kind: "continue",
+        directives: {},
+        cleanedBody: "inspect this attachment",
+      });
+
+      await getReplyFromConfig(
+        ctx,
+        undefined,
+        withFastReplyConfig({ agents: { defaults: { workspace: configuredWorkspace } } }),
+      );
+
+      expect(stageSandboxMedia).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ workspaceDir: state.path(destination) }),
+      );
+      expect(runPreparedReply).toHaveBeenCalledOnce();
+    },
+  );
+});

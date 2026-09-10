@@ -17,6 +17,7 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
 import {
@@ -1196,6 +1197,12 @@ export async function getReplyFromConfig(
     hasInboundMedia(ctx)
   ) {
     const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
+    const stagingWorkspaceDir =
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: sessionEntry.spawnedBy,
+        workspaceDir: sessionEntry.spawnedWorkspaceDir,
+        cwd: sessionEntry.spawnedCwd,
+      }) ?? workspaceDir;
     const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
         ctx,
@@ -1203,7 +1210,7 @@ export async function getReplyFromConfig(
         cfg,
         agentId,
         sessionKey,
-        workspaceDir,
+        workspaceDir: stagingWorkspaceDir,
         abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
