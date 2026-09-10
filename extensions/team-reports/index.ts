@@ -131,6 +131,7 @@ export default definePluginEntry({
       surface: "tab",
       id: "team-reports",
       label: "Reports",
+      slug: "reports",
       description: "Team activity reports from GitHub and Discord.",
       icon: "chart",
       group: "control",

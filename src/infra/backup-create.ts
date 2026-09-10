@@ -29,6 +29,7 @@ import {
   publishPreparedBackupArchive,
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
+import { stageBackupConfigCapture } from "./backup-config-capture.js";
 import {
   observeBackupTarEntryProgress,
   removePreparedBackupArchive,
@@ -54,6 +55,7 @@ import {
   type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
+import { isUpdateCapturePath } from "./update-capture-paths.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
@@ -361,6 +363,16 @@ function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").Re
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
 }
 
+/**
+ * Restores the native path spelling of a node-tar stat-cache key. node-tar
+ * normalizes its absolute cache keys to forward slashes on Windows, while the
+ * snapshot source sets hold native `path.resolve` spellings with backslashes,
+ * so exact-match lookups must convert the key back first.
+ */
+function fromTarCacheKey(tarCacheKey: string): string {
+  return path.sep === "/" ? tarCacheKey : tarCacheKey.replaceAll("/", path.sep);
+}
+
 const MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS = 3;
 
 type ConsistentStateSnapshotPlan = {
@@ -521,14 +533,20 @@ export async function createBackupArchive(
   }
   const tempArchivePath = publication.tempArchivePath;
   try {
+    const configRemaps = await stageBackupConfigCapture(plan.configCapture, tempDir);
     const { legacyAuditSnapshots, stateSqliteBackup } = await createConsistentStateSnapshotPlan({
       inventory: plan.inventory,
       stateDir: stateAsset?.sourcePath,
       tempDir,
       onlyConfig,
     });
-    const sourcePathRemaps = new Map<string, string>();
-    const skippedStateSourcePaths = new Set<string>();
+    const sourcePathRemaps = new Map(configRemaps);
+    const skippedStateSourcePaths = new Set(configRemaps.values());
+    if (plan.configCapture?.files.length === 0) {
+      // A config created after sealing must not introduce an uncaptured graph.
+      skippedStateSourcePaths.add(path.resolve(plan.configPath));
+      skippedStateSourcePaths.add(await canonicalizePathForContainment(plan.configPath));
+    }
     for (const snapshot of stateSqliteBackup.snapshots) {
       sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
       for (const skippedSourcePath of snapshot.skippedSourcePaths) {
@@ -551,6 +569,7 @@ export async function createBackupArchive(
     // collect violations there and reject only after tar settles.
     const unexpectedSqliteSourcePaths: string[] = [];
     let archiveSymlinkViolation: Error | undefined;
+    let archivePrivacyViolation: Error | undefined;
     const tarFilter = (
       entryPath: string,
       entryStat: import("node:fs").Stats | import("tar").ReadEntry,
@@ -560,6 +579,14 @@ export async function createBackupArchive(
       const resolvedEntryPath = path.resolve(entryPath);
       if (resolvedEntryPath === manifestPath) {
         return true;
+      }
+      if (
+        isUpdateCapturePath(
+          sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath,
+          plan.stateDir,
+        )
+      ) {
+        return false;
       }
       const isDirectory =
         "isDirectory" in entryStat ? entryStat.isDirectory() : entryStat.type === "Directory";
@@ -615,6 +642,7 @@ export async function createBackupArchive(
         skippedVolatileCount = 0;
         unexpectedSqliteSourcePaths.length = 0;
         archiveSymlinkViolation = undefined;
+        archivePrivacyViolation = undefined;
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
           createArchiveStream: (reportProgress) =>
@@ -624,10 +652,35 @@ export async function createBackupArchive(
                 portable: true,
                 preservePaths: true,
                 linkCache: createBackupLinkCache(),
-                statCache: createBackupVolatileStatCache(plan.inventory.isVolatile),
+                statCache: createBackupVolatileStatCache(
+                  (sourcePath) =>
+                    plan.inventory.isVolatile(sourcePath) ||
+                    // node-tar lstats every enumerated entry before the tar
+                    // filter can exclude it, and a live SQLite database can
+                    // remove a transient sidecar (-wal/-shm/-journal) at any
+                    // moment. Paths already excluded by a verified snapshot
+                    // must not abort the whole archive when that happens, so
+                    // they get a synthetic stat and are filtered out without
+                    // touching the filesystem. Unsnapshotted SQLite sources
+                    // stay uncovered so the filter still rejects them.
+                    // node-tar normalizes its cache keys to forward slashes on
+                    // Windows while the snapshot sets below hold native
+                    // path.resolve spellings, so restore the native separator
+                    // spelling before the exact-match lookups.
+                    skippedStateSourcePaths.has(fromTarCacheKey(sourcePath)) ||
+                    stateSqliteBackup.discoveredSourcePaths.has(fromTarCacheKey(sourcePath)),
+                ),
                 filter: (entryPath, entryStat) => {
                   reportProgress({ phase: "traversal", entryPath });
-                  return tarFilter(entryPath, entryStat);
+                  try {
+                    return tarFilter(entryPath, entryStat);
+                  } catch (error) {
+                    // A malformed marker must reject publication after tar settles,
+                    // not throw out of its asynchronous traversal callback.
+                    archivePrivacyViolation =
+                      error instanceof Error ? error : new Error(String(error));
+                    return false;
+                  }
                 },
                 onWriteEntry: (entry) => {
                   const sourceEntryPath = entry.path;
@@ -667,6 +720,7 @@ export async function createBackupArchive(
               },
               [
                 manifestPath,
+                ...configRemaps.keys(),
                 ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
                 ...legacyAuditSnapshots.map((snapshot) => snapshot.sourcePath),
                 ...result.assets.map((asset) => asset.sourcePath),
@@ -677,11 +731,18 @@ export async function createBackupArchive(
           },
         });
         const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
-        const archiveValidationError = unexpectedSqliteSourcePath
+        let archiveValidationError = unexpectedSqliteSourcePath
           ? new Error(
               `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
             )
-          : archiveSymlinkViolation;
+          : (archivePrivacyViolation ?? archiveSymlinkViolation);
+        if (!archiveValidationError) {
+          try {
+            await plan.configCapture?.assertRootAlias?.();
+          } catch (error) {
+            archiveValidationError = error instanceof Error ? error : new Error(String(error));
+          }
+        }
         if (archiveValidationError) {
           if (!removePreparedBackupArchive(prepared)) {
             publication.pendingCleanupArchives.push(prepared);

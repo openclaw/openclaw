@@ -159,7 +159,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Broadcast to webchat for immediate UI update
     const message = projectChatDisplayMessage(appended.message, {
-      maxChars: resolveEffectiveChatHistoryMaxChars(cfg),
+      maxChars: resolveEffectiveChatHistoryMaxChars(),
     });
     const chatPayload = {
       runId: `inject-${appended.messageId}`,

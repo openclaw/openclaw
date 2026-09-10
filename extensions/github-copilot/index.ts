@@ -544,7 +544,7 @@ export default definePluginEntry({
             await ctx.prompter.note(
               [
                 "Open this URL in your browser and enter the code below.",
-                `URL: ${verificationUrl}`,
+                `URL: <${verificationUrl}>`,
                 `Code: ${userCode}`,
                 `Code expires in ${expiresInMinutes} minutes. Never share it.`,
                 "",

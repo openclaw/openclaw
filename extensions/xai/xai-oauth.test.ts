@@ -8,6 +8,7 @@ import {
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { withProxyFixture } from "openclaw/plugin-sdk/test-env";
+import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { fetch as undiciFetch, MockAgent, type Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyXaiConfig } from "./onboard.js";
@@ -169,10 +170,6 @@ describe("xAI OAuth", () => {
           refresh_token: "refresh",
           expires_in: 60,
         });
-        transport
-          .get("https://cli-chat-proxy.grok.com")
-          .intercept({ path: "/v1/settings" })
-          .reply(200, { default_model: "subscription-fixture" });
       }
       const origin = transport.get(new URL(redirectStart).origin);
       origin.intercept({ path: new URL(redirectStart).pathname }).reply(async () => {
@@ -275,10 +272,7 @@ describe("xAI OAuth", () => {
           });
         }
         if (url.endsWith("/models")) {
-          return jsonResponse({ data: [{ id: "subscription-fixture", api_backend: "responses" }] });
-        }
-        if (url.endsWith("/settings")) {
-          return jsonResponse({ default_model: "subscription-fixture" });
+          return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
         }
         if (boundary === "token response") {
           await hold();
@@ -646,10 +640,7 @@ describe("xAI OAuth", () => {
       fetchImpl.mockImplementation(async (input) => {
         const url = requestUrl(input);
         if (url.endsWith("/models")) {
-          return jsonResponse({ data: [{ id: "subscription-fixture", api_backend: "responses" }] });
-        }
-        if (url.endsWith("/settings")) {
-          return jsonResponse({ default_model: "subscription-fixture" });
+          return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
         }
         throw new Error(`Unexpected catalog URL: ${url}`);
       });
@@ -762,10 +753,10 @@ describe("xAI OAuth", () => {
         accountId: "acct-1",
         access: expect.any(String),
       });
-      expect(result.defaultModel).toBe("xai/auto");
+      expect(result.defaultModel).toBe("xai/grok-4.6");
       expect(result.configPatch?.agents?.defaults?.model).toEqual(
         setup === "fresh"
-          ? { primary: "xai/auto" }
+          ? { primary: "xai/grok-4.6" }
           : { primary: "other/selected", fallbacks: ["other/fallback"] },
       );
       expect(result.configPatch?.models?.providers?.xai).toMatchObject({
@@ -774,7 +765,7 @@ describe("xAI OAuth", () => {
         auth: "oauth",
       });
       expect(result.configPatch?.models?.providers?.xai?.models.map((model) => model.id)).toEqual([
-        "subscription-fixture",
+        "grok-4.6",
       ]);
       const savedProvider = result.configPatch?.models?.providers?.xai;
       expect(savedProvider?.models.some((model) => model.id === "auto")).toBe(false);
@@ -785,13 +776,19 @@ describe("xAI OAuth", () => {
       if (setup === "api") {
         expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
       }
-      expect(result.configPatch?.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
+      expect(result.configPatch?.agents?.defaults?.models?.["xai/grok-4.6"]?.alias).toBe("Grok");
       expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
       expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
     },
   );
 
-  it("falls back for unsafe xAI device-code lifetime fields", async () => {
+  it.each([
+    { completeUri: undefined, expectedUrl: "https://accounts.x.ai/oauth2/device" },
+    {
+      completeUri: "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234&source=cli",
+      expectedUrl: "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234&source=cli",
+    },
+  ])("preserves the device-code note link $expectedUrl", async ({ completeUri, expectedUrl }) => {
     const progress = {
       update: vi.fn(),
       stop: vi.fn(),
@@ -810,6 +807,7 @@ describe("xAI OAuth", () => {
           device_code: "device-code-1",
           user_code: "ABCD-1234",
           verification_uri: "https://accounts.x.ai/oauth2/device",
+          verification_uri_complete: completeUri,
           expires_in: Number.MAX_SAFE_INTEGER,
           interval: Number.MAX_SAFE_INTEGER,
         }),
@@ -824,10 +822,7 @@ describe("xAI OAuth", () => {
     fetchImpl.mockImplementation(async (input) => {
       const url = requestUrl(input);
       if (url.endsWith("/models")) {
-        return jsonResponse({ data: [{ id: "subscription-fixture", api_backend: "responses" }] });
-      }
-      if (url.endsWith("/settings")) {
-        return jsonResponse({ default_model: "subscription-fixture" });
+        return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
       }
       throw new Error(`Unexpected catalog URL: ${url}`);
     });
@@ -855,6 +850,12 @@ describe("xAI OAuth", () => {
       expect.stringContaining("Code expires in 5 minutes."),
       "xAI OAuth",
     );
+    const [message] = note.mock.calls[0]!;
+    expect(markdownToIR(message, { linkify: false }).links.map((link) => link.href)).toEqual([
+      expectedUrl,
+    ]);
+    expect(message).toContain("\nCode: ABCD-1234\n");
+    expect(ctx.openUrl).toHaveBeenCalledWith(expectedUrl);
     expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
   });
 });

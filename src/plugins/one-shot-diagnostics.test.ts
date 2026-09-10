@@ -6,12 +6,12 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginServicesHandle } from "./services.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
-const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
+const acquirePluginRegistryForInspection = vi.hoisted(() => vi.fn());
 const startPluginServices = vi.hoisted(() => vi.fn());
 const waitForDiagnosticEventsDrained = vi.hoisted(() => vi.fn(async () => {}));
 const warn = vi.hoisted(() => vi.fn());
 
-vi.mock("./loader.js", () => ({ loadOpenClawPlugins }));
+vi.mock("./loader.js", () => ({ acquirePluginRegistryForInspection }));
 vi.mock("./services.js", () => ({ startPluginServices }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
@@ -38,7 +38,10 @@ function mockRegistryWithServices(serviceIds: string[]) {
       origin: "bundled",
     })),
   };
-  loadOpenClawPlugins.mockReturnValue(registry);
+  acquirePluginRegistryForInspection.mockResolvedValue({
+    registry,
+    release: vi.fn(async () => {}),
+  });
   return registry;
 }
 
@@ -47,7 +50,10 @@ async function mockRealExporter(service: OpenClawPluginService, origin: "bundled
     await vi.importActual<typeof import("./services.js")>("./services.js");
   const registry = createEmptyPluginRegistry();
   registry.services.push({ pluginId: "diagnostics-otel", service, source: "test", origin });
-  loadOpenClawPlugins.mockReturnValue(registry);
+  acquirePluginRegistryForInspection.mockResolvedValue({
+    registry,
+    release: vi.fn(async () => {}),
+  });
   let servicesHandle: PluginServicesHandle | undefined;
   startPluginServices.mockImplementationOnce(
     async (params: Parameters<typeof startRealServices>[0]) => {
@@ -73,7 +79,7 @@ describe("startOneShotDiagnosticsExporters", () => {
     const handle = await startOneShotDiagnosticsExporters({ config: config as OpenClawConfig });
 
     expect(handle).toBeNull();
-    expect(loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(acquirePluginRegistryForInspection).not.toHaveBeenCalled();
     expect(startPluginServices).not.toHaveBeenCalled();
   });
 
@@ -84,11 +90,10 @@ describe("startOneShotDiagnosticsExporters", () => {
     const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
 
     expect(handle).not.toBeNull();
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(acquirePluginRegistryForInspection).toHaveBeenCalledWith(
       expect.objectContaining({
         config: otelEnabledConfig,
         onlyPluginIds: ["diagnostics-otel"],
-        activate: false,
         preferBuiltPluginArtifacts: true,
       }),
     );

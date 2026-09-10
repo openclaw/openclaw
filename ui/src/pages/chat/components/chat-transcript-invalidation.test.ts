@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
+import * as videoPoster from "../../../lib/media/video-poster.ts";
 import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
 import { createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
@@ -34,6 +35,112 @@ import {
 describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  describe("user video previews", () => {
+    const videoUrl = "https://cdn.example/recording.mp4";
+    const onOpenSidebar = vi.fn();
+    const revokeObjectURL = vi.fn();
+    let props: ReturnType<typeof threadProps>;
+    let transcript: ReturnType<typeof createTestTranscript>;
+    let container: HTMLDivElement;
+
+    beforeEach(() => {
+      vi.spyOn(videoPoster, "requestVideoPoster").mockResolvedValue(new Blob(["poster"]));
+      onOpenSidebar.mockClear();
+      revokeObjectURL.mockClear();
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = () => "blob:transcript-poster";
+          static override revokeObjectURL = revokeObjectURL;
+        },
+      );
+      props = {
+        ...threadProps("video-preview", "agent:main:video", [
+          {
+            role: "user",
+            timestamp: 1_000,
+            content: [
+              { type: "image", url: "/media/reference.png", alt: "Reference" },
+              {
+                type: "attachment",
+                attachment: {
+                  kind: "video",
+                  url: videoUrl,
+                  label: "Recording.mp4",
+                  mimeType: "video/mp4",
+                },
+              },
+              { type: "text", text: "Check this recording." },
+            ],
+          },
+        ]),
+        presented: false,
+        transcriptVisible: true,
+        onOpenSidebar,
+      };
+      container = document.body.appendChild(document.createElement("div"));
+      transcript = createTestTranscript();
+      transcript.hostConnected();
+    });
+    afterEach(() => {
+      render(nothing, container);
+      transcript.hostDisconnected();
+    });
+    async function renderPreview() {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      await flushDeferredRowPrune();
+    }
+
+    it("places mixed user media above text and opens the video in Files without inline playback", async () => {
+      await renderPreview();
+      const bubble = container.querySelector(".chat-bubble--with-images");
+      const gallery = bubble?.querySelector(":scope > .chat-message-images");
+      expect(gallery?.querySelectorAll(".chat-image-frame")).toHaveLength(2);
+      expect(gallery?.nextElementSibling?.textContent).toContain("Check this recording.");
+      expect(container.querySelector("video, openclaw-chat-video-player")).toBeNull();
+      gallery?.querySelector<HTMLButtonElement>(".chat-video-preview button")?.click();
+      expect(onOpenSidebar).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "attachment", attachmentKind: "video", src: videoUrl }),
+      );
+    });
+
+    it.each(["video", "image"])(
+      "keeps an openable gallery card when %s decoding fails",
+      async (stage) => {
+        if (stage === "video") {
+          vi.mocked(videoPoster.requestVideoPoster).mockResolvedValue(null);
+        }
+        await renderPreview();
+        const frame = container.querySelector(".chat-video-preview");
+        if (stage === "image") {
+          expectDefined(frame?.querySelector("img"), "loaded video poster").dispatchEvent(
+            new Event("error"),
+          );
+        }
+        expect(frame?.querySelector(".chat-assistant-attachment-card--compact")).toBeInstanceOf(
+          HTMLElement,
+        );
+        frame?.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+        expect(onOpenSidebar).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "attachment", src: videoUrl }),
+        );
+      },
+    );
+
+    it("retains visible inactive video previews, releases hidden rows and restores them on return", async () => {
+      await renderPreview();
+      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+      props.transcriptVisible = false;
+      await renderPreview();
+      expect(container.querySelector(".chat-video-preview img")).toBeNull();
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
+      props.transcriptVisible = true;
+      await renderPreview();
+      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+    });
+  });
 
   it("updates settled GitHub reference chips when the session repository arrives or changes", () => {
     vi.spyOn(Date, "now").mockReturnValue(60_000);

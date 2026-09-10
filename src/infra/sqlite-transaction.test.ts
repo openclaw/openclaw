@@ -2,6 +2,7 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import path from "node:path";
 import type { Readable } from "node:stream";
+import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getNodeSqliteKysely } from "./kysely-sync.js";
@@ -380,11 +381,13 @@ describe("runSqliteImmediateTransactionSync", () => {
         code: "ERR_SQLITE_ERROR",
         database: "agent.sqlite",
         failureKind: "lock-contention",
+        isMainThread,
         operation: "session.patch",
         pid: process.pid,
         sqliteErrcode: 5,
         sqlitePrimaryCode: 5,
         step: "begin",
+        threadId,
       }),
     );
   });
@@ -468,8 +471,10 @@ describe("runSqliteImmediateTransactionSync", () => {
         async: false,
         database: "agent.sqlite",
         elapsedMs: 1_500,
+        isMainThread,
         pid: process.pid,
         step: "begin",
+        threadId,
       }),
     );
     expect(logger.warn).toHaveBeenCalledWith(
@@ -478,8 +483,10 @@ describe("runSqliteImmediateTransactionSync", () => {
         async: false,
         database: "agent.sqlite",
         elapsedMs: 1_500,
+        isMainThread,
         pid: process.pid,
         step: "commit",
+        threadId,
       }),
     );
     expect(logger.warn).toHaveBeenCalledWith(
@@ -487,7 +494,9 @@ describe("runSqliteImmediateTransactionSync", () => {
       expect.objectContaining({
         async: false,
         database: "agent.sqlite",
+        isMainThread,
         pid: process.pid,
+        threadId,
       }),
     );
   });
@@ -564,10 +573,13 @@ describe("runSqliteImmediateTransactionSync", () => {
         busyTimeoutMs: 20,
         code: "ERR_SQLITE_ERROR",
         failureKind: "lock-contention",
+        isMainThread,
         operation: "contention-proof",
+        pid: process.pid,
         sqliteErrcode: 5,
         sqlitePrimaryCode: 5,
         step: "begin",
+        threadId,
       }),
     );
 

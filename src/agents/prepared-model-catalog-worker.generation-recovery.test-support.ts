@@ -69,16 +69,17 @@ export async function expectPublishedOwnerRecoveryAfterGenerationMismatch(
       getConfig: () => config,
       readOnly: false,
     });
+  let published: Awaited<ReturnType<typeof loadPreparedGatewayModelCatalogSnapshot>> | undefined;
   registerGatewayModelCatalogPrivateAccess(loadRecoveredCatalog, {
     loadDeferred: async () =>
-      await loadPreparedGatewayModelCatalogSnapshot({
+      (published = await loadPreparedGatewayModelCatalogSnapshot({
         agentId: "main",
         agentDir: fixture.agentDir,
         workspaceDir: fixture.workspaceDir,
         getConfig: () => config,
         readOnly: false,
-      }),
-    readPrepared: async () => undefined,
+      })),
+    readPrepared: async () => published,
   });
   const context = {
     getRuntimeConfig: () => config,
@@ -91,9 +92,10 @@ export async function expectPublishedOwnerRecoveryAfterGenerationMismatch(
       concurrentRead = prepareModelRuntimeSnapshot(input).then(loadRecoveredCatalog);
     }
   });
-  const recovered = await buildModelsListResult({ context, params: { view: "all" } }).finally(
-    unregister,
-  );
+  const recovered = await buildModelsListResult({
+    source: { kind: "gateway", context },
+    params: { view: "all", refresh: true },
+  }).finally(unregister);
   const concurrentRecovered = await concurrentRead;
 
   expect(recovered.models).toContainEqual(

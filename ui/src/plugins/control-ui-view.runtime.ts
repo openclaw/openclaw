@@ -392,7 +392,7 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
         .map((entry) => {
           const href = entry.host.navigation.pageHref(entry.value.page);
           const active = href === `${window.location.pathname}${window.location.search}`;
-          let icon: IconName = "puzzle";
+          let icon: IconName = "plug";
           if (entry.value.icon && Object.hasOwn(icons, entry.value.icon)) {
             // SAFETY: the own-key check narrows this plugin-provided name to the icon registry.
             icon = entry.value.icon as IconName;

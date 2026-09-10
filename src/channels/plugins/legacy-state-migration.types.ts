@@ -18,6 +18,8 @@ export type ChannelLegacyStateMigrationPlan =
       stateDir?: string;
       cleanupSource?: "rename" | "remove";
       cleanupWhenEmpty?: boolean;
+      /** Only for unused artifacts whose retained bytes cannot affect runtime state. */
+      cleanupWarningDisposition?: "recoverable";
       /** Deletes a non-file legacy source (e.g. plugin-state rows) once all entries are covered. */
       removeSource?: () => void | Promise<void>;
       preview?: string;

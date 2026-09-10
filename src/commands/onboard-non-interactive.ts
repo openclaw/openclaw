@@ -47,14 +47,14 @@ async function runNonInteractiveMigrationImport(params: {
   }
   const { detectSetupMigrationSources, runSetupMigrationImport } =
     await import("../wizard/setup.migration-import.js");
-  const detections = await detectSetupMigrationSources({
+  const discovery = await detectSetupMigrationSources({
     config: params.baseConfig,
     runtime: params.runtime,
   });
   const outcome = await runSetupMigrationImport({
     opts: { ...params.opts, importFrom: providerId, nonInteractive: true },
     baseConfig: params.baseConfig,
-    detections,
+    ...discovery,
     prompter: createNonInteractiveLoggingPrompter(
       params.runtime,
       (message) =>

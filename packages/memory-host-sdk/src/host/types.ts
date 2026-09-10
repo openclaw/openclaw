@@ -1,5 +1,6 @@
 // Public memory host contracts shared by runtime, builtin search, and package consumers.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { MemorySearchDeadlineControlOptions } from "./search-deadline-control.js";
 export type MemorySource = "memory" | "sessions";
 
 export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
@@ -336,7 +337,7 @@ export interface MemorySearchManager {
       sources?: MemorySource[];
       /** Optional caller cancellation; managers consume it where their runtime supports cancellation. */
       signal?: AbortSignal;
-    },
+    } & MemorySearchDeadlineControlOptions,
   ): Promise<MemorySearchResult[]>;
   listTriggerCandidates?(opts?: {
     limit?: number;

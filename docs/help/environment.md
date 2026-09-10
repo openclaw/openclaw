@@ -28,15 +28,38 @@ The variables below are the supported environment contract for operators. Undocu
 
 ### Paths and instances
 
-| Variable                 | Purpose                                                           |
-| ------------------------ | ----------------------------------------------------------------- |
-| `OPENCLAW_HOME`          | Override the home directory used for OpenClaw path defaults.      |
-| `OPENCLAW_STATE_DIR`     | Override the mutable state directory.                             |
-| `OPENCLAW_CONFIG_PATH`   | Override the active config file path.                             |
-| `OPENCLAW_WORKSPACE_DIR` | Override the default agent workspace.                             |
-| `OPENCLAW_PROFILE`       | Select a named profile and its isolated defaults.                 |
-| `OPENCLAW_GIT_DIR`       | Override the source checkout used by development-channel updates. |
-| `OPENCLAW_INCLUDE_ROOTS` | Allow `$include` to resolve from additional roots.                |
+| Variable                  | Purpose                                                                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_HOME`           | Override the home directory used for OpenClaw path defaults.                                         |
+| `OPENCLAW_STATE_DIR`      | Override the mutable state directory.                                                                |
+| `OPENCLAW_CONFIG_PATH`    | Override the active config file path.                                                                |
+| `OPENCLAW_WORKSPACE_DIR`  | Override the default agent workspace.                                                                |
+| `OPENCLAW_PROFILE`        | Select a named profile and its isolated defaults.                                                    |
+| `OPENCLAW_GIT_DIR`        | Override the source checkout used by development-channel updates.                                    |
+| `OPENCLAW_INCLUDE_ROOTS`  | Allow `$include` to resolve from additional roots.                                                   |
+| `OPENCLAW_SQLITE_LIBRARY` | Override the SQLite library for [Bun on macOS](/install/bun-compatibility#sqlite-library-selection). |
+
+#### `OPENCLAW_HOME`
+
+When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.
+
+`OPENCLAW_HOME` does not grant ownership of the OS account's native Gateway service. Gateway service-management commands treat a relocated home as isolated state; use the OS account home and a named profile when a separate native service identity is required.
+
+**Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > Termux `PREFIX` home fallback on Android > `os.homedir()`
+
+**Example** (macOS LaunchDaemon):
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+  <key>OPENCLAW_HOME</key>
+  <string>/Users/user</string>
+</dict>
+```
+
+`OPENCLAW_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using the same OS home fallback chain before use.
+
+Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_GIT_DIR` still take precedence. OS-account tasks such as shell startup file detection, package-manager setup, and host `~` expansion may still use the real system home.
 
 ### Gateway and authentication
 
@@ -70,19 +93,20 @@ Installed third-party plugins may declare additional credential variables in the
 
 ### Feature and runtime toggles
 
-| Variable                             | Purpose                                                                      |
-| ------------------------------------ | ---------------------------------------------------------------------------- |
-| `OPENCLAW_LOAD_SHELL_ENV`            | Import missing expected variables from the login shell.                      |
-| `OPENCLAW_SHELL_ENV_TIMEOUT_MS`      | Set the login-shell import timeout.                                          |
-| `OPENCLAW_EXEC_SHELL_SNAPSHOT`       | Disable exec shell snapshots with `0`.                                       |
-| `OPENCLAW_OFFLINE`                   | Prevent downloads of pinned agent helper binaries.                           |
-| `OPENCLAW_BROWSER_HEADLESS`          | Force managed browser launches headed (`0`) or headless (`1`).               |
-| `OPENCLAW_DISABLE_BONJOUR`           | Force Bonjour advertising on (`0`) or off (`1`).                             |
-| `OPENCLAW_NO_AUTO_UPDATE`            | Disable automatic update applies.                                            |
-| `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS` | Allow trusted private-DNS `ws://` connections as a break-glass override.     |
-| `OPENCLAW_ALLOW_MULTI_GATEWAY`       | Allow multiple Gateway processes while preserving per-state ownership locks. |
-| `OPENCLAW_SKIP_CHANNELS`             | Start the Gateway without channel transports for troubleshooting.            |
-| `OPENCLAW_THEME`                     | Force the TUI palette to `light` or `dark`.                                  |
+| Variable                             | Purpose                                                                                      |
+| ------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `OPENCLAW_CONFIG_READONLY`           | Set to `1` for [externally managed immutable config](/cli/config#externally-managed-config). |
+| `OPENCLAW_LOAD_SHELL_ENV`            | Import missing expected variables from the login shell.                                      |
+| `OPENCLAW_SHELL_ENV_TIMEOUT_MS`      | Set the login-shell import timeout.                                                          |
+| `OPENCLAW_EXEC_SHELL_SNAPSHOT`       | Disable exec shell snapshots with `0`.                                                       |
+| `OPENCLAW_OFFLINE`                   | Prevent downloads of pinned agent helper binaries.                                           |
+| `OPENCLAW_BROWSER_HEADLESS`          | Force managed browser launches headed (`0`) or headless (`1`).                               |
+| `OPENCLAW_DISABLE_BONJOUR`           | Force Bonjour advertising on (`0`) or off (`1`).                                             |
+| `OPENCLAW_NO_AUTO_UPDATE`            | Disable automatic update applies.                                                            |
+| `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS` | Allow trusted private-DNS `ws://` connections as a break-glass override.                     |
+| `OPENCLAW_ALLOW_MULTI_GATEWAY`       | Allow multiple Gateway processes while preserving per-state ownership locks.                 |
+| `OPENCLAW_SKIP_CHANNELS`             | Start the Gateway without channel transports for troubleshooting.                            |
+| `OPENCLAW_THEME`                     | Force the TUI palette to `light` or `dark`.                                                  |
 
 ## Provider credentials and workspace `.env`
 
@@ -97,7 +121,7 @@ Use one of these trusted sources for provider credentials instead:
 
 If you previously stored provider keys or endpoint routing values only in a workspace `.env`, move them to one of the trusted sources above. Workspace `.env` can still provide ordinary project variables that are not credentials, endpoint redirects, host overrides, or `OPENCLAW_*` runtime controls.
 
-See [Workspace `.env` files](/gateway/security#workspace-env-files) for the security rationale.
+See [Workspace `.env` files](/gateway/security/secrets-and-storage#workspace-env-files) for the security rationale.
 
 ## Config `env` block
 
@@ -272,28 +296,6 @@ unavailable instead of triggering a network request.
 | `OPENCLAW_DEBUG_MODEL_PAYLOAD`   | Model payload diagnostics: `summary`, `tools`, or `full-redacted`. `full-redacted` is capped and redacted but may include prompt/message text.                                               |
 | `OPENCLAW_DEBUG_SSE`             | Streaming diagnostics: `events` for first/done timing, `peek` to include the first five redacted SSE events.                                                                                 |
 | `OPENCLAW_DEBUG_CODE_MODE`       | Code-mode model-surface diagnostics, including provider-tool hiding and compact control/direct enforcement.                                                                                  |
-
-### `OPENCLAW_HOME`
-
-When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.
-
-`OPENCLAW_HOME` does not grant ownership of the OS account's native Gateway service. Gateway service-management commands treat a relocated home as isolated state; use the OS account home and a named profile when a separate native service identity is required.
-
-**Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > Termux `PREFIX` home fallback on Android > `os.homedir()`
-
-**Example** (macOS LaunchDaemon):
-
-```xml
-<key>EnvironmentVariables</key>
-<dict>
-  <key>OPENCLAW_HOME</key>
-  <string>/Users/user</string>
-</dict>
-```
-
-`OPENCLAW_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using the same OS home fallback chain before use.
-
-Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_GIT_DIR` still take precedence. OS-account tasks such as shell startup file detection, package-manager setup, and host `~` expansion may still use the real system home.
 
 ## nvm users: web_fetch TLS failures
 

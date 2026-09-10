@@ -63,6 +63,10 @@
         {
           "group": "高级",
           "pages": ["zh-CN/install/development-channels"]
+        },
+        {
+          "group": "运行时",
+          "pages": ["zh-CN/install/node-compatibility", "zh-CN/install/bun-compatibility"]
         }
       ]
     },
@@ -78,7 +82,6 @@
           "pages": [
             "zh-CN/channels/discord",
             "zh-CN/channels/feishu",
-            "zh-CN/channels/grammy",
             "zh-CN/channels/googlechat",
             "zh-CN/channels/imessage",
             "zh-CN/channels/line",
@@ -117,7 +120,6 @@
         {
           "group": "代理运行时",
           "pages": [
-            "zh-CN/pi",
             "zh-CN/concepts/architecture",
             "zh-CN/concepts/agent",
             "zh-CN/concepts/agent-loop",
@@ -179,14 +181,12 @@
           "group": "内置工具",
           "pages": [
             "zh-CN/tools/apply-patch",
-            "zh-CN/brave-search",
             "zh-CN/tools/elevated",
             "zh-CN/tools/exec",
             "zh-CN/tools/exec-approvals",
             "zh-CN/tools/firecrawl",
             "zh-CN/tools/llm-task",
             "zh-CN/tools/lobster",
-            "zh-CN/perplexity",
             "zh-CN/tools/reactions",
             "zh-CN/tools/thinking",
             "zh-CN/tools/web"
@@ -224,7 +224,6 @@
             "zh-CN/plugins/voice-call",
             "zh-CN/plugins/zalouser",
             "zh-CN/plugins/manifest",
-            "zh-CN/plugins/agent-tools",
             "zh-CN/prose"
           ]
         },
@@ -243,8 +242,23 @@
             "zh-CN/nodes/camera",
             "zh-CN/nodes/talk",
             "zh-CN/nodes/voicewake",
-            "zh-CN/nodes/location-command",
-            "zh-CN/tts"
+            "zh-CN/nodes/location-command"
+          ]
+        },
+        {
+          "group": "插件",
+          "pages": [
+            "zh-CN/plugins/manage-plugins",
+            "zh-CN/plugins/community",
+            "zh-CN/plugins/bundles"
+          ]
+        },
+        {
+          "group": "构建插件",
+          "pages": [
+            "zh-CN/plugins/building-plugins",
+            "zh-CN/plugins/feature-plugins",
+            "zh-CN/plugins/tool-plugins"
           ]
         }
       ]
@@ -300,10 +314,7 @@
             "zh-CN/platforms/linux",
             "zh-CN/platforms/windows",
             "zh-CN/platforms/android",
-            "zh-CN/platforms/ios",
-            "zh-CN/platforms/digitalocean",
-            "zh-CN/platforms/oracle",
-            "zh-CN/platforms/raspberry-pi"
+            "zh-CN/platforms/ios"
           ]
         },
         {
@@ -315,7 +326,6 @@
             "zh-CN/platforms/mac/voice-overlay",
             "zh-CN/platforms/mac/webchat",
             "zh-CN/platforms/mac/canvas",
-            "zh-CN/platforms/mac/child-process",
             "zh-CN/platforms/mac/health",
             "zh-CN/platforms/mac/icon",
             "zh-CN/platforms/mac/logging",
@@ -365,7 +375,6 @@
               "group": "协议与 API",
               "pages": [
                 "zh-CN/gateway/protocol",
-                "zh-CN/gateway/bridge-protocol",
                 "zh-CN/gateway/openai-http-api",
                 "zh-CN/gateway/openresponses-http-api",
                 "zh-CN/gateway/tools-invoke-http-api",
@@ -376,7 +385,6 @@
             {
               "group": "网络与发现",
               "pages": [
-                "zh-CN/gateway/network-model",
                 "zh-CN/gateway/pairing",
                 "zh-CN/gateway/discovery",
                 "zh-CN/gateway/bonjour"
@@ -388,7 +396,6 @@
           "group": "远程访问",
           "pages": [
             "zh-CN/gateway/remote",
-            "zh-CN/gateway/remote-gateway-readme",
             "zh-CN/gateway/tailscale"
           ]
         },
@@ -482,7 +489,6 @@
         {
           "group": "技术参考",
           "pages": [
-            "zh-CN/reference/wizard",
             "zh-CN/reference/token-use",
             "zh-CN/reference/api-usage-costs",
             "zh-CN/reference/transcript-hygiene",
@@ -502,6 +508,14 @@
         {
           "group": "项目",
           "pages": ["zh-CN/reference/credits"]
+        },
+        {
+          "group": "插件参考",
+          "pages": [
+            "zh-CN/plugins/plugin-inventory",
+            "zh-CN/plugins/reference",
+            "zh-CN/plugins/dependency-resolution"
+          ]
         }
       ]
     },
@@ -551,8 +565,6 @@
             "zh-CN/help/environment",
             "zh-CN/help/debugging",
             "zh-CN/help/testing",
-            "zh-CN/help/scripts",
-            "zh-CN/debug/node-issue",
             "zh-CN/diagnostics/flags"
           ]
         },
@@ -566,11 +578,19 @@
         },
         {
           "group": "开发者设置",
-          "pages": ["zh-CN/start/setup", "zh-CN/pi-dev"]
+          "pages": ["zh-CN/start/setup"]
         },
         {
           "group": "文档元信息",
           "pages": ["zh-CN/start/hubs", "zh-CN/start/docs-directory", "zh-CN/AGENTS"]
+        },
+        {
+          "group": "常见问题",
+          "pages": ["zh-CN/help/faq-first-run", "zh-CN/help/faq-models"]
+        },
+        {
+          "group": "测试",
+          "pages": ["zh-CN/help/testing-updates-plugins", "zh-CN/help/testing-live"]
         }
       ]
     }

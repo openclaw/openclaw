@@ -182,6 +182,7 @@ function loadSessionEntryWithMode(
     agentId: target.agentId,
     storePath,
     store,
+    ...(target.readSource ? { readSource: target.readSource } : {}),
     entry,
     canonicalKey: target.canonicalKey,
     storeKeys: target.storeKeys,

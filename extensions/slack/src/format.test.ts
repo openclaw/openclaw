@@ -8,6 +8,16 @@ import {
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 describe("chunkSlackMrkdwnText", () => {
+  it.each(["`", "```"])("keeps %s code boundaries after literal backslashes", (marker) => {
+    const text = `Path: ${marker}C:\\${marker} ${"ordinary prose ".repeat(220)}done`;
+    const chunks = chunkSlackMrkdwnText(text, 3_000);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.slice(1).every((chunk) => !chunk.includes("`"))).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
   it("preserves ordinary whitespace at Slack section boundaries", () => {
     const text = `${"x".repeat(2_998)}  tail`;
     const chunks = chunkSlackMrkdwnText(text, 3_000);

@@ -53,6 +53,8 @@ Pick a provider, authenticate, then set the default model as `provider/model`.
 For the full provider catalog and advanced configuration, see
 [Provider directory](/providers/index) and [Model providers](/concepts/model-providers).
 
+<a id="additional-bundled-provider-variants" />
+
 ## Additional provider variants
 
 - `anthropic-vertex` - install `@openclaw/anthropic-vertex-provider` for implicit Anthropic on Google Vertex support when Vertex credentials are available; no separate onboarding auth choice

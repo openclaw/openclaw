@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
@@ -104,8 +105,12 @@ const mocks = vi.hoisted(() => ({
   resolveMemorySearchConfig: vi.fn<
     typeof import("../agents/memory-search.js").resolveMemorySearchConfig
   >(() => null),
-  loadModelCatalog: vi.fn(async () => []),
-  prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+  loadModelCatalog: vi.fn<
+    typeof import("../agents/prepared-model-catalog.js").readPreparedModelCatalog
+  >(async () => []),
+  releaseSimpleCompletion: vi.fn(),
+  acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
+    release: () => mocks.releaseSimpleCompletion(),
     selection: {
       provider: "openai",
       modelId: "gpt-5.4",
@@ -340,13 +345,13 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog:
-    mocks.loadModelCatalog as typeof import("../agents/prepared-model-catalog.js").loadPreparedModelCatalog,
+  readPreparedModelCatalog:
+    mocks.loadModelCatalog as typeof import("../agents/prepared-model-catalog.js").readPreparedModelCatalog,
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent:
-    mocks.prepareSimpleCompletionModelForAgent as unknown as typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent:
+    mocks.acquireSimpleCompletionModelForAgent as unknown as typeof import("../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel:
     mocks.completeWithPreparedSimpleCompletionModel as unknown as typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
 }));
@@ -638,7 +643,8 @@ describe("capability cli", () => {
         return store;
       });
     mocks.resolveMemorySearchConfig.mockReset().mockReturnValue(null);
-    mocks.prepareSimpleCompletionModelForAgent.mockClear();
+    mocks.acquireSimpleCompletionModelForAgent.mockClear();
+    mocks.releaseSimpleCompletion.mockClear();
     mocks.completeWithPreparedSimpleCompletionModel.mockClear();
     mocks.callGateway.mockReset().mockImplementation((async ({ method }: { method: string }) => {
       if (method === "tts.status") {
@@ -766,7 +772,7 @@ describe("capability cli", () => {
   }
 
   function firstPreparedModelParams() {
-    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+    const calls = mocks.acquireSimpleCompletionModelForAgent.mock.calls as unknown as Array<
       [Record<string, unknown>]
     >;
     return calls[0]?.[0];
@@ -916,6 +922,91 @@ describe("capability cli", () => {
     expect(mocks.runtime.log).toHaveBeenCalledWith("No results found.");
   });
 
+  it.each([
+    ["list", []],
+    ["inspect", ["--model", "catalog-fixture/work-model"]],
+  ] as const)("shows the requested agent's model in infer model %s", async (command, args) => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, work: {} },
+      },
+    });
+    const workModel: ModelCatalogEntry = {
+      provider: "catalog-fixture",
+      id: "work-model",
+      name: "Work model",
+      contextWindow: 24576,
+      reasoning: false,
+      input: ["text", "image"],
+    };
+    mocks.loadModelCatalog.mockImplementation(async (params) =>
+      params?.agentId === "work"
+        ? [workModel]
+        : [{ provider: "catalog-fixture", id: "main-model", name: "Main model" }],
+    );
+
+    await runCap("infer", "model", "--agent", "work", command, ...args, "--json");
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      command === "list" ? [workModel] : workModel,
+    );
+  });
+
+  it.each(["list", "inspect"])(
+    "rejects an unknown agent before infer model %s returns another agent's model",
+    async (command) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+      });
+
+      await expect(
+        runCap(
+          "infer",
+          "model",
+          "--agent",
+          "retired",
+          command,
+          ...(command === "inspect" ? ["--model", "openai/gpt-5.4"] : []),
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains('Unknown agent id "retired"');
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
+
+  it("canonicalizes an infer model run override using the requested agent's catalog", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+    });
+    mocks.loadModelCatalog.mockImplementation(async (params) =>
+      params?.agentId === "work"
+        ? [{ provider: "catalog-fixture", id: "Work-Model", name: "Work model" }]
+        : [],
+    );
+
+    await runCap(
+      "infer",
+      "model",
+      "--agent",
+      "work",
+      "run",
+      "--model",
+      "catalog-fixture/WORK-MODEL",
+      "--prompt",
+      "hello",
+      "--json",
+    );
+
+    expect(firstPreparedModelParams()).toMatchObject({
+      agentId: "work",
+      modelRef: "catalog-fixture/Work-Model",
+    });
+  });
+
   it("reports model providers configured through their environment key", async () => {
     vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
 
@@ -1014,10 +1105,15 @@ describe("capability cli", () => {
       },
     });
 
-    await expect(runCapability("audio", "providers", "--json")).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("inference provider inspection has no explicit owner");
-    expectRuntimeErrorContains("Pass --agent <id> or set agents.defaults.systemAgent.agentId");
+    // Agent selection is an expected CLI condition rendered by the root failure
+    // owner; the command rethrows instead of printing its own copy.
+    await expect(runCapability("audio", "providers", "--json")).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringMatching(
+        /inference provider inspection has no explicit owner[\s\S]*Pass --agent <id> or set agents\.defaults\.systemAgent\.agentId/,
+      ),
+    });
+    expect(runtimeErrorMessages()).toEqual([]);
     expect(mocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
@@ -1092,37 +1188,45 @@ describe("capability cli", () => {
     });
   });
 
-  it("inspects runtime-declared manifest models without live discovery", async () => {
-    mocks.loadModelCatalog.mockResolvedValueOnce([] as never);
-    mocks.planEffectiveModelCatalogRows.mockReturnValueOnce({
-      rows: [
-        {
-          provider: "openai",
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          ref: "openai/gpt-5.6-sol",
-          mergeKey: "openai/gpt-5.6-sol",
-          source: "manifest",
-          input: ["text"],
-          reasoning: true,
-          status: "available",
-        },
-      ],
-      entries: [],
-      conflicts: [],
-    });
+  it.each(["list", "inspect", "providers"])(
+    "keeps excluded manifest models out of infer model %s",
+    async (command) => {
+      mocks.loadModelCatalog.mockResolvedValue([]);
+      mocks.planEffectiveModelCatalogRows.mockReturnValue({
+        rows: [
+          {
+            provider: "cerebras",
+            id: "gpt-oss-120b",
+            name: "GPT OSS 120B",
+            ref: "cerebras/gpt-oss-120b",
+            mergeKey: "cerebras::gpt-oss-120b",
+            source: "manifest",
+            input: ["text"],
+            reasoning: true,
+            status: "available",
+          },
+        ],
+        entries: [],
+        conflicts: [],
+      });
 
-    await runCap("capability", "model", "inspect", "--model", "openai/gpt-5.6-sol", "--json");
-
-    expect(firstJsonOutput()).toEqual(
-      expect.objectContaining({ provider: "openai", id: "gpt-5.6-sol" }),
-    );
-  });
+      if (command === "inspect") {
+        await expect(
+          runCap("infer", "model", command, "--model", "cerebras/gpt-oss-120b", "--json"),
+        ).rejects.toThrow("exit 1");
+        expectRuntimeErrorContains("Model not found: cerebras/gpt-oss-120b");
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      } else {
+        await runCap("infer", "model", command, "--json");
+        expect(mocks.runtime.writeJson).toHaveBeenCalledWith([]);
+      }
+    },
+  );
 
   it("defaults model run to local transport", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--json");
 
-    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
     expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(firstJsonOutput()?.capability).toBe("model.run");
@@ -1166,11 +1270,13 @@ describe("capability cli", () => {
 
     await expect(
       runCapability("model", "run", "--local", "--prompt", "hi", "--json"),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("infer model run");
-    expectRuntimeErrorContains("--agent");
-    expectRuntimeErrorContains("agents.defaults.systemAgent.agentId");
+    ).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringMatching(
+        /infer model run[\s\S]*--agent[\s\S]*agents\.defaults\.systemAgent\.agentId/,
+      ),
+    });
+    expect(runtimeErrorMessages()).toEqual([]);
   });
 
   it("lets explicit model run agents override the system agent", async () => {
@@ -1215,7 +1321,7 @@ describe("capability cli", () => {
   it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--json");
 
-    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+    const calls = mocks.acquireSimpleCompletionModelForAgent.mock.calls as unknown as Array<
       [Record<string, unknown>]
     >;
     const params = calls[0]?.[0];
@@ -1245,7 +1351,8 @@ describe("capability cli", () => {
   });
 
   it("adds minimal instructions only for openai local model probes", async () => {
-    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+    mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      release: () => mocks.releaseSimpleCompletion(),
       selection: {
         provider: "openai",
         modelId: "gpt-5.5",
@@ -1423,7 +1530,8 @@ describe("capability cli", () => {
   });
 
   it("rejects local Codex provider probes before simple-completion dispatch", async () => {
-    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+    mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      release: () => mocks.releaseSimpleCompletion(),
       selection: {
         provider: "codex",
         modelId: "gpt-5.4",
@@ -1446,6 +1554,7 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("Codex app-server agent runtime");
+    expect(mocks.releaseSimpleCompletion).toHaveBeenCalledTimes(1);
     expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
@@ -1458,7 +1567,7 @@ describe("capability cli", () => {
       );
 
       expectRuntimeErrorContains("--prompt cannot be empty or whitespace-only.");
-      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
       expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
@@ -1483,7 +1592,7 @@ describe("capability cli", () => {
       ).rejects.toThrow("exit 1");
 
       expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
-      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
       expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
     },
@@ -1647,7 +1756,7 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("Invalid thinking level.");
-    expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
     expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
@@ -2053,9 +2162,11 @@ describe("capability cli", () => {
 
     await expect(
       runCapability("image", "generate", "--prompt", "friendly lobster", "--json"),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("Multiple agents are configured");
+    ).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringContaining("Multiple agents are configured"),
+    });
+    expect(runtimeErrorMessages()).toEqual([]);
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
@@ -2397,30 +2508,33 @@ describe("capability cli", () => {
     expect(generationCall?.providerOptions).toBeUndefined();
   });
 
-  it("passes image quality and OpenAI moderation hints through to generation runtime", async () => {
-    primeGeneratedImage("gpt-image-2", "draft.png");
+  it.each(["low", "xhigh", "max"])(
+    "passes %s image quality and OpenAI moderation through to runtime",
+    async (quality) => {
+      primeGeneratedImage("gpt-image-2", "draft.png");
 
-    await runCapability(
-      "image",
-      "generate",
-      "--prompt",
-      "low-cost draft",
-      "--quality",
-      "low",
-      "--openai-moderation",
-      "low",
-      "--json",
-    );
+      await runCapability(
+        "image",
+        "generate",
+        "--prompt",
+        "low-cost draft",
+        "--quality",
+        quality,
+        "--openai-moderation",
+        "low",
+        "--json",
+      );
 
-    const generationCall = firstImageGenerationCall();
-    expect(generationCall?.prompt).toBe("low-cost draft");
-    expect(generationCall?.quality).toBe("low");
-    expect(generationCall?.providerOptions).toEqual({
-      openai: {
-        moderation: "low",
-      },
-    });
-  });
+      const generationCall = firstImageGenerationCall();
+      expect(generationCall?.prompt).toBe("low-cost draft");
+      expect(generationCall?.quality).toBe(quality);
+      expect(generationCall?.providerOptions).toEqual({
+        openai: {
+          moderation: "low",
+        },
+      });
+    },
+  );
 
   it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
     primeGeneratedImage("gpt-image-1.5", "transparent-edit.png");
@@ -2548,7 +2662,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "--quality must be one of low, medium, high, or auto",
+      "--quality must be one of low, medium, high, xhigh, max, or auto",
     );
 
     mocks.runtime.error.mockClear();

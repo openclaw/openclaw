@@ -2,7 +2,11 @@ import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 /** Adjusts cross-tool guidance from the final authorized tool set. */
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { describeExecTool, describeProcessTool } from "./bash-tools.descriptions.js";
+import {
+  describeExecTool,
+  describeProcessTool,
+  EXEC_AUTO_REVIEW_GUIDANCE,
+} from "./bash-tools.descriptions.js";
 import { describeAgentsListTool, describeAgentsWaitTool } from "./tool-description-presets.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -83,7 +87,14 @@ export function applyToolAvailabilityDescriptions(tools: AnyAgentTool[]): AnyAge
   const hasSessionsSpawnTool = availableTools.has("sessions_spawn");
   return tools.map((tool) => {
     if (tool.name === "exec") {
-      return replaceDescription(tool, describeExecTool({ hasCronTool, hasProcessTool }));
+      return replaceDescription(
+        tool,
+        describeExecTool({
+          hasCronTool,
+          hasProcessTool,
+          autoReview: tool.description.includes(EXEC_AUTO_REVIEW_GUIDANCE),
+        }),
+      );
     }
     if (tool.name === "process") {
       return replaceDescription(tool, describeProcessTool({ hasCronTool }));

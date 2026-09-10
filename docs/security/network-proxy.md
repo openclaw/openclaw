@@ -217,3 +217,9 @@ Add any additional metadata hosts or reserved ranges your cloud provider or netw
 - User local WebUIs and local model servers are not covered by a general local-network bypass — allowlist them in the operator proxy policy if needed. The exception is the bundled Ollama memory embedding provider's guarded direct path, scoped to the exact host-local loopback origin from its configured `baseUrl`; LAN, tailnet, private-network, and public Ollama hosts still use the managed proxy.
 - The local debug proxy's direct upstream forwarding (for proxy requests and `CONNECT` tunnels) is disabled by default while managed proxy mode is active; enable it only for approved local diagnostics.
 - OpenClaw does not inspect, test, or certify your proxy policy. Treat proxy policy changes as security-sensitive operational changes.
+
+## Related
+
+- [Threat model](/security/THREAT-MODEL-ATLAS) — adversarial threats to the OpenClaw platform and ClawHub, mapped to MITRE ATLAS
+- [Security](/gateway/security) — the trust model, safe defaults, and hardening guidance for running OpenClaw
+- [Proxy](/cli/proxy) — `openclaw proxy`, which validates operator-managed proxy routing and runs the local debug capture proxy

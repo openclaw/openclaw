@@ -8,6 +8,20 @@ private final class DashboardWindowContentView: NSView {
     override var mouseDownCanMoveWindow: Bool {
         true
     }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Command-translated characters preserve the shortcut on alternate layouts.
+        guard event.type == .keyDown,
+              event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
+              event.characters?.lowercased() == "w",
+              let window, window.attachedSheet == nil,
+              let controller = window.windowController as? DashboardWindowController
+        else { return super.performKeyEquivalent(with: event) }
+        // Claim the key before AppKit's Close Window menu action. The web owner
+        // decides whether a focused side tab exists; the traffic light is unchanged.
+        controller.closeFocusedPanelOrWindow()
+        return true
+    }
 }
 
 /// The dashboard's empty unified toolbar exists only to grow the titlebar to
@@ -981,6 +995,34 @@ extension DashboardWindowController {
         self.activeNavigationWebView.goForward()
     }
 
+    fileprivate func closeFocusedPanelOrWindow() {
+        guard let window else { return }
+        guard self.canDispatchNativeCommands else {
+            window.performClose(nil)
+            return
+        }
+        let sourceID = self.notificationSourceID
+        let intent = self.windowIntentGeneration
+        let lifetime = self.windowLifetimeRevision
+        let browserScope = self.nativeBrowser.presentationScope(for: self.activeNavigationWebView)
+        let detail = browserScope.map { "{browserScope:\(Self.jsStringLiteral($0))}" } ?? "null"
+        let script = Self.scopedDashboardScript("""
+        return !window.dispatchEvent(new CustomEvent('openclaw:native-close-focused-panel', {
+          cancelable: true, detail: \(detail)
+        }));
+        """, url: self.currentURL)
+        Task { @MainActor [weak self, weak window] in
+            guard let self, let window else { return }
+            let handled = try? await self.webView.evaluateJavaScript(script)
+            // A delayed reply must not close a replacement/reopened window or a
+            // new document. Close intent is never queued for a future dashboard.
+            guard self.window === window, self.notificationSourceID == sourceID,
+                  self.windowIntentGeneration == intent, self.windowLifetimeRevision == lifetime,
+                  !self.webView.isLoading, handled as? Bool != true else { return }
+            window.performClose(nil)
+        }
+    }
+
     private static func makeJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
         let alert = NSAlert()
         alert.messageText = "OpenClaw Dashboard"
@@ -1215,7 +1257,7 @@ extension DashboardWindowController {
     }
 
     var windowLifetimeRevision: UInt64? {
-        (window as? DashboardWindow)?.lifetimeRevision
+        (self.window as? DashboardWindow)?.lifetimeRevision
     }
 
     private func advanceWindowIntent() {

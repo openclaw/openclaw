@@ -154,12 +154,13 @@ export async function rankShortTermPromotionCandidates(
 
     const avgScore = clampScore(entry.totalScore / Math.max(1, signalCount));
     const frequency = clampScore(Math.log1p(signalCount) / Math.log1p(10));
-    const uniqueQueries = entry.queryHashes?.length ?? 0;
-    const contextDiversity = Math.max(uniqueQueries, entry.recallDays?.length ?? 0);
-    if (contextDiversity < minUniqueQueries) {
+    // Scheduler and grounded-backfill keys are synthetic. Only provenance-
+    // qualified interactive recalls can satisfy user-query diversity.
+    const uniqueQueries = entry.userQueryHashes?.length ?? 0;
+    if (uniqueQueries < minUniqueQueries) {
       continue;
     }
-    const diversity = clampScore(contextDiversity / 5);
+    const diversity = clampScore(uniqueQueries / 5);
     const lastRecalledAtMs = Date.parse(entry.lastRecalledAt);
     const ageDays = Number.isFinite(lastRecalledAtMs)
       ? Math.max(0, (nowMs - lastRecalledAtMs) / DAY_MS)

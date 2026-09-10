@@ -20,7 +20,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { applyXaiOAuthConfig, XAI_OAUTH_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyXaiOAuthConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildLiveXaiOAuthProvider } from "./provider-catalog.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
@@ -590,7 +590,7 @@ async function noteXaiDeviceCode(
       ctx.isRemote
         ? "Open this URL in your LOCAL browser and enter the code below."
         : "Open this URL in your browser and enter the code below.",
-      `URL: ${deviceCode.verificationUriComplete ?? deviceCode.verificationUri}`,
+      `URL: <${deviceCode.verificationUriComplete ?? deviceCode.verificationUri}>`,
       `Code: ${deviceCode.userCode}`,
       `Code expires in ${expiresInMinutes} minutes. Never share it.`,
     ].join("\n"),
@@ -641,7 +641,7 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
     progress.stop("xAI OAuth complete");
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
-      defaultModel: XAI_OAUTH_DEFAULT_MODEL_REF,
+      defaultModel: XAI_DEFAULT_MODEL_REF,
       access: tokens.accessToken,
       refresh: tokens.refreshToken,
       expires: tokens.expires,

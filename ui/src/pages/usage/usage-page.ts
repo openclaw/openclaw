@@ -165,11 +165,7 @@ class UsagePage extends OpenClawLightDomElement {
           this.usageSelectedSessions.length === 1 ? this.usageSelectedSessions[0] : undefined;
         if (sessionKey) {
           // Manual intent belongs to this request's selection, never a later poll or selection.
-          if (value.refreshSessionKey === sessionKey) {
-            this.details.load(sessionKey);
-          } else {
-            void this.details.contextWeight.load(sessionKey);
-          }
+          this.details.load(sessionKey, value.refreshSessionKey === sessionKey);
         }
       } else {
         this.applyUsageError(snapshot.error.cause);

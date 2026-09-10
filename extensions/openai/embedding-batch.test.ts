@@ -1,6 +1,7 @@
 // Openai tests cover embedding batch plugin behavior.
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
 import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
 
@@ -15,28 +16,6 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function jsonlBytes(value: string): number {
   return jsonlEncoder.encode(value).byteLength;
-}
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 function fetchInputUrl(input: RequestInfo | URL): string {
@@ -941,7 +920,7 @@ describe("OpenAI embedding batch output", () => {
   });
 
   it("bounds batch resource error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"batch status unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"batch status unavailable ".repeat(1024)}tail`, {
       status: 400,
       headers: { "Content-Type": "text/plain" },
     });

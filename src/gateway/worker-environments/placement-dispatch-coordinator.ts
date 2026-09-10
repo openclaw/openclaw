@@ -3,7 +3,10 @@ import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import type { WorkerPlacementCancellationTarget } from "./placement-reclaim-contract.js";
+import {
+  matchesWorkerPlacementTarget,
+  type WorkerPlacementCancellationTarget,
+} from "./placement-reclaim-contract.js";
 import {
   WorkerPlacementAdmissionTargetError,
   type WorkerPlacementDispatchAdmission,
@@ -25,6 +28,7 @@ function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
     };
   };
   return {
+    superseded: new AbortController(),
     currentPlacement: () => current,
     completedPlacement: () => completed,
     operation: run((placement) => {
@@ -47,6 +51,11 @@ export function coordinateWorkerPlacementDispatch(
   admitDispatch: WorkerPlacementDispatchAdmission,
 ): WorkerPlacementDispatchService & {
   isPlacementOperationInFlight(sessionId: string): boolean;
+  waitForInitialPlacement(
+    this: void,
+    placement: WorkerDispatchPlacement,
+    signal?: AbortSignal,
+  ): Promise<WorkerDispatchPlacement>;
 } {
   type PlacementFence = { promise: Promise<void>; dispatchCohort: readonly symbol[] };
   type ReconciliationSweep = PlacementFence & {
@@ -195,6 +204,13 @@ export function coordinateWorkerPlacementDispatch(
   const pendingOperations = (sessionId: string) => [...(operationsInFlight.get(sessionId) ?? [])];
   const registerOperation = (record: PlacementOperation) => {
     const pending = operationsInFlight.get(record.request.sessionId) ?? new Set();
+    // A new lifecycle operation permanently invalidates waiters on its predecessor,
+    // even if Stop/Move/replacement finishes before that predecessor resolves.
+    for (const predecessor of pending) {
+      predecessor.superseded.abort(
+        new Error("Worker setup was superseded by another placement operation"),
+      );
+    }
     pending.add(record);
     operationsInFlight.set(record.request.sessionId, pending);
     const release = () => {
@@ -214,6 +230,38 @@ export function coordinateWorkerPlacementDispatch(
   };
   return {
     isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
+    async waitForInitialPlacement(placement, signal) {
+      signal?.throwIfAborted();
+      const pending = pendingOperations(placement.sessionId);
+      const owner = pending.length === 1 ? pending[0] : undefined;
+      // The persisted state is not proof of a live setup owner. Only join the exact
+      // dispatch/recovery that published it, never a Move or Stop operation.
+      if (
+        !owner ||
+        (owner.kind !== "dispatch" && owner.kind !== "recovery") ||
+        owner.request.sessionKey !== placement.sessionKey ||
+        owner.request.agentId !== placement.agentId ||
+        !matchesWorkerPlacementTarget(
+          owner.currentPlacement() ?? (owner.kind === "recovery" ? owner.request : undefined),
+          placement,
+        )
+      ) {
+        throw new Error(
+          "Worker setup has no matching live dispatch owner. Wait for recovery or explicitly retry setup.",
+        );
+      }
+      const waitSignal = signal
+        ? AbortSignal.any([signal, owner.superseded.signal])
+        : owner.superseded.signal;
+      const completed = await racePromiseWithAbortSignal(owner.operation, waitSignal);
+      waitSignal.throwIfAborted();
+      if (!completed || !matchesWorkerPlacementTarget(owner.completedPlacement(), completed)) {
+        throw new Error(
+          "Worker setup did not publish a ready placement. Inspect the setup recovery error.",
+        );
+      }
+      return completed;
+    },
     dispatch: async (request, onTransition, authorize) => {
       const inFlight = pendingOperations(request.sessionId).find(
         (pending) => pending.kind === "dispatch",

@@ -1,5 +1,6 @@
 {
   "id": "diffs",
+  "categories": ["tools"],
   "activation": {
     "onStartup": true
   },

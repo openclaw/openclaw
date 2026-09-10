@@ -1,3 +1,4 @@
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -22,6 +23,36 @@ import {
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
+  it("keeps a new sticker description through canonical reply-context finalization", async () => {
+    describeStickerImage.mockResolvedValueOnce("A curious sticker");
+    const ctxPayload = finalizeInboundContext({
+      Body: "[User sent media without caption]",
+      BodyForAgent: "[User sent media without caption]",
+      BodyForCommands: "",
+      RawBody: "",
+      CommandBody: "",
+      ChatType: "direct" as const,
+      From: "telegram:123",
+      To: "telegram:123",
+      SessionKey: "agent:default:telegram:direct:123",
+      InboundEventKind: "user_request" as const,
+      media: [{ path: "/tmp/sticker.webp", kind: "sticker" as const }],
+      CommandAuthorized: true,
+      Sticker: { fileId: "sticker-file", fileUniqueId: "sticker-unique" },
+      StickerMediaIncluded: true,
+    });
+
+    await dispatchWithContext({ context: createContext({ ctxPayload }) });
+    const replyContext = finalizeInboundContext(ctxPayload);
+
+    expect(replyContext.agentText).toBe(
+      "[Sticker] A curious sticker\n[User sent media without caption]",
+    );
+    expect(replyContext.BodyForAgent).toBe(replyContext.agentText);
+    expect(replyContext.rawText).toBe("");
+    expect(replyContext.commandText).toBe("");
+  });
+
   it("skips general understanding after describing a first-seen non-vision sticker", async () => {
     describeStickerImage.mockResolvedValueOnce("A curious sticker");
     const ctxPayload = {
@@ -80,11 +111,12 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     });
   });
 
-  it("preserves supplemental context when describing a captionless sticker", async () => {
+  it("preserves canonical supplemental context when describing a captionless sticker", async () => {
     describeStickerImage.mockResolvedValueOnce("A contextual sticker");
     const ctxPayload = {
       Body: "reply-chain context",
-      BodyForAgent: "reply-chain context",
+      agentText: "reply-chain context",
+      BodyForAgent: "stale reply envelope",
       RawBody: "",
       media: [{ path: "/tmp/sticker.webp", kind: "sticker" as const }],
       CommandAuthorized: true,
@@ -98,6 +130,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     await dispatchWithContext({ context: createContext({ ctxPayload }) });
 
     expect(ctxPayload.Body).toBe("[Sticker] A contextual sticker\nreply-chain context");
+    expect(ctxPayload.agentText).toBe("[Sticker] A contextual sticker\nreply-chain context");
     expect(ctxPayload.BodyForAgent).toBe("[Sticker] A contextual sticker\nreply-chain context");
   });
 

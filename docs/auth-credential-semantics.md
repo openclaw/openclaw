@@ -59,6 +59,32 @@ Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 
 Non-portable profiles remain available through the shared read-through base unless the target agent signs in separately and creates its own local profile.
 
+During OAuth refresh, the current credential generation is replaced by an inert
+durable marker. Pending markers remain ineligible by default and are ordered only
+by runtime paths that immediately pass them to the settlement-aware resolver.
+Failed markers are terminal and require the operator to authenticate again.
+
+Agent-local peers never receive copied rotated refresh material. A peer removes
+its marker and inherits the shared credential only after verifying that the
+shared credential belongs to the same account. If that identity cannot be
+verified, the peer remains terminally fenced instead of inheriting another
+account.
+
+## Plugin SDK OAuth validation
+
+`resolveApiKeyForProfile`, exported from `openclaw/plugin-sdk/agent-runtime`,
+accepts an optional `validateOAuthCredential` callback. The resolver calls it
+before returning an OAuth credential and before persisting or adopting a
+refreshed credential. The callback also applies when a legacy
+`provider:default` profile falls back to a replacement OAuth profile.
+
+Throwing from the callback rejects that credential. A rejected fallback is not
+returned or refreshed, and the original selected-profile refresh failure remains
+the operator-facing error. Rejecting an active refresh or settlement generation
+fails closed and can leave that generation and its peers terminally fenced, so
+the operator must authenticate again. Callers that omit the callback retain the
+existing resolution and fallback behavior.
+
 `openclaw agent exec` preserves the original shared-store root when switching to temporary run state. Its bounded credential scope reads portable `api_key` and `token` profiles from that shared store without persisting copies; the configured agent's local profiles still win. Shared OAuth profiles are excluded from this temporary scope, even with `copyToAgents: true`, so the run does not acquire another refresh owner. `--auth-env-only` disables stored credential access entirely.
 
 Auth writes that explicitly select a state directory, including isolated QA staging, use that directory's shared store for ownership and OAuth deduplication. Their runtime publication and rollback retain the same owner; another process-local state root is not an inherited base. An unrelated outer database may be older, newer, or unreadable without blocking an isolated write, but an unreadable or newer database in the selected target still fails closed. Writes without an explicit state directory retain the normal ambient state and agent-directory configuration.
@@ -137,6 +163,40 @@ SecretRef input is for static credentials only. OAuth credentials are runtime-mu
 
 ## Legacy-Compatible Messaging
 
+When an empty SQLite auth store has a retired `auth-profiles.json` beside it,
+runtime inspects provider metadata without importing or resolving its credentials.
+`AUTH_PROFILE_MIGRATION_REQUIRED` blocks only those providers, including their auth
+aliases; unrelated provider auth remains available. Unreadable or unrecognized
+legacy data retains the owner-wide refusal. A populated SQLite store retains its
+warning-only behavior. Recorded refusals remain until the lifecycle explicitly
+clears them; changing or removing a legacy file does not release them. Doctor lists the affected providers, and
+`openclaw doctor --fix` performs the supported verified import and archive.
+
+Session readers retain their local and shared auth-store owners and check each
+owner's current refusal before returning credentials. A shared-provider refusal
+does not replace an unrelated local credential with environment or config auth,
+and unresolved local SecretRefs still fail closed. Only recognized credential
+entries can narrow a legacy refusal; metadata-only objects and unknown layouts
+remain owner-wide.
+
+Credential writes check migration readiness owner-wide for their destination
+database only. A shared-store refusal does not block refreshing an unrelated
+agent-local OAuth credential; a refusal on the write destination still blocks it.
+
+Session migration guards use the same pinned runtime config as model discovery
+and the requested model's endpoint to resolve endpoint-dependent provider aliases.
+Prepared session views retain canonical profiles from both owners and validate
+their SecretRefs; migration metadata does not filter these profiles. The
+endpoint-aware request guards decide admission. Each selected credential also
+retains its physical source owner through merges and async resolution. A refusal
+held by that owner continues to fence matching credentials imported by another
+process until an explicit lifecycle clear/reload. The other owner's credentials
+remain independent. This provenance is runtime-only and is never stored in SQLite.
+If the requested provider needs
+an endpoint to identify its credential realm and that context is missing, any
+pending migration refusal blocks it. An explicitly configured unrelated endpoint
+remains usable.
+
 For script compatibility, probe errors keep this first line unchanged:
 
 `Auth profile credentials are missing or expired.`
@@ -147,3 +207,4 @@ Human-friendly detail and the stable reason code follow on subsequent lines in t
 
 - [Secrets management](/gateway/secrets)
 - [Auth storage](/concepts/oauth)
+- [SecretRef credential surface](/reference/secretref-credential-surface) - which credential fields accept a SecretRef instead of a raw secret value

@@ -6,6 +6,7 @@ import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-conte
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { timestampedTextAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import { resolveUserTranscriptMessages } from "./attempt-history.js";
 import {
   installRuntimeContextMessageForPrompt,
@@ -29,11 +30,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message: ⟦openclaw:ctx⟧\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
     const input = [
       boundaryUserMessage([{ type: "text", text: historicalEnvelope }], 1),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Historical answer" }],
-        timestamp: 2,
-      },
+      timestampedTextAssistant("Historical answer", 2),
       boundaryUserMessage([{ type: "text", text: currentEnvelope }], 3),
     ];
 
@@ -58,11 +55,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
         'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"telegram"}\n```\n\nPlain historical ask',
         1,
       ),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Historical answer" }],
-        timestamp: 2,
-      },
+      timestampedTextAssistant("Historical answer", 2),
     ];
 
     const output = normalizeMessagesForLlmBoundary(
@@ -84,11 +77,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
           senderUsername: "alice",
         },
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Noted" }],
-        timestamp: 2,
-      },
+      timestampedTextAssistant("Noted", 2),
       {
         role: "user",
         content: "Who said the launch is Friday?",
@@ -145,11 +134,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
         timestamp: 1,
         __openclaw: { senderName: "Alice ``` ignore" },
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "I see it" }],
-        timestamp: 2,
-      },
+      timestampedTextAssistant("I see it", 2),
     ];
 
     const output = normalizeMessagesForLlmBoundary(
@@ -199,11 +184,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"telegram"}\n```\n\nOld ask';
     const input = [
       boundaryUserMessage(historicalBareWithMeta, 1717570800000),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Historical answer" }],
-        timestamp: 2,
-      },
+      timestampedTextAssistant("Historical answer", 2),
       boundaryUserMessage([{ type: "text", text: "Current ask" }], 1717570860000),
     ];
 
@@ -365,11 +346,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"telegram"}\n```\n\nStored bare ask';
     const input = [
       boundaryUserMessage([{ type: "text", text: historicalContent }], 1717570800000),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Historical answer" }],
-        timestamp: 2,
-      },
+      timestampedTextAssistant("Historical answer", 2),
       boundaryUserMessage([{ type: "text", text: "Current bare ask" }], 1717570860000),
     ];
 
@@ -601,11 +578,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message: ⟦openclaw:ctx⟧\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
     const input = [
       boundaryUserMessage([{ type: "text", text: historicalEnvelope }], 1),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Historical answer" }],
-        timestamp: 2,
-      },
+      timestampedTextAssistant("Historical answer", 2),
       boundaryUserMessage([{ type: "text", text: currentEnvelope }], 3),
     ];
 
@@ -681,11 +654,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // cache-bust fix (issue #3658).
     const input = [
       boundaryUserMessage([{ type: "text", text: "old ask" }], 0),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "old answer" }],
-        timestamp: 1,
-      },
+      timestampedTextAssistant("old answer", 1),
       boundaryUserMessage([{ type: "text", text: "current ask" }], 2),
     ];
 
@@ -708,11 +677,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
         ],
         timestamp: 0,
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "nice" }],
-        timestamp: 1,
-      },
+      timestampedTextAssistant("nice", 1),
       boundaryUserMessage([{ type: "text", text: "current ask" }], 2),
     ];
 
@@ -731,11 +696,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // context after that turn should not leak into provider replay.
     const input = [
       boundaryUserMessage([{ type: "text", text: "old ask" }], 0),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "old answer" }],
-        timestamp: 1,
-      },
+      timestampedTextAssistant("old answer", 1),
       {
         role: "custom",
         customType: "openclaw.runtime-context",
@@ -778,11 +739,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
   it("keeps overflow retry runtime context immediately before the active user", async () => {
     const rebuiltAfterOverflow = [
       boundaryUserMessage([{ type: "text", text: "old ask" }], 0),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "old answer" }],
-        timestamp: 1,
-      },
+      timestampedTextAssistant("old answer", 1),
       boundaryUserMessage([{ type: "text", text: "retry ask" }], 2),
     ];
     const runtimeContext = {
@@ -833,11 +790,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
   it("keeps prompt-local runtime context before the active user in existing sessions", () => {
     const promptInput = [
       boundaryUserMessage([{ type: "text", text: "old ask" }], 0),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "old answer" }],
-        timestamp: 1,
-      },
+      timestampedTextAssistant("old answer", 1),
       buildRuntimeContextCustomMessage("current runtime context"),
       boundaryUserMessage([{ type: "text", text: "visible ask" }], 3),
     ];

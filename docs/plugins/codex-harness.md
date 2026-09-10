@@ -14,6 +14,11 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+Pasted text saved as a `.txt` attachment is extracted by OpenClaw and included in
+the current turn as untrusted external content, subject to the existing file
+extraction limits. This also applies to adopted and forked Codex sessions with
+locked model selection. Images continue through Codex's native image input.
+
 Remote Codex app-servers can run on a different machine from the Gateway. Set
 `remoteWorkspaceRoot` to validate remote workspace attachment paths. OpenClaw
 transfers authoritative attachment bytes over the existing app-server connection
@@ -21,11 +26,11 @@ using a fixed, no-shell `command/exec` reader. The reader rejects symlinks,
 enforces file and response size limits before allocation, and stages immutable
 Gateway-managed media before channel delivery without requiring a shared or
 synchronized filesystem. Codex images are materialized directly from typed
-app-server events; saved-path-only images use the same bounded remote reader.
+app-server events. Saved-path-only images use the same bounded remote reader.
 Uploads always use the Gateway's configured channel identity and request timeout.
 
 Use canonical OpenAI model refs such as `openai/gpt-5.6-sol`. Do not configure
-legacy Codex GPT refs; put OpenAI agent auth order under `auth.order.openai`.
+legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
 
@@ -36,7 +41,7 @@ authored provider request override. Valid model-scoped `params.fastMode` /
 `params.fast_mode` values and valid cutoff keys are typed agent-runtime
 controls, so they do not count as authored provider request params or select a
 runtime by themselves. See
-[OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+[OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime).
 If Codex owns auth before Platform versus ChatGPT routing is known, OpenClaw
 still requires every candidate route to declare Codex compatibility. Native
 auth ownership alone never bypasses that route check.
@@ -48,7 +53,7 @@ dynamic tools routed through the app-server `item/tool/call` bridge. An
 ordinary OpenClaw sandbox or restricted tool policy disables native code mode
 unless you opt into the experimental sandbox exec-server path. Node-backed
 `remote-exec` on a paired device or cloud worker instead uses its
-placement-owned environment without that experimental flag.
+placement-owned environment without that experimental flag. A dedicated cloud worker with a completed project preparation keeps the bound workspace and `HOME` paths, so native commands can reuse setup caches. The node exec-server still uses a separate temporary `CODEX_HOME` for each connection. Ending the connection removes that Codex state and preserves the prepared project home.
 
 Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
 as a distinct OpenClaw execution path. Use `gateway_exec` only when a command
@@ -63,7 +68,7 @@ terminals listed on that Codex thread before releasing the run. Other Codex
 threads and deliberately backgrounded `gateway_process` jobs are unaffected.
 If native terminal cleanup fails, the run reports an error instead of silently
 claiming cleanup succeeded. Inspect that thread's running terminals before
-starting more work. This uses Codex's terminal ownership; it does not guarantee
+starting more work. This uses Codex's terminal ownership. It does not guarantee
 cleanup of commands that deliberately detach from that ownership.
 
 With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
@@ -71,7 +76,7 @@ Codex also receives `node_exec` when a connected node supports `system.run`.
 Offline paired devices and devices without shell support do not expose this tool.
 When a node is configured, that binding must resolve to an eligible node. Native shell
 remains on the Codex app-server host and workspace
-(Gateway-local for the default stdio deployment); `node_exec` selects the sole
+(Gateway-local for the default stdio deployment). `node_exec` selects the sole
 connected node that supports `system.run`, or requires a name or id when several
 are eligible. It keeps OpenClaw's node approval policy in force and waits for the
 remote command to finish. Remote-node background follow-up is not available. If
@@ -299,7 +304,10 @@ nine child pages below. The anchors from the single-page version still resolve h
 - [OpenAI provider](/providers/openai)
 - [OpenAI Codex help](https://help.openai.com/en/collections/14937394-codex)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
+- [Copilot SDK harness](/plugins/copilot)
 - [Plugin hooks](/plugins/hooks)
 - [Diagnostics export](/gateway/diagnostics)
 - [Status](/cli/status)
 - [Testing](/help/testing-live#live-codex-app-server-harness-smoke)
+- [ACP agents](/tools/acp-agents) — how ACP agents are configured and bound
+- [ACP agents — setup](/tools/acp-agents-setup) — configuring this harness as an ACP agent

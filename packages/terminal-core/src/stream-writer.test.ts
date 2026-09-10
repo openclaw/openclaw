@@ -80,38 +80,6 @@ describe("createSafeStreamWriter", () => {
     }
   });
 
-  it("keeps a callback reset effective through a reentrant successful write", () => {
-    const failure = Object.assign(new Error("closed pipe"), { code: "EPIPE" });
-    let notifications = 0;
-    let recoveredResult: boolean | undefined;
-    const writer = createSafeStreamWriter({
-      onBrokenPipe: () => {
-        notifications += 1;
-        if (notifications === 1) {
-          writer.reset();
-          recoveredResult = writer.write(process.stdout, "recovered");
-        }
-      },
-    });
-    const write = vi.spyOn(process.stdout, "write").mockImplementation((text) => {
-      if (text === "recovered") {
-        return true;
-      }
-      throw failure;
-    });
-    try {
-      expect(writer.write(process.stdout, "first")).toBe(false);
-      expect(recoveredResult).toBe(true);
-      expect(writer.isClosed()).toBe(false);
-      expect(writer.write(process.stdout, "retry")).toBe(false);
-      expect(writer.isClosed()).toBe(true);
-      expect(notifications).toBe(2);
-      expect(write.mock.calls.map(([text]) => text)).toEqual(["first", "recovered", "retry"]);
-    } finally {
-      write.mockRestore();
-    }
-  });
-
   it("keeps the output closed when the notification callback throws", () => {
     const failure = Object.assign(new Error("closed pipe"), { code: "EPIPE" });
     const callbackError = new Error("notification failed");

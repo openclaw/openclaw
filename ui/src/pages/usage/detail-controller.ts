@@ -1,3 +1,4 @@
+import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
@@ -8,30 +9,49 @@ import {
 } from "../../components/panel-refresh-status.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
-  requestSessionUsageContextWeight,
+  requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
   type SessionUsageQuery,
+  type SessionUsageTarget,
 } from "../../lib/sessions/usage.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import { createUsageRequest } from "./request.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
 
+function sameUsageTarget(a: SessionUsageTarget | undefined, b: SessionUsageTarget): boolean {
+  return a?.key === b.key && a.agentId === b.agentId;
+}
+
 function createUsageDetailRequest<T>(
   host: ReactiveControllerHost,
   gateway: GatewayPageController,
-  request: (client: GatewayBrowserClient, key: string, signal: AbortSignal) => Promise<T>,
+  request: (
+    client: GatewayBrowserClient,
+    target: SessionUsageTarget,
+    signal: AbortSignal,
+  ) => Promise<T>,
+  resolveTarget: (key: string) => SessionUsageTarget,
   canLoad?: (key: string) => boolean,
 ) {
-  let value: { sessionKey: string; data: T } | null = null;
+  let value: { target: SessionUsageTarget; data?: T } | null = null;
   let status = createPanelRefreshStatus();
   let pending: Promise<void> | null = null;
   let generation = 0;
   const task = createUsageRequest(host, {
-    task: async ([client, sessionKey]: readonly [GatewayBrowserClient, string], { signal }) => ({
-      sessionKey,
-      data: await request(client, sessionKey, signal),
+    task: async (
+      [client, target]: readonly [GatewayBrowserClient, SessionUsageTarget],
+      { signal },
+    ) => ({
+      target,
+      // Qualified keys can name disk-backed owners outside the configured roster.
+      // Keep key-only wire routing while retaining the full local target identity.
+      data: await request(
+        client,
+        parseAgentSessionKeyParts(target.key.trim()) ? { key: target.key } : target,
+        signal,
+      ),
     }),
     onComplete: (result) => {
       pending = null;
@@ -41,8 +61,8 @@ function createUsageDetailRequest<T>(
     onError: (error) => {
       pending = null;
       const failure = failUsageDetailRefresh(status, error, gateway.snapshot);
-      if (failure.clearData) {
-        value = null;
+      if (failure.clearData && value) {
+        delete value.data;
       }
       status = failure.status;
     },
@@ -68,9 +88,11 @@ function createUsageDetailRequest<T>(
     },
     async recover(sessionKey: string, loadInitial = false): Promise<void> {
       const current = generation;
+      const target = resolveTarget(sessionKey);
       await pending;
       if (
         current === generation &&
+        sameUsageTarget(target, resolveTarget(sessionKey)) &&
         gateway.snapshot &&
         isGatewayAvailable(gateway.snapshot) &&
         (status.awaitingGateway || status.error !== null || (loadInitial && !status.hasLoaded))
@@ -78,23 +100,29 @@ function createUsageDetailRequest<T>(
         void this.load(sessionKey);
       }
     },
-    load(sessionKey: string): Promise<void> {
+    load(sessionKey: string, refresh = true): Promise<void> {
       const client = gateway.client;
       if (!client || !gateway.connected) {
         return Promise.resolve();
       }
       const enabled = Boolean(sessionKey) && canLoad?.(sessionKey) !== false;
-      if (value?.sessionKey !== sessionKey || !enabled) {
-        value = null;
+      const target = resolveTarget(sessionKey);
+      const sameTarget = sameUsageTarget(value?.target, target);
+      if (!sameTarget || !enabled) {
+        value = enabled ? { target } : null;
         status = createPanelRefreshStatus();
       }
       if (!enabled) {
         cancel();
         return Promise.resolve();
       }
+      // Routine overview refresh retains matching details, but never another owner's data.
+      if (!refresh && sameTarget) {
+        return pending ?? Promise.resolve();
+      }
       status = beginPanelRefresh(status);
       generation += 1;
-      return (pending = task.run([client, sessionKey]));
+      return (pending = task.run([client, target]));
     },
     cancel,
     clear() {
@@ -116,28 +144,49 @@ export class UsageDetailsController {
     query: () => SessionUsageQuery,
     sessions: () => UsageSessionEntry[],
   ) {
-    this.timeSeries = createUsageDetailRequest(host, gateway, requestSessionUsageTimeSeries);
-    this.sessionLogs = createUsageDetailRequest(host, gateway, async (client, key) => {
-      const payload = await requestSessionUsageLogs(client, key);
-      // SAFETY: sessions.usage.logs returns entries normalized by the Gateway's loadSessionLogs.
-      return Array.isArray(payload.logs) ? (payload.logs as SessionLogEntry[]) : null;
-    });
+    const resolveTarget = (key: string): SessionUsageTarget => {
+      const agentId = sessions().find((session) => session.key === key)?.agentId ?? query().agentId;
+      return { key, ...(agentId ? { agentId } : {}) };
+    };
+    this.timeSeries = createUsageDetailRequest(
+      host,
+      gateway,
+      requestSessionUsageTimeSeries,
+      resolveTarget,
+    );
+    this.sessionLogs = createUsageDetailRequest(
+      host,
+      gateway,
+      async (client, target) => {
+        const payload = await requestSessionUsageLogs(client, target);
+        // SAFETY: sessions.usage.logs returns entries normalized by the Gateway's loadSessionLogs.
+        return Array.isArray(payload.logs) ? (payload.logs as SessionLogEntry[]) : null;
+      },
+      resolveTarget,
+    );
     this.contextWeight = createUsageDetailRequest(
       host,
       gateway,
-      (client, key, signal) => {
-        const params = query();
-        const agentId =
-          sessions().find((session) => session.key === key)?.agentId ?? params.agentId;
-        return requestSessionUsageContextWeight(client, { ...params, agentId }, key, signal);
+      async (client, target, signal) => {
+        const result = await requestSessionUsage(
+          client,
+          { ...query(), agentId: target.agentId },
+          {
+            key: target.key,
+            includeContextWeight: true,
+            signal,
+          },
+        );
+        return result.sessions[0]?.contextWeight;
       },
+      resolveTarget,
       (key) => sessions().some((session) => session.key === key && session.hasContextWeight),
     );
   }
 
-  load(sessionKey: string): void {
-    void this.timeSeries.load(sessionKey);
-    void this.sessionLogs.load(sessionKey);
+  load(sessionKey: string, refreshAll = true): void {
+    void this.timeSeries.load(sessionKey, refreshAll);
+    void this.sessionLogs.load(sessionKey, refreshAll);
     void this.contextWeight.load(sessionKey);
   }
 

@@ -19,6 +19,7 @@ import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { extractStoredAssistantText } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
@@ -637,15 +638,9 @@ describe("extractStoredAssistantText", () => {
   });
 
   it("keeps normal status text that mentions billing", () => {
-    const message = {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
-        },
-      ],
-    };
+    const message = textAssistant(
+      "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
+    );
     expect(extractStoredAssistantText(message)).toBe(
       "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
     );

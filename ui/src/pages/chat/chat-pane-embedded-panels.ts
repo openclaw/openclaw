@@ -285,7 +285,7 @@ export function sidebarPanelDefinitions(
     ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),
-      icon: icons.puzzle,
+      icon: icons.plug,
       available: entry !== undefined,
       content: entry
         ? renderPluginContribution(

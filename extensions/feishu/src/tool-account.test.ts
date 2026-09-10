@@ -34,7 +34,7 @@ describe("resolveFeishuToolAccount", () => {
 
   it("prefers the active contextual account over configured defaultAccount", () => {
     const resolved = resolveFeishuToolAccount({
-      api: { config: cfg },
+      cfg,
       defaultAccountId: "work",
       requiredTool,
     });
@@ -44,7 +44,7 @@ describe("resolveFeishuToolAccount", () => {
 
   it("falls back to configured defaultAccount when there is no contextual account", () => {
     const resolved = resolveFeishuToolAccount({
-      api: { config: cfg },
+      cfg,
       requiredTool,
     });
 
@@ -53,13 +53,11 @@ describe("resolveFeishuToolAccount", () => {
 
   it("skips a disabled configured defaultAccount", () => {
     const resolved = resolveFeishuToolAccount({
-      api: {
-        config: {
-          channels: {
-            feishu: {
-              ...cfg.channels.feishu,
-              defaultAccount: "disabled",
-            },
+      cfg: {
+        channels: {
+          feishu: {
+            ...cfg.channels.feishu,
+            defaultAccount: "disabled",
           },
         },
       },
@@ -73,13 +71,11 @@ describe("resolveFeishuToolAccount", () => {
   it("rejects tool account resolution when the channel is disabled", () => {
     expect(() =>
       resolveFeishuToolAccount({
-        api: {
-          config: {
-            channels: {
-              feishu: {
-                ...cfg.channels.feishu,
-                enabled: false,
-              },
+        cfg: {
+          channels: {
+            feishu: {
+              ...cfg.channels.feishu,
+              enabled: false,
             },
           },
         },
@@ -90,7 +86,7 @@ describe("resolveFeishuToolAccount", () => {
 
   it("allows an explicit configured account", () => {
     const resolved = resolveFeishuToolAccount({
-      api: { config: cfg },
+      cfg,
       executeParams: { accountId: "WORK" },
       requiredTool,
     });
@@ -100,14 +96,12 @@ describe("resolveFeishuToolAccount", () => {
 
   it("allows the explicit unlisted default backed by top-level credentials", () => {
     const resolved = resolveFeishuToolAccount({
-      api: {
-        config: {
-          channels: {
-            feishu: {
-              defaultAccount: "ops",
-              appId: "base-app-id",
-              appSecret: "base-app-secret", // pragma: allowlist secret
-            },
+      cfg: {
+        channels: {
+          feishu: {
+            defaultAccount: "ops",
+            appId: "base-app-id",
+            appSecret: "base-app-secret", // pragma: allowlist secret
           },
         },
       },
@@ -126,7 +120,7 @@ describe("resolveFeishuToolAccount", () => {
   ])("rejects an explicit $name account", (testCase) => {
     expect(() =>
       resolveFeishuToolAccount({
-        api: { config: cfg },
+        cfg,
         executeParams: { accountId: testCase.accountId },
         requiredTool,
       }),

@@ -497,24 +497,59 @@ describe("config io write", () => {
     );
   });
 
-  itWithHome("refuses direct config writes in Nix mode without changing the file", async (home) => {
-    const { configPath, raw: initialRaw } = await writeConfigFixture(home, {
-      gateway: { mode: "local" },
-    });
+  itWithHome("does not enable READONLY from config env.vars before writing", async (home) => {
+    const config = {
+      env: { vars: { OPENCLAW_CONFIG_READONLY: "1" } },
+      gateway: { mode: "local" as const },
+    };
+    const { configPath } = await writeConfigFixture(home, config);
     const io = createHomeConfigIO(home, {
       configPath,
-      env: {
-        OPENCLAW_NIX_MODE: "1",
-        OPENCLAW_TEST_FAST: "1",
-      } as NodeJS.ProcessEnv,
+      env: { OPENCLAW_TEST_FAST: "1" },
     });
-
-    await expect(io.writeConfigFile({ gateway: { mode: "local", port: 19001 } })).rejects.toThrow(
-      "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
-    );
-
-    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+    expect(io.loadConfig().gateway?.mode).toBe("local");
+    const result = await io.writeConfigFile({
+      ...config,
+      gateway: { mode: "local", port: 19001 },
+    });
+    expect(result.persistedConfig.gateway?.port).toBe(19001);
+    expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(19001);
+    expect(io.env.OPENCLAW_CONFIG_READONLY).toBeUndefined();
   });
+
+  for (const [mode, message] of [
+    [
+      "OPENCLAW_NIX_MODE",
+      "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
+    ],
+    ["OPENCLAW_CONFIG_READONLY", "Config is externally managed (`OPENCLAW_CONFIG_READONLY=1`)"],
+  ] as const) {
+    itWithHome(
+      `refuses direct config writes in ${mode} without changing the file`,
+      async (home) => {
+        const { configPath, raw: initialRaw } = await writeConfigFixture(home, {
+          env: { vars: { [mode]: "0" } },
+          gateway: { mode: "local" },
+        });
+        const io = createHomeConfigIO(home, {
+          configPath,
+          env: {
+            [mode]: "1",
+            OPENCLAW_TEST_FAST: "1",
+          } as NodeJS.ProcessEnv,
+        });
+
+        expect(io.loadConfig().gateway?.mode).toBe("local");
+        expect(io.env[mode]).toBe("1");
+        await expect(
+          io.writeConfigFile({ gateway: { mode: "local", port: 19001 } }),
+        ).rejects.toThrow(message);
+
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+        expect((await io.readConfigFileSnapshot()).config.gateway?.mode).toBe("local");
+      },
+    );
+  }
 
   itWithHome(
     "dedupes validation warnings across writes and reloads until config becomes clean",
@@ -717,6 +752,23 @@ describe("config io write", () => {
     expect(persisted.$schema).toBe("https://openclaw.ai/config.json");
     expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
   });
+
+  for (const mode of ["OPENCLAW_CONFIG_READONLY", "OPENCLAW_NIX_MODE"]) {
+    itWithHome(mode + " preserves prefixed config without recovery snapshots", async (home) => {
+      const configPath = configPathForHome(home);
+      const originalRaw = "status output\n" + formatConfig({ gateway: { mode: "local" } });
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createHomeConfigIO(home, { env: { VITEST: "true", [mode]: "1" } });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+      await expect(io.recoverConfigFromJsonRootSuffix(snapshot)).resolves.toBe(false);
+      expect(await fs.readFile(configPath, "utf-8")).toBe(originalRaw);
+      expect(
+        (await fs.readdir(path.dirname(configPath))).filter((name) => name.includes(".clobbered.")),
+      ).toHaveLength(0);
+    });
+  }
 
   itWithHome("recovers configs polluted by a leading status line", async (home) => {
     const configPath = configPathForHome(home);

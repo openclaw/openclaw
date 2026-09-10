@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { waitForAgentJob } from "./agent-job.js";
+import type { DedupeEntry } from "../server-shared.js";
+import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 
 let runSequence = 0;
 
@@ -14,6 +15,45 @@ describe("waitForAgentJob settled execution", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
   });
+
+  it.each(["ok", "error", "timeout"] as const)(
+    "preserves yielded execution only when chat settles successfully: %s",
+    async (status) => {
+      const runId = `chat-yielded-execution-${runSequence++}`;
+      await waitForAgentJob({ runId, source: "chat", timeoutMs: 0 });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 100 } });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          yielded: true,
+          livenessState: "paused",
+          executionSettled: true,
+        },
+      });
+      await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toBeNull();
+      setGatewayDedupeEntry({
+        dedupe: new Map<string, DedupeEntry>(),
+        key: `chat:${runId}`,
+        entry: {
+          ts: Date.now(),
+          ok: status === "ok",
+          payload: { runId, status, startedAt: 100, endedAt: 300 },
+        },
+      });
+      await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toMatchObject(
+        {
+          status,
+          endedAt: 300,
+          yielded: status === "ok" ? true : undefined,
+          livenessState: status === "ok" ? "paused" : undefined,
+        },
+      );
+    },
+  );
 
   it.each([
     {

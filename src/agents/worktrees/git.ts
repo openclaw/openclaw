@@ -75,6 +75,7 @@ export async function runGit(
   options: {
     env?: NodeJS.ProcessEnv;
     input?: string | Uint8Array;
+    maxOutputBytes?: number;
     timeoutMs?: number;
     signal?: AbortSignal;
   } = {},

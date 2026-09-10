@@ -5,6 +5,7 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   discoverLmstudioModels,
@@ -59,27 +60,6 @@ describe("lmstudio-models", () => {
       throw new Error("Expected request body to be a JSON string");
     }
     return JSON.parse(init.body) as unknown;
-  };
-  const cancelTrackedResponse = (
-    text: string,
-    init: ResponseInit,
-  ): {
-    response: Response;
-    wasCanceled: () => boolean;
-  } => {
-    let canceled = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(text));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    return {
-      response: new Response(stream, init),
-      wasCanceled: () => canceled,
-    };
   };
   const createModelLoadFetchMock = (params?: {
     key?: string;
@@ -596,7 +576,7 @@ describe("lmstudio-models", () => {
   });
 
   it("cancels the response body after a non-ok model discovery response", async () => {
-    const tracked = cancelTrackedResponse("unavailable", { status: 503 });
+    const tracked = cancelTrackedTextResponse("unavailable", { status: 503 });
     const fetchMock = vi.fn(async () => tracked.response);
 
     const result = await fetchLmstudioModels({
@@ -905,7 +885,7 @@ describe("lmstudio-models", () => {
   it("suppresses truncated model load error bodies", async () => {
     const credential = "split-credential-xyz";
     const body = `${"x".repeat(8 * 1024 - 2)}${credential}${"y".repeat(1000)}`;
-    const tracked = cancelTrackedResponse(body, { status: 503 });
+    const tracked = cancelTrackedTextResponse(body, { status: 503 });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (String(url).endsWith("/api/v1/models")) {

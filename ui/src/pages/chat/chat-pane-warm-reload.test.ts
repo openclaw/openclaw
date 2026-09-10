@@ -2,6 +2,7 @@
 import { IDBFactory } from "fake-indexeddb";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { loadChatHistory, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -43,8 +44,9 @@ describe("chat pane warm reload", () => {
     const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
     vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
     vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
-    pane.context = createInitializationContext();
-    pane.context.gateway.snapshot.phase = "connecting";
+    const context = createInitializationContext();
+    context.gateway.snapshot.phase = "connecting";
+    pane.context = { ...context, sessions: createTestSessionCapability(context.gateway) };
     pane.sessionKey = sessionKey;
     pane.chatMessagesBySession = memory;
     pane.sessionSnapshotStore = store;
@@ -56,7 +58,12 @@ describe("chat pane warm reload", () => {
       kind: "delta",
       messages: [],
       deltaCursor: "warm-reload-next-cursor",
-      sessionInfo: { key: sessionKey, kind: "direct", sessionId: "warm-reload-session" },
+      sessionInfo: {
+        key: sessionKey,
+        kind: "direct",
+        sessionId: "warm-reload-session",
+        updatedAt: 1,
+      },
     }));
     const client = createGatewayBrowserClientFixture({ request });
     const transcript = createTestTranscript();
@@ -93,6 +100,7 @@ describe("chat pane warm reload", () => {
       render(null, container);
       transcript.hostDisconnected();
       pane.disconnectedCallback();
+      pane.context.sessions.dispose();
       await clearStoredChatSnapshots();
     }
   });

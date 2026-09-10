@@ -234,6 +234,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
             USERPROFILE: sourceEnv.USERPROFILE,
             OPENCLAW_AGENT_DIR: sourceEnv.OPENCLAW_AGENT_DIR,
             PI_CODING_AGENT_DIR: sourceEnv.PI_CODING_AGENT_DIR,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: sourceEnv.OPENCLAW_BUNDLED_PLUGINS_DIR,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: sourceEnv.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
           },
         }),
         baseEnv: env,

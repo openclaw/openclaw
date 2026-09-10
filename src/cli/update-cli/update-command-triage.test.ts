@@ -21,6 +21,10 @@ const runInteractiveUpdateFailureAction = vi.hoisted(() =>
 );
 
 vi.mock("./update-command-report.js", () => ({ runInteractiveUpdateFailureAction }));
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
+  confirm: async () => true,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -326,29 +330,37 @@ describe("update failure triage boundary", () => {
     },
   );
 
-  it("keeps --yes non-interactive and preserves an unexpected updater exception", async () => {
-    const target: UpdateTriageTarget & { root: string } = await createInstalledTriage();
-    const failure = new Error("Package verification failed unexpectedly");
-    target.failureResult = {
-      ...failedUpdate,
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    };
+  it.each([
+    { yes: true, terminal: true },
+    { yes: false, terminal: false },
+  ])(
+    "preserves non-interactive updater failures (yes=$yes, terminal=$terminal)",
+    async ({ yes, terminal }) => {
+      const target: UpdateTriageTarget & { root: string } = await createInstalledTriage();
+      const failure = new Error("Package verification failed unexpectedly");
+      target.failureResult = {
+        ...failedUpdate,
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      };
 
-    await expect(
-      withUpdateFailureTriage({ yes: true }, target, async () => {
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
+      await withTriageTerminal(terminal, async () => {
+        await expect(
+          withUpdateFailureTriage({ yes }, target, async () => {
+            throw failure;
+          }),
+        ).rejects.toBe(failure);
+      });
 
-    const receipt = await readReceipt(target);
-    expect(receipt.args).toContain("--non-interactive");
-    expect(receipt.failure).toMatchObject({
-      error: failure.message,
-      result: { recovery: { serviceRestartSafe: false } },
-    });
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
-  });
+      const receipt = await readReceipt(target);
+      expect(receipt.args).toContain("--non-interactive");
+      expect(receipt.failure).toMatchObject({
+        error: failure.message,
+        result: { recovery: { serviceRestartSafe: false } },
+      });
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["reported", "unexpected"] as const)(
     "exports the final managed %s failure after cleanup without launching triage",
@@ -623,6 +635,7 @@ describe("update failure triage boundary", () => {
             path.join(bin, "claude"),
             `#!${process.execPath}\n` +
               `const fs = require("node:fs");\n` +
+              `if (process.argv.includes("--help")) { process.stdout.write("--safe-mode\\n"); process.exit(0); }\n` +
               `fs.appendFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({\n` +
               `  cwd: fs.realpathSync(process.cwd()),\n` +
               `  home: process.env.HOME,\n` +
@@ -633,7 +646,7 @@ describe("update failure triage boundary", () => {
               `  nodeOptions: process.env.NODE_OPTIONS,\n` +
               `  updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS,\n` +
               `  released: fs.existsSync(${JSON.stringify(releasedPath)}),\n` +
-              `  prompt: process.argv[2],\n` +
+              `  prompt: process.argv.at(-1),\n` +
               `}) + "\\n");\n` +
               `process.exitCode = ${agentExitCode};\n`,
             { mode: 0o700 },

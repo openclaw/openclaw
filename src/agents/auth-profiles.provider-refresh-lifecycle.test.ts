@@ -13,11 +13,8 @@ import {
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  oauthCred,
-  readAuthProfileStoreForTest,
-  storeWith,
-} from "./auth-profiles/oauth-test-utils.js";
+import { oauthCred } from "./auth-profiles/credential-fixtures.test-support.js";
+import { readAuthProfileStoreForTest, storeWith } from "./auth-profiles/oauth-test-utils.js";
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 

@@ -2,6 +2,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
@@ -30,18 +31,30 @@ export function resolveNodeSqliteLocation(location: string): string {
   return resolveSqliteFilesystemPath(location);
 }
 
+/** Preserve native Windows path prefixes before adding SQLite URI parameters. */
+function resolveSqliteFileUriPath(pathname: string, platform: NodeJS.Platform): string {
+  if (platform === "win32") {
+    const namespacedPath = path.win32.toNamespacedPath(path.win32.resolve(pathname));
+    // SQLite separates the query before decoding the Windows namespace prefix.
+    return `file:${encodeURIComponent(namespacedPath)}`;
+  }
+  return pathToFileURL(path.resolve(pathname)).href;
+}
+
+/** Open an existing writable database without SQLite's create-if-missing flag. */
+export function resolveExistingSqliteFileUri(
+  pathname: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return `${resolveSqliteFileUriPath(pathname, platform)}?mode=rw`;
+}
+
 /** Build an immutable SQLite URI without losing the Windows long-path namespace. */
 export function resolveImmutableSqliteFileUri(
   pathname: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
-  if (platform === "win32") {
-    const namespacedPath = path.win32.toNamespacedPath(path.win32.resolve(pathname));
-    // SQLite decodes path escapes after separating the query string, so the
-    // encoded \\?\ prefix reaches the Windows VFS without becoming URI syntax.
-    return `file:${encodeURIComponent(namespacedPath)}?mode=ro&immutable=1`;
-  }
-  return `${pathToFileURL(path.resolve(pathname)).href}?mode=ro&immutable=1`;
+  return `${resolveSqliteFileUriPath(pathname, platform)}?mode=ro&immutable=1`;
 }
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
@@ -92,6 +105,9 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
 export function requireNodeSqlite(): typeof import("node:sqlite") {
   installProcessWarningFilter();
   try {
+    ensureSqliteLibrarySelected();
+    // Bun follow-up: Revalidate close/dispose file release after oven-sh/bun#40005 ships.
+    // Bun 1.4.2 retains native statements after close; node:sqlite exposes no finalizer.
     const sqlite = require("node:sqlite") as typeof import("node:sqlite");
     assertSafeSqliteRuntime(sqlite);
     return sqlite;

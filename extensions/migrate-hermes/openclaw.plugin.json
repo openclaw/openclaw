@@ -1,5 +1,6 @@
 {
   "id": "migrate-hermes",
+  "categories": ["runtime"],
   "activation": {
     "onStartup": false
   },

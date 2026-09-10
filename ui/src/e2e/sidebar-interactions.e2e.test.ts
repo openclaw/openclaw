@@ -36,6 +36,10 @@ suite.define(() => {
       defaultAgentId: agentId,
       sessionKey: `agent:${agentId}:main`,
       sessionGroups: [group],
+      sessions: [
+        { key: `agent:${agentId}:main`, label: "Grouped conversation", category: group },
+        { key: `agent:${agentId}:notes`, label: "Ungrouped notes" },
+      ],
       featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
       methodResponses: {
         "sessions.catalog.list": {
@@ -97,6 +101,11 @@ suite.define(() => {
             selector: `[data-session-section="category:${group}"] .sidebar-new-session`,
             section: `category:${group}`,
             params: { agent: agentId, group },
+          },
+          {
+            selector: '[data-session-section="ungrouped"] .sidebar-new-session',
+            section: "ungrouped",
+            params: { agent: agentId },
           },
           {
             selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,

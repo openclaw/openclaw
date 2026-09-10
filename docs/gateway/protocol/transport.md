@@ -28,9 +28,9 @@ the wire protocol version and the root `openclaw` CLI release.
   `@openclaw/gateway-client/browser`.
 
 For application lifecycle guidance, see
-[Building a Gateway client](https://docs.openclaw.ai/gateway/clients). For apps
+[Building a Gateway client](/gateway/clients). For apps
 that supervise the Gateway as a child process, see
-[Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
+[Embedding OpenClaw](/gateway/embedding).
 
 ## Transport and framing
 

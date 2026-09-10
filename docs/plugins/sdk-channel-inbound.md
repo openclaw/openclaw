@@ -74,19 +74,28 @@ Normalize plugin-owned attachment records with `toInboundMediaFacts(...)`, then
 pass the resulting ordered array through the context's `media` field:
 
 ```ts
+// saved, nativeUrl, messageId, and caption are plugin-supplied values from the
+// platform event you just normalized.
 const media = toInboundMediaFacts([
   { path: saved.path, url: nativeUrl, contentType: saved.contentType, messageId },
 ]);
 
-const ctx = finalizeInboundContext({ Body: caption, media });
+const ctx = runtime.channel.reply.finalizeInboundContext({ Body: caption, media });
 ```
+
+`toInboundMediaFacts` is exported from this subpath. `finalizeInboundContext` is
+not: it is reached through the injected plugin runtime as
+`runtime.channel.reply.finalizeInboundContext`.
 
 Array position is attachment identity. Per-fact `transcribed`, `messageId`, and
 `workspaceDir` replace the legacy parallel index/workspace fields. The
 `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, `MediaTypes`,
 `MediaTranscribedIndexes`, `MediaWorkspaceDir`, and `MediaStaged` context fields,
 plus `buildChannelInboundMediaPayload(...)`, remain available only as deprecated
-compatibility. New plugins should not construct or read them.
+compatibility. The compatibility registry deprecated them on 2026-07-24 with a
+`removeAfter` date of 2026-10-01; see the
+[removal timeline](/plugins/sdk-migration/removal-timeline). New plugins should
+not construct or read them.
 
 Bundled/native channels that already receive the injected plugin runtime
 object can call the same helpers under `runtime.channel.inbound.*` instead of
@@ -253,7 +262,7 @@ registered. Use the finalizable live-preview helpers from
 
 ## Migration
 
-`runtime.channel.turn.*` runtime aliases were removed. Use:
+`runtime.channel.turn.*` runtime aliases were removed in 2026.5.27. Use:
 
 - `runtime.channel.inbound.run(...)` for raw inbound events.
 - `runtime.channel.inbound.dispatchReply(...)` for assembled reply contexts.
@@ -261,6 +270,11 @@ registered. Use the finalizable live-preview helpers from
 - `runtime.channel.inbound.runPreparedReply(...)`, deprecated, only for
   channel-owned prepared dispatch paths that already assemble their own
   dispatch closure.
+
+`runPreparedReply` is carried by the `plugin-runtime-api-compat-aliases`
+compatibility record, whose earliest removal review date is 2026-10-01. That
+date is a review date and not a scheduled removal: the alias stays until every
+enumerated surface is proven to have no bundled or published reader.
 
 New plugin code should not introduce `turn`-named channel APIs. Keep model or
 agent turn vocabulary inside agent/provider code; channel plugins use inbound,

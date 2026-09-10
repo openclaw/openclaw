@@ -157,3 +157,4 @@ Snapshots are stored in memory with a 10-minute validity window and a cap of 50 
 
 - [macOS app](/platforms/macos)
 - [macOS permissions](/platforms/mac/permissions)
+- [Codex Computer Use](/plugins/codex-computer-use)

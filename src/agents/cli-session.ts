@@ -1,7 +1,7 @@
 /**
  * CLI session persistence helpers.
- * Keeps provider-keyed session bindings, reuse fingerprints, and legacy
- * Claude CLI state in one normalized session-store contract.
+ * Keeps provider-keyed session bindings and reuse fingerprints in one
+ * normalized session-store contract.
  */
 import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -67,7 +67,7 @@ export function assertCliSessionBindingResultCommitAllowed(
   }
 }
 
-/** Store a CLI session binding and mirror it to legacy/simple session-id fields. */
+/** Store a CLI session binding and mirror it to the provider-keyed session-id map. */
 export function setCliSessionBinding(
   entry: SessionEntry,
   provider: string,
@@ -124,9 +124,6 @@ export function setCliSessionBinding(
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    entry.claudeCliSessionId = trimmed;
-  }
 }
 
 /** Remove the stored CLI session binding for one provider. */

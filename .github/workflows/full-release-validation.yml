@@ -172,6 +172,7 @@ env:
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
   NODE_VERSION: "24.19.0"
   RELEASE_ISOLATION_TOOLING_CONTRACT: "2"
+  FULL_RELEASE_DISPATCH_WITNESS_CONTRACT: "1"
 
 jobs:
   resolve_target:
@@ -197,6 +198,75 @@ jobs:
       candidate_request_json: ${{ steps.candidate_request.outputs.request_json }}
       candidate_request_sha256: ${{ steps.candidate_request.outputs.request_sha256 }}
     steps:
+      - name: Retain root dispatch inputs
+        id: dispatch_witness
+        env:
+          DISPATCH_SERVER_URL: ${{ github.server_url }}
+          DISPATCH_WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const { createHash } = require("node:crypto");
+          const env = process.env;
+          const descriptor = fs.openSync(env.GITHUB_EVENT_PATH, "r");
+          let event;
+          try {
+            const size = fs.fstatSync(descriptor).size;
+            if (size > 1024 * 1024) throw new Error("Event exceeds its byte limit");
+            const bytes = Buffer.alloc(size + 1);
+            const length = fs.readSync(descriptor, bytes, 0, bytes.length, 0);
+            if (length !== size) throw new Error("Event changed while reading");
+            event = JSON.parse(bytes.subarray(0, length).toString("utf8"));
+          } catch {
+            throw new Error("Invalid or oversized root dispatch event");
+          } finally {
+            fs.closeSync(descriptor);
+          }
+          const inputs = event?.inputs;
+          if (!inputs || typeof inputs !== "object" || Array.isArray(inputs) ||
+              Object.values(inputs).some((value) => !["string", "boolean", "number"].includes(typeof value) ||
+                (typeof value === "number" && !Number.isFinite(value)))) {
+            throw new Error("Invalid root dispatch inputs");
+          }
+          // The immutable workflow binds input types; event booleans use wire strings.
+          const wireInputs = Object.fromEntries(
+            Object.keys(inputs).sort().map((key) => [key, String(inputs[key])]),
+          );
+          const canonicalInputs = JSON.stringify(wireInputs);
+          if (Buffer.byteLength(canonicalInputs) > 128 * 1024) {
+            throw new Error("Root dispatch inputs exceed their byte limit");
+          }
+          const witness = {
+            kind: "openclaw.full-release-dispatch-inputs/v1",
+            serverUrl: env.DISPATCH_SERVER_URL,
+            repository: env.GITHUB_REPOSITORY,
+            workflowRef: env.DISPATCH_WORKFLOW_REF,
+            event: env.GITHUB_EVENT_NAME,
+            ref: env.GITHUB_REF,
+            sha: env.GITHUB_SHA,
+            runId: env.GITHUB_RUN_ID,
+            runAttempt: env.GITHUB_RUN_ATTEMPT,
+            inputsDigest: `sha256:${createHash("sha256").update(canonicalInputs).digest("hex")}`,
+          };
+          const bytes = JSON.stringify(witness) + "\n";
+          if (Buffer.byteLength(bytes) > 128 * 1024) {
+            throw new Error("Root dispatch witness exceeds its byte limit");
+          }
+          const directory = path.join(env.RUNNER_TEMP, "full-release-dispatch-inputs");
+          fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+          fs.writeFileSync(path.join(directory, "dispatch-inputs.json"), bytes, { mode: 0o600 });
+          NODE
+
+      - name: Upload root dispatch inputs
+        if: ${{ steps.dispatch_witness.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: full-release-dispatch-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/full-release-dispatch-inputs/dispatch-inputs.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Checkout trusted workflow helper
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

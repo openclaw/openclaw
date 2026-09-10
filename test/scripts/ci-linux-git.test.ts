@@ -1011,11 +1011,14 @@ posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
     expect(backoffs(report)).toEqual([]);
     expect(
       report.commands.every(
-        ({ tool, cwd }) =>
-          cwd === (tool === "node" ? report.workspace : path.join(report.workspace, "publish")),
+        ({ tool, args, cwd }) =>
+          cwd ===
+          (tool === "node" && args[0] === "--input-type=module"
+            ? report.workspace
+            : path.join(report.workspace, "publish")),
       ),
     ).toBe(true);
-    expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(1);
+    expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(2);
     expect(report.boundaries.map(({ name }) => name)).toEqual([
       "diff",
       "fetch:1",
@@ -1028,6 +1031,8 @@ posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
       "rebase:1",
       ...dependencyReads.map((args) => `show:${args[1]}`),
       "consumer:node",
+      "consumer:npm",
+      "consumer:node",
       "push:1",
       "exit",
     ]);
@@ -1036,14 +1041,15 @@ posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
 );
 
 posixIt.each([
-  { operation: "rebase", failure: 23 },
-  { operation: "push", failure: 23 },
-  { operation: "rebase", failure: 125 },
-  { operation: "push", failure: 143 },
+  { operation: "rebase", failure: 23, lockChange: false },
+  { operation: "push", failure: 23, lockChange: true },
+  { operation: "rebase", failure: 125, lockChange: false },
+  { operation: "push", failure: 143, lockChange: false },
 ])(
   "docs publication drains failed $operation ($failure) before abort/next fetch and then succeeds",
-  async ({ operation, failure }) => {
+  async ({ operation, failure, lockChange }) => {
     const report = await runDocs("Commit publish repo sync", {
+      env: lockChange ? { FIXTURE_DOCS_LOCK_AFTER_REBASE: "1" } : {},
       rebaseResults: operation === "rebase" ? [failure, 0] : [],
       pushResults: operation === "push" ? [failure, 0] : [],
     });
@@ -1067,6 +1073,24 @@ posixIt.each([
     expect(backoffs(report)).toEqual([2]);
     expect(report.output).toContain("Publish sync attempt 1 failed; retrying.");
     expect(report.pushes).toHaveLength(operation === "push" ? 2 : 1);
+    expect(report.commands.filter(({ tool }) => tool === "npm")).toHaveLength(lockChange ? 2 : 1);
+    if (operation === "push" && !lockChange) {
+      expect(report.output).toContain("Reused 1 unchanged successful page check(s).");
+    }
+  },
+  55_000,
+);
+
+posixIt(
+  "docs publication rejects invalid content introduced by the final rebase",
+  async () => {
+    const report = await runDocs("Commit publish repo sync", {
+      env: { FIXTURE_DOCS_MDX_AFTER_REBASE: "# Rebased page\n\n{unfinished\n" },
+    });
+    expect(report.code, report.output).toBe(125);
+    expect(report.output).toContain("Docs MDX check failed");
+    expect(report.pushes).toEqual([]);
+    expect(report.rebases.map(({ args }) => args)).toEqual([rebase]);
   },
   55_000,
 );

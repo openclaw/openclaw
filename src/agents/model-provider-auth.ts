@@ -165,9 +165,13 @@ export async function hasAuthForModelProvider(params: {
     params.store ??
     (params.discoverExternalCliAuth === false
       ? ensureAuthProfileStoreWithoutExternalProfiles(slowPathAgentDir, {
+          migrationProvider: provider,
+          config: params.cfg,
           allowKeychainPrompt: false,
         })
       : ensureAuthProfileStore(slowPathAgentDir, {
+          migrationProvider: provider,
+          config: params.cfg,
           externalCli: externalCliDiscoveryForProviderAuth({ cfg: params.cfg, provider }),
         }));
 

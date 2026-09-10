@@ -563,6 +563,9 @@ describe("DraftSubmissionFlow", () => {
       recoveryScope: "principal-a",
       recoveryScopeReady: true,
       request: vi.fn(async (method: string) => {
+        if (method === "models.list") {
+          return { models: [] };
+        }
         if (method === "worktrees.branches") {
           return { repositoryStatus: "git", branches: [] };
         }
@@ -588,6 +591,7 @@ describe("DraftSubmissionFlow", () => {
     const context = {
       basePath: "",
       gateway: {
+        subscribeEvents: () => () => undefined,
         connection: { gatewayUrl: "ws://gateway.example" },
         snapshot: {
           phase: "connected",

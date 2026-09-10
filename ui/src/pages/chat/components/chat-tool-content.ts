@@ -329,6 +329,7 @@ function renderToolCardModes(
   file: DiffFilePaths,
 ) {
   // Call IDs repeat across messages; scope DOM identity without copying source cards.
+  // Web Awesome links ARIA references in later observer callbacks; initial render needs them too.
   const id = `${messageKey}:${card.id}`;
   const active = isError ? "raw" : "diff";
   const modeLabel = t("chat.toolCards.viewMode");
@@ -341,16 +342,38 @@ function renderToolCardModes(
       without-scroll-controls
       ${ref((element) => syncTabGroupLabel(element, modeLabel))}
     >
-      <wa-tab slot="nav" id=${`${id}-diff-tab`} panel="diff" ?active=${active === "diff"}>
+      <wa-tab
+        slot="nav"
+        id=${`${id}-diff-tab`}
+        aria-controls=${`${id}-diff-panel`}
+        panel="diff"
+        ?active=${active === "diff"}
+      >
         ${t("chat.toolCards.diff")}
       </wa-tab>
-      <wa-tab slot="nav" id=${`${id}-raw-tab`} panel="raw" ?active=${active === "raw"}>
+      <wa-tab
+        slot="nav"
+        id=${`${id}-raw-tab`}
+        aria-controls=${`${id}-raw-panel`}
+        panel="raw"
+        ?active=${active === "raw"}
+      >
         ${t("chat.toolCards.raw")}
       </wa-tab>
-      <wa-tab-panel id=${`${id}-diff-panel`} name="diff" ?active=${active === "diff"}>
+      <wa-tab-panel
+        id=${`${id}-diff-panel`}
+        aria-labelledby=${`${id}-diff-tab`}
+        name="diff"
+        ?active=${active === "diff"}
+      >
         ${renderDiffBlock(diff, outcome, undefined, file)}
       </wa-tab-panel>
-      <wa-tab-panel id=${`${id}-raw-panel`} name="raw" ?active=${active === "raw"}>
+      <wa-tab-panel
+        id=${`${id}-raw-panel`}
+        aria-labelledby=${`${id}-raw-tab`}
+        name="raw"
+        ?active=${active === "raw"}
+      >
         ${renderToolDataBlock({
           ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
           text: card.outputText!,

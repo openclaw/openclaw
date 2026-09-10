@@ -924,7 +924,12 @@ describe("gateway server chat", () => {
     let webchatWs: WebSocket | undefined;
     agentDiscoveryMock.enabled = true;
     agentDiscoveryMock.models = [
-      { id: "claude-opus-4-6", provider: "anthropic", input: ["text", "image"] },
+      {
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        provider: "anthropic",
+        input: ["text", "image"],
+      },
     ];
 
     try {
@@ -2506,7 +2511,9 @@ describe("gateway server chat", () => {
         },
       });
       agentDiscoveryMock.enabled = true;
-      agentDiscoveryMock.models = [{ id: "gpt-5", provider: "openai", reasoning: true }];
+      agentDiscoveryMock.models = [
+        { id: "gpt-5", name: "GPT-5", provider: "openai", reasoning: true },
+      ];
       await prepareGatewayReplyRuntimeForTest({ force: true });
 
       const historyRes = await rpcReq<{

@@ -109,6 +109,7 @@ export {
   buildMatrixToolProgressPrompt,
   buildMatrixToolProgressTaskContent,
   buildMentionPrompt,
+  MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY,
   MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME,
 } from "./scenario-runtime-prompts.js";
 
@@ -427,22 +428,6 @@ export async function runConfigurableTopLevelScenario(params: {
   };
 }
 
-async function runTopLevelMentionScenario(params: {
-  accessToken: string;
-  actorId: MatrixQaActorId;
-  baseUrl: string;
-  observedEvents: MatrixQaObservedEvent[];
-  roomId: string;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
-  sutUserId: string;
-  timeoutMs: number;
-  tokenPrefix: string;
-  withMention?: boolean;
-}) {
-  return await runConfigurableTopLevelScenario(params);
-}
-
 export async function runDriverTopLevelMentionScenario(params: {
   baseUrl: string;
   driverAccessToken: string;
@@ -454,7 +439,7 @@ export async function runDriverTopLevelMentionScenario(params: {
   timeoutMs: number;
   tokenPrefix: string;
 }) {
-  return await runTopLevelMentionScenario({
+  return await runConfigurableTopLevelScenario({
     accessToken: params.driverAccessToken,
     actorId: "driver",
     baseUrl: params.baseUrl,
@@ -539,7 +524,7 @@ export async function runTopologyScopedTopLevelScenario(params: {
   withMention?: boolean;
 }) {
   const roomId = resolveMatrixQaScenarioRoomId(params.context, params.roomKey);
-  const result = await runTopLevelMentionScenario({
+  const result = await runConfigurableTopLevelScenario({
     accessToken: params.accessToken,
     actorId: params.actorId,
     baseUrl: params.context.baseUrl,

@@ -101,7 +101,6 @@ export async function updateNpmInstalledPlugins(params: {
   officialPluginUpdateChannel?: UpdateChannel;
   coreVersion?: string;
   versionBoundPluginIds?: ReadonlySet<string>;
-  dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
@@ -483,7 +482,6 @@ export async function updateNpmInstalledPlugins(params: {
           effectiveSpec,
           extensionsDir,
           timeoutMs: params.timeoutMs,
-          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
           onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
           expectedIntegrity,
@@ -588,6 +586,7 @@ export async function updateNpmInstalledPlugins(params: {
           updateChannel,
           timeoutMs: params.timeoutMs,
           channelFallbackSuffix,
+          checkNewerExactPinnedClawHubDefaultLine: Boolean(trustedOfficialClawHubInstall),
         }),
       );
       completedCanonicalUpdates.add(pluginId);
@@ -661,13 +660,16 @@ export async function updateNpmInstalledPlugins(params: {
     completedCanonicalUpdates.add(pluginId);
 
     outcomes.push(
-      buildPluginUpdateVersionOutcome({
+      await buildPluginUpdateVersionOutcome({
         pluginId,
         record,
         result,
         currentVersion,
         nextVersion,
         channelFallbackSuffix,
+        checkNewerExactPinnedClawHubDefaultLine: Boolean(trustedOfficialClawHubInstall),
+        updateChannel,
+        timeoutMs: params.timeoutMs,
       }),
     );
   }

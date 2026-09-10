@@ -41,6 +41,7 @@ import {
 } from "../secrets/runtime-degraded-state.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import {
   summarizeActionableTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
@@ -136,27 +137,6 @@ function compareSessionCandidatesByUpdatedAt(
   right: SessionEntrySummary,
 ) {
   return (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0);
-}
-
-function selectRecentSessionCandidates(
-  candidates: SessionEntrySummary[],
-  limit: number,
-): SessionEntrySummary[] {
-  const selected: SessionEntrySummary[] = [];
-  for (const candidate of candidates) {
-    const insertAt = selected.findIndex(
-      (selectedCandidate) => compareSessionCandidatesByUpdatedAt(candidate, selectedCandidate) < 0,
-    );
-    if (insertAt >= 0) {
-      selected.splice(insertAt, 0, candidate);
-      if (selected.length > limit) {
-        selected.pop();
-      }
-    } else if (selected.length < limit) {
-      selected.push(candidate);
-    }
-  }
-  return selected;
 }
 
 async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
@@ -519,7 +499,11 @@ export async function getStatusSummary(
   );
   const recent = sessionDetails
     ? await sessionDetails.buildSessionRows(
-        selectRecentSessionCandidates(sessionStores.recent, RECENT_SESSION_LIMIT),
+        sortAndLimitBy(
+          sessionStores.recent,
+          RECENT_SESSION_LIMIT,
+          compareSessionCandidatesByUpdatedAt,
+        ),
       )
     : [];
   const hostDesktopStatus =

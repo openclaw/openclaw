@@ -58,7 +58,6 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
 
-type NoticeAppender = typeof appendBoardEventNotice;
 type CanvasDocumentReader = typeof readCanvasDocumentHtmlSource;
 type McpAppDependencies = {
   resolveActiveView: typeof resolveMcpAppActiveView;
@@ -118,7 +117,6 @@ function assertCapabilityParamsSize(
 
 export function createBoardHandlers(
   store: BoardStore,
-  appendNotice: NoticeAppender = appendBoardEventNotice,
   readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
   dependencies: BoardHandlerDependencies = {},
 ): GatewayRequestHandlers {
@@ -602,7 +600,7 @@ export function createBoardHandlers(
             return;
           }
           authority.assertActive();
-          const appended = appendNotice({
+          const appended = appendBoardEventNotice({
             sessionKey: identity.sessionKey,
             agentId: identity.agentId,
             widget: identity.name,

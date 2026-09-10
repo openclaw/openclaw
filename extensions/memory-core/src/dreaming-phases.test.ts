@@ -882,63 +882,52 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
-  it("checkpoints daily ingestion and skips unchanged daily files", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    const dailyPath = path.join(workspaceDir, "memory", "2026-04-05.md");
-    await fs.writeFile(
-      dailyPath,
-      ["# 2026-04-05", "", "- Move backups to S3 Glacier."].join("\n"),
-      "utf-8",
-    );
-
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  // This test asserts inline-mode side effects on the daily
-                  // file; pin storage explicitly after the default flipped to
-                  // "separate" in #66328.
-                  storage: { mode: "inline", separateReports: false },
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 2,
-                    },
+  it("checkpoints daily ingestion without recounting unchanged daily files", async () => {
+    await withDreamingTestClock(async () => {
+      setDreamingTestTime();
+      const workspaceDir = await createDreamingWorkspace();
+      await writeDailyNote(workspaceDir, ["# Backups", "", "- Move backups to S3 Glacier."]);
+      const { beforeAgentReply } = createHarness(
+        {
+          plugins: {
+            entries: {
+              "memory-core": {
+                config: {
+                  dreaming: {
+                    enabled: true,
+                    timezone: "UTC",
+                    storage: { mode: "separate", separateReports: false },
+                    phases: { light: { enabled: true, limit: 20, lookbackDays: 2 } },
                   },
                 },
               },
             },
           },
         },
-      },
-      workspaceDir,
-    );
-
-    const readSpy = vi.spyOn(fs, "readFile");
-    try {
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
+        workspaceDir,
       );
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    } finally {
-      readSpy.mockRestore();
-    }
 
-    const dailyReadCount = readSpy.mock.calls.filter(
-      ([target]) => typeof target === "string" && target === dailyPath,
-    ).length;
-    expect(dailyReadCount).toBeLessThanOrEqual(1);
-    const dailyIngestion = await dreamingTestState.readDailyIngestionState(workspaceDir);
-    expect(Object.keys(dailyIngestion.files)).toHaveLength(1);
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 0);
+      const first = await shortTermTesting.readRecallStore(
+        workspaceDir,
+        DREAMING_TEST_BASE_TIME.toISOString(),
+      );
+      expect(Object.values(first.entries)).toEqual([
+        expect.objectContaining({ dailyCount: 1, snippet: expect.stringContaining("S3 Glacier") }),
+      ]);
+      const checkpoint = await dreamingTestState.readDailyIngestionState(workspaceDir);
+      expect(Object.keys(checkpoint.files)).toEqual([`memory/${DREAMING_TEST_DAY}.md`]);
+
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
+      const repeated = await shortTermTesting.readRecallStore(
+        workspaceDir,
+        new Date(DREAMING_TEST_BASE_TIME.getTime() + 60_000).toISOString(),
+      );
+      expect(Object.values(repeated.entries)).toEqual([
+        expect.objectContaining({ dailyCount: 1, snippet: expect.stringContaining("S3 Glacier") }),
+      ]);
+      expect(await dreamingTestState.readDailyIngestionState(workspaceDir)).toEqual(checkpoint);
+    });
   });
 
   it("ingests recent daily memory files even before recall traffic exists", async () => {
@@ -2321,7 +2310,7 @@ describe("memory-core dreaming phases", () => {
     );
   });
 
-  it("promotes one recurring bullet across three contextualized day files", async () => {
+  it("requires interactive queries before promoting a recurring daily bullet", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const days = ["2026-03-25", "2026-03-30", "2026-04-04"];
     for (const day of days) {
@@ -2351,24 +2340,62 @@ describe("memory-core dreaming phases", () => {
       );
     });
 
-    const ranked = await rankShortTermPromotionCandidates({
+    await expect(
+      rankShortTermPromotionCandidates({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+      }),
+    ).resolves.toHaveLength(0);
+
+    const dailyOnly = await rankShortTermPromotionCandidates({
       workspaceDir,
+      minScore: 0,
+      minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
-    expect(ranked).toHaveLength(1);
-    expect(ranked[0]).toMatchObject({
+    expect(dailyOnly).toHaveLength(1);
+    expect(dailyOnly[0]).toMatchObject({
       path: "memory/2026-04-04.md",
       dailyCount: 3,
       signalCount: 3,
-      uniqueQueries: 3,
+      uniqueQueries: 0,
       recallDays: days.toReversed(),
       provenance: { originClass: "agent" },
     });
-    expect(ranked[0]?.key).toMatch(/^memory:claim:/u);
+    expect(dailyOnly[0]?.key).toMatch(/^memory:claim:/u);
+
+    for (const query of ["router backup storage", "encrypted retention", "glacier backups"]) {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query,
+        dayBucket: "2026-04-05",
+        nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+        dedupeByQueryPerDay: true,
+        results: [
+          {
+            path: "memory/2026-04-04.md",
+            startLine: 5,
+            endLine: 5,
+            score: 0.92,
+            snippet: "Move router backups to S3 Glacier with encrypted retention policy.",
+            source: "memory",
+          },
+        ],
+      });
+    }
+
+    const ranked = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0]?.uniqueQueries).toBe(3);
 
     const applied = await applyShortTermPromotions({
       workspaceDir,
       candidates: ranked,
+      minScore: 0,
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
     expect(applied.applied).toBe(1);

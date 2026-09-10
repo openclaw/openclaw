@@ -197,20 +197,36 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(credentials.if ?? "").not.toMatch(/\b(?:always|cancelled|failure|success)\s*\(/u);
 
     const preflight = expectDefined(credentials.run, "credential validation command");
-    for (const key of [undefined, "synthetic-openai-key"]) {
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", preflight], {
-        encoding: "utf8",
-        env: {
-          PATH: process.env.PATH,
-          CREDENTIALS: "openai",
-          ...(key ? { OPENAI_API_KEY: key } : {}),
+    for (const { credential, key, label, alternatives } of [
+      { credential: "openai", key: "OPENAI_API_KEY", label: "OpenAI", alternatives: {} },
+      { credential: "anthropic", key: "ANTHROPIC_API_TOKEN", label: "Anthropic", alternatives: {} },
+      {
+        credential: "anthropic-api-key",
+        key: "ANTHROPIC_API_KEY",
+        label: "Anthropic API key",
+        alternatives: {
+          ANTHROPIC_API_TOKEN: "synthetic-oauth-token",
+          OPENCLAW_CLAUDE_CREDENTIALS_JSON: "synthetic-claude-credentials",
+          OPENCLAW_CLAUDE_JSON: "synthetic-claude-config",
         },
-      });
-      expect(result.status, result.stderr).toBe(key ? 0 : 1);
-      if (!key) {
-        expect(result.stderr).toContain("Missing credential for OpenAI");
+      },
+    ]) {
+      for (const authenticated of [false, true]) {
+        const result = spawnSync("bash", ["--noprofile", "--norc", "-c", preflight], {
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH,
+            CREDENTIALS: credential,
+            ...alternatives,
+            ...(authenticated ? { [key]: "synthetic-api-key" } : {}),
+          },
+        });
+        expect(result.status, result.stderr).toBe(authenticated ? 0 : 1);
+        if (!authenticated) {
+          expect(result.stderr).toContain(`Missing credential for ${label}`);
+        }
+        expect(result.stdout + result.stderr).not.toContain("synthetic-");
       }
-      expect(result.stdout + result.stderr).not.toContain("synthetic-openai-key");
     }
 
     for (const state of [
@@ -438,6 +454,80 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(plan.dockerE2e.omitted.map((entry: MatrixEntry) => entry.id)).toContain("core");
     expect(plan.liveModels.omitted.map((entry: MatrixEntry) => entry.id)).toContain("anthropic");
   });
+
+  it.each(["stable", "full"])(
+    "keeps live Anthropic cache proof in both %s release-core workflow steps",
+    (releaseProfile) => {
+      const definition = workflow();
+      const job = requiredJob(definition, "validate_docker_e2e");
+      const directory = tempDirs.make("openclaw-release-core-cache-");
+      symlinkSync(process.cwd(), path.join(directory, ".release-harness"), "dir");
+      const expressions: Record<string, string> = {
+        "inputs.release_test_profile": releaseProfile,
+        "inputs.include_openwebui": "false",
+        "matrix.chunk_id": "core",
+        "steps.plan.outputs.needs_package": "1",
+        "steps.plan.outputs.needs_live_image": "0",
+        "needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id": "",
+      };
+      const render = (value: string) =>
+        value.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_, expression: string) =>
+          expectDefined(expressions[expression], `release-core fixture expression ${expression}`),
+        );
+      for (const stepName of ["Plan Docker E2E chunk", "Run Docker E2E chunk"]) {
+        const step = expectDefined(
+          job.steps.find((entry) => entry.name === stepName),
+          stepName,
+        );
+        // Preserve every scheduler selector from the real workflow. PLAN_JSON
+        // only substitutes scheduling for execution; it does not change lanes.
+        const selectors = Object.fromEntries(
+          Object.entries({ ...definition.env, ...job.env, ...step.env })
+            .filter(([key]) =>
+              /^(?:OPENCLAW_DOCKER_ALL_|DOCKER_E2E_CHUNK$|CHUNK$|INCLUDE_OPENWEBUI$|RELEASE_TEST_PROFILE$)/u.test(
+                key,
+              ),
+            )
+            .map(([key, value]) => [key, render(value)]),
+        );
+        const result = spawnSync(
+          "bash",
+          ["--noprofile", "--norc", "-c", render(expectDefined(step.run, stepName))],
+          {
+            cwd: directory,
+            encoding: "utf8",
+            env: {
+              PATH: process.env.PATH,
+              GITHUB_WORKSPACE: process.cwd(),
+              GITHUB_OUTPUT: path.join(directory, "outputs"),
+              TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
+              OPENCLAW_DOCKER_E2E_REPO_ROOT: process.cwd(),
+              ...selectors,
+              OPENCLAW_DOCKER_ALL_PLAN_JSON: "1",
+            },
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        const plan = JSON.parse(
+          stepName === "Plan Docker E2E chunk"
+            ? readFileSync(
+                path.join(directory, ".artifacts/docker-tests/release-core-plan.json"),
+                "utf8",
+              )
+            : result.stdout,
+        );
+        expect(plan.releaseProfile).toBe(releaseProfile);
+        expect(plan.lanes).toContainEqual(
+          expect.objectContaining({
+            name: "live-anthropic-cache",
+            live: true,
+            imageKind: "functional",
+          }),
+        );
+        expect(plan.credentials).toContain("anthropic-api-key");
+      }
+    },
+  );
 
   it("keeps stable release jobs broad enough for stable-required lanes", () => {
     const plan = createReleaseWorkflowMatrixPlan({

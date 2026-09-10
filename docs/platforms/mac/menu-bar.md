@@ -106,3 +106,4 @@ Manual Cron refreshes and successful job changes supersede older reads, so an in
 
 - [macOS app](/platforms/macos)
 - [Menu bar icon](/platforms/mac/icon)
+- [Usage tracking](/concepts/usage-tracking)

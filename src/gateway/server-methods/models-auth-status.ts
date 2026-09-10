@@ -133,11 +133,7 @@ export function invalidateModelAuthStatusCache(): void {
 async function refreshModelAuthStatusRuntimeState(): Promise<void> {
   // Durable and CLI auth refresh into the transient prepared owner below. Do not clear the
   // process-wide warmed auth state for a read; mutations still invalidate it explicitly.
-  try {
-    await refreshActiveProviderAuthRuntimeSnapshot();
-  } catch (err) {
-    log.warn(`runtime auth snapshot refresh before auth status failed: ${formatForLog(err)}`);
-  }
+  await refreshActiveProviderAuthRuntimeSnapshot();
 }
 
 function readProviderParam(params: Record<string, unknown>): string | null {
@@ -186,6 +182,7 @@ function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps 
 // must remove every owning store or stale profiles reappear on the next status
 // read and provider-auth warmup.
 async function removeProviderAuthProfilesAcrossOwnerStores(params: {
+  cfg: OpenClawConfig;
   provider: string;
   agentDir: string;
   profileIds: string[];
@@ -201,6 +198,7 @@ async function removeProviderAuthProfilesAcrossOwnerStores(params: {
   }
   for (const ownerAgentDir of ownerAgentDirs) {
     const updatedStore = await removeProviderAuthProfilesWithLock({
+      cfg: params.cfg,
       provider: params.provider,
       agentDir: ownerAgentDir,
     });
@@ -522,8 +520,13 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       const removed = selection.profileIds
-        ? await removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: removedProfiles })
+        ? await removeAuthProfilesAcrossOwnerStores({
+            cfg,
+            agentDir,
+            profileIds: removedProfiles,
+          })
         : await removeProviderAuthProfilesAcrossOwnerStores({
+            cfg,
             provider,
             agentDir,
             profileIds: removedProfiles,
@@ -703,7 +706,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const configBoundAuthProviders = new Set(
         Object.entries(store.profiles)
           .filter(([profileId]) => configBoundProfileIds.has(profileId))
-          .map(([, profile]) => resolveProviderIdForAuth(profile.provider, authAliasLookupParams)),
+          .map(([, profile]) =>
+            resolveProviderIdForAuth(profile.provider, {
+              ...authAliasLookupParams,
+              storedCredential: true,
+            }),
+          ),
       );
       const providers = authHealth.providers.map((prov) =>
         mapProvider(

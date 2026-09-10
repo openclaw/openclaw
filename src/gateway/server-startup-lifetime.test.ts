@@ -1,7 +1,15 @@
+import assert from "node:assert/strict";
 import { createServer } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  getLegacyPluginSdkResourceHost,
+  type LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -54,20 +62,142 @@ function createStartupTestState(label: string) {
   });
 }
 
-describe("Gateway startup lifetime", () => {
-  it("closes startup tracing when invalid config prevents bootstrap from returning", async () => {
-    startupTraceEventLoopDelay.instances.length = 0;
-    const state = await createStartupTestState("gateway-invalid-config-startup-trace");
-    state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
-    await state.writeConfig({ gateway: { mode: 42 } });
-    state.applyEnv();
-    try {
-      await expect(createGatewayKernel()).rejects.toThrow("Invalid config");
-      expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
-    } finally {
-      await state.cleanup();
+function registerSecretsClearFailure(
+  register: (hook: () => void) => void,
+  error: Error,
+): () => void {
+  let failure: Error | undefined = error;
+  register(function failRegisteredSecretsClear() {
+    if (failure) {
+      throw failure;
     }
   });
+  return () => {
+    failure = undefined;
+  };
+}
+
+describe("Gateway startup lifetime", () => {
+  it.each([
+    { disposalFails: false, clearFails: false },
+    { disposalFails: true, clearFails: false },
+    { disposalFails: true, clearFails: true },
+  ])(
+    "closes early startup owners when invalid config prevents bootstrap (SDK failure: $disposalFails, clear failure: $clearFails)",
+    async ({ disposalFails, clearFails }) => {
+      startupTraceEventLoopDelay.instances.length = 0;
+      const state = await createStartupTestState("gateway-invalid-config-startup-trace");
+      state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
+      await state.writeConfig({ gateway: { mode: 42 } });
+      state.applyEnv();
+      const bootstrapModule = await import("./server-startup-bootstrap.js");
+      const metadataModule = await import("../plugins/plugin-metadata-lifecycle.js");
+      const secretsModule = await import("../secrets/runtime-state.js");
+      const bootstrap = bootstrapModule.prepareGatewayServerBootstrap;
+      const retainMetadata = metadataModule.retainGatewayPluginMetadata;
+      const releases: Array<ReturnType<typeof vi.fn<() => void>>> = [];
+      const metadataSpy = vi
+        .spyOn(metadataModule, "retainGatewayPluginMetadata")
+        .mockImplementation(() => {
+          const release = vi.fn(retainMetadata());
+          releases.push(release);
+          return release;
+        });
+      const clearSecretsSpy = vi.spyOn(secretsModule, "clearSecretsRuntimeSnapshotState");
+      const clearError = new Error("synthetic registered secrets clear failure");
+      const stopClearFailure = clearFails
+        ? registerSecretsClearFailure(
+            secretsModule.registerSecretsRuntimeStateClearHook,
+            clearError,
+          )
+        : undefined;
+      const database = new DatabaseSync(":memory:");
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const disposalError = new Error("synthetic early SDK disposal failure");
+      let sdkHost: LegacyPluginSdkResourceHost | undefined;
+      let startupError: unknown;
+      const bootstrapSpy = vi
+        .spyOn(bootstrapModule, "prepareGatewayServerBootstrap")
+        .mockImplementation(async (...args) => {
+          sdkHost = getLegacyPluginSdkResourceHost();
+          const inspection = new PluginRegistryInspectionResources();
+          inspection.attach(createEmptyPluginRegistry());
+          inspection.register("startup-provider", {
+            id: "native",
+            dispose: async () => {
+              entered.resolve();
+              await resume.promise;
+              database.close();
+              if (disposalFails) {
+                throw disposalError;
+              }
+            },
+          });
+          sdkHost.adopt(inspection, inspection.retain());
+          await inspection.release();
+          try {
+            return await bootstrap(...args);
+          } catch (error) {
+            startupError = error;
+            throw error;
+          }
+        });
+      const outcome = createGatewayKernel().catch((error: unknown) => error);
+      try {
+        await entered.promise;
+        expect(database.isOpen).toBe(true);
+        expect(releases).toHaveLength(1);
+        expect(releases[0]).not.toHaveBeenCalled();
+        expect(clearSecretsSpy).not.toHaveBeenCalled();
+        resume.resolve();
+        const failure = await outcome;
+        expect(startupError).toBeInstanceOf(Error);
+        if (disposalFails) {
+          const sdkFailure = await sdkHost?.close().catch((error: unknown) => error);
+          assert(failure instanceof AggregateError);
+          const failures: unknown[] = failure.errors;
+          expect(failure.name).toBe("GatewayStartupCleanupError");
+          expect(failure.cause).toBe(startupError);
+          expect(failures).toHaveLength(2);
+          expect(failures[0]).toBe(startupError);
+          if (clearFails) {
+            const cleanupFailure = failures[1];
+            assert(cleanupFailure instanceof AggregateError);
+            const cleanupErrors: unknown[] = cleanupFailure.errors;
+            expect(cleanupFailure.cause).toBe(sdkFailure);
+            expect(cleanupErrors).toHaveLength(2);
+            expect(cleanupErrors[0]).toBe(sdkFailure);
+            expect(cleanupErrors[1]).toBe(clearError);
+          } else {
+            expect(failures[1]).toBe(sdkFailure);
+          }
+        } else {
+          expect(failure).toBe(startupError);
+        }
+        expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
+        expect(database.isOpen).toBe(false);
+        expect(clearSecretsSpy).toHaveBeenCalledOnce();
+        expect(releases[0]).toHaveBeenCalledOnce();
+      } finally {
+        stopClearFailure?.();
+        resume.resolve();
+        await outcome;
+        bootstrapSpy.mockRestore();
+        metadataSpy.mockRestore();
+        clearSecretsSpy.mockRestore();
+        await sdkHost?.close().catch(() => undefined);
+        if (database.isOpen) {
+          database.close();
+        }
+        secretsModule.clearSecretsRuntimeSnapshotState();
+        for (const release of releases) {
+          release();
+        }
+        await state.cleanup();
+      }
+    },
+  );
 
   it("closes startup tracing when required TLS material is unavailable", async () => {
     startupTraceEventLoopDelay.instances.length = 0;
@@ -193,6 +323,7 @@ describe("Gateway startup lifetime", () => {
         });
       const cleanupOwner = {
         stop: vi.fn(async () => {
+          expect(getLegacyPluginSdkResourceHost()).toBe(kernel?.sdkResourceHost);
           if (failCleanup) {
             throw cleanupError;
           }

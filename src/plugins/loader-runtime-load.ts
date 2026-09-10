@@ -92,14 +92,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 export async function acquirePluginRegistryForInspection(
   options: Omit<PluginLoadOptions, "activate" | "cache"> = {},
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
-  const resources = new PluginRegistryInspectionResources();
-  try {
-    const registry = loadOpenClawPluginsCore(
+  return acquireRegistryResources((resources) =>
+    loadOpenClawPluginsCore(
       { ...options, activate: false, cache: false },
       loaderBindings,
       undefined,
       resources,
-    );
+    ),
+  );
+}
+
+async function acquireRegistryResources(
+  load: (resources: PluginRegistryInspectionResources) => PluginRegistry,
+): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
+  const resources = new PluginRegistryInspectionResources();
+  try {
+    const registry = load(resources);
     return { registry, release: () => resources.release() };
   } catch (error) {
     try {
@@ -115,12 +123,32 @@ export async function acquirePluginRegistryForInspection(
   }
 }
 
+type ScopedRuntimeOverrides = Omit<InternalPluginLoadOverrides, "runtime"> & {
+  runtime: Pick<PluginRuntime, "config"> &
+    Partial<Pick<PluginRuntime, "modelAuth" | "modelConfig">>;
+};
+
 export function loadOpenClawPluginsWithInternalOverrides(
   options: PluginLoadOptions & { cache: false },
-  overrides: Omit<InternalPluginLoadOverrides, "runtime"> & {
-    runtime: Pick<PluginRuntime, "config"> &
-      Partial<Pick<PluginRuntime, "modelAuth" | "modelConfig">>;
-  },
+  overrides: ScopedRuntimeOverrides,
+): PluginRegistry {
+  return loadRegistryWithInternalOverrides(options, overrides);
+}
+
+/** Owns the same narrow capability runtime without publishing or caching its registrations. */
+export function acquirePluginRegistryWithInternalOverrides(
+  options: PluginLoadOptions & { cache: false; activate: false },
+  overrides: ScopedRuntimeOverrides,
+): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
+  return acquireRegistryResources((resources) =>
+    loadRegistryWithInternalOverrides(options, overrides, resources),
+  );
+}
+
+function loadRegistryWithInternalOverrides(
+  options: PluginLoadOptions & { cache: false },
+  overrides: ScopedRuntimeOverrides,
+  resources?: PluginRegistryInspectionResources,
 ): PluginRegistry {
   const runtimeModelAuth = overrides.runtime.modelAuth ??
     options.runtimeOptions?.modelAuth ?? { ...loaderBindings.modelAuth };
@@ -141,7 +169,7 @@ export function loadOpenClawPluginsWithInternalOverrides(
   delete runtimeDescriptors.modelAuth;
   delete runtimeDescriptors.modelConfig;
   Object.defineProperties(runtime, runtimeDescriptors);
-  return loadOpenClawPluginsCore(options, loaderBindings, { ...overrides, runtime });
+  return loadOpenClawPluginsCore(options, loaderBindings, { ...overrides, runtime }, resources);
 }
 
 export function resolveNativePluginModelAuth(): PluginRuntime["modelAuth"] {

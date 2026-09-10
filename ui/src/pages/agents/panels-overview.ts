@@ -1,5 +1,6 @@
 // Control UI view renders agents panels overview screen content.
 import { html, nothing } from "lit";
+import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -19,6 +20,7 @@ import {
   type AgentContext,
   buildAgentContext,
   buildModelOptions,
+  createPrimaryModelExclusion,
   normalizeModelValue,
   resolveAgentConfig,
   resolveAgentTextAvatar,
@@ -29,12 +31,16 @@ import {
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import type { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
   emoji: string | null;
   avatar: string | null;
 };
+
+/** Authenticated image lease the settings preview shares with the roster. */
+export type IdentityAvatarLoader = Pick<IdentityAvatarController, "resolve" | "imageErrorHandler">;
 
 export function renderAgentOverview(params: {
   agent: AgentsListResult["agents"][number];
@@ -46,6 +52,7 @@ export function renderAgentOverview(params: {
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   identityDraft: AgentIdentityDraft;
+  identityAvatarLoader: IdentityAvatarLoader;
   identitySaving: boolean;
   identityError: string | null;
   canUpdateConfig: boolean;
@@ -108,8 +115,14 @@ export function renderAgentOverview(params: {
     identityDraft.name ?? params.agentIdentity?.name ?? agent.identity?.name ?? agent.name ?? "";
   const identityEmoji =
     identityDraft.emoji ?? params.agentIdentity?.emoji ?? agent.identity?.emoji ?? "";
+  // Upload previews are local data URLs; persisted avatars live on a protected
+  // Gateway route and must resolve through the authenticated image lease.
+  const persistedAvatarUrl = identityDraft.avatar
+    ? null
+    : resolveAgentAvatarUrl(agent, params.agentIdentity);
   const identityAvatarUrl =
-    identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
+    identityDraft.avatar ??
+    (persistedAvatarUrl ? params.identityAvatarLoader.resolve(persistedAvatarUrl) : null);
   const identityAvatarText =
     resolveAgentTextAvatar(agent, params.agentIdentity) ??
     (deriveAvatarInitial(identityName || agent.id) || "?");
@@ -132,6 +145,7 @@ export function renderAgentOverview(params: {
   // Same catalog the primary picker offers; the field hides the effective
   // primary and current chain itself. Order is preserved: a pick appends.
   const fallbackOptions = buildModelOptions(configForm, null, params.modelCatalog, agent.id);
+  const isPrimaryModel = createPrimaryModelExclusion(configForm, effectivePrimary, agent.id);
 
   return html`
     ${renderSettingsSection(
@@ -142,7 +156,16 @@ export function renderAgentOverview(params: {
             <span class="agent-identity-editor__avatar" aria-hidden="true">
               ${
                 identityAvatarUrl
-                  ? html`<img src=${identityAvatarUrl} alt="" decoding="async" />`
+                  ? html`<img
+                      src=${identityAvatarUrl}
+                      alt=""
+                      decoding="async"
+                      @error=${
+                        persistedAvatarUrl
+                          ? params.identityAvatarLoader.imageErrorHandler(persistedAvatarUrl)
+                          : undefined
+                      }
+                    />`
                   : html`<span class="agent-identity-editor__avatar-text"
                       >${identityAvatarText}</span
                     >`
@@ -309,7 +332,8 @@ export function renderAgentOverview(params: {
               class="agent-fallbacks"
               .options=${fallbackOptions}
               .value=${fallbackChips}
-              .exclude=${effectivePrimary ? [effectivePrimary] : []}
+              .isExcluded=${isPrimaryModel}
+              .getValueKey=${normalizeAgentModelRefForConfig}
               .placeholder=${t("agents.overview.addFallback")}
               .accessibleLabel=${t("agents.overview.fallbacks")}
               .allowCustom=${true}

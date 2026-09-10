@@ -4,6 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
@@ -736,77 +741,122 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(host.chatStream).toBeNull();
   });
 
-  it("publishes the canonical global row key for a selected agent alias", () => {
-    const reconcileRunTerminal = vi.fn();
-    const host = makeHost({
+  it.each([
+    { sessionKey: "global", localRows: true, yielded: false, reentrant: false, unbound: false },
+    {
       sessionKey: "agent:work:main",
-      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
-      chatRunId: "run-global",
-      chatStream: "streaming",
-      sessionsResult: makeSessionsResult([
-        {
-          key: "global",
-          hasActiveRun: true,
-          activeRunIds: ["run-global"],
-          status: "running",
-        },
-      ]),
-      sessions: {
-        reconcileRunTerminal,
-      },
-    });
-
-    reconcileChatRunLifecycle(host, {
-      outcome: "done",
-      sessionStatus: "done",
-      runId: "run-global",
+      localRows: true,
+      yielded: false,
+      reentrant: false,
+      unbound: false,
+    },
+    {
       sessionKey: "agent:work:main",
-      clearLocalRun: true,
-      clearChatStream: true,
-    });
-
-    expect(host.sessionsResult?.sessions[0]).toMatchObject({
-      key: "global",
-      hasActiveRun: false,
-      status: "done",
-    });
-    expect(reconcileRunTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-global",
-        sessionKeys: expect.arrayContaining(["agent:work:main", "global"]),
-      }),
-    );
-  });
-
-  it("publishes the canonical global key before the local session list loads", () => {
-    const reconcileRunTerminal = vi.fn();
-    const host = makeHost({
+      localRows: false,
+      yielded: false,
+      reentrant: false,
+      unbound: false,
+    },
+    { sessionKey: "global", localRows: true, yielded: true, reentrant: false, unbound: false },
+    {
       sessionKey: "agent:work:main",
-      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
-      chatRunId: "run-global",
-      chatStream: "streaming",
-      sessionsResult: null,
-      sessions: {
-        reconcileRunTerminal,
-      },
-    });
+      localRows: false,
+      yielded: true,
+      reentrant: false,
+      unbound: false,
+    },
+    { sessionKey: "global", localRows: true, yielded: false, reentrant: true, unbound: false },
+    { sessionKey: "global", localRows: true, yielded: false, reentrant: false, unbound: true },
+  ])(
+    "settles only Work's global row ($sessionKey, local: $localRows, yielded: $yielded, reentrant: $reentrant, unbound: $unbound)",
+    async ({ sessionKey, localRows, yielded, reentrant, unbound }) => {
+      vi.useFakeTimers();
+      const mainRow = {
+        key: "global",
+        agentId: unbound ? undefined : "main",
+        sessionId: "same-id-in-separate-agent-stores",
+        kind: "global" as const,
+        updatedAt: 10,
+        activeRunIds: [] as string[],
+        hasActiveRun: false,
+        status: "done" as const,
+        endedAt: 100,
+      };
+      const workRow = {
+        ...mainRow,
+        agentId: "work",
+        activeRunIds: ["work-run"],
+        hasActiveRun: true,
+        status: "running" as const,
+        endedAt: undefined,
+      };
+      const client = createTestGatewayClient(async (_method, params) =>
+        sessionsResult(
+          [(params as { agentId?: string }).agentId === "work" ? workRow : mainRow],
+          10,
+        ),
+      );
+      const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+      const query = { agentId: "work", ownerId: "ada" };
+      let host: ReconcileHost | undefined;
+      const stop = sessions.subscribeList(query, (snapshot) => {
+        if (reentrant && host && snapshot.result?.sessions[0]?.status === "failed") {
+          host.assistantAgentId = "main";
+          host.sessionsResult = sessions.state.result;
+        }
+      });
+      try {
+        await sessions.refresh({ agentId: unbound ? undefined : "main", force: true });
+        await sessions.refreshList(query);
+        const primary = sessions.state.result;
+        host = makeHost({
+          sessionKey,
+          assistantAgentId: "work",
+          agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
+          chatRunId: "work-run",
+          chatStream: "streaming",
+          sessionsResult: localRows ? sessionsResult([workRow], 10) : null,
+          sessions,
+        });
 
-    reconcileChatRunLifecycle(host, {
-      outcome: "done",
-      sessionStatus: "done",
-      runId: "run-global",
-      sessionKey: "agent:work:main",
-      clearLocalRun: true,
-      clearChatStream: true,
-    });
+        reconcileChatRunLifecycle(host, {
+          ...(yielded
+            ? { yielded: true }
+            : { outcome: "interrupted", sessionStatus: "failed", errorMessage: "Work failed" }),
+          runId: "work-run",
+          sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          publishRunStatus: false,
+          armLocalTerminalReconcile: !yielded,
+        });
 
-    expect(reconcileRunTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-global",
-        sessionKeys: expect.arrayContaining(["agent:work:main", "global"]),
-      }),
-    );
-  });
+        expect(sessions.state.result).toBe(primary);
+        expect(sessions.listSnapshot(query).result?.sessions[0]).toMatchObject({
+          agentId: "work",
+          activeRunIds: [],
+          hasActiveRun: false,
+          status: yielded ? "running" : "failed",
+          ...(yielded ? { abortedLastRun: false } : { lastRunError: "Work failed" }),
+        });
+        expect(host.chatRunId).toBeNull();
+        if (localRows && !reentrant) {
+          expect(host.sessionsResult?.sessions[0]?.status).toBe(yielded ? "running" : "failed");
+        }
+        if (!yielded) {
+          expect(host.lastLocalTerminalReconcile?.agentId).toBe("work");
+        }
+        if (reentrant) {
+          expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(false);
+          expect(host.sessionsResult).toBe(primary);
+        }
+      } finally {
+        stop();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("arms suppression on a completed turn, then suppresses the racing refresh", () => {
     const host = makeHost({

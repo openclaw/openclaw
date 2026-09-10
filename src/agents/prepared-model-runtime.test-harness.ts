@@ -47,7 +47,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   },
   modelRegistry: {
     fork: vi.fn((authStorage: unknown) => ({ authStorage })),
-    getAll: vi.fn(() => []),
+    getAll: vi.fn<() => ModelCatalogSnapshot["entries"]>(() => []),
     find: vi.fn(() => null),
   },
   buildPreparedModelCatalogSnapshot: vi.fn<BuildPreparedModelCatalogSnapshot>(async () => ({
@@ -359,6 +359,10 @@ vi.mock("./models-config.providers.implicit.js", () => ({
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
+  acquireAgentRuntimePluginRegistry: async (...args: unknown[]) => {
+    const registry = preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args);
+    return { registry, primaryRegistry: registry };
+  },
   loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
     preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));

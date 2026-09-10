@@ -1,5 +1,6 @@
 {
   "id": "baseten",
+  "categories": ["models"],
   "name": "Baseten",
   "description": "OpenClaw Baseten provider plugin.",
   "activation": {

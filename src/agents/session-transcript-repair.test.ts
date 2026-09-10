@@ -228,13 +228,7 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 
   it("reports the original messages discarded during pairing repair", () => {
-    const orphan = {
-      role: "toolResult" as const,
-      toolCallId: "call_orphan",
-      toolName: "read",
-      content: [{ type: "text" as const, text: "orphan" }],
-      isError: false,
-    };
+    const orphan = textToolResult("call_orphan", "read", "orphan", { isError: false });
     const input = castAgentMessages([
       { role: "user", content: "hello" },
       orphan,
@@ -669,13 +663,7 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
   it("real error matching custom synthetic text stays first without marker", () => {
     const input = castAgentMessages([
       makeAssistant("call_1"),
-      {
-        role: "toolResult" as const,
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "aborted" }],
-        isError: true,
-      },
+      textToolResult("call_1", "read", "aborted", { isError: true }),
       makeRealResult("call_1"),
     ]);
 
@@ -717,13 +705,7 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
         content: [{ type: "toolCall", id: "call_2", name: "write", arguments: {} }],
       },
       makeRealResult("call_1"),
-      {
-        role: "toolResult" as const,
-        toolCallId: "call_2",
-        toolName: "write",
-        content: [{ type: "text", text: "second output" }],
-        isError: false,
-      },
+      textToolResult("call_2", "write", "second output", { isError: false }),
     ]);
 
     const result = repairToolUseResultPairing(input);

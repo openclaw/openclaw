@@ -6,9 +6,9 @@ read_when:
 title: "Zalo personal plugin"
 ---
 
-Zalo Personal support for OpenClaw via a plugin that uses native `zca-js` to
-automate a normal Zalo user account. No external `zca`/`openzca` CLI binary is
-required.
+The zalouser plugin adds unofficial Zalo Personal support to OpenClaw. It uses
+native `zca-js` to automate a normal Zalo user account. No external
+`zca`/`openzca` CLI binary is required.
 
 <Warning>
 Unofficial automation may lead to account suspension or ban. Use at your own risk.

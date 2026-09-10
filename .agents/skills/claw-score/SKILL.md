@@ -28,8 +28,9 @@ out of this repo. If a score needs private evidence, use the redacted
 - `taxonomy.yaml` is the hand-edited source of truth for surfaces, levels,
   QA profiles, categories, feature coverage IDs, docs refs, LTS overrides, and
   completeness-instruction paths.
-- Feature `coverageIds` are ANDed proof targets, not aliases. A feature may
-  list multiple IDs when each ID proves part of one capability.
+- Each feature has exactly one `coverageIds` entry. Keep that evidence ID
+  unique to the feature; broader many-to-many evidence mapping is not part of
+  the current taxonomy schema.
 - Coverage IDs use dotted `namespace.behavior` form, with lowercase
   alphanumeric/dash segments. Profile, surface, and category IDs may remain
   dashed or dotted.
@@ -40,8 +41,7 @@ out of this repo. If a score needs private evidence, use the redacted
 - `qa/maturity-scores.yaml` is the committed aggregate source for Quality,
   Completeness, and LTS review state.
 - `extensions/qa-lab/src/scorecard-taxonomy.ts` exports
-  `qaMaturityScoresSchema` and `readValidatedQaMaturityScoreSources`; use those
-  QA Lab utilities to validate score output.
+  `readValidatedQaMaturityScoreSources`; use it to validate score output.
 - Generated public docs are `docs/maturity/scorecard.md` and
   `docs/maturity/taxonomy.md`; both come from `pnpm maturity:render`. Do not
   hand-edit generated Markdown to change score results.

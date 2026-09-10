@@ -60,7 +60,7 @@ For a per-agent configuration with several host folders, access modes, and the e
 
 ## Tool policy: which tools exist/are callable
 
-Two layers matter:
+Five layers matter:
 
 - **Tool profile**: `tools.profile` and `agents.entries.*.tools.profile` (base allowlist)
 - **Provider tool profile**: `tools.byProvider[provider].profile` and `agents.entries.*.tools.byProvider[provider].profile`
@@ -158,3 +158,4 @@ In `"non-main"` mode, group/channel keys are _not_ main. Use the main session ke
 - [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [Elevated Mode](/tools/elevated)
+- [OpenShell](/gateway/openshell) — a managed sandbox backend that runs the sandbox layer over SSH

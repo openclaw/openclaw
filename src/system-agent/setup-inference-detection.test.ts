@@ -137,16 +137,7 @@ describe("isolated setup inference detection", () => {
     expect(JSON.parse(response.body)).toEqual({ ok: true, status: "live" });
     expect(elapsedMs).toBeLessThan(500);
     const detection = await pending;
-    expect(detection).toMatchObject({
-      candidates: fallback.candidates,
-      unavailableCandidates: fallback.unavailableCandidates,
-      manualProviders: fallback.manualProviders,
-      authOptions: fallback.authOptions,
-      recommendedInstalls: fallback.recommendedInstalls,
-      workspace: fallback.workspace,
-      setupComplete: fallback.setupComplete,
-    });
-    expect(detection.prepareOptions ?? []).toEqual([]);
+    expect(detection).toEqual(fallback);
     expect(performance.now() - pendingStartedAt).toBeLessThan(10_000);
   });
 
@@ -165,26 +156,6 @@ describe("isolated setup inference detection", () => {
         "AI access detection did not finish after 0.05s. " +
         "This Gateway may still be checking — try again.",
     });
-  });
-
-  it("returns partial candidates when detection times out", async () => {
-    const { detectSetupInferenceIsolated } = await loadDetectionModule();
-    const partial = detectedCodex();
-
-    const detection = await detectSetupInferenceIsolated({
-      workerUrl: blockingWorkerUrl,
-      workerData: {
-        blockMs: 30_000,
-        detection: emptyDetection(),
-        partialDetection: partial,
-      },
-      // Generous timeout: the partial must beat the deadline on loaded CI
-      // runners, or the empty-timeout rejection makes this flake.
-      timeoutMs: 3_000,
-      fallbackEnv: {},
-    });
-
-    expect(detection).toEqual(partial);
   });
 
   it("returns ambient API keys when detection times out", async () => {

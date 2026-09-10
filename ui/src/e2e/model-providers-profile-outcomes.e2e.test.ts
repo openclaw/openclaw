@@ -165,15 +165,16 @@ suite.define(() => {
             "models.list": {
               cases: [
                 {
-                  match: { view: "configured", agentId: "writer", preparedOnly: true },
-                  response: { models: [readyModel] },
-                },
-                {
                   match: { view: "configured", agentId: "writer", refresh: true },
                   response: {
                     models: [readyModel],
+                    refreshFailed: providerOutcomes.some((outcome) => outcome.status !== "ready"),
                     providerOutcomes,
                   },
+                },
+                {
+                  match: { view: "configured", agentId: "writer" },
+                  response: { models: [readyModel] },
                 },
                 { match: { view: "configured" }, response: { models: [] } },
               ],
@@ -221,7 +222,7 @@ suite.define(() => {
               return (
                 params?.view === "configured" &&
                 params.agentId === "writer" &&
-                params.preparedOnly === true
+                params.refresh !== true
               );
             }),
           )

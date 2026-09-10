@@ -20,7 +20,10 @@ export {
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
 export { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-export { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+export {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "../infra/sqlite-readonly-location.js";
 export {
   runSqliteImmediateTransaction,
   runSqliteImmediateTransactionSync,

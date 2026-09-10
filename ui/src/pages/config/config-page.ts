@@ -127,7 +127,7 @@ type ConfigPageSetting =
 // sensible instead of silently opening the old page's default section.
 const MOVED_SECTION_ROUTES: Record<
   string,
-  { routeId: RouteId; keepSection: boolean; advanced?: boolean }
+  { routeId: RouteId; keepSection: boolean; search?: string; advanced?: boolean }
 > = {
   "communications:__notifications__": { routeId: "notifications", keepSection: false },
   "communications:channels": { routeId: "channels", keepSection: false },
@@ -136,6 +136,11 @@ const MOVED_SECTION_ROUTES: Record<
   "appearance:wizard": { routeId: "advanced", keepSection: true },
   "advanced:transcripts": { routeId: "communications", keepSection: true, advanced: true },
   "automation:approvals": { routeId: "security", keepSection: true },
+  "automation:plugins": {
+    routeId: "plugin-settings",
+    keepSection: false,
+    search: "?tab=advanced",
+  },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
 };
@@ -613,9 +618,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       const movedRoute = MOVED_SECTION_ROUTES[`${this.pageId}:${rawSection}`];
       if (movedRoute) {
         this.context?.navigate(movedRoute.routeId, {
-          search: movedRoute.keepSection
-            ? `?section=${encodeURIComponent(rawSection)}${movedRoute.advanced ? "&advanced=1" : ""}`
-            : "",
+          search:
+            movedRoute.search ??
+            (movedRoute.keepSection
+              ? `?section=${encodeURIComponent(rawSection)}${movedRoute.advanced ? "&advanced=1" : ""}`
+              : ""),
           hash: this.routeData?.hash ?? globalThis.location?.hash ?? "",
         });
         return;

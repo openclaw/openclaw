@@ -137,6 +137,8 @@ In Code Mode, the conversation tools reuse their exact Gateway output contracts.
 
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities and normal visibility policy before admitting the target turn; target placement does not grant messaging access. Targets outside the configured visibility scope, archived targets, and replaced targets remain denied.
 
+During healthy worker provisioning or workspace preparation, accepted input stays queued until the intended worker is ready. It starts once after OpenClaw rechecks the session and placement. Cancellation, failed setup, or a replaced destination does not silently run that input locally or on another worker. Check the retained input and setup error before submitting another message.
+
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
 
@@ -230,15 +232,14 @@ tool clamp stays limited to its spawn subtree. Incognito sessions remain hidden
 from every cross-session tool. Ambient group watches still add activity notices
 and prompt hints; they do not grant access.
 
-## Further reading
-
-- [Session Management](/concepts/session): routing, lifecycle, maintenance
-- [Sub-agents](/tools/subagents): child-session lifecycle and delivery
-- [ACP Agents](/tools/acp-agents): external harness spawning
-- [Multi-agent](/concepts/multi-agent): multi-agent architecture
-- [Gateway Configuration](/gateway/configuration): session tool config knobs
+<a id="further-reading" />
 
 ## Related
 
-- [Session management](/concepts/session)
+- [Session Management](/concepts/session): routing, lifecycle, maintenance
 - [Session pruning](/concepts/session-pruning)
+- [Sub-agents](/tools/subagents): child-session lifecycle and delivery
+- [ACP Agents](/tools/acp-agents): external harness spawning
+- [Multi-agent](/concepts/multi-agent): multi-agent architecture
+- [Goal](/tools/goal) — durable per-session objectives, read and updated through the dedicated `get_goal`, `create_goal`, and `update_goal` tools
+- [Gateway Configuration](/gateway/configuration): session tool config knobs

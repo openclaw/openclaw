@@ -562,7 +562,9 @@ export async function prepareGooglePromptCacheStreamFn(
   const inner = params.streamFn;
   return async (model, context, options) => {
     const split = splitSystemPromptCacheBoundary(context.systemPrompt ?? "");
-    const systemPrompt = sanitizeTransportPayloadText(split?.stablePrefix ?? "");
+    const systemPrompt = sanitizeTransportPayloadText(
+      stripSystemPromptCacheBoundary(split?.stablePrefix ?? ""),
+    );
     if (!split || !systemPrompt.trim()) {
       return inner(model, context, options);
     }

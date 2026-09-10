@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
   createAuthStoreWithProfiles,
@@ -18,16 +19,8 @@ function configureProfiles(): void {
   authStoreMocks.state.hasSource = true;
   authStoreMocks.state.store = createAuthStoreWithProfiles({
     profiles: {
-      [TEST_PRIMARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-primary",
-      },
-      [TEST_SECONDARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-secondary",
-      },
+      [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
+      [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-secondary"),
       [OAUTH_PROFILE_ID]: {
         type: "oauth",
         provider: "openai",
@@ -35,11 +28,7 @@ function configureProfiles(): void {
         refresh: "test-refresh",
         expires: Date.now() + 60_000,
       },
-      [MISMATCHED_PROFILE_ID]: {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-mismatched",
-      },
+      [MISMATCHED_PROFILE_ID]: createApiKeyCredential("anthropic", "sk-mismatched"),
     },
     order: { openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID, OAUTH_PROFILE_ID] },
   });

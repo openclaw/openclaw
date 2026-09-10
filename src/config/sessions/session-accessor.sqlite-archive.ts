@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
+import { performance } from "node:perf_hooks";
+import { isMainThread, threadId, Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -19,12 +21,18 @@ import {
   isSessionArchiveArtifactName,
   type SessionArchiveReason,
 } from "./artifacts.js";
-import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionLifecycleArchivedTranscript,
+  SqliteSessionReclamationDiagnostics,
+} from "./session-accessor.sqlite-contract.js";
 import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+
+const log = createSubsystemLogger("session-sqlite");
+const SLOW_RECLAMATION_WORKER_MS = 1_000;
 
 export type SessionStateDeletePlan = {
   agentId: string;
@@ -295,7 +303,7 @@ function resolveSourceWorkerExecArgv(): string[] {
 }
 
 function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
-  diagnostics?: { workerThreadId?: number };
+  diagnostics?: SqliteSessionReclamationDiagnostics;
   expectedMessageType: "done" | "published" | "reclaimed";
   onCommitRequest?: () => void;
   withWriteAdmission?: (
@@ -304,6 +312,8 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
   transferList?: ArrayBuffer[];
   workerData: object;
 }): Promise<Result[]> {
+  const reclamationKind = params.diagnostics?.kind;
+  const startedAt = performance.now();
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
   let worker: Worker;
   try {
@@ -323,13 +333,14 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
     return Promise.reject(toStringifiedError(error));
   }
 
-  return new Promise((resolve, reject) => {
+  const workerThreadId = worker.threadId;
+  let exitCode: number | undefined;
+  const operation = new Promise<Result[]>((resolve, reject) => {
     let results: Result[] | undefined;
     let workerError: Error | undefined;
     let admission: { id: number; released: Deferred } | undefined;
     let admissionId = 0;
     let exited = false;
-    let exitCode: number | undefined;
     const admissionTasks: Promise<void>[] = [];
     worker.on("message", (message: { results: Result[]; type: string; admissionId?: number }) => {
       if (message.type === "commit-request") {
@@ -431,6 +442,33 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
       }, reject);
     });
   });
+  if (reclamationKind) {
+    const observeCompletion = (outcome: "resolved" | "rejected") => {
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs < SLOW_RECLAMATION_WORKER_MS) {
+        return;
+      }
+      log.warn("slow SQLite reclamation Worker operation", {
+        pid: process.pid,
+        threadId,
+        isMainThread,
+        reclamationKind,
+        workerThreadId,
+        elapsedMs,
+        outcome,
+        exitCode,
+      });
+    };
+    // Observe in the caller's trace scope, after Worker exit and admission settlement.
+    // A failed log must neither change the operation nor leave an unhandled rejection.
+    void operation
+      .then(
+        () => observeCompletion("resolved"),
+        () => observeCompletion("rejected"),
+      )
+      .catch(() => {});
+  }
+  return operation;
 }
 
 // Serialize lifecycle archive Workers so this path cannot multiply
@@ -439,7 +477,7 @@ const sqliteTranscriptArchiveWorkerQueue = new KeyedAsyncQueue();
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
 export function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
-  diagnostics?: { workerThreadId?: number };
+  diagnostics?: SqliteSessionReclamationDiagnostics;
   expectedMessageType: "done" | "published" | "reclaimed";
   onCommitRequest?: () => void;
   withWriteAdmission?: (

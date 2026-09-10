@@ -352,6 +352,11 @@ function assertSerializedManifestBudget(baseCommit, entries) {
   }
 }
 async function hashFiles(entries) {
+  // Inventory file sizes can change before open; reserve their actual sizes below.
+  let openedBytes = entries.reduce(
+    (bytes, entry) => bytes + (entry.type === "symlink" ? Buffer.byteLength(entry.target) : 0),
+    0,
+  );
   for (const entry of entries) {
     if (entry.type !== "file") {
       continue;
@@ -364,6 +369,11 @@ async function hashFiles(entries) {
     try {
       const before = await handle.stat({ bigint: true });
       if (!before.isFile()) fail("worker workspace file changed while it was being read");
+      const size = Number(before.size);
+      openedBytes += size;
+      if (openedBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+        fail("worker workspace manifest exceeds its eligible byte limit");
+      }
       const identity = workspaceStatIdentity("worker", before);
       let sha256 = hashMemo.get(identity);
       if (sha256) {
@@ -372,7 +382,10 @@ async function hashFiles(entries) {
         const hashStartedAt = performance.now();
         const hash = crypto.createHash("sha256");
         const stream = handle.createReadStream({ autoClose: false });
+        let bytesRead = 0;
         for await (const chunk of stream) {
+          bytesRead += chunk.length;
+          if (bytesRead > size) fail("worker workspace file changed while it was being read");
           hash.update(chunk);
         }
         sha256 = hash.digest("hex");

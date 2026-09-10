@@ -41,6 +41,33 @@ pnpm ui:dev
 
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
 
+To use the real Gateway's capabilities, media, and native plugin UI while
+developing, select its URL when starting Vite:
+
+```bash
+OPENCLAW_UI_DEV_GATEWAY_URL=http://127.0.0.1:18789 pnpm ui:dev --host 127.0.0.1 --port 5173
+```
+
+Configured development binds to loopback by default. Open `http://127.0.0.1:5173` and use the Gateway's normal authentication and
+device pairing. The target accepts `http://`, `https://`, `ws://`, or `wss://`,
+including a configured Gateway base path. Keep credentials out of this setting.
+Add the exact browser origin to `gateway.controlUi.allowedOrigins` when needed;
+the development proxy preserves the browser's Origin and does not provide
+authentication credentials.
+
+Vite serves the UI and its hot reload connection, and proxies Gateway requests.
+The UI keeps credentials and saved settings scoped to the actual Gateway. An
+owner pairing handoff can be delivered on the dev page while retaining its
+original Gateway destination and fragment. To use another Gateway, restart
+Vite with the new target; an already-open page cannot forward requests through
+the replacement target. Reload the page after restarting Vite.
+
+UI edits use Vite's normal hot reload or page reload. Start the Gateway's source
+watch separately when developing its implementation. Stopping Vite stops its
+proxy, without stopping the Gateway or deleting either application's state.
+Without `OPENCLAW_UI_DEV_GATEWAY_URL`, `pnpm ui:dev` retains its existing
+standalone connection behavior. This setting does not affect `pnpm ui:build`.
+
 For a standalone preview with synthetic data, use:
 
 ```bash

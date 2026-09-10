@@ -46,6 +46,18 @@ export async function doctorCommand() {
   if (!process.argv.includes('--no-workspace-suggestions')) note('Doctor workspace diagnostic', 'Workspace');
   console.log('Doctor console diagnostic');
   process.stderr.write('Doctor stderr diagnostic\\n');
+  ${
+    scenario === "doctor-hang" || scenario === "doctor-progress"
+      ? `
+  console.log('STEP completed fixture-schema');
+  console.error('STEP active fixture-validation');
+  process.on('SIGTERM', () => {});
+  ${scenario === "doctor-progress" ? "setInterval(() => console.error('PROGRESS fixture-validation'), 40);" : ""}
+  setTimeout(() => process.exit(0), 8_000);
+  await new Promise(() => {});
+  `
+      : ""
+  }
   outro('Doctor complete.');
   ${scenario === "doctor-error" ? "throw new Error('Doctor repair failed');" : ""}
 }
@@ -152,11 +164,13 @@ export const preparePostCorePluginConfig = async () => ({
   ],
 ]);
 const blockedPhase =
-  scenario === "phase-hang"
-    ? "configSnapshot"
-    : scenario === "completion-hang"
-      ? "completionCache"
-      : undefined;
+  scenario === "doctor-hang" || scenario === "doctor-progress"
+    ? "doctor"
+    : scenario === "phase-hang"
+      ? "configSnapshot"
+      : scenario === "completion-hang"
+        ? "completionCache"
+        : undefined;
 if (blockedPhase) {
   const lifecycleUrl = sourceUrl("./update-cli/update-finalization-lifecycle.ts");
   // Keep real phase ownership; only the deliberately blocked phase gets a short budget.

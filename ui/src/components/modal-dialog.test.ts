@@ -156,29 +156,34 @@ describe("openclaw-modal-dialog", () => {
     expect(dialog.open).toBe(true);
   });
 
-  it("hands an active toast back to the app layer when it closes", async () => {
-    const shell = document.createElement("div");
-    shell.className = "shell";
-    const appHost = document.createElement("openclaw-toast-host");
-    shell.append(appHost);
-    document.body.append(shell);
-    try {
-      const { modal } = await renderModal();
-      const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
+  it.each(["hide", "remove"] as const)(
+    "hands an active toast back to the app layer on %s",
+    async (action) => {
+      const shell = document.createElement("div");
+      shell.className = "shell";
+      const appHost = document.createElement("openclaw-toast-host");
+      shell.append(appHost);
+      document.body.append(shell);
+      try {
+        const { modal } = await renderModal();
 
-      showToast({ message: "Saved" });
-      modal.hide();
-      await modal.updateComplete;
-      await appHost.updateComplete;
+        showToast({ message: "Saved" });
+        expect(appHost.parentElement).toBe(modal);
+        modal[action]();
+        await modal.updateComplete;
+        if (action === "hide") {
+          modal.dispatchEvent(new Event("wa-after-hide"));
+        }
+        await appHost.updateComplete;
 
-      expect(moveBefore).toHaveBeenCalledWith(appHost, null);
-      expect(moveBefore.mock.contexts).toContain(modal);
-      expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
-      expect(modal.querySelector(".app-toast")).toBeNull();
-    } finally {
-      shell.remove();
-    }
-  });
+        expect(appHost.parentElement).toBe(shell);
+        expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
+        expect(modal.querySelector(".app-toast")).toBeNull();
+      } finally {
+        shell.remove();
+      }
+    },
+  );
 
   it("assigns overlay motion by interaction type", () => {
     const styles = OpenClawModalDialog.styles.cssText;

@@ -1,6 +1,8 @@
 // Agents gateway methods expose agent listing, config mutation, workspace file
 // reads/writes, identity merging, and safe deletion for operator clients.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -82,6 +84,7 @@ import {
   WORKSPACE_BOOTSTRAP_FILENAMES,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
+import { trashAllowedRoots } from "../../commands/cleanup-utils.js";
 import {
   readConfigFileSnapshotForWrite,
   withConfigMutationExclusive,
@@ -112,6 +115,7 @@ import {
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+import { enqueueWorkspaceFileUpdate } from "./workspace-fs.js";
 
 // Derived from the canonical workspace list so retiring a bootstrap file cannot
 // leave the Control UI advertising a file the runtime no longer reads.
@@ -412,7 +416,20 @@ async function removeAgentPath(
     // fs-safe pins traversal and identity for validation; Trash has no fd-relative move API, so
     // replacement after this check and before its rename is the accepted residual race bound.
     assertCurrent();
-    await movePathToTrash(trashPath);
+    // statAgentCleanupPath verified the declared parent; fs-safe's default roots (home/tmp)
+    // alone refuse every path of a volume-backed state dir. Keep those defaults so the
+    // directory behind a workspace symlink stays fenced exactly as shipped, while the link
+    // itself may always move (accepted edge: a link target beside its link is trashed too).
+    await movePathToTrash(trashPath, {
+      allowedRoots: [
+        ...trashAllowedRoots(
+          cleanupPath.sourcePaths,
+          cleanupPath.kind === "symlink" ? cleanupPath.canonicalPath : undefined,
+        ),
+        os.homedir(),
+        os.tmpdir(),
+      ],
+    });
     return { removed: { path: pathname, method: "trash" } };
   } catch (error) {
     if (!isMissingPathError(error)) {
@@ -721,6 +738,46 @@ async function writeWorkspaceFileOrRespond(params: {
     throw err;
   }
   return true;
+}
+
+function hashWorkspaceFileContent(content: Buffer | string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+async function readWorkspaceFileHash(
+  workspaceRoot: WorkspaceRoot,
+  name: string,
+): Promise<string | undefined> {
+  try {
+    const safeRead = await workspaceRoot.read(name, {
+      hardlinks: "reject",
+      nonBlockingRead: true,
+    });
+    return hashWorkspaceFileContent(safeRead.buffer);
+  } catch (err) {
+    if (isMissingPathError(err)) {
+      return undefined;
+    }
+    throw err;
+  }
+}
+
+function respondWorkspaceFileConflict(
+  respond: RespondFn,
+  name: string,
+  currentHash: string | undefined,
+) {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, `agent file "${name}" changed since it was read`, {
+      details: {
+        type: "agent_file_conflict",
+        name,
+        ...(currentHash ? { currentHash } : {}),
+      },
+    }),
+  );
 }
 
 async function readWorkspaceFileContent(
@@ -1524,6 +1581,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
           missing: false,
           size: safeRead.stat.size,
           updatedAtMs: Math.floor(safeRead.stat.mtimeMs),
+          hash: hashWorkspaceFileContent(safeRead.buffer),
           content: safeRead.buffer.toString("utf-8"),
         },
       },
@@ -1547,14 +1605,30 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const filePath = path.join(workspaceDir, name);
     const content = params.content;
     let workspaceRoot: WorkspaceRoot;
+    let conflict: { currentHash: string | undefined } | undefined;
     try {
       workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
-      await workspaceRoot.write(name, content, { encoding: "utf8" });
+      const writeRoot = workspaceRoot;
+      const expectedHash = params.expectedHash?.toLowerCase();
+      conflict = await enqueueWorkspaceFileUpdate(async () => {
+        if (expectedHash) {
+          const currentHash = await readWorkspaceFileHash(writeRoot, name);
+          if (currentHash !== expectedHash) {
+            return { currentHash };
+          }
+        }
+        await writeRoot.write(name, content, { encoding: "utf8" });
+        return undefined;
+      });
     } catch (err) {
       if (!(err instanceof FsSafeError)) {
         throw err;
       }
       respondWorkspaceFileUnsafe(respond, name);
+      return;
+    }
+    if (conflict) {
+      respondWorkspaceFileConflict(respond, name, conflict.currentHash);
       return;
     }
     const meta = await statWorkspaceFileSafely(workspaceRoot, workspaceDir, name);
@@ -1570,6 +1644,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
           missing: false,
           size: meta?.size,
           updatedAtMs: meta?.updatedAtMs,
+          hash: hashWorkspaceFileContent(content),
           content,
         },
       },

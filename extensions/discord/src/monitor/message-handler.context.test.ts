@@ -1,5 +1,6 @@
 // Discord tests cover sender bot-status forwarding into the inbound context payload.
-import { describe, expect, it } from "vitest";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { describe, expect, it, vi } from "vitest";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
@@ -70,6 +71,21 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
 
     expect(result?.ctxPayload.MessageThreadId).toBe("auto-thread-1");
     expect(result?.ctxPayload.ThreadParentId).toBe("c1");
+  });
+
+  it("builds the payload through the host channel context builder when one is supplied", async () => {
+    const host = { buildContext: buildChannelInboundEventContext };
+    const buildContext = vi.spyOn(host, "buildContext");
+    const ctx = { ...(await createBaseDiscordMessageContext()), buildContext: host.buildContext };
+
+    const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
+    if (!result) {
+      throw new Error("expected a built Discord message context");
+    }
+
+    expect(buildContext).toHaveBeenCalledTimes(1);
+    expect(result.ctxPayload).toBe(await buildContext.mock.results[0]?.value);
+    expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
   });
 
   it("forwards bot author status to ctxPayload.SenderIsBot", async () => {

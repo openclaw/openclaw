@@ -213,6 +213,7 @@ export async function prepareReplyAgentPayloads(state: {
     // always gets a diagnostic, even when the retry produced no final text.
     const recovery = resolveStrandedReplyRecovery({
       base: followupRun,
+      payloads: [],
       finalText: "",
       sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
       sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
@@ -308,6 +309,8 @@ export async function prepareReplyAgentPayloads(state: {
     const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
       fallbackTransition,
       fallbackFailureKnown,
+      fallbackAttempts,
+      cfg,
       isHeartbeat,
       hasSuccessfulTerminalDelivery: successfulTerminalDelivery,
       allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
@@ -434,6 +437,9 @@ export async function prepareReplyAgentPayloads(state: {
   const hasTerminalReplyPayload = replyPayloadsWithoutToolWarnings.some(
     (payload) =>
       isReplyPayloadTerminalContent(payload) &&
+      ((!shouldDeliverTerminalFailure && !yieldAcknowledgmentPayload) ||
+        followupRun.run.sourceReplyDeliveryMode !== "message_tool_only" ||
+        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   if (yieldAcknowledgmentPayload && hasTerminalReplyPayload) {
@@ -458,7 +464,9 @@ export async function prepareReplyAgentPayloads(state: {
       return { kind: "return" as const, value: silentFallbackFailurePayload };
     }
   } else if (emptyInteractiveReplyPayload && !hasTerminalReplyPayload) {
-    const emptyPayloadResult = await buildFinalPayloads([emptyInteractiveReplyPayload]);
+    const emptyPayloadResult = await buildFinalPayloads([
+      buildStrandedRetryMissingDeliveryDiagnostic() ?? emptyInteractiveReplyPayload,
+    ]);
     replyPayloads = [...replyPayloads, ...emptyPayloadResult.replyPayloads];
     didLogHeartbeatStrip = emptyPayloadResult.didLogHeartbeatStrip;
     if (emptyPayloadResult.replyPayloads.length > 0) {

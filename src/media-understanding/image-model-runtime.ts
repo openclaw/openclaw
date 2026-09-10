@@ -12,6 +12,7 @@ import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
 } from "../agents/prepared-model-runtime.js";
+import { retainPreparedModelRuntimeSnapshotResources } from "../agents/prepared-model-runtime.resources.js";
 import { resolveProviderModelMaterializationAuthMode } from "../agents/provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "../agents/provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "../agents/provider-runtime-auth-protection.js";
@@ -52,7 +53,10 @@ type PreparedImageRuntime = {
   model: Model;
 };
 
-type ResolvedImageRuntime = PreparedImageRuntime & { release: () => void };
+type ImageRuntimeResources = {
+  release: () => void;
+  assertResourcesOpen?: () => void;
+};
 
 const resolvedImageRuntimeContexts = new WeakMap<Model, ResolvedImageRuntimeContext>();
 
@@ -215,7 +219,8 @@ async function prepareResolvedImageRuntime(
 
 export async function resolveImageRuntime(
   params: ImageRuntimeParams,
-): Promise<ResolvedImageRuntime> {
+  onAcquired: (resources: ImageRuntimeResources) => void,
+): Promise<PreparedImageRuntime> {
   const resolvedRef = normalizeModelRef(params.provider, params.model);
   const workspaceDir =
     params.workspaceDir ??
@@ -225,12 +230,12 @@ export async function resolveImageRuntime(
     ...(params.profile ? { authProfileId: params.profile } : {}),
     ...(params.preferredProfile ? { preferredProfile: params.preferredProfile } : {}),
   };
-  // Borrow a supplied generation; only direct calls acquire and release a new lease.
-  const preparedRuntimeLease = params.preparedModelRuntime
-    ? {
-        snapshot: params.preparedModelRuntime as PreparedModelRuntimeSnapshot,
-        release: () => {},
-      }
+  const suppliedSnapshot = params.preparedModelRuntime as PreparedModelRuntimeSnapshot | undefined;
+  const suppliedClaim = suppliedSnapshot
+    ? retainPreparedModelRuntimeSnapshotResources(suppliedSnapshot)
+    : undefined;
+  const preparedRuntimeLease = suppliedSnapshot
+    ? { snapshot: suppliedSnapshot, release: () => suppliedClaim?.release() }
     : await acquireAgentRunPreparedModelRuntime(
         {
           agentDir: params.agentDir,
@@ -249,65 +254,57 @@ export async function resolveImageRuntime(
         // The request already chose a model; full inventory discovery must stay outside setup.
         { catalogMode: "static", abortSignal: params.signal },
       );
-  let leaseRetained = false;
-  const retainLease = (resolved: PreparedImageRuntime): ResolvedImageRuntime => {
-    leaseRetained = true;
-    return { ...resolved, release: preparedRuntimeLease.release };
+  // The operation owns release before setup can leave asynchronous cleanup behind.
+  onAcquired({
+    release: preparedRuntimeLease.release,
+    ...(suppliedClaim ? { assertResourcesOpen: suppliedClaim.assertOpen } : {}),
+  });
+  params.signal?.throwIfAborted();
+  const preparedRuntime = preparedRuntimeLease.snapshot;
+  const preparedWorkspaceDir = preparedRuntime.workspaceDir ?? runtimeParams.workspaceDir;
+  const preparedParams: ImageRuntimeParams = {
+    ...runtimeParams,
+    agentDir: preparedRuntime.agentDir,
+    cfg: preparedRuntime.config,
+    preparedModelRuntime: preparedRuntime,
+    ...(preparedWorkspaceDir ? { workspaceDir: preparedWorkspaceDir } : {}),
   };
-  try {
+  // Media request types carry this agent-owned handle opaquely to avoid importing the agent
+  // runtime graph into provider contracts. This is the sole boundary that consumes its stores.
+  const preparedStores = preparedRuntime.createStores() as Required<
+    Pick<NonNullable<Parameters<typeof resolveModelAsync>[4]>, "authStorage" | "modelRegistry">
+  >;
+  const resolveOptions = {
+    allowBundledStaticCatalogFallback: true,
+    ...preparedStores,
+    preparedModelRuntime: preparedRuntime,
+    skipAgentDiscovery: true,
+    ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
+    ...authProfileOptions,
+  };
+  return await withPluginRuntimeGenerationScope(preparedRuntime, async () => {
+    const resolved = await resolveModelAsync(
+      resolvedRef.provider,
+      resolvedRef.model,
+      preparedParams.agentDir,
+      preparedParams.cfg,
+      resolveOptions,
+    );
+    // Setup may have closed during model lookup; do not start auth for a late result.
     params.signal?.throwIfAborted();
-    const preparedRuntime = preparedRuntimeLease.snapshot;
-    const preparedWorkspaceDir = preparedRuntime.workspaceDir ?? runtimeParams.workspaceDir;
-    const preparedParams: ImageRuntimeParams = {
-      ...runtimeParams,
-      agentDir: preparedRuntime.agentDir,
-      cfg: preparedRuntime.config,
-      preparedModelRuntime: preparedRuntime,
-      ...(preparedWorkspaceDir ? { workspaceDir: preparedWorkspaceDir } : {}),
-    };
-    // Media request types carry this agent-owned handle opaquely to avoid importing the agent
-    // runtime graph into provider contracts. This is the sole boundary that consumes its stores.
-    const preparedStores = preparedRuntime.createStores() as Required<
-      Pick<NonNullable<Parameters<typeof resolveModelAsync>[4]>, "authStorage" | "modelRegistry">
-    >;
-    const resolveOptions = {
-      allowBundledStaticCatalogFallback: true,
-      ...preparedStores,
-      preparedModelRuntime: preparedRuntime,
-      skipAgentDiscovery: true,
-      ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
-      ...authProfileOptions,
-    };
-    return await withPluginRuntimeGenerationScope(preparedRuntime, async () => {
-      const resolved = await resolveModelAsync(
-        resolvedRef.provider,
-        resolvedRef.model,
-        preparedParams.agentDir,
-        preparedParams.cfg,
-        resolveOptions,
-      );
-      // Setup may have closed during model lookup; do not start auth for a late result.
-      params.signal?.throwIfAborted();
-      const model = requireImageCapableModel({
-        model: resolved.model,
-        resolvedProvider: resolvedRef.provider,
-        resolvedModel: resolvedRef.model,
-        requestedProvider: params.provider,
-        requestedModel: params.model,
-      });
-      return retainLease(
-        await prepareResolvedImageRuntime(
-          preparedParams,
-          preparedRuntime,
-          model,
-          resolved.authStorage,
-          resolved.modelRegistry,
-        ),
-      );
+    const model = requireImageCapableModel({
+      model: resolved.model,
+      resolvedProvider: resolvedRef.provider,
+      resolvedModel: resolvedRef.model,
+      requestedProvider: params.provider,
+      requestedModel: params.model,
     });
-  } finally {
-    if (!leaseRetained) {
-      preparedRuntimeLease.release();
-    }
-  }
+    return await prepareResolvedImageRuntime(
+      preparedParams,
+      preparedRuntime,
+      model,
+      resolved.authStorage,
+      resolved.modelRegistry,
+    );
+  });
 }

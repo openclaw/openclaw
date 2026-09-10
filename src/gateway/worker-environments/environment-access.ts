@@ -9,6 +9,11 @@ import {
 } from "./admission.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectSnapshot } from "./project-preparation.js";
+import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
+import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
+import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
@@ -21,7 +26,9 @@ const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
 type WorkerEnvironmentAccessOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
+  projectNamespace?: string;
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
+  bindPreparedWorkspace?: WorkerProviderLifecycleInputOptions["bindPreparedWorkspace"];
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
@@ -106,6 +113,71 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     };
   };
 
+  const bindPreparedWorkspace = async (
+    request: Parameters<NonNullable<WorkerEnvironmentAccessOptions["bindPreparedWorkspace"]>>[0],
+  ) => {
+    const bind = options.bindPreparedWorkspace;
+    const assertCurrent = () => {
+      request.signal?.throwIfAborted();
+      request.assertCurrent();
+      const record = requireCurrentRecord(request.environmentId);
+      const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+      if (
+        record.state !== "attached" ||
+        record.ownerEpoch !== request.ownerEpoch ||
+        record.attachedSessionIds.length !== 1 ||
+        record.attachedSessionIds[0] !== request.sessionId ||
+        record.destroyRequestedAtMs !== null ||
+        record.sharedHost !== false ||
+        preparation?.key !== request.preparationKey ||
+        preparation.cacheKey !== request.cacheKey
+      ) {
+        throw new Error("Prepared workspace lost its exact attached environment owner");
+      }
+    };
+    assertCurrent();
+    if (!bind) {
+      throw new Error("Prepared workspace node transport is unavailable");
+    }
+    const projectSnapshot = readWorkerProjectSnapshot(
+      store.get(request.environmentId)!.profileSnapshot.project,
+    );
+    let repository: Awaited<ReturnType<typeof prepareRepositoryWorkerProjectSource>> | undefined;
+    if (projectSnapshot && "source" in projectSnapshot) {
+      if (!options.projectNamespace) {
+        throw new Error("Prepared repository namespace is unavailable");
+      }
+      // A ready hit and resumed initial binding must prove current source access too;
+      // a snapshot is reusable content, never a substitute for repository authority.
+      const preparedIdentity = readWorkerProjectPreparation(
+        store.get(request.environmentId)!.profileSnapshot.project,
+      );
+      repository = await prepareRepositoryWorkerProjectSource({
+        expected: projectSnapshot,
+        namespace: options.projectNamespace,
+        getConfig: options.getConfig,
+        assertCurrent,
+        signal: request.signal,
+        knownRecipe: preparedIdentity
+          ? () => ({ project: projectSnapshot, setupRecipe: preparedIdentity.setupRecipe })
+          : undefined,
+      });
+      if (!repository) {
+        throw new Error("Prepared repository is no longer public");
+      }
+    }
+    const assertBindingCurrent = () => {
+      assertCurrent();
+      repository?.assertCurrent();
+    };
+    assertBindingCurrent();
+    const prepared = await bind({ ...request, assertCurrent: assertBindingCurrent });
+    assertBindingCurrent();
+    await repository?.revalidate(request.signal);
+    assertCurrent();
+    return prepared;
+  };
+
   const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> => {
     const stopping = options.isStopping();
     if (stopping) {
@@ -141,6 +213,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
           "provider_failure",
           "Worker lease isolation is not reconciled; retry after provider inspection",
         );
+      }
+      if (
+        record.ownerEpoch === request.ownerEpoch &&
+        record.lastError &&
+        !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)
+      ) {
+        throw new WorkerRuntimeRefreshPendingError(boundedError(record.lastError));
       }
       const credential = store.getCredential(request.environmentId);
       if (
@@ -411,6 +490,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   return {
+    bindPreparedWorkspace,
     get: (environmentId: string) => {
       const record = store.get(environmentId);
       return record ? project(record) : undefined;

@@ -1,5 +1,6 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import { fingerprint } from "../protocol/index.js";
 import {
   parseReefRelayUrl,
@@ -46,14 +47,7 @@ const reefSetupAdapter = {
     cfg: OpenClawConfig;
     accountId: string;
     input: Record<string, unknown>;
-  }) =>
-    ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        reef: { ...(cfg.channels?.reef as object), ...input },
-      },
-    }) as OpenClawConfig,
+  }) => patchTopLevelChannelConfigSection({ cfg, channel: "reef", patch: input }),
 };
 
 export const reefSetupContract = defineChannelSetupContract({

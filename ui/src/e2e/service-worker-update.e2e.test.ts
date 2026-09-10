@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +47,21 @@ type InstallGate = {
 let browser: Browser;
 let outDir: string;
 let server: ControlUiE2eServer;
+let buildBPromise: Promise<void> | undefined;
+
+async function stageBuildB(destination: string): Promise<void> {
+  const pristineDir = `${outDir}-build-b`;
+  buildBPromise ??= buildProductionControlUiE2e(pristineDir, buildB);
+  await buildBPromise;
+  await rm(destination, { force: true, recursive: true });
+  try {
+    // Each deployment owns its bytes; the terminal case modifies its worker.
+    await cp(pristineDir, destination, { recursive: true, dereference: true });
+  } catch (error) {
+    await rm(destination, { force: true, recursive: true });
+    throw error;
+  }
+}
 
 async function findBuildAsset(buildId: string, buildDir = outDir): Promise<BuildAsset> {
   const assetsDir = path.join(buildDir, "assets");
@@ -270,14 +285,20 @@ describe("Control UI service-worker production update E2E", () => {
   }, 120_000);
 
   afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-    if (outDir) {
-      await Promise.all(
-        [outDir, `${outDir}-next`, `${outDir}-previous`].map((dir) =>
-          rm(dir, { force: true, recursive: true }),
-        ),
-      );
+    try {
+      await browser?.close();
+    } finally {
+      try {
+        await server?.close();
+      } finally {
+        if (outDir) {
+          await Promise.all(
+            ["", "-build-b", "-next", "-previous", "-foreground", "-sleeping"].map((suffix) =>
+              rm(`${outDir}${suffix}`, { force: true, recursive: true }),
+            ),
+          );
+        }
+      }
     }
   });
 
@@ -357,7 +378,7 @@ describe("Control UI service-worker production update E2E", () => {
         const draft =
           mode === "chat" ? "keep my draft through the missed update" : '{ "count": 2 }';
         await editor.fill(draft);
-        await buildProductionControlUiE2e(nextDir, buildB);
+        await stageBuildB(nextDir);
         await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
         await rename(outDir, previousDir);
         await rename(nextDir, outDir);
@@ -507,7 +528,7 @@ describe("Control UI service-worker production update E2E", () => {
       const nextOutDir = `${outDir}-next`;
       const previousOutDir = `${outDir}-previous`;
       installGate = await createInstallGate();
-      await buildProductionControlUiE2e(nextOutDir, buildB);
+      await stageBuildB(nextOutDir);
       await holdReplacementWorkerInstalling(nextOutDir, installGate.url);
       const assetB = await findBuildAsset(buildB, nextOutDir);
       expect(assetB.path).not.toBe(assetA.path);

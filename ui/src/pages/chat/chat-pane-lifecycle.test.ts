@@ -1020,7 +1020,7 @@ describe("chat pane connection lifecycle", () => {
     const client = {
       request,
     } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     const deferHydration = vi.spyOn(pane, "deferSessionHydrationUntilTranscript");
     state.connected = false;
     pane.connectedClient = client;
@@ -1043,7 +1043,7 @@ describe("chat pane connection lifecycle", () => {
       method === "chat.abort" ? Promise.resolve({ aborted: true }) : new Promise<never>(() => {}),
     );
     const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     const sessionKey = "agent:main";
     pane.context = {
       ...pane.context,
