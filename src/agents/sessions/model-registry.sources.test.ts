@@ -80,6 +80,25 @@ function createRegistry(
 }
 
 describe("ModelRegistry source composition", () => {
+  it("keeps model headers separate for literal provider/model pairs with delimiters", async () => {
+    const authoredProvider = `${provider}:variant`;
+    const registry = createRegistry({
+      authoredProvider,
+      authored: {
+        ...authored,
+        models: [{ id: "shared", headers: { "X-Authored-Model": "private" } }],
+      },
+      generated: { ...generated, models: [{ id: "variant:shared" }] },
+      credentials: { [provider]: { type: "api_key", key: "current-store-key" } },
+    });
+    await expect(
+      registry.getApiKeyAndHeaders(registry.find(provider, "variant:shared")!),
+    ).resolves.toEqual({ ok: true, apiKey: "current-store-key", headers: undefined });
+    await expect(
+      registry.getApiKeyAndHeaders(registry.find(authoredProvider, "shared")!),
+    ).resolves.toMatchObject({ headers: { "X-Authored-Model": "private" } });
+  });
+
   it.each([rootUrl, catalogUrl])(
     "preserves source compatibility without mixing provider defaults at %s",
     (baseUrl) => {
