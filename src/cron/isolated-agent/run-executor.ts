@@ -674,6 +674,7 @@ function createCronPromptExecutor(
                 ),
                 provider: executionProvider,
                 model: modelOverride,
+                authProfileId: params.liveSelection.authProfileId,
                 thinkLevel: candidateThinkLevel,
                 timeoutMs: params.timeoutMs,
                 runId,

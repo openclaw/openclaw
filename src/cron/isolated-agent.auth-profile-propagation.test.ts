@@ -8,10 +8,12 @@ import {
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
+  isCliProviderMock,
   mockRunCronFallbackPassthrough,
   resolveConfiguredModelRefMock,
   resolveSessionAuthSelectionMock,
   runEmbeddedAgentMock,
+  runCliAgentMock,
 } from "./isolated-agent/run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -94,6 +96,53 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(getEmbeddedAgentParams()).toMatchObject({
       authProfileId: "openrouter:default",
+    });
+  });
+
+  it("passes authProfileId to runCliAgent when a cron route uses the CLI backend", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+    });
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "claude-cli:manual",
+      source: "auto",
+      routeRequirement: "api-key",
+    });
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "check status" }],
+      meta: { agentMeta: {} },
+    });
+    mockRunCronFallbackPassthrough();
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        cfg: {
+          auth: {
+            profiles: {
+              "claude-cli:manual": {
+                provider: "claude-cli",
+                mode: "api_key",
+              },
+            },
+            order: { "claude-cli": ["claude-cli:manual"] },
+          },
+        },
+        job: makeIsolatedAgentJobFixture({
+          delivery: { mode: "none" },
+          payload: { kind: "agentTurn", message: "check status" },
+        }),
+        message: "check status",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      authProfileId: "claude-cli:manual",
     });
   });
 });
