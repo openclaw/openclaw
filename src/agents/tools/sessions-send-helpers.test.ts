@@ -236,12 +236,24 @@ describe("agent-to-agent prompt context", () => {
 describe("isRequesterParentOfNativeSubagentSession", () => {
   const requester = "agent:main:dashboard:req-uuid-123";
 
-  it("identifies parentage for traditional subagent: key shapes", () => {
+  it("identifies parentage for traditional subagent: key shapes with spawnedBy", () => {
     expect(
       isRequesterParentOfNativeSubagentSession({
         entry: {
           parentSessionKey: requester,
           spawnedBy: requester,
+        },
+        requesterSessionKey: requester,
+        targetSessionKey: "agent:penny:subagent:child-uuid-456",
+      }),
+    ).toBe(true);
+  });
+
+  it("identifies parentage for traditional subagent: key shapes with only parentSessionKey", () => {
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: {
+          parentSessionKey: requester,
         },
         requesterSessionKey: requester,
         targetSessionKey: "agent:penny:subagent:child-uuid-456",
@@ -262,7 +274,7 @@ describe("isRequesterParentOfNativeSubagentSession", () => {
     ).toBe(true);
   });
 
-  it("identifies parentage when only spawnedBy matches requester", () => {
+  it("identifies parentage for visible dashboard sessions when spawnedBy matches requester", () => {
     expect(
       isRequesterParentOfNativeSubagentSession({
         entry: {
@@ -274,16 +286,18 @@ describe("isRequesterParentOfNativeSubagentSession", () => {
     ).toBe(true);
   });
 
-  it("identifies parentage when only parentSessionKey matches requester", () => {
+  it("does not suppress follow-up delivery for ordinary dashboard transcript forks", () => {
+    // Ordinary forks persist parentSessionKey from forkSource, but do NOT set spawnedBy.
+    // They must NOT be treated as native spawned children.
     expect(
       isRequesterParentOfNativeSubagentSession({
         entry: {
           parentSessionKey: requester,
         },
         requesterSessionKey: requester,
-        targetSessionKey: "agent:penny:dashboard:child-uuid-456",
+        targetSessionKey: "agent:penny:dashboard:fork-uuid-456",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("rejects when requester does not match child lineage (unrelated sender)", () => {
@@ -299,13 +313,20 @@ describe("isRequesterParentOfNativeSubagentSession", () => {
     ).toBe(false);
   });
 
-  it("rejects ACP sessions even if requester matches lineage", () => {
+  it("rejects ACP sessions with typed SessionAcpMeta", () => {
     expect(
       isRequesterParentOfNativeSubagentSession({
         entry: {
           parentSessionKey: requester,
           spawnedBy: requester,
-          acp: {} as unknown as boolean,
+          acp: {
+            backend: "acp",
+            agent: "penny",
+            runtimeSessionName: "session-1",
+            mode: "persistent",
+            state: "running",
+            lastActivityAt: Date.now(),
+          },
         },
         requesterSessionKey: requester,
         targetSessionKey: "agent:penny:dashboard:child-uuid-456",
@@ -351,4 +372,3 @@ describe("isRequesterParentOfNativeSubagentSession", () => {
     ).toBe(false);
   });
 });
-

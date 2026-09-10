@@ -38,11 +38,11 @@ import {
   normalizeAgentIdStrict,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { classifySessionKind } from "../../sessions/classify-session-kind.js";
 import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
-import { classifySessionKind } from "../../sessions/classify-session-kind.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import {
   isCronRunSessionKey,
@@ -295,15 +295,19 @@ export function isRequesterParentOfNativeSubagentSession(params: {
   }
   const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
   const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
-  const isLineageParent = requester === spawnedBy || requester === parentSessionKey;
-  if (!isLineageParent) {
-    return false;
+
+  // For traditional subagent: key shapes, either spawnedBy or parentSessionKey establishes parentage.
+  if (isSubagentSessionKey(params.targetSessionKey)) {
+    return requester === spawnedBy || requester === parentSessionKey;
   }
-  return (
-    isSubagentSessionKey(params.targetSessionKey) ||
-    classifySessionKind(params.targetSessionKey, params.entry) === "spawn-child" ||
-    Boolean(spawnedBy || parentSessionKey)
-  );
+
+  // For visible dashboard sessions, spawnedBy is the authoritative marker that
+  // distinguishes an explicitly spawned child from an ordinary transcript fork.
+  if (classifySessionKind(params.targetSessionKey, params.entry) === "spawn-child") {
+    return Boolean(spawnedBy) && requester === spawnedBy;
+  }
+
+  return false;
 }
 
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
