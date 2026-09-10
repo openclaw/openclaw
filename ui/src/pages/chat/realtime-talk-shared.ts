@@ -56,7 +56,7 @@ export type RealtimeTalkCallbacks = {
   onVideoError?: (error: unknown) => void;
 };
 
-export { RealtimeTalkEventInput };
+export type { RealtimeTalkEventInput };
 
 type RealtimeTalkAudioContract = {
   inputEncoding: "pcm16" | "g711_ulaw";
@@ -230,7 +230,7 @@ function resolveRealtimeTalkEventSessionId(
   return `${ctx.sessionKey}:${session.provider}:${session.transport}`;
 }
 
-export { ChatPayload };
+export type { ChatPayload };
 
 const EMPTY_FINAL_FALLBACK_GRACE_MS = 500;
 const EMPTY_FINAL_FALLBACK_TEXT = "OpenClaw finished with no text.";
