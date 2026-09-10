@@ -22,8 +22,8 @@ import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
+import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   createConfiguredProviderCatalogModelIdNormalizer,
@@ -652,35 +652,16 @@ function applyModelCatalogMetadata(params: {
   if (!configuredEntry && !alias) {
     return params.entry;
   }
-  const nextAlias = alias ?? params.entry.alias;
-  const nextContextWindow = configuredEntry?.contextWindow ?? params.entry.contextWindow;
-  const nextContextTokens = configuredEntry?.contextTokens ?? params.entry.contextTokens;
-  const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
-  const configuredReasoning = configuredEntry?.configuredReasoning;
-  const nextInput = configuredEntry?.input ?? params.entry.input;
-  const nextParams =
-    params.entry.params || configuredEntry?.params
-      ? { ...params.entry.params, ...configuredEntry?.params }
-      : undefined;
-  const nextCompat = resolveCatalogOwnedModelCompat({
-    catalogRoute: params.entry,
-    catalogCompat: params.entry.compat,
-    configuredRoute: configuredEntry,
-    configuredCompat: configuredEntry?.compat,
-  });
-
-  return {
-    ...params.entry,
-    name: configuredEntry?.name ?? params.entry.name,
-    ...(nextAlias ? { alias: nextAlias } : {}),
-    ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
-    ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
-    ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
-    ...(configuredReasoning !== undefined ? { configuredReasoning } : {}),
-    ...(nextInput ? { input: nextInput } : {}),
-    ...(nextParams ? { params: nextParams } : {}),
-    ...(nextCompat ? { compat: nextCompat } : {}),
-  };
+  const entry = configuredEntry
+    ? {
+        ...overlayCatalogMetadata(params.entry, configuredEntry, {
+          preserveBaseCompat: true,
+          preserveBaseRoute: true,
+        }),
+        name: configuredEntry.name,
+      }
+    : params.entry;
+  return alias ? { ...entry, alias } : entry;
 }
 
 export function resolveModelRefFromString(
