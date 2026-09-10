@@ -2079,7 +2079,6 @@ src/auto-reply/reply/conversation-turn-capture.ts	2
 src/auto-reply/reply/directive-handling.impl.ts	2
 src/auto-reply/reply/directive-handling.levels.ts	9
 src/auto-reply/reply/directive-handling.model-picker.ts	1
-src/auto-reply/reply/directive-handling.model.ts	2
 src/auto-reply/reply/directive-handling.parse.ts	2
 src/auto-reply/reply/directive-handling.shared.ts	2
 src/auto-reply/reply/directives.ts	2
@@ -3548,7 +3547,6 @@ src/state/openclaw-state-ownership.ts	1
 src/state/openclaw-state-snapshot-sanitizer.ts	1
 src/state/user-profiles-tailscale-avatar.ts	2
 src/state/user-profiles.ts	1
-src/status/status-message.ts	3
 src/status/status-text.ts	3
 src/status/summary.runtime.ts	1
 src/system-agent/agent-turn.ts	4

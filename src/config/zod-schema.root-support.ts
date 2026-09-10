@@ -3,9 +3,9 @@ import { z } from "zod";
 import { findEdgeAuthIssue } from "../shared/gateway-edge-auth-headers.js";
 import type { ConfigSchemaShape } from "./schema.field-metadata.js";
 import type { GatewayRemoteConfig } from "./types.gateway.js";
-import { MemorySearchSchema } from "./zod-schema.agent-runtime.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import { McpServerSchema } from "./zod-schema.mcp-server.js";
+import { MemorySearchSchema } from "./zod-schema.memory-search.js";
 import { NodeHostAgentRunsSchema, NodeHostWorkerRunsSchema } from "./zod-schema.node-host.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 

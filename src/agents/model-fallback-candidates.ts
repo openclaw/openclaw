@@ -91,13 +91,29 @@ function createModelCandidateCollector() {
 export function resolveImageFallbackCandidates(
   params: {
     cfg: OpenClawConfig | undefined;
-    defaultProvider: string;
     modelOverride?: string;
   } & ModelManifestNormalizationContext,
 ): ModelFallbackCandidate[] {
+  const primary = resolveAgentModelPrimaryValue(params.cfg?.agents?.defaults?.imageModel);
+  let defaultProvider = DEFAULT_PROVIDER;
+  if (primary?.trim()) {
+    const primaryAliasIndex = buildModelAliasIndex({
+      cfg: params.cfg ?? {},
+      defaultProvider: DEFAULT_PROVIDER,
+      manifestPlugins: params.manifestPlugins,
+    });
+    const resolvedPrimary = resolveModelRefFromString({
+      cfg: params.cfg,
+      raw: primary,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex: primaryAliasIndex,
+      manifestPlugins: params.manifestPlugins,
+    });
+    defaultProvider = resolvedPrimary?.ref.provider || DEFAULT_PROVIDER;
+  }
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
-    defaultProvider: params.defaultProvider,
+    defaultProvider,
     manifestPlugins: params.manifestPlugins,
   });
   const { candidates, addCandidate } = createModelCandidateCollector();
@@ -106,7 +122,7 @@ export function resolveImageFallbackCandidates(
     const resolved = resolveModelRefFromString({
       cfg: params.cfg,
       raw,
-      defaultProvider: params.defaultProvider,
+      defaultProvider,
       aliasIndex,
       manifestPlugins: params.manifestPlugins,
     });
@@ -121,11 +137,8 @@ export function resolveImageFallbackCandidates(
 
   if (params.modelOverride?.trim()) {
     addRaw(params.modelOverride, "requested");
-  } else {
-    const primary = resolveAgentModelPrimaryValue(params.cfg?.agents?.defaults?.imageModel);
-    if (primary?.trim()) {
-      addRaw(primary, "configured-primary");
-    }
+  } else if (primary?.trim()) {
+    addRaw(primary, "configured-primary");
   }
 
   const imageFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.imageModel);
@@ -135,26 +148,6 @@ export function resolveImageFallbackCandidates(
     addRaw(raw, "configured-fallback");
   }
   return candidates;
-}
-
-export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): string {
-  const configuredPrimary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
-  if (configuredPrimary?.trim()) {
-    const aliasIndex = buildModelAliasIndex({
-      cfg: cfg ?? {},
-      defaultProvider: DEFAULT_PROVIDER,
-    });
-    const resolved = resolveModelRefFromString({
-      cfg,
-      raw: configuredPrimary,
-      defaultProvider: DEFAULT_PROVIDER,
-      aliasIndex,
-    });
-    if (resolved?.ref.provider) {
-      return resolved.ref.provider;
-    }
-  }
-  return DEFAULT_PROVIDER;
 }
 
 export function resolveModelCandidateChain(

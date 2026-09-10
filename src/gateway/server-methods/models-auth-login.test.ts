@@ -35,6 +35,7 @@ const choice: ProviderAuthChoiceMetadata = {
 const result = {
   providerId: "fixture",
   methodId: "device-code",
+  authRefresh: "refreshed",
   profiles: [{ profileId: "fixture:owner", provider: "fixture", mode: "oauth" }],
 };
 const sessions = new Set<ReturnType<typeof createWizardSessionTracker>>();

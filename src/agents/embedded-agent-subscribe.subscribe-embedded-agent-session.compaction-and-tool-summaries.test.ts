@@ -12,6 +12,7 @@ import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
+import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 type SessionEventHandler = (evt: unknown) => void;
@@ -197,6 +198,54 @@ describe("synchronous context accounting", () => {
 });
 
 describe("fenced output and compaction retries", () => {
+  it("preserves an accepted heartbeat response and private scratch through compaction retry", async () => {
+    const onHeartbeatToolResponse = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-heartbeat-compaction",
+      sessionPersistence: "detached",
+      onHeartbeatToolResponse,
+    });
+    const tool = createHeartbeatResponseTool();
+    const response = {
+      outcome: "done" as const,
+      notify: true,
+      summary: "The monitored task completed.",
+      notificationText: "Your report is ready.",
+      scratch: "Private monitor notes: report completion confirmed.",
+    };
+    const toolCallId = "heartbeat-before-compaction";
+    emit({
+      type: "tool_execution_start",
+      toolName: tool.name,
+      toolCallId,
+      args: response,
+    });
+    const result = await tool.execute(toolCallId, response);
+    emit({
+      type: "tool_execution_end",
+      toolName: tool.name,
+      toolCallId,
+      isError: false,
+      result,
+    });
+    await subscription.waitForPendingEvents();
+    expect(subscription.getHeartbeatToolResponse()).toEqual(response);
+
+    emit(completedCompactionEnd());
+    const assistant = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "Internal retry fallback." }],
+    });
+    emit({ type: "message_start", message: assistant });
+    emit({ type: "message_end", message: assistant });
+    emit({ type: "agent_end", messages: [assistant] });
+    await subscription.waitForPendingEvents();
+    await subscription.waitForCompactionRetry();
+
+    expect(subscription.getHeartbeatToolResponse()).toEqual(response);
+    expect(onHeartbeatToolResponse).toHaveBeenCalledExactlyOnceWith(response);
+    expect(subscription.getCompactionCount()).toBe(1);
+  });
+
   it("waits for auto-compaction retry and clears buffered text", async () => {
     // A retrying compaction invalidates any assistant text buffered from the
     // failed attempt; waiters resolve only after the retry path reaches agent_end.

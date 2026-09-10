@@ -4067,8 +4067,7 @@ export const en: TranslationMap & {
       dismissing: "Dismissing…",
       emptyTitle: "No mentions yet",
       emptyBody: "When someone mentions you in a chat, it appears here.",
-      retention:
-        "Mentions are kept for up to seven days. Gateway restarts preserve your Inbox and dismissals.",
+      retention: "Mentions expire after 7 days.",
       notifications: "Notification settings",
       loading: "Loading mentions…",
       unavailable: "Sign in and connect to the Gateway to see your mentions.",
@@ -4652,6 +4651,7 @@ export const en: TranslationMap & {
       tokensWrittenToCache: "Tokens written to cache",
       tokensReadFromCache: "Tokens read from cache",
       noContextData: "No context data",
+      contextOutOfDate: "These context details are out of date. Refresh usage and try again.",
       systemPromptBreakdown: "System Prompt Breakdown",
       collapse: "Collapse",
       collapseAll: "Collapse All",

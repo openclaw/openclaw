@@ -23,8 +23,9 @@ import { buildAgentRuntimeAuthPlan } from "../../agents/runtime-plan/auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readSessionFallbackModel } from "../../status/session-fallback-model.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { resolveSupportedThinkingLevel } from "../thinking.js";
@@ -341,11 +342,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
   currentThinkLevel: ThinkLevel;
   thinkingCatalog?: ThinkingCatalogEntry[];
   runtimePolicySessionKey?: string;
+  sessionKey?: string;
+  storePath?: string;
   resetModelOverride: boolean;
   workspaceDir?: string;
   surface?: string;
-  sessionEntry?: Pick<SessionEntry, "modelProvider" | "model"> &
-    Partial<Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">>;
+  sessionEntry?: InternalSessionEntry;
 }): Promise<ReplyPayload | undefined> {
   if (!params.directives.hasModelDirective) {
     return undefined;
@@ -389,17 +391,30 @@ export async function maybeHandleModelDirectiveInfo(params: {
       agentId: params.activeAgentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      sessionEntry: isCompleteSessionEntry(params.sessionEntry) ? params.sessionEntry : undefined,
+      sessionEntry: params.sessionEntry,
     });
     return reply ?? { text: "No models available." };
   }
 
+  const modelParams = {
+    selectedProvider: params.provider,
+    selectedModel: params.model,
+    sessionEntry: params.sessionEntry,
+  };
+  const completedModel = readSessionFallbackModel({
+    ...modelParams,
+    config: params.cfg,
+    sessionScope: {
+      agentId: params.activeAgentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+  });
+  const modelRefs = resolveSelectedAndActiveModel({
+    ...modelParams,
+    sessionEntry: completedModel ?? params.sessionEntry,
+  });
   if (wantsSummary) {
-    const modelRefs = resolveSelectedAndActiveModel({
-      selectedProvider: params.provider,
-      selectedModel: params.model,
-      sessionEntry: params.sessionEntry,
-    });
     const current = modelRefs.selected.label;
     const thinkingRuntime = resolveEffectiveAgentRuntime({
       cfg: params.cfg,
@@ -497,11 +512,6 @@ export async function maybeHandleModelDirectiveInfo(params: {
     authByProvider.set(provider, authLabel);
   }
 
-  const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider: params.provider,
-    selectedModel: params.model,
-    sessionEntry: params.sessionEntry,
-  });
   const current = modelRefs.selected.label;
   const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
   const lines = [
@@ -552,14 +562,4 @@ export async function maybeHandleModelDirectiveInfo(params: {
     }
   }
   return { text: lines.join("\n") };
-}
-
-function isCompleteSessionEntry(
-  entry: Pick<SessionEntry, "modelProvider" | "model"> | undefined,
-): entry is SessionEntry {
-  return Boolean(
-    entry &&
-    typeof (entry as Partial<SessionEntry>).sessionId === "string" &&
-    typeof (entry as Partial<SessionEntry>).updatedAt === "number",
-  );
 }

@@ -16,6 +16,10 @@ import {
   type ProviderChannelLoginResolution,
 } from "../plugins/provider-login-options.js";
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import {
+  ProviderAuthConfigApplyError,
+  ProviderCredentialsSavedError,
+} from "../shared/provider-auth-result.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { RuntimeEnv } from "./runtime-env.js";
@@ -25,7 +29,7 @@ export type {
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
 export type { ProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
-export { ProviderCredentialsSavedError } from "../plugins/provider-auth-errors.js";
+export { ProviderAuthConfigApplyError, ProviderCredentialsSavedError };
 
 type ProviderAuthLoginFlowRuntime = typeof import("../commands/models/auth.js");
 
@@ -312,6 +316,14 @@ function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResu
   };
   const providerId = parseRequiredString(result.providerId, "provider id");
   const methodId = parseRequiredString(result.methodId, "method id");
+  const authRefresh = result.authRefresh;
+  if (
+    authRefresh !== "refreshed" &&
+    authRefresh !== "gateway-rejected" &&
+    authRefresh !== "gateway-unreachable"
+  ) {
+    throw new Error("Provider login returned an invalid auth refresh outcome.");
+  }
   const profiles = result.profiles.map((profile): ModelsAuthLoginFlowResult["profiles"][number] => {
     if (!profile || typeof profile !== "object") {
       throw new Error("Provider login returned an invalid profile.");
@@ -336,6 +348,7 @@ function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResu
   return {
     providerId,
     methodId,
+    authRefresh,
     ...(defaultModel ? { defaultModel } : {}),
     profiles,
   };
@@ -385,6 +398,7 @@ export async function runProviderChannelLoginFlow(params: {
     config: readConfig(),
     runtime: params.runtime,
     signal: params.signal,
+    beforePersistentEffect: assertCurrent,
     prompter: buildProviderChannelLoginPrompter({ ...params, assertCurrent }),
     isRemote: true,
     openUrl: async (url) => {
@@ -400,23 +414,36 @@ export function formatProviderLoginCommand(choice: ProviderChannelLoginChoice): 
   return `/login ${choice.command}`;
 }
 
-export function formatProviderLoginComplete(choice: ProviderChannelLoginChoice): string {
-  return `${choice.providerLabel} login complete. Try your request again now.`;
-}
-
-export function formatProviderLoginSessionSwitchFailed(
+export function formatProviderLoginCompletion(
   choice: ProviderChannelLoginChoice,
+  authRefresh: ModelsAuthLoginFlowResult["authRefresh"],
+  sessionSwitchFailed = false,
   sessionLabel = "session",
 ): string {
-  return `${choice.providerLabel} login completed, but this ${sessionLabel} could not switch to the newly authenticated profile. Retry \`${formatProviderLoginCommand(choice)}\`, or select the profile manually.`;
+  const sessionFailure = `this ${sessionLabel} could not switch to the newly authenticated profile. Retry \`${formatProviderLoginCommand(choice)}\`, or select the profile manually.`;
+  if (authRefresh === "refreshed") {
+    return sessionSwitchFailed
+      ? `${choice.providerLabel} login completed, but ${sessionFailure}`
+      : `${choice.providerLabel} login complete. Try your request again now.`;
+  }
+  const message =
+    authRefresh === "gateway-rejected"
+      ? `${choice.providerLabel} credentials saved, but the Gateway could not apply the auth update. Check the Gateway logs, restart the Gateway, then use /models.`
+      : `${choice.providerLabel} credentials saved, but the Gateway could not be reached to apply them. Restart the Gateway, then use /models.`;
+  return sessionSwitchFailed ? `${message} Also, ${sessionFailure}` : message;
 }
 
-export function formatProviderLoginFailed(choice: ProviderChannelLoginChoice): string {
+export function formatProviderLoginFailure(
+  choice: ProviderChannelLoginChoice,
+  error: unknown,
+): string {
+  if (error instanceof ProviderAuthConfigApplyError) {
+    return `${choice.providerLabel} credentials saved, but provider settings could not be applied. Review the provider settings and check the Gateway logs before trying again.`;
+  }
+  if (error instanceof ProviderCredentialsSavedError) {
+    return `${choice.providerLabel} credentials were saved, but sign-in did not finish. Send \`${formatProviderLoginCommand(choice)}\` to retry.`;
+  }
   return `${choice.providerLabel} login did not complete. Send \`${formatProviderLoginCommand(choice)}\` to try again.`;
-}
-
-export function formatProviderLoginSavedIncomplete(choice: ProviderChannelLoginChoice): string {
-  return `${choice.providerLabel} credentials were saved, but sign-in did not finish. Send \`${formatProviderLoginCommand(choice)}\` to retry.`;
 }
 
 function formatProviderLoginControlUiHandoff(choice: ProviderChannelLoginChoice): string {

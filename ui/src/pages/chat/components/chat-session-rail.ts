@@ -237,6 +237,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) onModeChange?: (mode: SessionRailMode) => void;
   @property({ attribute: false }) onVisibilityChange?: (visible: boolean) => void;
   @property({ type: Boolean }) embedded = false;
+  @property({ type: Boolean }) presented = false;
   @state() private now = Date.now();
 
   private readonly railState = new ChatSessionRailState();
@@ -293,7 +294,14 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     this.onVisibilityChange?.(true);
   }
 
-  override updated() {
+  override updated(changedProperties: PropertyValues<this>) {
+    // Retained tabs stay mounted while hidden. Only a presentation edge owns
+    // focus; history, replies, and reconnects must not interrupt another input.
+    if (changedProperties.has("presented") && this.presented) {
+      this.querySelector<HTMLInputElement>(".chat-session-rail__input:not(:disabled)")?.focus({
+        preventScroll: true,
+      });
+    }
     if (this.running && this.startedAt != null && visibleDigest(this.input())) {
       this.scheduleClock();
     } else {

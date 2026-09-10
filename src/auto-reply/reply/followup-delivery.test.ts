@@ -113,6 +113,22 @@ function createAccounting(
   } as never;
 }
 
+const createDefaults = (onBlockReply: (payload: ReplyPayload) => Promise<void>) => ({
+  defaultModel: "claude",
+  typingMode: "never" as const,
+  typing: {
+    onReplyStart: vi.fn(async () => {}),
+    startTypingLoop: vi.fn(async () => {}),
+    startTypingOnText: vi.fn(async () => {}),
+    refreshTypingTtl: vi.fn(),
+    isActive: vi.fn(() => false),
+    markRunComplete: vi.fn(),
+    markDispatchIdle: vi.fn(),
+    cleanup: vi.fn(),
+  },
+  opts: { onBlockReply },
+});
+
 describe("resolveFollowupDeliveryDecision", () => {
   const sourceReplyTarget = {
     tool: "message",
@@ -123,6 +139,56 @@ describe("resolveFollowupDeliveryDecision", () => {
   const progressTarget = { ...sourceReplyTarget, sourceReplyFinal: false };
   const finalTarget = { ...sourceReplyTarget, sourceReplyFinal: true };
   const progressPayload = { text: "Still working", sourceReplyFinal: false };
+
+  it.each([
+    {
+      name: "total-only usage",
+      usage: { total: 1250 },
+      sessionMode: undefined,
+      expected: "queued reply\nUsage: 1.3k total",
+    },
+    {
+      name: "cache-only usage",
+      usage: { cacheRead: 800, cacheWrite: 200 },
+      sessionMode: undefined,
+      expected: "queued reply\nUsage: ? in / ? out · cache 800 cached / 200 new",
+    },
+    {
+      name: "an explicit usage-off preference",
+      usage: { total: 1250 },
+      sessionMode: "off",
+      expected: "queued reply",
+    },
+  ] as const)(
+    "delivers $name through the queued footer owner",
+    async ({ usage, sessionMode, expected }) => {
+      const turn = createTurn({ config: { messages: { responseUsage: "tokens" } } });
+      const sourceDispatcher = vi.fn(async () => {});
+      turn.queued.originatingChannel = "webchat";
+      turn.queued.originatingTo = undefined;
+      turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDispatcher };
+      turn.session.current = () => ({
+        sessionId: "session",
+        updatedAt: 1,
+        responseUsage: sessionMode,
+      });
+
+      const decision = resolveFollowupDeliveryDecision({
+        turn,
+        execution: createSettledExecution("queued reply"),
+        accounting: createAccounting([{ text: "queued reply" }], { usage }),
+      });
+      const delivery = await deliverFollowupDecision({
+        decision,
+        turn,
+        defaults: createDefaults(vi.fn(async () => {})),
+        runId: turn.runId,
+        runFollowup: vi.fn(async () => {}),
+      });
+      expect(delivery).toMatchObject({ kind: "completed", payloads: [{ text: expected }] });
+      expect(sourceDispatcher).not.toHaveBeenCalled();
+    },
+  );
 
   it("delivers a yield acknowledgment after accepting a child spawn", () => {
     const execution = createSettledExecution();
@@ -586,22 +652,6 @@ describe("resolveFollowupDeliveryDecision", () => {
 });
 
 describe("deliverFollowupDecision", () => {
-  const createDefaults = (onBlockReply: (payload: ReplyPayload) => Promise<void>) => ({
-    defaultModel: "claude",
-    typingMode: "never" as const,
-    typing: {
-      onReplyStart: vi.fn(async () => {}),
-      startTypingLoop: vi.fn(async () => {}),
-      startTypingOnText: vi.fn(async () => {}),
-      refreshTypingTtl: vi.fn(),
-      isActive: vi.fn(() => false),
-      markRunComplete: vi.fn(),
-      markDispatchIdle: vi.fn(),
-      cleanup: vi.fn(),
-    },
-    opts: { onBlockReply },
-  });
-
   it("keeps dispatcher-only delivery out of a routable origin", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.followupRoute = { route: "dispatcher" };

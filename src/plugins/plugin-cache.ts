@@ -163,6 +163,10 @@ export function getPluginCacheSource(
   modulePath: string,
   cache = getPluginCache(),
 ): PluginSourceCacheRecord {
+  const cached = cache.sources.get(cache.sourceAliases.get(modulePath) ?? modulePath);
+  if (cached) {
+    return cached;
+  }
   const lexical = path.resolve(
     modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath,
   );

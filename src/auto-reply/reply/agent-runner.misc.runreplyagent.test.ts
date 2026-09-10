@@ -7,6 +7,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { parseCliOutput } from "../../agents/cli-output.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   abortEmbeddedAgentRun,
@@ -2801,14 +2802,51 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
-  it("does not append session key when responseUsage=tokens", async () => {
+  it.each([
+    {
+      name: "split token counts",
+      usage: { input_tokens: 12, output_tokens: 3, cacheRead: 4, cacheWrite: 2 },
+      expected: "Usage: 12 in / 3 out · cache 4 cached / 2 new",
+    },
+    {
+      name: "input-only counts",
+      usage: { input_tokens: 12, total_tokens: 15 },
+      expected: "Usage: 12 in / ? out",
+    },
+    {
+      name: "output-only counts",
+      usage: { output_tokens: 3, total_tokens: 15 },
+      expected: "Usage: ? in / 3 out",
+    },
+    {
+      name: "total-only counts",
+      usage: { total_tokens: 1250 },
+      expected: "Usage: 1.3k total",
+    },
+    {
+      name: "cache-only counts",
+      usage: { cacheRead: 800, cacheWrite: 200 },
+      expected: "Usage: ? in / ? out · cache 800 cached / 200 new",
+    },
+    {
+      name: "total and cache counts without a split",
+      usage: { total_tokens: 1250, cacheRead: 800, cacheWrite: 200 },
+      expected: "Usage: 1.3k total · cache 800 cached / 200 new",
+    },
+  ])("shows $name without cost or session keys in tokens mode", async ({ usage, expected }) => {
+    const output = parseCliOutput({
+      raw: JSON.stringify({ result: "ok", usage }),
+      backend: { command: "fixture-cli" },
+      providerId: "fixture-cli",
+      outputMode: "json",
+    });
     runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
+      payloads: [{ text: output.text }],
       meta: {
         agentMeta: {
           provider: "amazon-bedrock",
           model: "us.anthropic.claude-sonnet-4-6",
-          usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 2 },
+          usage: output.usage,
         },
       },
     });
@@ -2837,8 +2875,7 @@ describe("runReplyAgent response usage footer", () => {
     });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("Usage:");
-    expect(text).toContain("cache 4 cached / 2 new");
+    expect(text).toBe(`ok\n${expected}`);
     expect(text).not.toContain("est $");
     expect(text).not.toContain("· session ");
   });

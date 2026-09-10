@@ -54,6 +54,7 @@ describe("provider channel login runtime", () => {
     const runLoginFlow = vi.fn(async () => ({
       providerId: "acme-cloud",
       methodId: "device-code",
+      authRefresh: "refreshed",
       profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
     }));
 
@@ -89,6 +90,7 @@ describe("provider channel login runtime", () => {
         return {
           providerId: "acme-cloud",
           methodId: "device-code",
+          authRefresh: "refreshed",
           profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
         };
       };
@@ -119,6 +121,7 @@ describe("provider channel login runtime", () => {
       return {
         providerId: "acme-cloud",
         methodId: "device-code",
+        authRefresh: "refreshed",
         profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
       };
     };
@@ -152,6 +155,7 @@ describe("provider channel login runtime", () => {
         const saved = {
           providerId: "acme-cloud",
           methodId: "device-code",
+          authRefresh: "refreshed",
           profiles: [{ profileId: "acme-cloud:saved", provider: "acme-cloud", mode: "oauth" }],
         };
         authorized = false;

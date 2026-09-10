@@ -9,13 +9,10 @@ import {
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
   formatProviderLoginCommand,
-  formatProviderLoginComplete,
-  formatProviderLoginFailed,
-  formatProviderLoginSavedIncomplete,
-  formatProviderLoginSessionSwitchFailed,
+  formatProviderLoginCompletion,
+  formatProviderLoginFailure,
   isProviderLoginPatchPersisted,
   prepareProviderChannelLogin,
-  ProviderCredentialsSavedError,
   releaseProviderLoginFlow,
   reserveProviderLoginFlow,
   runProviderChannelLoginFlow,
@@ -276,7 +273,7 @@ async function runChannelProviderLogin(params: {
         normalizeSurface(profile.provider) === normalizeSurface(params.choice.providerId),
     )?.profileId;
     if (!nextProfileId) {
-      return { text: formatProviderLoginSessionSwitchFailed(params.choice) };
+      return { text: formatProviderLoginCompletion(params.choice, loginResult.authRefresh, true) };
     }
     const switchResult = await switchLoginSessionProfile({
       commandParams: params.commandParams,
@@ -286,17 +283,15 @@ async function runChannelProviderLogin(params: {
       assertCurrent,
     });
     return {
-      text:
-        switchResult === "failed"
-          ? formatProviderLoginSessionSwitchFailed(params.choice)
-          : formatProviderLoginComplete(params.choice),
+      text: formatProviderLoginCompletion(
+        params.choice,
+        loginResult.authRefresh,
+        switchResult === "failed",
+      ),
     };
   } catch (error) {
     return {
-      text:
-        error instanceof ProviderCredentialsSavedError
-          ? formatProviderLoginSavedIncomplete(params.choice)
-          : formatProviderLoginFailed(params.choice),
+      text: formatProviderLoginFailure(params.choice, error),
     };
   } finally {
     releaseProviderLoginFlow({

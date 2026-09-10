@@ -3,13 +3,10 @@ import {
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
   formatProviderLoginCommand,
-  formatProviderLoginComplete,
-  formatProviderLoginFailed,
-  formatProviderLoginSavedIncomplete,
-  formatProviderLoginSessionSwitchFailed,
+  formatProviderLoginCompletion,
+  formatProviderLoginFailure,
   isProviderLoginPatchPersisted,
   prepareProviderChannelLogin,
-  ProviderCredentialsSavedError,
   releaseProviderLoginFlow,
   reserveProviderLoginFlow,
   runProviderChannelLoginFlow,
@@ -157,10 +154,6 @@ export async function executeTelegramLoginCommand(params: {
   // Sign-in action delivery releases Telegram's serialized chat lane. The
   // reservation and account signal still own polling through completion.
   const completion = (async () => {
-    const sessionSwitchFailedMessage = formatProviderLoginSessionSwitchFailed(
-      loginChoice,
-      "Telegram session",
-    );
     let terminalMessage: string;
     try {
       const targetSessionEntryAtStart = dispatch.nativeCommandRuntime.getSessionEntry({
@@ -195,12 +188,11 @@ export async function executeTelegramLoginCommand(params: {
           normalizeLowercaseStringOrEmpty(profile.provider) ===
           normalizeLowercaseStringOrEmpty(loginChoice.providerId),
       )?.profileId;
-      terminalMessage = formatProviderLoginComplete(loginChoice);
-      if (!nextProfileId) {
-        terminalMessage = sessionSwitchFailedMessage;
-      } else if (
+      let sessionSwitchFailed = !nextProfileId;
+      if (
+        nextProfileId &&
         normalizeLowercaseStringOrEmpty(params.currentProvider) ===
-        normalizeLowercaseStringOrEmpty(loginChoice.providerId)
+          normalizeLowercaseStringOrEmpty(loginChoice.providerId)
       ) {
         const storePath = resolveStorePath(dispatch.runtimeCfg.session?.store, {
           agentId: dispatch.route.agentId,
@@ -237,7 +229,7 @@ export async function executeTelegramLoginCommand(params: {
               (adoptionDecision?.status === "patch" &&
                 !isProviderLoginPatchPersisted(persisted, nextProfileId)))
           ) {
-            terminalMessage = sessionSwitchFailedMessage;
+            sessionSwitchFailed = true;
           }
         } catch (error) {
           flowSignal.throwIfAborted();
@@ -248,9 +240,15 @@ export async function executeTelegramLoginCommand(params: {
               )}`,
             ),
           );
-          terminalMessage = sessionSwitchFailedMessage;
+          sessionSwitchFailed = true;
         }
       }
+      terminalMessage = formatProviderLoginCompletion(
+        loginChoice,
+        loginResult.authRefresh,
+        sessionSwitchFailed,
+        "Telegram session",
+      );
     } catch (error) {
       if (flowSignal.aborted) {
         return;
@@ -258,10 +256,7 @@ export async function executeTelegramLoginCommand(params: {
       dispatch.runtime.error?.(
         danger(`telegram ${formatProviderLoginCommand(loginChoice)} failed: ${String(error)}`),
       );
-      terminalMessage =
-        error instanceof ProviderCredentialsSavedError
-          ? formatProviderLoginSavedIncomplete(loginChoice)
-          : formatProviderLoginFailed(loginChoice);
+      terminalMessage = formatProviderLoginFailure(loginChoice, error);
     }
     if (flowSignal.aborted) {
       return;
