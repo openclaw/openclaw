@@ -29,17 +29,19 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
     "forced-matching",
     "forced-missing",
     "forced-control-lost",
+    "forced-legacy-host",
   ] as const)(
     "retires gracefully only after the closing receipt is acknowledged (%s)",
     async (acknowledgement) => {
       const forced = acknowledgement.startsWith("forced-");
+      const legacy = acknowledgement === "legacy-host" || acknowledgement === "forced-legacy-host";
       const generation = randomUUID();
       const child = spawn(
         process.execPath,
         resolveRuntimeWorkerArgv(
           resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor),
         ),
-        { detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "ipc"] },
+        { detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe", "ipc"] },
       );
       const exited = createDeferredCore<{
         code: number | null;
@@ -55,6 +57,19 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
       const messages: ServiceChildAnchorMessage[] = [];
       let prearmedSequence: number | undefined;
       let outboundSequence = 0;
+      const lineage = child.stdio[4];
+      if (!(lineage instanceof Duplex)) {
+        child.kill("SIGKILL");
+        throw new Error("Expected the host-owned lineage pipe");
+      }
+      lineage.once("end", () => {
+        if (!control.destroyed && !legacy) {
+          control.write(
+            `${JSON.stringify({ type: "lineage-closed", generation, sequence: ++outboundSequence })}\n`,
+          );
+        }
+      });
+      lineage.resume();
       let forcedCancellationAt = 0;
       const startupFailure = acknowledgement === "pre-armed" || acknowledgement === "startup-error";
       let pending = "";
@@ -131,11 +146,17 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
           env: {},
           stdinMode: "pipe-closed",
           controlFd: 3,
+          ...(legacy ? {} : { lineageFd: 4 }),
           ...(acknowledgement === "legacy-host"
             ? {}
             : { acknowledgeClosing: acknowledgement !== "unsupported-capability" }),
         });
         const result = await exited.promise;
+        if (acknowledgement === "forced-legacy-host") {
+          expect(result, stderr).toEqual({ code: null, signal: "SIGKILL" });
+          expect(messages.some((message) => message.type === "closing")).toBe(false);
+          return;
+        }
         if (acknowledgement === "unsupported-capability") {
           expect(result, stderr).toEqual({ code: 1, signal: null });
           expect(messages).toEqual([]);
@@ -183,6 +204,7 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
         child.kill("SIGKILL");
         await exited.promise;
         control.destroy();
+        lineage.destroy();
       }
     },
   );
