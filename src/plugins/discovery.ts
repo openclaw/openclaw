@@ -1180,10 +1180,10 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     if (!stat) {
       return;
     }
-    // Origin gates entry resolution and bundled runtime privileges, so pointing
-    // plugins.load.paths at a host-owned plugin must not reclassify it.
+    // Origin gates entry resolution and bundled runtime privileges. Configured
+    // paths and install records must resolve host-owned plugins as bundled.
     const origin =
-      params.origin === "config" &&
+      (params.origin === "config" || params.origin === "global") &&
       isHostBundledPluginRoot(stat.isFile() ? path.dirname(resolved) : resolved, env)
         ? "bundled"
         : params.origin;

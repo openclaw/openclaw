@@ -54,6 +54,16 @@ export class PluginRegistryInspectionResources {
     this.#source.rollback(pluginId);
   }
 
+  /** Copied callbacks keep their source through this inspection's final disposer. */
+  retainDependency(dependency: PluginRegistryInspectionResources): void {
+    if (this.#release) {
+      throw new Error("Plugin inspection resources have been released");
+    }
+    if (dependency !== this) {
+      this.#source.retainDependency(() => dependency.retain());
+    }
+  }
+
   /** Retains physical resources without extending this inspection's authority. */
   retain(): { release: () => Promise<void> } {
     if (this.#release) {

@@ -25,6 +25,7 @@ import {
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  acquirePreparedModelRuntimeSnapshot,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -63,6 +64,16 @@ export type GetPublishedPreparedModelCatalogOwnerParams = Omit<
 >;
 
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
+type PreparedModelCatalogOwner = {
+  snapshot: PreparedModelRuntimeSnapshot;
+  release?: () => void;
+};
+
+async function preparePublishedCatalogOwner(
+  input: PreparedModelRuntimeInput,
+): Promise<PreparedModelCatalogOwner> {
+  return { snapshot: await prepareModelRuntimeSnapshot(input) };
+}
 
 async function materializeRequestedModelCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
@@ -234,15 +245,17 @@ export function getPreparedModelCatalogSnapshot(
 async function resolveReadOnlyPublishedModelCatalogOwner(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
-): Promise<PreparedModelRuntimeSnapshot | undefined> {
+  preparePublishedOwner = preparePublishedCatalogOwner,
+): Promise<PreparedModelCatalogOwner | undefined> {
   const { activationFull, full } = resolveInputs(params);
   const fullCandidates =
     activationFull.workspaceDir === full.workspaceDir ? [full] : [full, activationFull];
   for (const candidate of fullCandidates) {
     try {
       // Full lifecycle owners include provider augmentation omitted by read-only fallback builds.
-      const prepared = await prepareModelRuntimeSnapshot(candidate);
-      if (!acceptsPreparedSnapshotConfig(prepared, candidate, configPolicy)) {
+      const prepared = await preparePublishedOwner(candidate);
+      if (!acceptsPreparedSnapshotConfig(prepared.snapshot, candidate, configPolicy)) {
+        prepared.release?.();
         throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
       }
       return prepared;
@@ -258,12 +271,17 @@ async function resolveReadOnlyPublishedModelCatalogOwner(
 async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
-): Promise<{ snapshot: PreparedModelRuntimeSnapshot; release?: () => void }> {
+  preparePublishedOwner = preparePublishedCatalogOwner,
+): Promise<PreparedModelCatalogOwner> {
   const { activationExact, activationFull, exact } = resolveInputs(params);
   if (params.readOnly) {
-    const prepared = await resolveReadOnlyPublishedModelCatalogOwner(params, configPolicy);
+    const prepared = await resolveReadOnlyPublishedModelCatalogOwner(
+      params,
+      configPolicy,
+      preparePublishedOwner,
+    );
     if (prepared) {
-      return { snapshot: prepared };
+      return prepared;
     }
     const lease = await acquireReadOnlyPreparedModelRuntime(activationExact);
     if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationExact, configPolicy)) {
@@ -273,10 +291,11 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
     return lease;
   }
   try {
-    const preparedExact = await prepareModelRuntimeSnapshot(exact);
-    if (acceptsPreparedSnapshotConfig(preparedExact, exact, configPolicy)) {
-      return { snapshot: preparedExact };
+    const preparedExact = await preparePublishedOwner(exact);
+    if (acceptsPreparedSnapshotConfig(preparedExact.snapshot, exact, configPolicy)) {
+      return preparedExact;
     }
+    preparedExact.release?.();
   } catch (error) {
     if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
       throw error;
@@ -311,6 +330,7 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
   read: (snapshot: PreparedModelRuntimeSnapshot) => T | Promise<T>,
+  preparePublishedOwner = preparePublishedCatalogOwner,
 ): Promise<T> {
   // Ordinary reads stay passive; explicit refresh keeps its existing writable default.
   const request = {
@@ -323,6 +343,7 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
   const { snapshot, release } = await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
     request,
     configPolicy,
+    preparePublishedOwner,
   );
   try {
     // Only published owners expose generation caches; temporary reads use their prepared facts.
@@ -334,7 +355,7 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
             request.readOnly,
             request.refreshFullCatalog,
           );
-    // Projection must finish before a temporary lease retires its liveness predicate.
+    // Projection must finish before releasing the selected generation's resources.
     return await read(owner);
   } finally {
     release?.();
@@ -385,7 +406,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
 }): Promise<ModelCatalogEntry[]> {
   const request = { ...params, readOnly: true };
   const publishedOwner = getPreparedModelCatalogOwnerSnapshot(request);
-  const owner = await resolveReadOnlyPublishedModelCatalogOwner(request, "exact");
+  const owner = (await resolveReadOnlyPublishedModelCatalogOwner(request, "exact"))?.snapshot;
   const catalog = owner
     ? (publishedOwner ? await materializeRequestedModelCatalog(owner, true, undefined) : owner)
         .modelCatalog
@@ -417,12 +438,17 @@ export async function loadProviderScopedThinkingCatalog(params: {
   return entries;
 }
 
-/** Keeps the exact catalog owner alive through an asynchronous read. */
+/** Retains published or temporary catalog resources through an asynchronous read. */
 export async function withPreparedModelCatalogOwner<T>(
   params: LoadPreparedModelCatalogParams,
   read: (snapshot: PreparedModelRuntimeSnapshot) => T | Promise<T>,
 ): Promise<T> {
-  return await withPreparedModelCatalogOwnerPolicy(params, "exact", read);
+  return await withPreparedModelCatalogOwnerPolicy(
+    params,
+    "exact",
+    read,
+    acquirePreparedModelRuntimeSnapshot,
+  );
 }
 
 /** Resolves the lifecycle owner for an exact caller-supplied config. */

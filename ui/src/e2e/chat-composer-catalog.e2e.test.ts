@@ -707,7 +707,9 @@ suite.define(() => {
       await gateway.waitForRequest("models.list", { after: 1 });
       await trigger.click();
       await gateway.setMethodResponse("models.list", { models: [existing, published] });
+      const previousRequestCount = (await gateway.getRequests("models.list")).length;
       await trigger.click();
+      await gateway.waitForRequest("models.list", { after: previousRequestCount });
       await expect
         .poll(() => composer.locator('[data-chat-model-option="example/published"]').isVisible())
         .toBe(true);

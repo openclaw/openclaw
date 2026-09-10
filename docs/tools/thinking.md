@@ -125,6 +125,8 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 ## Related
 
 - Elevated mode docs live in [Elevated mode](/tools/elevated).
+- [Slash commands](/tools/slash-commands) — changing the thinking level mid-session
+- [Configuration reference](/gateway/configuration-reference) — where the thinking defaults are configured
 
 ## Heartbeats
 

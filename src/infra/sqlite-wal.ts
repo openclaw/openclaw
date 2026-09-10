@@ -10,6 +10,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasErrnoCode } from "./errno.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 import { isSqliteLockError, runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
@@ -738,11 +739,25 @@ export function configureSqliteConnectionPragmas(
 ): SqliteWalMaintenance {
   const { foreignKeys, synchronous, ...walOptions } = options;
   const maintenance = configureSqliteWalMaintenance(db, walOptions);
-  if (synchronous) {
-    db.exec(`PRAGMA synchronous = ${synchronous};`);
+  try {
+    if (synchronous) {
+      db.exec(`PRAGMA synchronous = ${synchronous};`);
+    }
+    if (foreignKeys) {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
+    return maintenance;
+  } catch (error) {
+    // The caller cannot dispose maintenance until this function returns it.
+    try {
+      maintenance.close();
+    } catch (closeError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, closeError],
+        "SQLite connection pragma configuration and WAL maintenance cleanup both failed.",
+        error,
+      );
+    }
+    throw error;
   }
-  if (foreignKeys) {
-    db.exec("PRAGMA foreign_keys = ON;");
-  }
-  return maintenance;
 }

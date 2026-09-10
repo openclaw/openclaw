@@ -402,7 +402,7 @@ export function buildStatusModelSelectionLines(params: {
       `  Session selected: ${selected}`,
       reasonLine,
       clearLine,
-      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-strictness",
     );
   }
   if (mismatches.length > limit) {

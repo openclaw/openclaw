@@ -2312,13 +2312,11 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {
   it("uses the RPC maxChars override when present", () => {
-    expect(resolveEffectiveChatHistoryMaxChars({}, 45)).toBe(45);
+    expect(resolveEffectiveChatHistoryMaxChars(45)).toBe(45);
   });
 
   it("falls back to the default hardcoded limit", () => {
-    expect(resolveEffectiveChatHistoryMaxChars({}, undefined)).toBe(
-      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-    );
+    expect(resolveEffectiveChatHistoryMaxChars()).toBe(DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS);
   });
 });
 

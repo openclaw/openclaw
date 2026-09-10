@@ -1109,8 +1109,9 @@ async function runCliWithPreparedOutputMode(
   startupTrace.mark("argv");
 
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
-  const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
-  await assertSupportedRuntime();
+  const { assertSupportedRuntime, isCurrentRuntimeSupported } =
+    await import("../infra/runtime-guard.js");
+  await assertSupportedRuntime(undefined, undefined, normalizedArgv);
 
   if (
     !isHelpOrVersionInvocation &&
@@ -1192,6 +1193,7 @@ async function runCliWithPreparedOutputMode(
     env: process.env,
   });
   const useSourceOnlyBestEffortConfig =
+    !isCurrentRuntimeSupported() ||
     normalizedInvocation.primary === "update" ||
     (normalizedInvocation.primary === "doctor" && hasFlag(normalizedArgv, "--lint"));
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {

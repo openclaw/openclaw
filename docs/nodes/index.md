@@ -56,6 +56,7 @@ Node capabilities in depth:
 - [Image and media support](/nodes/images) - Image formats and attachment handling.
 - [Audio and voice notes](/nodes/audio) - Audio capture and voice-note handling.
 - [Node troubleshooting](/nodes/troubleshooting) - Pairing, foreground, permission, and tool failures.
+- [`openclaw nodes`](/cli/nodes) - CLI reference for listing, inspecting, and managing nodes.
 
 ## Where each section moved
 

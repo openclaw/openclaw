@@ -22,9 +22,13 @@ async function readFailedWriterLog(failure: unknown) {
       logging.setLoggerOverride({ level: "warn", file: logPath });
       try {
         await expect(
-          runExclusiveSqliteSessionWrite({ agentId: "main", env: state.env }, async () => {
-            throw failure;
-          }),
+          runExclusiveSqliteSessionWrite(
+            { agentId: "main", env: state.env },
+            async () => {
+              throw failure;
+            },
+            "session.transcript.batch",
+          ),
         ).rejects.toBe(failure);
         await logging.flushLogger();
         const content = await fs.readFile(logPath, "utf8");
@@ -33,6 +37,7 @@ async function readFailedWriterLog(failure: unknown) {
         const details = record["2"];
         assert.ok(isRecord(details));
         expect(record["1"]).toBe("SQLite session write failed");
+        expect(details.operation).toBe("session.transcript.batch");
         return { content, error: details.error };
       } finally {
         await logging.flushLogger();
@@ -131,6 +136,7 @@ test.each([false, true])(
             order.push("first:end");
             return "first";
           },
+          "session.history.archive-prune",
           diagnostics,
         ),
       );
@@ -138,24 +144,32 @@ test.each([false, true])(
       clock = 100;
       const failure = new Error("synthetic writer failure");
       const second = owners.run("second", () =>
-        runExclusiveSqliteSessionWrite(scope, async () => {
-          order.push("second:start");
-          clock += 400;
-          if (fail) {
-            throw failure;
-          }
-          return "second";
-        }),
+        runExclusiveSqliteSessionWrite(
+          scope,
+          async () => {
+            order.push("second:start");
+            clock += 400;
+            if (fail) {
+              throw failure;
+            }
+            return "second";
+          },
+          "session.maintenance.plan",
+        ),
       );
       const settled = second.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
       const queuedSuccessor = owners.run("queued-successor", () =>
-        runExclusiveSqliteSessionWrite(scope, async () => {
-          order.push("queued-successor");
-          return "queued-successor";
-        }),
+        runExclusiveSqliteSessionWrite(
+          scope,
+          async () => {
+            order.push("queued-successor");
+            return "queued-successor";
+          },
+          "session.pending-input.stage",
+        ),
       );
       try {
         expect(order).toEqual(["first:start"]);
@@ -165,6 +179,18 @@ test.each([false, true])(
         expect(await settled).toEqual(fail ? { error: failure } : { value: "second" });
         expect(await queuedSuccessor).toBe("queued-successor");
         expect(order).toEqual(["first:start", "first:end", "second:start", "queued-successor"]);
+        expect(records.find((entry) => entry.owner === "first")?.args[1]).toHaveProperty(
+          "operation",
+          "session.history.archive-prune",
+        );
+        expect(records.find((entry) => entry.owner === "second")?.args[1]).toHaveProperty(
+          "operation",
+          "session.maintenance.plan",
+        );
+        expect(records.find((entry) => entry.owner === "queued-successor")?.args[1]).toHaveProperty(
+          "operation",
+          "session.pending-input.stage",
+        );
         expect(records.find((entry) => entry.owner === "first")?.args[1]).toEqual(
           expect.objectContaining({
             pid: process.pid,
@@ -198,9 +224,15 @@ test.each([false, true])(
         if (fail) {
           expect(record?.args[1]).toHaveProperty("error", failure.message);
         }
-        await expect(runExclusiveSqliteSessionWrite(scope, async () => "successor")).resolves.toBe(
-          "successor",
-        );
+        const warningCount = records.length;
+        await expect(
+          runExclusiveSqliteSessionWrite(
+            scope,
+            async () => "successor",
+            "session.pending-input.stage",
+          ),
+        ).resolves.toBe("successor");
+        expect(records).toHaveLength(warningCount);
       } finally {
         release.resolve();
         await Promise.allSettled([first, second, queuedSuccessor]);
@@ -214,9 +246,13 @@ test("a queued writer rejected by cleanup never runs after release", async () =>
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = { agentId: "main", env: state.env };
     const release = createDeferredCore();
-    const first = runExclusiveSqliteSessionWrite(scope, async () => await release.promise);
+    const first = runExclusiveSqliteSessionWrite(
+      scope,
+      async () => await release.promise,
+      "session.history.archive-prune",
+    );
     const run = vi.fn(async () => "never");
-    const second = runExclusiveSqliteSessionWrite(scope, run);
+    const second = runExclusiveSqliteSessionWrite(scope, run, "session.maintenance.plan");
     const rejected = expect(second).rejects.toThrow("SQLite session store queue cleared for test");
     const drained = drainSessionStoreWriterQueuesForTest();
     try {

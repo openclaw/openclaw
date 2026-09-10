@@ -553,6 +553,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       providerLifecycle.listMachineOptions(profileId),
     listOperatingSystems: async (profileId: string) =>
       providerLifecycle.listOperatingSystems(profileId),
+    bindPreparedWorkspace: environmentAccess.bindPreparedWorkspace,
     create: async (
       profileId: string,
       idempotencyKey: string,
@@ -561,6 +562,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       projectPath?: string,
       signal?: AbortSignal,
       os?: string,
+      runSetupScript?: boolean,
     ) => {
       if (executionMode) {
         requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
@@ -571,6 +573,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           os,
           executionMode,
           projectPath,
+          runSetupScript,
           signal,
         }),
       );
@@ -583,6 +586,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       projectPath?: string,
       signal?: AbortSignal,
       os?: string,
+      runSetupScript?: boolean,
     ) => {
       requireProviderExecutionMode(profile.providerId, executionMode);
       return environmentAccess.project(
@@ -595,6 +599,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           os,
           executionMode,
           projectPath,
+          runSetupScript,
           signal,
         }),
       );

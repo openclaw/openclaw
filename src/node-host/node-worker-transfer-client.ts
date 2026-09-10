@@ -45,6 +45,10 @@ import {
   type NodeWorkerWorkspaceTransferInput,
 } from "../worker/node-workspace-transfer-protocol.js";
 import {
+  prepareNodeWorkerWorkspaceOverlay,
+  type NodeWorkerPreparedWorkspaceTransfer,
+} from "./node-worker-prepared-workspace-transfer.js";
+import {
   applyNodeRepositoryCheckpoint,
   readNodeRepositoryCheckpointBase,
   withNodeRepositoryPublication,
@@ -221,6 +225,7 @@ async function downloadWorkspace(params: {
   workspaceDir: string;
   manifestHome: string;
   transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: "download" }>;
+  prepared?: NodeWorkerPreparedWorkspaceTransfer;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -258,6 +263,19 @@ async function downloadWorkspace(params: {
   if (params.transfer.seedKey && (!manifest.baseCommit || params.transfer.attachments)) {
     throw new Error("Prepared project seeds require a Git workspace transfer");
   }
+  const overlay =
+    params.prepared && !params.transfer.attachments
+      ? await prepareNodeWorkerWorkspaceOverlay({
+          prepared: params.prepared,
+          manifest,
+          manifestRef: params.transfer.manifestRef,
+          // Only initial Gateway project sync carries a seed. Accepted publication and
+          // explicit checkpoints restore exact snapshots, including setup-output deletions.
+          sourceOverlay: Boolean(params.transfer.seedKey) && !checkpointBase,
+          hashMemo: params.hashMemo,
+          signal: params.signal,
+        })
+      : undefined;
   const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
   if (
     params.transfer.attachments &&
@@ -293,7 +311,7 @@ async function downloadWorkspace(params: {
     if (published.trim() !== params.transfer.manifestRef) {
       throw new Error("workspace transfer manifest publication acknowledgement is invalid");
     }
-    if (manifest.baseCommit && !checkpointBase) {
+    if (manifest.baseCommit && !checkpointBase && !overlay) {
       try {
         let seeded = false;
         if (params.transfer.seedKey) {
@@ -360,7 +378,11 @@ async function downloadWorkspace(params: {
     }
     await withWorkerWorkspaceHashMemo(stagingHashMemo, async () => {
       for (const entry of manifest.entries) {
-        if (checkpointPaths && !checkpointPaths.has(entry.path)) {
+        if (
+          overlay
+            ? !overlay.changed.has(entry.path)
+            : checkpointPaths && !checkpointPaths.has(entry.path)
+        ) {
           continue;
         }
         const destination = workspacePath(staging, entry.path);
@@ -378,6 +400,11 @@ async function downloadWorkspace(params: {
         await fsp.rm(destination, { recursive: true, force: true });
         if (entry.type === "symlink") {
           await fsp.symlink(entry.target, destination);
+          continue;
+        }
+        if (overlay && checkpointPaths && !checkpointPaths.has(entry.path)) {
+          await overlay.materializeSourceFile(entry, destination);
+          await fsp.chmod(destination, entry.mode);
           continue;
         }
         await downloadFile({
@@ -400,7 +427,7 @@ async function downloadWorkspace(params: {
     const blobApplyMs = performance.now() - blobApplyStartedAt;
     // Reuse only hashes validated on this staging filesystem. Capture still checks
     // the complete tree and current handle identities before the atomic replacement.
-    if (checkpointBase && checkpointBaseRef) {
+    if (checkpointBase && checkpointBaseRef && !overlay) {
       await applyNodeRepositoryCheckpoint({
         workspaceDir: params.workspaceDir,
         stagingRoot: staging,
@@ -412,14 +439,16 @@ async function downloadWorkspace(params: {
       });
       params.hashMemo?.clear();
     } else {
-      const observed = await captureManifest({
-        workspaceDir: staging,
-        manifestHome: params.manifestHome,
-        baseCommit: manifest.baseCommit,
-        referenceManifestRef: params.transfer.manifestRef,
-        hashMemo: stagingHashMemo,
-        signal: params.signal,
-      });
+      const observed = overlay
+        ? await overlay.apply(staging)
+        : await captureManifest({
+            workspaceDir: staging,
+            manifestHome: params.manifestHome,
+            baseCommit: manifest.baseCommit,
+            referenceManifestRef: params.transfer.manifestRef,
+            hashMemo: stagingHashMemo,
+            signal: params.signal,
+          });
       if (observed !== params.transfer.manifestRef) {
         throw new Error(
           `workspace transfer materialized a different manifest (${observed}/${params.transfer.manifestRef})`,
@@ -451,10 +480,10 @@ async function downloadWorkspace(params: {
         }
         params.signal?.throwIfAborted();
       }
-    } else if (!checkpointBase) {
+    } else if (!overlay && !checkpointBase) {
       await replaceWorkspace(params.workspaceDir, staging);
     }
-    if (params.hashMemo && !checkpointBase) {
+    if (params.hashMemo && !overlay && !checkpointBase) {
       replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, [...stagingHashMemo]);
     }
     transferLog.debug("node worker workspace transfer completed", {
@@ -487,6 +516,7 @@ async function uploadWorkspace(params: {
   workspaceDir: string;
   manifestHome: string;
   transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: "upload" }>;
+  prepared?: NodeWorkerPreparedWorkspaceTransfer;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -524,6 +554,7 @@ async function uploadWorkspace(params: {
     manifestHome: params.manifestHome,
     baseCommit: base.baseCommit,
     referenceManifestRef: params.transfer.referenceManifestRef,
+    baseManifestRef: params.transfer.baseManifestRef,
     ...(params.hashMemo === undefined ? {} : { hashMemo: params.hashMemo }),
     signal: params.signal,
   });
@@ -614,11 +645,14 @@ export async function runNodeWorkerWorkspaceTransfer(params: {
   workspaceDir: string;
   manifestHome: string;
   transfer: NodeWorkerWorkspaceTransferInput;
+  prepared?: NodeWorkerPreparedWorkspaceTransfer;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
   try {
-    await recoverWorkspaceReplacement(params.workspaceDir);
+    if (!params.prepared) {
+      await recoverWorkspaceReplacement(params.workspaceDir);
+    }
     return params.transfer.direction === "download"
       ? await downloadWorkspace({
           ...params,

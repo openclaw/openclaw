@@ -761,6 +761,7 @@ describe("SQLite active transcript event projection", () => {
         writerEntered();
         await release;
       },
+      "session.transcript.batch",
     );
     await entered;
     const createWorker = vi.fn(() => {

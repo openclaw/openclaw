@@ -319,7 +319,8 @@ vi.mock("../infra/path-env.js", () => ({
   ensureOpenClawCliOnPath: ensurePathMock,
 }));
 
-vi.mock("../infra/runtime-guard.js", () => ({
+vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/runtime-guard.js")>()),
   assertSupportedRuntime: assertRuntimeMock,
 }));
 

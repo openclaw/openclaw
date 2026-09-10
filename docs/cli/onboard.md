@@ -466,3 +466,8 @@ openclaw channels add
 openclaw configure
 openclaw agents add <name>
 ```
+
+## Related
+
+- [CLI reference](/cli)
+- [`openclaw setup`](/cli/setup) — the system-agent entry point; bare `setup` is interactive, and falls through to guided onboarding on a fresh system

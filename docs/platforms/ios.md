@@ -636,3 +636,4 @@ same iOS limits as Talk started inside the app.
 - [Pairing](/channels/pairing)
 - [Discovery](/gateway/discovery)
 - [Bonjour](/gateway/bonjour)
+- [Stable HTTPS URL](/gateway/stable-https-url) — give a loopback-only Gateway a stable, tailnet-only HTTPS URL with Tailscale Serve

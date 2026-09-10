@@ -193,3 +193,4 @@ Tasks remain in memory only. Completed and other terminal tasks are retained for
 - [Channel routing](/channels/channel-routing)
 - [Gateway security](/gateway/security)
 - [Channel plugin SDK](/plugins/sdk-channel-plugins)
+- [A2A plugin reference](/plugins/reference/a2a) — manifest, config, and tool reference for the plugin
