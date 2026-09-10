@@ -27,6 +27,8 @@ import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
 import { renderReadOnlyTranscript } from "./chat-read-only-transcript.ts";
 import {
+  loadOlderTaskTranscript,
+  readTaskDetailSnapshot,
   readTaskTranscript,
   resetTaskDetail,
   type TaskDetailHost,
@@ -54,7 +56,7 @@ export function renderTaskDetailPanel(params: {
     `;
   }
   const detailedTask = backgroundTasks.taskDetails.get(task.id);
-  const currentTask = newestTaskSnapshot(task, detailedTask);
+  const currentTask = readTaskDetailSnapshot(params.host, newestTaskSnapshot(task, detailedTask));
   // A subagent's sessionKey is its requester's conversation, never its own
   // work; only the child session is that task's transcript.
   const transcriptSessionKey = normalizeOptionalString(
@@ -65,15 +67,17 @@ export function renderTaskDetailPanel(params: {
   // A task pointing at this pane's canonical session uses the inspector. Mirroring
   // the current conversation into its own detail sidebar would duplicate the chat.
   const content =
-    transcriptSessionKey &&
-    !uiConversationMatches(
-      params.host,
-      params.host.sessionKey,
-      transcriptSessionKey,
-      currentTask.agentId,
-    )
-      ? renderTaskTranscript({ ...params, task: currentTask, sessionKey: transcriptSessionKey })
-      : renderTaskFallback(currentTask, backgroundTasks, params.host);
+    currentTask.transcriptAvailable && !transcriptSessionKey
+      ? renderTaskTranscript({ ...params, task: currentTask })
+      : transcriptSessionKey &&
+          !uiConversationMatches(
+            params.host,
+            params.host.sessionKey,
+            transcriptSessionKey,
+            currentTask.agentId,
+          )
+        ? renderTaskTranscript({ ...params, task: currentTask, sessionKey: transcriptSessionKey })
+        : renderTaskFallback(currentTask, backgroundTasks, params.host);
   return html`
     <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
       ${renderTaskHeader(taskTitle(currentTask), currentTask, backgroundTasks)} ${content}
@@ -151,36 +155,47 @@ function renderTaskHeader(
 function renderTaskTranscript(params: {
   chat: ChatThreadProps;
   host: TaskDetailHost;
-  sessionKey: string;
+  sessionKey?: string;
   task: TaskSummary;
   transcript: ChatTranscriptController;
 }): TemplateResult {
   const load = readTaskTranscript(params.host, {
     taskId: params.task.id,
-    sessionKey: params.sessionKey,
+    ...(params.sessionKey
+      ? { sessionKey: params.sessionKey }
+      : { native: true as const, active: isActiveTask(params.task) }),
   });
   if (load.status === "loading") {
     return renderPanelLoadingSkeleton("review", t("chat.backgroundTasks.transcriptLoading"));
   }
   if (load.status === "error") {
     return html`<div class="sidebar-content chat-task-detail__state chat-task-detail__state--error">
-      ${t("chat.backgroundTasks.transcriptFailed")}
+      ${
+        !params.sessionKey && isActiveTask(params.task)
+          ? t("chat.backgroundTasks.transcriptRetrying")
+          : t("chat.backgroundTasks.transcriptFailed")
+      }
     </div>`;
   }
-  if (load.messages.length === 0) {
+  if (load.messages.length === 0 && !load.nextCursor) {
     return html`<div class="sidebar-content chat-task-detail__state">
       ${t("chat.backgroundTasks.transcriptEmpty")}
     </div>`;
   }
-  const selectedSession = params.chat.sessions?.sessions.find(
-    (row) =>
-      (row.key !== "global" ||
-        (isUiGlobalScopeConfigured(params.host) &&
-          normalizeAgentId(params.host.sessionsResultAgentId ?? "") ===
-            normalizeAgentId(params.task.agentId))) &&
-      uiSessionRowMatchesSelectedChat(params.host, row.key, params.sessionKey),
-  );
+  const sessionKey = params.sessionKey;
+  const selectedSession = sessionKey
+    ? params.chat.sessions?.sessions.find(
+        (row) =>
+          (row.key !== "global" ||
+            (isUiGlobalScopeConfigured(params.host) &&
+              normalizeAgentId(params.host.sessionsResultAgentId ?? "") ===
+                normalizeAgentId(params.task.agentId))) &&
+          uiSessionRowMatchesSelectedChat(params.host, row.key, sessionKey),
+      )
+    : undefined;
   return html`<div class="sidebar-content chat-task-detail__content">
+    ${load.nextCursor ? html`<button class="btn btn--ghost btn--sm" type="button" ?disabled=${load.loadingOlder} @click=${() => loadOlderTaskTranscript(params.host)}>${t("chat.backgroundTasks.loadOlder")}</button>` : nothing}
+    ${load.olderError ? html`<div class="chat-task-detail__state--error">${t("chat.backgroundTasks.transcriptFailed")}</div>` : nothing}
     <div class="chat-task-detail__transcript">
       ${renderReadOnlyTranscript({
         chat: {
@@ -190,7 +205,8 @@ function renderTaskTranscript(params: {
         },
         messages: load.messages,
         paneId: `${params.chat.paneId}:task-sidebar`,
-        sessionKey: params.sessionKey,
+        sessionKey: params.sessionKey ?? `task:${params.task.id}`,
+        providerOwned: !params.sessionKey,
         transcript: params.transcript,
       })}
     </div>

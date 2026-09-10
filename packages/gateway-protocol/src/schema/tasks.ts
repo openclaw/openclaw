@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionCatalogTranscriptItemSchema } from "./sessions-catalog.js";
 import { withSince } from "./since.js";
 
 /**
@@ -55,6 +56,8 @@ export const TaskSummarySchema = closedObject({
   agentId: Type.Optional(Type.String()),
   sessionKey: Type.Optional(Type.String()),
   childSessionKey: Type.Optional(Type.String()),
+  /** Task-scoped provider history, distinct from the requester conversation. */
+  transcriptAvailable: Type.Optional(Type.Boolean()),
   ownerKey: Type.Optional(Type.String()),
   runId: Type.Optional(Type.String()),
   taskId: Type.Optional(Type.String()),
@@ -108,6 +111,23 @@ export const TasksGetResultSchema = closedObject({
   task: TaskSummarySchema,
 });
 
+/** Read-only provider history addressed exclusively by an authorized ledger task. */
+export const TasksHistoryParamsSchema = closedObject({
+  taskId: NonEmptyString,
+  cursor: Type.Optional(Type.String({ maxLength: 16384 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+});
+
+export const TasksHistoryResultSchema = closedObject({
+  taskId: NonEmptyString,
+  // Live refresh merges pages by source identity, never by repeated message text.
+  items: Type.Array(
+    closedObject({ ...SessionCatalogTranscriptItemSchema.properties, id: NonEmptyString }),
+    { maxItems: 100 },
+  ),
+  nextCursor: Type.Optional(Type.String({ maxLength: 16384 })),
+});
+
 /** Cancel request for one task id with optional operator reason. */
 export const TasksCancelParamsSchema = closedObject({
   taskId: NonEmptyString,
@@ -149,3 +169,6 @@ export type TasksCancelParams = Static<typeof TasksCancelParamsSchema>;
 export type TasksCancelResult = Static<typeof TasksCancelResultSchema>;
 export type TasksRecoveryParams = Static<typeof TasksRecoveryParamsSchema>;
 export type TasksRecoveryResult = Static<typeof TasksRecoveryResultSchema>;
+
+export type TasksHistoryParams = Static<typeof TasksHistoryParamsSchema>;
+export type TasksHistoryResult = Static<typeof TasksHistoryResultSchema>;

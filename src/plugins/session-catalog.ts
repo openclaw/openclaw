@@ -7,6 +7,7 @@ import type {
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { TasksHistoryResult } from "../../packages/gateway-protocol/src/schema/tasks.js";
 import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import { listAgentIds, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -40,6 +41,20 @@ export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "
   /** False when Gateway-local reads must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
 };
+/** Host-resolved task scope. Never accept native identifiers or source homes from the caller. */
+type SessionCatalogTaskHistoryProviderParams = {
+  taskId: string;
+  taskKind: string;
+  runId?: string;
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  agentId?: string;
+  ownerKey: string;
+  cursor?: string;
+  limit?: number;
+  allowProcessHomeFallback?: boolean;
+};
+
 export type SessionCatalogContinueProviderParams = Omit<
   SessionsCatalogContinueParams,
   "catalogId"
@@ -200,6 +215,14 @@ export type SessionCatalogProvider = {
   list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
   /** Items are newest-first by source order; nextCursor continues to older items. */
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
+  /** Separate task admission; does not grant catalog visibility or continuation. */
+  taskHistory?: {
+    taskKinds: readonly string[];
+    /** Verify ownership and lineage; return stable item IDs, excluding reasoning and raw payloads. */
+    read: (
+      params: SessionCatalogTaskHistoryProviderParams,
+    ) => Promise<Omit<SessionsCatalogReadResult, "items"> & { items: TasksHistoryResult["items"] }>;
+  };
   continueSession?: (
     params: SessionCatalogContinueProviderParams,
   ) => Promise<SessionCatalogContinueProviderResult>;

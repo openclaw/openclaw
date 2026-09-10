@@ -45,6 +45,15 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
   <Accordion title="Cron, tasks, plugins, skills, devices, exec approvals">
     - Automations (cron jobs): stat cards (automation count, failing count, scheduler state, next wake) above an Automations/Run history tab switch; the Automations tab lists jobs in a filterable table (All/Active/Paused, search, schedule and last-run filters, per-row action menu) with starter suggestions below, and the Run history tab shows recent runs across all automations (`cron.*`).
     - Tasks: live active and recent background task ledger with linked sessions and cancellation (`tasks.*`). Chat's Background tasks rail groups running and finished work; selecting a rail row opens that task's live status and transcript or prompt/output inspector in the detail sidebar.
+      Codex-native children use task-scoped history rather than the parent chat.
+      The open inspector refreshes active children even after the parent yields;
+      **Load older** pages through earlier activity, up to 800 retained items.
+      Closing or hiding the pane,
+      disconnecting, or observing a terminal task stops active polling. Private
+      reasoning and raw provider payloads are excluded. If the parent session is
+      reset or its native binding/source changes, historical child inspection may
+      become unavailable; the UI never falls back to the parent's transcript.
+      This inspection does not add Discord progress notifications.
     - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`); MCP server rows edit `mcp.servers` through the config methods.
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Devices: one inventory joins paired device records, the node catalog, and live presence (`device.pair.list`, `node.list`, `system-presence`). The Gateway host is pinned first; paired clients show connection status, roles, tokens, capabilities, and commands. Duplicate pairings collapse into an expandable group, and **Clean up N stale** bulk-removes admin-confirmed offline duplicates that were auto-approved (silent local, trusted-CIDR, or SSH-verified) or predate approval provenance. Paired rows have an **Actions** menu to copy its device ID, **Edit alias** (a non-empty operator label of up to 64 characters, preserving the device ID and client-reported name), remove its pairing (`node.pair.remove`, `device.pair.remove`), or approve/reject a pending node re-approval (`node.pair.approve`/`reject`). Device pairing requests retain their visible **Approve** and **Reject** buttons (`device.pair.*`), and mobile setup codes can be created from the same card. **Details** groups device identity, IP, scopes, token rotation/revocation, and commands into labeled facts.

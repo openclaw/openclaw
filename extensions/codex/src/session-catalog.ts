@@ -21,6 +21,7 @@ import {
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   isInteractiveThreadSource,
 } from "./session-catalog-parsing.js";
+import { createCodexTaskHistory } from "./session-catalog-task-history.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
@@ -196,6 +197,7 @@ function registerCodexSessionCatalog(params: {
     id: "codex",
     label: "Codex",
     supportsProcessHomeIsolation: true,
+    taskHistory: createCodexTaskHistory(params),
     resolveCreateSession: ({ agentId }) =>
       resolveCodexCatalogCreateSession(
         params.api.runtime.modelConfig,

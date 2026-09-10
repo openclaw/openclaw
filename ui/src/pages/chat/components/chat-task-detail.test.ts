@@ -142,6 +142,58 @@ describe("task detail panel", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("offers older native history on an empty first page without loading the requester transcript", async () => {
+    const task: TaskSummary = {
+      id: "native-child",
+      taskId: "native-child",
+      status: "completed",
+      runtime: "subagent",
+      agentId: "main",
+      sessionKey: "agent:main:other-session",
+      transcriptAvailable: true,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const request = vi.fn(async (method: string) =>
+      method === "tasks.get"
+        ? { task }
+        : { taskId: task.id, items: [], nextCursor: "older-native-page" },
+    );
+    const host: TaskDetailHost = {
+      sessionKey: "agent:main:main",
+      client: createGatewayBrowserClientFixture({ request }),
+      connected: true,
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const transcript = createTestTranscript();
+    const rerender = () =>
+      render(
+        renderTaskDetailPanel({
+          backgroundTasks: backgroundTasks(task),
+          chat: threadProps("pane-1"),
+          host,
+          task,
+          transcript,
+        }),
+        container,
+      );
+    rerender();
+    await vi.waitFor(() => expect(host.taskDetailState?.load.status).toBe("loaded"));
+    rerender();
+    const older = container.querySelector<HTMLButtonElement>(".chat-task-detail__content > button");
+    expect(older).not.toBeNull();
+    older!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("tasks.history", {
+        taskId: task.id,
+        limit: 100,
+        cursor: "older-native-page",
+      }),
+    );
+    expect(request.mock.calls.some(([method]) => method === "chat.history")).toBe(false);
+    transcript.hostDisconnected();
+  });
+
   it.each([
     {
       name: "uses qualified child session archive attribution",

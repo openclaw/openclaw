@@ -862,6 +862,7 @@ enum class GatewayMethod(
   HooksStatus("hooks.status"),
   TasksRetry("tasks.retry"),
   TasksDismiss("tasks.dismiss"),
+  TasksHistory("tasks.history"),
   AuditRunInspect("audit.run.inspect"),
   SessionsPatchMany("sessions.patchMany"),
   UpdateHold("update.hold"),

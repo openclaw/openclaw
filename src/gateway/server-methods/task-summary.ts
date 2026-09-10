@@ -10,6 +10,7 @@ import {
   sanitizeTaskStatusText,
   truncateTaskStatusText,
 } from "../../tasks/task-status.js";
+import { resolveTaskHistoryProvider } from "./task-history-provider.js";
 
 type TaskLedgerStatus = TaskSummary["status"];
 
@@ -79,6 +80,7 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     ...(task.agentId ? { agentId: task.agentId } : {}),
     sessionKey: task.requesterSessionKey,
     ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
+    ...(resolveTaskHistoryProvider(task) ? { transcriptAvailable: true } : {}),
     ownerKey: task.ownerKey,
     ...(task.runId ? { runId: task.runId } : {}),
     ...(task.parentFlowId ? { flowId: task.parentFlowId } : {}),

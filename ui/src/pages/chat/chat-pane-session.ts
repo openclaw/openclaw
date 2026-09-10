@@ -1,14 +1,11 @@
-import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
 import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
@@ -25,13 +22,9 @@ import {
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import { catalogItemMessage } from "./catalog-item-message.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
-import {
-  CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS,
-  catalogRawResult,
-  catalogRawString,
-} from "./chat-pane-shared.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -366,58 +359,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected catalogItemMessage(item: SessionCatalogTranscriptItem): Record<string, unknown> | null {
-    const timestamp = parseDateStringTimestampMs(item.timestamp) ?? null;
-    const text = item.text?.trim() ? item.text : null;
-    if (item.type === "userMessage") {
-      return text
-        ? {
-            role: "user",
-            // Missing source attribution must never fall back to the current viewer.
-            senderLabel: item.sender?.label ?? t("sessionsView.user"),
-            ...(item.sender
-              ? {
-                  __openclaw: {
-                    senderIdentity: item.sender.identity,
-                    senderId: item.sender.identity.id,
-                    senderName: item.sender.label,
-                    senderProfileAvatarUrl: item.sender.avatarUrl,
-                  },
-                }
-              : {}),
-            content: text,
-            ...(timestamp == null ? {} : { timestamp }),
-            messageId: item.id,
-          }
-        : null;
-    }
-    let content = text;
-    let truncated = item.truncated;
-    if (item.type === "reasoning") {
-      content = text ? `Thinking\n\n${text}` : "Thinking";
-    } else if (item.type === "toolCall") {
-      const label =
-        text ?? catalogRawString(item.raw, ["command", "name", "tool", "title", "query"]);
-      content = label ? `Tool call\n\n${label}` : "Tool call";
-    } else if (item.type === "toolResult") {
-      const output =
-        text ?? catalogRawString(item.raw, ["aggregatedOutput"]) ?? catalogRawResult(item.raw);
-      // Native text and raw fallbacks share the same display limit; source data stays intact.
-      const preview = output ? clampText(output, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null;
-      truncated ||= Boolean(output && preview !== output);
-      content = preview ? `Tool result\n\n${preview}` : "Tool result";
-    }
-    if (!content) {
-      return null;
-    }
-    if (truncated) {
-      content = `${content}\n\n${t("chat.catalogOutputTruncated")}`;
-    }
-    return {
-      role: "assistant",
-      content: [{ type: "text", text: content }],
-      ...(timestamp == null ? {} : { timestamp }),
-      messageId: item.id,
-    };
+    return catalogItemMessage(item);
   }
 
   protected prependUniqueCatalogMessages(messages: unknown[]): unknown[] {

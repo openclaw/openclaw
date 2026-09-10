@@ -655,6 +655,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Public sharing appends so every previously advertised method index remains stable.
   ["session.publicShare.set", "sessions-sharing", "operator.write", "2026.9"],
   ["claws.monitors", "claws-monitors", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  // Task inspection appends to preserve every existing advertised method index.
+  ["tasks.history", "tasks", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

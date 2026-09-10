@@ -5867,6 +5867,7 @@ export const en: TranslationMap & {
       worked: "Worked",
     },
     backgroundTasks: {
+      loadOlder: "Load older activity",
       label: "Background tasks",
       title: "Background tasks",
       show: "Show background tasks",
@@ -5887,6 +5888,7 @@ export const en: TranslationMap & {
       transcriptLoading: "Loading task transcript…",
       transcriptEmpty: "No transcript messages yet.",
       transcriptFailed: "Could not load task transcript.",
+      transcriptRetrying: "Could not load task transcript. Retrying while the task is active.",
       taskDetailTitle: "Task details",
       taskUnavailable: "This task is no longer available.",
       prompt: "Prompt",

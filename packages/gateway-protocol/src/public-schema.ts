@@ -351,6 +351,8 @@ export {
   TaskSummarySchema,
   TasksListParamsSchema,
   TasksListResultSchema,
+  TasksHistoryParamsSchema,
+  TasksHistoryResultSchema,
   TasksGetParamsSchema,
   TasksGetResultSchema,
   TasksCancelParamsSchema,

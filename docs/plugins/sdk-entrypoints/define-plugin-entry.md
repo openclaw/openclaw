@@ -51,13 +51,33 @@ export default definePluginEntry({
   `SessionCatalogProvider` with `api.registerSessionCatalog(...)`. Required
   provider fields are `id`, `label`, `list`, and `read`; optional hooks are
   `resolveCreateSession`, `continueSession`, `copyToGatewaySession`,
-  `checkUpstreamActivity`, `archive`, `openTerminal`, and `startTerminalSession`.
+  `checkUpstreamActivity`, `archive`, `openTerminal`, `startTerminalSession`,
+  and `taskHistory`.
   Core owns the
   `sessions.catalog.*` Gateway methods; providers return host, session,
   transcript, and terminal-plan projections without registering RPCs. A list
   provider should call the optional
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
+
+  `taskHistory` opts provider-native background tasks into read-only inspection.
+  Declare `taskKinds` and implement the typed `read` callback on `SessionCatalogProvider.taskHistory`.
+  The Gateway resolves the ledger task, checks requester-session access, and passes
+  its run and owner identifiers; clients cannot select native threads or homes.
+  The provider must verify the current parent binding, source connection, and child
+  lineage before reading, then revalidate ownership after asynchronous work. Return
+  newest-first catalog transcript items with non-empty, stable source IDs and an
+  opaque `nextCursor`, omitting private
+  reasoning and raw provider payloads. This hook does not grant catalog visibility,
+  continuation, or archival authority. Duplicate task-kind claims fail closed.
+
+  The `tasks.history` RPC accepts `taskId`, optional `cursor` (at most 16,384
+  characters), and optional `limit` (1–100, default 100). It requires
+  `operator.read` plus access to the requesting session. Responses contain `taskId`,
+  `items`, and optional `nextCursor`, bounded to 100 items and 20 MiB. Task summaries
+  advertise `transcriptAvailable` when exactly one registered provider offers the
+  task kind. Missing or revoked native ownership returns “Task history is
+  unavailable”; no requester transcript is substituted.
 
   If a host can finish after `list` returns a fail-soft snapshot, register its
   bounded completion with the optional `waitUntil(completion: Promise<void>)`

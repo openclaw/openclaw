@@ -1,7 +1,11 @@
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import { z } from "zod";
-import type { CodexThreadItem, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
+import type {
+  CodexThread,
+  CodexThreadItem,
+  CodexThreadTurnsListResponse,
+} from "./app-server/protocol.js";
 import {
   CatalogParamsError,
   MAX_TRANSCRIPT_PAGE_BYTES,
@@ -146,6 +150,18 @@ export async function readCodexCatalogTranscriptPage(
   request: TranscriptRequest,
 ): Promise<TranscriptPage> {
   const thread = await control.requireEligibleThread(request.threadId);
+  return readVerifiedCodexTranscriptPage(control, thread, request);
+}
+
+/** Caller must establish thread ownership on the same pinned connection first. */
+export async function readVerifiedCodexTranscriptPage(
+  control: CodexSessionCatalogControl,
+  thread: CodexThread,
+  request: TranscriptRequest,
+): Promise<TranscriptPage> {
+  if (thread.id !== request.threadId) {
+    throw new CatalogParamsError("Codex transcript thread identity changed");
+  }
   if (thread.historyMode !== "paginated") {
     return readLegacyCodexTranscriptPage((params) => control.listTurnPage(params), request);
   }

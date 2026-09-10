@@ -6,6 +6,7 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 type TaskResponsePayload = {
   tasks?: Array<Record<string, unknown>>;
   task?: Record<string, unknown>;
+  items?: Array<Record<string, unknown>>;
   found?: boolean;
   cancelled?: boolean;
   nextCursor?: string;
@@ -69,7 +70,13 @@ export function createSnapshotTask(overrides: Partial<TaskRecord>): TaskRecord {
 }
 
 export async function runTaskHandler(
-  method: "tasks.list" | "tasks.get" | "tasks.cancel" | "tasks.retry" | "tasks.dismiss",
+  method:
+    | "tasks.list"
+    | "tasks.get"
+    | "tasks.history"
+    | "tasks.cancel"
+    | "tasks.retry"
+    | "tasks.dismiss",
   params: Record<string, unknown>,
   config: Record<string, unknown> = {},
   client: GatewayClient | null = null,

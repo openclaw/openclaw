@@ -8,6 +8,7 @@ export function renderReadOnlyTranscript(params: {
   paneId: string;
   sessionKey: string;
   transcript: ChatTranscriptController;
+  providerOwned?: boolean;
 }) {
   const { chat } = params;
   return renderChatThread(
@@ -24,11 +25,11 @@ export function renderReadOnlyTranscript(params: {
       streamStartedAt: null,
       runId: null,
       queue: [],
-      showThinking: chat.showThinking,
+      showThinking: params.providerOwned ? false : chat.showThinking,
       showToolCalls: chat.showToolCalls,
       persistCommentary: chat.persistCommentary,
-      sessions: chat.sessions,
-      sessionHost: chat.sessionHost,
+      sessions: params.providerOwned ? null : chat.sessions,
+      sessionHost: params.providerOwned ? undefined : chat.sessionHost,
       assistantName: chat.assistantName,
       assistantAvatar: chat.assistantAvatar,
       assistantAvatarUrl: chat.assistantAvatarUrl,
@@ -39,12 +40,14 @@ export function renderReadOnlyTranscript(params: {
       // Peer authors link to their Activity feed here exactly as in the live transcript.
       personActivity: chat.personActivity,
       basePath: chat.basePath,
-      fullMessageAgentId: chat.fullMessageAgentId,
-      loadFullAssistantMessage: chat.loadFullAssistantMessage,
+      fullMessageAgentId: params.providerOwned ? undefined : chat.fullMessageAgentId,
+      loadFullAssistantMessage: params.providerOwned ? undefined : chat.loadFullAssistantMessage,
       mediaPolicyEpoch: chat.mediaPolicyEpoch,
-      assistantAttachmentAuthToken: chat.assistantAttachmentAuthToken,
-      resolveArtifactDownload: chat.resolveArtifactDownload,
-      canvasPluginSurfaceUrl: chat.canvasPluginSurfaceUrl,
+      assistantAttachmentAuthToken: params.providerOwned
+        ? undefined
+        : chat.assistantAttachmentAuthToken,
+      resolveArtifactDownload: params.providerOwned ? undefined : chat.resolveArtifactDownload,
+      canvasPluginSurfaceUrl: params.providerOwned ? undefined : chat.canvasPluginSurfaceUrl,
       embedSandboxMode: chat.embedSandboxMode,
       allowExternalEmbedUrls: chat.allowExternalEmbedUrls,
       fetchLinkFavicon: chat.fetchLinkFavicon,
