@@ -13,14 +13,14 @@ sidebarTitle: "ACP agents"
 
 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let
 OpenClaw run external coding harnesses (Claude Code, Cursor, Copilot, Droid,
-OpenClaw ACP, OpenCode, Gemini CLI, and other supported ACPX harnesses)
+OpenClaw ACP, OpenCode, Gemini CLI, and other supported acpx harnesses)
 through an ACP backend plugin. Each spawn is tracked as a
 [background task](/automation/tasks).
 
 <Note>
 **ACP is the external-harness path, not the default Codex path.** The native
 Codex app-server plugin owns `/codex ...` controls and the default
-`openai/gpt-*` embedded runtime for agent turns; ACP owns `/acp ...` controls
+`openai/gpt-*` embedded runtime for agent turns. ACP owns `/acp ...` controls
 and `sessions_spawn({ runtime: "acp" })` sessions.
 
 To let Codex or Claude Code connect as an external MCP client directly to

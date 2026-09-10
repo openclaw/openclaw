@@ -30,7 +30,7 @@ or sign in with OpenAI ChatGPT/Codex OAuth.
 <Steps>
   <Step title="Configure auth">
     Set an API key for at least one provider (for example `OPENAI_API_KEY`,
-    `GEMINI_API_KEY`, `OPENROUTER_API_KEY`) or sign in with OpenAI Codex OAuth.
+    `GEMINI_API_KEY`, `OPENROUTER_API_KEY`) or sign in with OpenAI ChatGPT/Codex OAuth.
   </Step>
   <Step title="Pick a default model (optional)">
     ```json5
@@ -75,19 +75,19 @@ internal image endpoints remain blocked by default.
 
 ## Common routes
 
-| Goal                                                 | Model ref                                                                                           | Auth                                   |
-| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| OpenAI image generation with API billing             | `openai/gpt-image-2`                                                                                | `OPENAI_API_KEY`                       |
-| OpenAI GPT Image 2.5                                 | `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst`                                     | Explicit OpenAI API-key route          |
-| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                                                                                | OpenAI ChatGPT/Codex OAuth             |
-| OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                                                                              | `OPENAI_API_KEY` or OpenAI Codex OAuth |
-| DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell`                                                        | `DEEPINFRA_API_KEY`                    |
-| fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                                                                  | `FAL_KEY`                              |
-| fal GPT Image 2.5                                    | `fal/openai/gpt-image-2.5/flare/text-to-image` or `fal/openai/gpt-image-2.5/sunburst/text-to-image` | `FAL_KEY`                              |
-| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview`                                                  | `OPENROUTER_API_KEY`                   |
-| LiteLLM image generation                             | `litellm/gpt-image-2`                                                                               | `LITELLM_API_KEY`                      |
-| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`                                                               | `AZURE_OPENAI_API_KEY` or Entra ID     |
-| Google Gemini image generation                       | `google/gemini-3.1-flash-image`                                                                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Goal                                             | Model ref                                                                                           | Auth                                           |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| OpenAI image generation with API billing         | `openai/gpt-image-2`                                                                                | `OPENAI_API_KEY`                               |
+| OpenAI GPT Image 2.5                             | `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst`                                     | Explicit OpenAI API-key route                  |
+| OpenAI image generation with ChatGPT/Codex OAuth | `openai/gpt-image-2`                                                                                | OpenAI ChatGPT/Codex OAuth                     |
+| OpenAI transparent-background PNG/WebP           | `openai/gpt-image-1.5`                                                                              | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth |
+| DeepInfra image generation                       | `deepinfra/black-forest-labs/FLUX-1-schnell`                                                        | `DEEPINFRA_API_KEY`                            |
+| fal Krea 2 expressive/style-directed generation  | `fal/krea/v2/medium/text-to-image`                                                                  | `FAL_KEY`                                      |
+| fal GPT Image 2.5                                | `fal/openai/gpt-image-2.5/flare/text-to-image` or `fal/openai/gpt-image-2.5/sunburst/text-to-image` | `FAL_KEY`                                      |
+| OpenRouter image generation                      | `openrouter/google/gemini-3.1-flash-image-preview`                                                  | `OPENROUTER_API_KEY`                           |
+| LiteLLM image generation                         | `litellm/gpt-image-2`                                                                               | `LITELLM_API_KEY`                              |
+| Microsoft Foundry MAI image generation           | `microsoft-foundry/<deployment-name>`                                                               | `AZURE_OPENAI_API_KEY` or Entra ID             |
+| Google Gemini image generation                   | `google/gemini-3.1-flash-image`                                                                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY`           |
 
 The same tool handles text-to-image and reference-image editing. Use `image`
 for one reference or `images` for multiple. For Krea 2 models on fal, those
@@ -160,7 +160,7 @@ current session:
 </ParamField>
 <ParamField path="images" type="string[]">
   Multiple reference images for edit mode or style-reference models (up to 16
-  through the shared tool; provider-specific limits still apply).
+  through the shared tool. Provider-specific limits still apply).
 </ParamField>
 <ParamField path="size" type="string">
   Size hint: `1024x1024`, `1536x1024`, `1024x1536`, `2048x2048`, `3840x2160`.
@@ -202,7 +202,7 @@ nearby geometry option instead of the exact requested one, OpenClaw remaps to
 the closest supported size, aspect ratio, or resolution before submission.
 Unsupported output hints are dropped for providers that do not declare
 support and reported in the tool result. Tool results report the applied
-settings; `details.normalization` captures any requested-to-applied
+settings. `details.normalization` captures any requested-to-applied
 translation.
 </Note>
 
@@ -239,7 +239,7 @@ For `image_generate`, OpenClaw tries providers in this order:
 3. **`agents.defaults.mediaModels.image.fallbacks`** in order.
 4. **Auto-detection** - only when neither a primary nor fallback model is
    configured, using configured provider defaults:
-   - current default provider first;
+   - current default provider first.
    - remaining registered image-generation providers in provider-id order.
 
 If a provider fails (auth error, rate limit, etc.), the next configured
@@ -253,7 +253,7 @@ from each attempt.
   </Accordion>
   <Accordion title="Auto-detection uses configured providers">
     Auto-detection considers provider defaults whose readiness or auth checks pass.
-    Explicit image model configuration limits fallback to the configured list;
+    Explicit image model configuration limits fallback to the configured list.
     OpenClaw does not append auto-detected providers.
   </Accordion>
   <Accordion title="Timeouts">
@@ -261,7 +261,7 @@ from each attempt.
     backends. A per-call `timeoutMs` tool parameter overrides the configured
     default, and configured defaults override plugin-authored provider
     defaults. Google and OpenRouter hosted image providers use 180 second
-    defaults; Microsoft Foundry MAI, xAI, and Azure OpenAI image generation use
+    defaults. Microsoft Foundry MAI, xAI, and Azure OpenAI image generation use
     600 seconds. Codex dynamic-tool calls use a 120 second `image_generate`
     bridge default and honor the same timeout budget when configured, bounded
     by OpenClaw's 600000 ms dynamic-tool bridge maximum.
@@ -284,7 +284,7 @@ inputs. Pass a reference image path or URL:
 ```
 
 OpenAI, OpenRouter, and Google support up to 5 reference images via the
-`images` parameter; xAI supports up to 3. fal supports 1 reference image for
+`images` parameter. xAI supports up to 3. fal supports 1 reference image for
 Flux image-to-image, up to 16 for GPT Image 2.5 edits, up to 10 for older GPT Image edits, up to 10 style references
 for Krea 2, and up to 14 for Nano Banana 2 edits. Microsoft Foundry, MiniMax,
 and ComfyUI support 1.
@@ -332,14 +332,14 @@ and ComfyUI support 1.
 
     The `openai/gpt-image-1.5`, `openai/gpt-image-1`, and
     `openai/gpt-image-1-mini` models can still be selected explicitly. Use
-    `gpt-image-1.5` for transparent-background PNG/WebP output; the current
+    `gpt-image-1.5` for transparent-background PNG/WebP output. The current
     `gpt-image-2` API rejects `background: "transparent"`.
 
     `gpt-image-2` supports both text-to-image generation and
     reference-image editing through the same `image_generate` tool.
     OpenClaw forwards `prompt`, `count`, `size`, `quality`, `outputFormat`,
     and reference images to OpenAI. OpenAI does **not** receive
-    `aspectRatio` or `resolution` directly; when possible OpenClaw maps
+    `aspectRatio` or `resolution` directly. When possible OpenClaw maps
     those into a supported `size`, otherwise the tool reports them as
     ignored overrides.
 
@@ -367,8 +367,8 @@ and ComfyUI support 1.
     }
     ```
 
-    `openai.background` accepts `transparent`, `opaque`, or `auto`;
-    transparent outputs require `outputFormat` `png` or `webp` and a
+    `openai.background` accepts `transparent`, `opaque`, or `auto`.
+    Transparent outputs require `outputFormat` `png` or `webp` and a
     transparency-capable OpenAI image model. OpenClaw routes default
     `gpt-image-2` transparent-background requests to `gpt-image-1.5`.
     `openai.outputCompression` applies to JPEG/WebP outputs and is ignored
@@ -411,7 +411,7 @@ and ComfyUI support 1.
     - Edit endpoint: `/mai/v1/images/edits`
     - Auth: `AZURE_OPENAI_API_KEY` / provider API key, or Entra ID through `az login`
     - Output: one PNG image
-    - Size: default `1024x1024`; width and height must each be at least 768 px,
+    - Size: default `1024x1024`. Width and height must each be at least 768 px,
       and total pixels must be at most 1,048,576
     - Edits: one PNG or JPEG reference image, supported only by
       `MAI-Image-2.5-Flash` and `MAI-Image-2.5` deployments
@@ -482,7 +482,7 @@ and ComfyUI support 1.
     ```
 
     Krea 2 returns one image per request. Prefer `aspectRatio` for
-    Krea; OpenClaw maps `size` to the closest supported Krea aspect ratio and
+    Krea. OpenClaw maps `size` to the closest supported Krea aspect ratio and
     rejects `resolution` for Krea rather than dropping it. Use `fal.creativity`
     when you want a native Krea creativity level:
 
@@ -590,7 +590,7 @@ openclaw infer image generate \
 </Tabs>
 
 The same `--output-format`, `--background`, and `--quality` flags are available
-on `openclaw infer image edit`; `--openai-background` remains as an
+on `openclaw infer image edit`. `--openai-background` remains as an
 OpenAI-specific alias. Use `--openai-moderation low|auto` with both OpenAI image
 generation and reference-image edits. The direct OpenAI Images API and the
 ChatGPT/Codex OAuth Responses backend both support the moderation hint.

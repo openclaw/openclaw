@@ -45,7 +45,7 @@ one per reader job. Open the page that matches your task.
 This browser is **not** your daily driver. It is a safe, isolated surface for
 agent automation and verification.
 
-On macOS, you can explicitly copy cookies from a Chrome-family system profile into a separate managed profile. The managed browser still uses its own user data directory; only the selected cookies are copied, and local storage and IndexedDB stay behind. See [Profiles](/tools/browser/existing-session#profiles-multi-browser) or the [`openclaw browser` CLI reference](/cli/browser) for import commands and limitations.
+On macOS, you can explicitly copy cookies from a Chrome-family system profile into a separate managed profile. The managed browser still uses its own user data directory. Only the selected cookies are copied, and local storage and IndexedDB stay behind. See [Profiles](/tools/browser/existing-session#profiles-multi-browser) or the [`openclaw browser` CLI reference](/cli/browser) for import commands and limitations.
 
 ## Where each section moved
 

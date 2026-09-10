@@ -54,11 +54,11 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 
 ## Related
 
-- [SDK Overview](/plugins/sdk-overview) - registration API and subpath reference
-- [Runtime Helpers](/plugins/sdk-runtime) - `api.runtime` and `createPluginRuntimeStore`
-- [Setup and Config](/plugins/sdk-setup) - manifest and setup entry loading
-- [Channel Plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
-- [Provider Plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
+- [Plugin SDK overview](/plugins/sdk-overview) - registration API and subpath reference
+- [Plugin runtime helpers](/plugins/sdk-runtime) - `api.runtime` and `createPluginRuntimeStore`
+- [Plugin setup and config](/plugins/sdk-setup) - manifest and setup entry loading
+- [Building channel plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
+- [Building provider plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
 
 ## MCP subprocess runtime
 
@@ -71,7 +71,7 @@ const { createMcpStdioClient } = await mcpStdioRuntime.load();
 
 Use `createMcpStdioClient(params)` for a caller-owned MCP proxy subprocess fronting a stateful driver. OpenClaw owns the subprocess and its descendants, newline framing and JSON-RPC validation, initialization, request admission, deadlines, and shutdown. The client starts connecting when the factory returns. Keep this runtime out of plugin registration and paths that do not open MCP connections.
 
-Supply `command`, optional `args`, and an exact `env`; the child inherits no other environment variables. Set `clientInfo` (`name` and `version`), the required `protocolVersion`, `startupTimeoutMs`, `maxPendingRequests`, and `maxFrameBytes`. The server must return exactly the requested protocol version. OpenClaw retains a fixed 32 KiB stderr tail for unexpected-exit diagnostics. The decoder bounds pending bytes plus each incoming chunk before buffering, preserves fragmented UTF-8, skips empty lines, and requires safe integer response IDs.
+Supply `command`, optional `args`, and an exact `env`. The child inherits no other environment variables. Set `clientInfo` (`name` and `version`), the required `protocolVersion`, `startupTimeoutMs`, `maxPendingRequests`, and `maxFrameBytes`. The server must return exactly the requested protocol version. OpenClaw retains a fixed 32 KiB stderr tail for unexpected-exit diagnostics. The decoder bounds pending bytes plus each incoming chunk before buffering, preserves fragmented UTF-8, skips empty lines, and requires safe integer response IDs.
 
 The caller supplies `errors.unavailable(message, cause?)` and `errors.protocol(message, cause?)`, each returning an `Error`. The first classifies process, lifecycle, admission, deadline, and cancellation failures. The second classifies malformed frames, non-timeout JSON-RPC errors, and handshake contract violations. Plugin-specific tool-result normalization stays with the caller.
 
@@ -81,4 +81,4 @@ The returned client exposes three methods:
 - `request(method, params, { timeoutMs, signal? })` waits for startup and returns the object result. An already-aborted signal or a full pending-request limit rejects only that call. After admission, cancellation or timeout retires the entire connection and rejects pending requests with the retained fatal error. The client suppresses SDK cancellation notifications because it terminates the process instead. A non-timeout JSON-RPC error response rejects only its matching request through `errors.protocol`.
 - `stop()` closes admission, retires pending requests, and awaits startup settlement and owned-process cleanup. It rejects through `errors.unavailable` with `proxy cleanup could not be confirmed` if cleanup is uncertain. It never stops a separately started service reached through the proxy's socket.
 
-Malformed frames, incompatible initialization, write failures, and unexpected process exit also retire the whole connection. The first fatal error is retained; create a new client to reconnect. Timeout classification follows the SDK error code, so a timeout-coded server error also retires the connection.
+Malformed frames, incompatible initialization, write failures, and unexpected process exit also retire the whole connection. The first fatal error is retained. Create a new client to reconnect. Timeout classification follows the SDK error code, so a timeout-coded server error also retires the connection.
