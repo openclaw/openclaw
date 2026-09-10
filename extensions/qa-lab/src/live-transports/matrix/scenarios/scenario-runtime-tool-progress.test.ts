@@ -1,4 +1,4 @@
-import { rm, stat } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
@@ -39,6 +39,7 @@ describe.skipIf(process.platform === "win32")("Matrix mention progress gate", ()
         }
       })
       .toBe(true);
+    expect(await readdir(gatePath)).toEqual([]);
     await rm(gatePath, { recursive: true });
   }
 
