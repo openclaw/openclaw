@@ -464,6 +464,7 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       "reference/full-release-validation/profiles",
       "reference/full-release-validation/evidence",
       "reference/release-performance-sweep",
+      "gateway/security/dependency-locking",
       "reference/test",
       "reference/test/local",
       "reference/test/lanes",
