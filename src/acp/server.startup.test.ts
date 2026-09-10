@@ -917,6 +917,83 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
+  it("writes a session's text to the wire before the prompt response that completes it", async () => {
+    // Two creations are outstanding at once, so an update for either is queued. The
+    // prompt response carries no session ID, so nothing about the frame itself keeps
+    // it behind the text it completes — only the boundary does.
+    mockState.acpInputMessages.push({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "session/new",
+      params: { cwd: "/tmp/openclaw" },
+    });
+    mockState.acpInputMessages.push({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "session/new",
+      params: { cwd: "/tmp/openclaw" },
+    });
+    mockState.acpInputMessages.push({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "session/prompt",
+      params: { sessionId: "chatty-session", prompt: [{ type: "text", text: "hi" }] },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    const servePromise = serveAcpGateway({});
+
+    try {
+      await emitHelloAndWaitForAgentSideConnection();
+      mockState.closeAcpInput?.();
+      await readCapturedAcpMessages();
+      const writer = getCapturedAcpStream().writable.getWriter();
+      const chunk = (sessionId: string, text: string) => ({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text },
+          },
+        },
+      });
+      const slowChunk = chunk("slow-session", "slow");
+      const chattyChunk = chunk("chatty-session", "answer");
+      const chattyCreated = { jsonrpc: "2.0", id: 2, result: { sessionId: "chatty-session" } };
+      const endTurn = { jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } };
+      const slowCreated = { jsonrpc: "2.0", id: 1, result: { sessionId: "slow-session" } };
+
+      // Neither session is introduced yet, so both updates are held.
+      await writer.write(slowChunk);
+      await writer.write(chattyChunk);
+      expect(mockState.acpOutputMessages).toEqual([]);
+
+      // Introducing the chatty session releases its own backlog rather than only the
+      // front of the shared queue, where the slow session's update is still blocked.
+      await writer.write(chattyCreated);
+      await writer.write(endTurn);
+      await writer.write(slowCreated);
+
+      // Asserted as one sequence: the guarantee is the order of the whole exchange on
+      // the wire, and checking it frame by frame would stop at the first divergence
+      // instead of showing where a displaced frame actually lands.
+      await vi.waitFor(() => expect(mockState.acpOutputMessages).toHaveLength(5));
+      expect(mockState.acpOutputMessages).toEqual([
+        chattyCreated,
+        chattyChunk,
+        endTurn,
+        slowCreated,
+        slowChunk,
+      ]);
+      writer.releaseLock();
+    } finally {
+      signalHandlers.get("SIGINT")?.();
+      await servePromise;
+      onceSpy.mockRestore();
+    }
+  });
+
   it("tears down the agent, Gateway, and state database when the outbound sink fails", async () => {
     const { onceSpy } = captureProcessSignalHandlers();
     const servePromise = serveAcpGateway({});
