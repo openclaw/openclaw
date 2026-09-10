@@ -13,6 +13,7 @@ import {
   resolveAnnounceTargetFromKey,
   resolvePingPongTurns,
 } from "./sessions-send-helpers.js";
+import { isRequesterParentOfNativeSubagentSession } from "./sessions-send-tool.js";
 
 describe("resolveAnnounceTargetFromKey", () => {
   beforeEach(() => {
@@ -231,3 +232,123 @@ describe("agent-to-agent prompt context", () => {
     expect(context).not.toContain("agent:target:main");
   });
 });
+
+describe("isRequesterParentOfNativeSubagentSession", () => {
+  const requester = "agent:main:dashboard:req-uuid-123";
+
+  it("identifies parentage for traditional subagent: key shapes", () => {
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: {
+          parentSessionKey: requester,
+          spawnedBy: requester,
+        },
+        requesterSessionKey: requester,
+        targetSessionKey: "agent:penny:subagent:child-uuid-456",
+      }),
+    ).toBe(true);
+  });
+
+  it("identifies parentage for visible dashboard spawn-child sessions (#144265)", () => {
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: {
+          parentSessionKey: requester,
+          spawnedBy: requester,
+        },
+        requesterSessionKey: requester,
+        targetSessionKey: "agent:penny:dashboard:child-uuid-456",
+      }),
+    ).toBe(true);
+  });
+
+  it("identifies parentage when only spawnedBy matches requester", () => {
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: {
+          spawnedBy: requester,
+        },
+        requesterSessionKey: requester,
+        targetSessionKey: "agent:penny:dashboard:child-uuid-456",
+      }),
+    ).toBe(true);
+  });
+
+  it("identifies parentage when only parentSessionKey matches requester", () => {
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: {
+          parentSessionKey: requester,
+        },
+        requesterSessionKey: requester,
+        targetSessionKey: "agent:penny:dashboard:child-uuid-456",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects when requester does not match child lineage (unrelated sender)", () => {
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: {
+          parentSessionKey: "agent:other:main",
+          spawnedBy: "agent:other:main",
+        },
+        requesterSessionKey: requester,
+        targetSessionKey: "agent:penny:dashboard:child-uuid-456",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects ACP sessions even if requester matches lineage", () => {
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: {
+          parentSessionKey: requester,
+          spawnedBy: requester,
+          acp: {} as unknown as boolean,
+        },
+        requesterSessionKey: requester,
+        targetSessionKey: "agent:penny:dashboard:child-uuid-456",
+      }),
+    ).toBe(false);
+
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: {
+          parentSessionKey: requester,
+          spawnedBy: requester,
+        },
+        acpMeta: { runtime: "acp" },
+        requesterSessionKey: requester,
+        targetSessionKey: "agent:penny:dashboard:child-uuid-456",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects when entry is missing or requester is empty", () => {
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: null,
+        requesterSessionKey: requester,
+        targetSessionKey: "agent:penny:dashboard:child-uuid-456",
+      }),
+    ).toBe(false);
+
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: { spawnedBy: requester },
+        requesterSessionKey: "",
+        targetSessionKey: "agent:penny:dashboard:child-uuid-456",
+      }),
+    ).toBe(false);
+
+    expect(
+      isRequesterParentOfNativeSubagentSession({
+        entry: { spawnedBy: requester },
+        requesterSessionKey: undefined,
+        targetSessionKey: "agent:penny:dashboard:child-uuid-456",
+      }),
+    ).toBe(false);
+  });
+});
+

@@ -42,6 +42,7 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
+import { classifySessionKind } from "../../sessions/classify-session-kind.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import {
   isCronRunSessionKey,
@@ -277,20 +278,15 @@ async function createConfiguredAgentMainSession(params: {
   }
 }
 
-type SessionsSendRouteEntry = Pick<SessionEntry, "acp" | "parentSessionKey" | "spawnedBy">;
+export type SessionsSendRouteEntry = Pick<SessionEntry, "acp" | "parentSessionKey" | "spawnedBy">;
 
-function isRequesterParentOfNativeSubagentSession(params: {
+export function isRequesterParentOfNativeSubagentSession(params: {
   entry: SessionsSendRouteEntry | null | undefined;
   acpMeta?: unknown;
   requesterSessionKey: string | null | undefined;
   targetSessionKey: string;
 }): boolean {
-  if (
-    !params.entry ||
-    params.acpMeta ||
-    params.entry.acp ||
-    !isSubagentSessionKey(params.targetSessionKey)
-  ) {
+  if (!params.entry || params.acpMeta || params.entry.acp) {
     return false;
   }
   const requester = normalizeOptionalString(params.requesterSessionKey);
@@ -299,7 +295,15 @@ function isRequesterParentOfNativeSubagentSession(params: {
   }
   const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
   const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
-  return requester === spawnedBy || requester === parentSessionKey;
+  const isLineageParent = requester === spawnedBy || requester === parentSessionKey;
+  if (!isLineageParent) {
+    return false;
+  }
+  return (
+    isSubagentSessionKey(params.targetSessionKey) ||
+    classifySessionKind(params.targetSessionKey, params.entry) === "spawn-child" ||
+    Boolean(spawnedBy || parentSessionKey)
+  );
 }
 
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
