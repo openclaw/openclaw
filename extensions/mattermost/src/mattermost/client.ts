@@ -150,21 +150,21 @@ async function readMattermostSuccessText(res: Response, path: string): Promise<s
 export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
   const text = await readResponseTextLimited(res, MATTERMOST_ERROR_BODY_LIMIT_BYTES);
-  // Remote API errors can reflect the request's Authorization header. Force
-  // tool-payload redaction before the text enters any surfaced error message.
-  const redacted = redactToolPayloadText(text);
+  // Redact only the final surfaced string, after JSON decoding. Redacting the
+  // serialized body would let \uXXXX-escaped credentials decode back to plaintext
+  // after the check, and could corrupt valid JSON before parsing.
   if (contentType.includes("application/json")) {
     try {
-      const data = JSON.parse(redacted) as { message?: string } | undefined;
+      const data = JSON.parse(text) as { message?: string } | undefined;
       if (data?.message) {
-        return data.message;
+        return redactToolPayloadText(data.message);
       }
-      return JSON.stringify(data);
+      return redactToolPayloadText(JSON.stringify(data));
     } catch {
-      return redacted;
+      // Non-JSON body despite the content type; fall through to the raw text.
     }
   }
-  return redacted;
+  return redactToolPayloadText(text);
 }
 
 export function createMattermostClient(params: {

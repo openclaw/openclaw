@@ -204,6 +204,34 @@ describe("readMattermostError", () => {
 
     expect(detail).not.toContain(token);
   });
+
+  it("redacts JSON-escaped credentials after decoding", async () => {
+    // Raw literal: \u0020 decodes to a space and \u0061 to "a". Escapes bypass
+    // literal credential matching on the serialized body, so redaction must
+    // run on the decoded message, not the raw JSON text.
+    const body = String.raw`{"message":"Bearer\u0020\u0061bcdefghijklmnopqrstuvwxyz"}`;
+    const response = new Response(body, {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+
+    const detail = await readMattermostError(response);
+
+    expect(detail).not.toContain("Bearer abcdefghijklmnopqrstuvwxyz");
+  });
+
+  it("redacts credentials in non-JSON bodies served with a JSON content type", async () => {
+    const token = "mm-bot-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const response = new Response(`upstream error: Bearer ${token}`, {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    });
+
+    const detail = await readMattermostError(response);
+
+    expect(detail).not.toContain(token);
+    expect(detail).toContain("upstream error");
+  });
 });
 
 // ── createMattermostClient ───────────────────────────────────────────
