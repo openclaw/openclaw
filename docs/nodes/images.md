@@ -76,7 +76,7 @@ image destinations retain their URL punctuation.
   - `{{AttachmentDir}}` — directory containing the local path.
   - `{{AttachmentIndex}}` — zero-based source fact index.
 - When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and the attachment path/reference is rewritten to a sandbox-relative path like `media/inbound/<filename>`.
-- `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` remain compatibility aliases for the `{{Attachment*}}` names that replaced them in 2026.8.1; no removal is scheduled.
+- `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` remain deprecated compatibility aliases for the `{{Attachment*}}` names that replaced them in 2026.8.1. Their approved `removeAfter` date is 2026-10-01, gated on a clean published-plugin artifact sweep; migrate before then. See [Media legacy projection](/plugins/sdk-migration/compatibility-policy#media-legacy-projection).
 - Media understanding (configured via `tools.media.*` or shared `tools.media.models`) runs before templating and can insert `[Image]`, `[Audio]`, and `[Video]` blocks into `Body`.
   - Audio sets `{{Transcript}}` and uses the transcript for command parsing so slash commands still work.
   - Video and image descriptions preserve any caption text for command parsing.
