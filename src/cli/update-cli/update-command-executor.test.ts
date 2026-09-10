@@ -4,7 +4,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
@@ -14,6 +14,7 @@ import { createManagedHandoffLeaseStore } from "../../infra/update-managed-servi
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
 import {
@@ -492,7 +493,13 @@ describe("candidate executor delegation", () => {
         expect(store.acquire(root, "new", { kind: "update" }).kind).toBe("busy");
       } finally {
         process.kill(descendant, "SIGTERM");
-        await waitForPidToExit(descendant);
+        const candidate = store.read(root + "/.openclaw-update-child-group");
+        assert(candidate.kind === "current", "Candidate group lease is missing");
+        // A Linux zombie has exited but retains its process group until reaped.
+        await vi.waitFor(
+          () => expect(isChildProcessTreeAlive(candidate.lease.executor)).toBe(false),
+          { timeout: 2_000, interval: 25 },
+        );
       }
       const next = store.acquire(root, "new", { kind: "update" });
       expect(next.kind).toBe("acquired");
