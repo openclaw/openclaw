@@ -1315,7 +1315,7 @@ describe("frozen admission workflow barriers", () => {
     ]),
   )(
     "verifies before the earliest planner command in $workflow: $condition $path",
-    ({ file, jobName, caller, condition, path }) => {
+    ({ file, jobName, caller, workflow, condition, path }) => {
       const f = frozenWorkflowFixture(
         file,
         jobName,
@@ -1378,7 +1378,16 @@ describe("frozen admission workflow barriers", () => {
         RELEASE_RERUN_GROUP_INPUT: "all",
         RELEASE_FILTER_VALIDATOR: join(f.tooling, RELEASE_FILTER_VALIDATOR),
       };
-      const script = stepNames.map((name) => workflowStep(job, name).run).join("\n");
+      const reusablePlannerFailure =
+        workflow === "reusable" && (condition === "dirty" || condition === "missing");
+      const script = stepNames
+        .map((name) => {
+          const stepScript = workflowStep(job, name).run;
+          return reusablePlannerFailure && name === "Plan frozen source admission"
+            ? `${stepScript}\nprintf 'acquisition-install-reachable\\n'`
+            : stepScript;
+        })
+        .join("\n");
       const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
         cwd: file === PACKAGE_ACCEPTANCE_WORKFLOW ? f.tooling : f.root,
         env: { ...f.env, ...env },
@@ -1406,6 +1415,14 @@ describe("frozen admission workflow barriers", () => {
         existsSync(join(f.root, "outputs")) ? readFileSync(join(f.root, "outputs"), "utf8") : "",
       ).toBe("");
       expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+      if (reusablePlannerFailure) {
+        expect(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8")).toBe("");
+        expect(
+          JSON.parse(readFileSync(join(f.root, "frozen-admission-request.json"), "utf8")).tooling
+            .sha,
+        ).toBe(f.env.ADMISSION_TOOLING_SHA);
+        expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
+      }
     },
   );
 
@@ -1505,53 +1522,6 @@ describe("frozen admission workflow barriers", () => {
     expect(existsSync(join(f.target, "node_modules"))).toBe(false);
     expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
   });
-
-  it.each(["dirty planner", "missing planner object"])(
-    "rejects %s before planner execution or acquisition",
-    (condition) => {
-      const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
-        include_live_suites: false,
-        include_release_path_suites: false,
-        docker_lanes: "onboard",
-      });
-      const path = "scripts/plan-release-workflow-matrix.mjs";
-      const sentinel = join(f.root, "planner-executed");
-      const original = readFileSync(join(f.tooling, path), "utf8");
-      writeFileSync(
-        join(f.tooling, path),
-        `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(sentinel)}, "executed");\n${original}`,
-      );
-      if (condition === "missing planner object") {
-        // Keep working bytes executable and HEAD's tree intact, but remove its blob.
-        f.toolingGit("add", path);
-        f.toolingGit("commit", "-qm", "planner execution witness");
-        f.env.ADMISSION_TOOLING_SHA = f.toolingGit("rev-parse", "HEAD");
-        const oid = f.toolingGit("rev-parse", `HEAD:${path}`);
-        unlinkSync(join(f.tooling, ".git/objects", oid.slice(0, 2), oid.slice(2)));
-        f.toolingGit("config", "remote.origin.url", "fixture::unavailable");
-        f.toolingGit("config", "remote.origin.promisor", "true");
-      }
-      const result = f.run(
-        "Plan frozen source admission",
-        {},
-        "printf 'acquisition-install-reachable\\n'",
-      );
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain(
-        condition === "dirty planner"
-          ? `tooling closure does not match committed source: ${path}`
-          : "unable to read selected source",
-      );
-      expect(existsSync(sentinel)).toBe(false);
-      expect(existsSync(join(f.root, "forbidden"))).toBe(false);
-      expect(result.stdout).toBe("");
-      expect(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8")).toBe("");
-      expect(
-        JSON.parse(readFileSync(join(f.root, "frozen-admission-request.json"), "utf8")).tooling.sha,
-      ).toBe(f.env.ADMISSION_TOOLING_SHA);
-      expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
-    },
-  );
 
   it("plans without selected objects and rejects admission before acquisition", () => {
     const f = frozenWorkflowFixture(
