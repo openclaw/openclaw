@@ -908,10 +908,7 @@ extensions/parallel/src/parallel-web-search-provider.runtime.ts	2
 extensions/perplexity/src/perplexity-web-search-provider.shared.ts	1
 extensions/pixverse/video-generation-provider.ts	2
 extensions/policy/src/cli.ts	1
-extensions/policy/src/doctor/access-findings.ts	1
-extensions/policy/src/doctor/access-shapes.ts	2
 extensions/policy/src/doctor/automatic-repairs.ts	7
-extensions/policy/src/doctor/data-auth-shapes.ts	1
 extensions/policy/src/doctor/evaluation.ts	4
 extensions/policy/src/doctor/exec-approval-findings.ts	1
 extensions/policy/src/doctor/policy-runtime.ts	2
