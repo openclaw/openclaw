@@ -20,7 +20,6 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { showToast } from "../../lib/toast.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
@@ -94,52 +93,6 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       this.confirmation = null;
     }
     return confirmed;
-  }
-
-  private async runConfirmedAction(
-    scope: GatewayConnectionScope,
-    lane: "cancelling" | "recovering",
-    target: string,
-    options: ConfirmDialogOptions,
-  ) {
-    const recover = lane === "recovering";
-    const method = recover ? "crabbox.images.recover" : "environments.destroy";
-    if (!(await this.confirm({ ...options, details: target }))) {
-      return;
-    }
-    if (!this.gateway.isCurrent(scope) || !this.canCall(method)) {
-      if (recover) {
-        this.error = t("cloudWorkersPage.snapshots.recoveryChanged");
-      }
-      return;
-    }
-    this[lane] = target;
-    this.error = null;
-    this.notice = null;
-    try {
-      await scope.client.request(
-        method,
-        recover
-          ? { selector: target, acknowledgeProviderCleanup: true }
-          : { environmentId: target },
-      );
-      if (this.gateway.isCurrent(scope)) {
-        this.notice = t(
-          recover
-            ? "cloudWorkersPage.snapshots.recovered"
-            : "cloudWorkersPage.snapshots.buildCancelled",
-        );
-        await this.load();
-      }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope)) {
-        this[lane] = null;
-      }
-    }
   }
 
   private async load() {
@@ -326,12 +279,34 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
     if (!scope || this.cancelling || this.confirmation || !this.canCall("environments.destroy")) {
       return;
     }
-    await this.runConfirmedAction(scope, "cancelling", environment.id, {
+    const confirmed = await this.confirm({
       title: t("cloudWorkersPage.snapshots.cancelBuild"),
       message: t("cloudWorkersPage.snapshots.cancelBuildMessage"),
+      details: environment.id,
       confirmLabel: t("cloudWorkersPage.snapshots.cancelBuild"),
       danger: true,
     });
+    if (!confirmed || !this.gateway.isCurrent(scope) || !this.canCall("environments.destroy")) {
+      return;
+    }
+    this.cancelling = environment.id;
+    this.error = null;
+    this.notice = null;
+    try {
+      await scope.client.request("environments.destroy", { environmentId: environment.id });
+      if (this.gateway.isCurrent(scope)) {
+        this.notice = t("cloudWorkersPage.snapshots.buildCancelled");
+        await this.load();
+      }
+    } catch (error) {
+      if (this.gateway.isCurrent(scope)) {
+        this.error = formatUiError(error);
+      }
+    } finally {
+      if (this.gateway.isCurrent(scope)) {
+        this.cancelling = null;
+      }
+    }
   }
 
   private renderBuildDialog() {
@@ -413,7 +388,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
     </openclaw-modal-dialog>`;
   }
 
-  private async recover(image: SnapshotImage) {
+  private async recoverCapture(image: SnapshotImage) {
     const scope = this.gateway.capture();
     const selector = image.capture?.selector;
     if (
@@ -427,12 +402,41 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
     ) {
       return;
     }
-    await this.runConfirmedAction(scope, "recovering", selector, {
+    const confirmed = await this.confirm({
       title: t("cloudWorkersPage.snapshots.recoverTitle"),
       message: t("cloudWorkersPage.snapshots.recoverMessage"),
+      details: selector,
       confirmLabel: t("cloudWorkersPage.snapshots.recover"),
       requiredAcknowledgement: t("cloudWorkersPage.snapshots.acknowledgement"),
     });
+    if (!confirmed) {
+      return;
+    }
+    if (!this.gateway.isCurrent(scope) || !this.canCall("crabbox.images.recover")) {
+      this.error = t("cloudWorkersPage.snapshots.recoveryChanged");
+      return;
+    }
+    this.recovering = selector;
+    this.error = null;
+    this.notice = null;
+    try {
+      await scope.client.request("crabbox.images.recover", {
+        selector,
+        acknowledgeProviderCleanup: true,
+      });
+      if (this.gateway.isCurrent(scope)) {
+        this.notice = t("cloudWorkersPage.snapshots.recovered");
+        await this.load();
+      }
+    } catch (error) {
+      if (this.gateway.isCurrent(scope)) {
+        this.error = formatUiError(error);
+      }
+    } finally {
+      if (this.gateway.isCurrent(scope)) {
+        this.recovering = null;
+      }
+    }
   }
 
   private deleteReason(image: SnapshotImage) {
@@ -534,7 +538,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
         ? () => void this.mutateImage(image, "delete")
         : undefined,
       onRecover: this.canCall("crabbox.images.recover")
-        ? () => void this.recover(image)
+        ? () => void this.recoverCapture(image)
         : undefined,
       onRebuild:
         projectRoot &&
