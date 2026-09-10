@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import Network
 import Security
 
 public struct GatewayTLSParams: Equatable, Sendable {
@@ -852,73 +851,9 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
     public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
         self.registerExpectedAuthority(url: request.url)
-        if let url = request.url,
-           let host = url.host,
-           url.scheme?.lowercased() == "wss"
-        {
-            let portValue = url.port ?? 443
-            if (1...65535).contains(portValue),
-               let port = NWEndpoint.Port(rawValue: UInt16(portValue)),
-               let tlsServerName = Self.tlsServerName(
-                   from: request.allHTTPHeaderFields,
-                   fallbackHost: host)
-            {
-                return WebSocketTaskBox(task: GatewayNetworkWebSocketTask(
-                    url: url,
-                    host: host,
-                    port: port,
-                    tlsServerName: tlsServerName,
-                    headers: request.allHTTPHeaderFields ?? [:],
-                    trustEvaluator: { [weak self] trust, host, port in
-                        self?.evaluateNetworkTrust(trust, host: host, port: port) ?? false
-                    }))
-            }
-        }
         let task = self.session.webSocketTask(with: request)
         task.maximumMessageSize = 16 * 1024 * 1024
         return WebSocketTaskBox(task: task)
-    }
-
-    private func evaluateNetworkTrust(_ trust: SecTrust, host: String, port: Int) -> Bool {
-        let expected = self.currentEnforcedFingerprint()
-        switch GatewayTLSServerTrust.evaluate(
-            trust: trust,
-            host: host,
-            port: port,
-            params: self.params,
-            expectedFingerprint: expected)
-        {
-        case let .accept(fingerprint, enforcePin):
-            self.recordTLSAcceptance(fingerprint, enforcePin: enforcePin)
-            return true
-        case let .reject(failure, enforcedFingerprint):
-            if let enforcedFingerprint {
-                self.recordTLSPinExpectation(enforcedFingerprint)
-            }
-            self.recordTLSFailure(failure)
-            return false
-        }
-    }
-
-    static func tlsServerName(from headers: [String: String]?, fallbackHost: String) -> String? {
-        let hostHeader = headers?.first {
-            $0.key.caseInsensitiveCompare("Host") == .orderedSame
-        }?.value
-        let candidate = (hostHeader ?? fallbackHost).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !candidate.isEmpty else { return nil }
-        if candidate.hasPrefix("["),
-           let closingBracket = candidate.firstIndex(of: "]")
-        {
-            let host = candidate[candidate.index(after: candidate.startIndex)..<closingBracket]
-            return host.isEmpty ? nil : String(host)
-        }
-        if let colon = candidate.lastIndex(of: ":"),
-           candidate[..<colon].contains(":") == false
-        {
-            let host = candidate[..<colon]
-            return host.isEmpty ? nil : String(host)
-        }
-        return candidate
     }
 
     public func data(

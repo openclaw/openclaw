@@ -104,24 +104,6 @@ struct GatewayTLSPinningTests {
         #expect(explicitPort.matches(host: "gateway.example.com", port: 8443))
     }
 
-    @Test(
-        arguments: [
-            (["Host": "gateway.example"], "fallback.example", "gateway.example"),
-            (["host": "gateway.example:8443"], "fallback.example", "gateway.example"),
-            (["Host": "[2001:db8::1]:9443"], "fallback.example", "2001:db8::1"),
-            (["Other": "ignored"], "fallback.example", "fallback.example"),
-            (["Host": "   "], "fallback.example", nil),
-        ])
-    func `websocket SNI is derived from host header`(
-        headers: [String: String],
-        fallbackHost: String,
-        expectedServerName: String?)
-    {
-        #expect(GatewayTLSPinningSession.tlsServerName(
-            from: headers,
-            fallbackHost: fallbackHost) == expectedServerName)
-    }
-
     @Test func `matching explicit pin overrides system trust`() {
         let decision = GatewayTLSValidationPolicy.decide(
             expectedFingerprint: "expected",

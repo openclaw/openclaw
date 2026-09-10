@@ -194,12 +194,35 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
                 GatewayConnectDeepLink.fromSetupCode(code))
     }
 
+    @Test(arguments: [
+        ("wss://gateway.example", 443, "wss://gateway.example"),
+        ("wss://gateway.example:443", 443, "wss://gateway.example"),
+        ("https://gateway.example:443", 443, "wss://gateway.example"),
+        ("wss://gateway.example:8443", 8443, "wss://gateway.example:8443"),
+        ("ws://127.0.0.1:80", 80, "ws://127.0.0.1"),
+        ("ws://127.0.0.1:18789", 18789, "ws://127.0.0.1:18789"),
+        ("wss://[::1]:443", 443, "wss://[::1]"),
+        ("wss://[::1]:8443", 8443, "wss://[::1]:8443"),
+    ])
+    func setupCodeOmitsDefaultWebSocketPortWithoutChangingEndpoint(
+        address: String,
+        port: Int,
+        expectedURL: String) throws
+    {
+        let payload = #"{"url":"\#(address)","bootstrapToken":"tok"}"#
+        let link = try #require(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)))
+
+        #expect(link.port == port)
+        #expect(link.connectionEndpoints.first?.port == port)
+        #expect(link.websocketURL?.absoluteString == expectedURL)
+    }
+
     @Test func setupCodePreservesPrimaryGatewayContextPath() {
         let payload = #"{"url":"wss://gateway.example/openclaw-gw","bootstrapToken":"tok"}"#
         let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
 
         #expect(link?.contextPath == "/openclaw-gw")
-        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example:443/openclaw-gw")
+        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example/openclaw-gw")
     }
 
     @Test func setupCodeDecodesGatewayContextPathExactlyOnce() {
@@ -207,7 +230,7 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
         let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
 
         #expect(link?.contextPath == "/openclaw%20gateway")
-        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example:443/openclaw%20gateway")
+        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example/openclaw%20gateway")
     }
 
     @Test func setupCodePreservesEscapedGatewayPathDelimiter() {
@@ -215,7 +238,7 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
         let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
 
         #expect(link?.contextPath == "/openclaw%2Fgateway")
-        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example:443/openclaw%2Fgateway")
+        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example/openclaw%2Fgateway")
     }
 
     @Test func setupCodePreservesNonUTF8GatewayPathOctet() {
@@ -223,7 +246,7 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
         let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
 
         #expect(link?.contextPath == "/openclaw%FFgateway")
-        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example:443/openclaw%FFgateway")
+        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example/openclaw%FFgateway")
     }
 
     @Test func setupCodeAllowsPrivateLanWs() {

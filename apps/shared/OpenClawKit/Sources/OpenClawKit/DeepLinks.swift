@@ -506,7 +506,8 @@ public struct GatewayConnectEndpoint: Codable, Sendable, Equatable {
         var components = URLComponents()
         components.scheme = self.tls ? "wss" : "ws"
         components.host = self.host
-        components.port = self.port
+        // URLSession includes explicit default ports in Host, which can miss hostname-only proxy routes.
+        components.port = self.port == (self.tls ? 443 : 80) ? nil : self.port
         components.percentEncodedPath = self.contextPath ?? ""
         return components.url
     }

@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import Network
 import os
 import Security
 
@@ -25,13 +24,7 @@ enum GatewayTLSFingerprintProbeBudget {
 }
 
 func defaultGatewayTLSFingerprintProbe(url: URL) async -> GatewayTLSFingerprintProbeResult {
-    if let serverName = url.host {
-        return await GatewayNetworkTLSFingerprintProbe.probe(
-            url: url,
-            serverName: serverName,
-            timeoutSeconds: GatewayTLSFingerprintProbeBudget.tlsHandshakeTimeoutSeconds)
-    }
-    return await withCheckedContinuation { continuation in
+    await withCheckedContinuation { continuation in
         let probe = GatewayTLSFingerprintProbe(
             url: url,
             timeoutSeconds: GatewayTLSFingerprintProbeBudget.tlsHandshakeTimeoutSeconds)
@@ -159,7 +152,7 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
         }
     }
 
-    fileprivate static func certificateFingerprint(_ trust: SecTrust) -> String? {
+    private static func certificateFingerprint(_ trust: SecTrust) -> String? {
         guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
               let cert = chain.first
         else {
@@ -168,101 +161,5 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
         let data = SecCertificateCopyData(cert) as Data
         let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02x", $0) }.joined()
-    }
-}
-
-private final class GatewayNetworkTLSFingerprintProbe: @unchecked Sendable {
-    private struct State {
-        var didFinish = false
-        var connection: NWConnection?
-    }
-
-    private let state = OSAllocatedUnfairLock(initialState: State())
-
-    static func probe(
-        url: URL,
-        serverName: String,
-        timeoutSeconds: Double) async -> GatewayTLSFingerprintProbeResult
-    {
-        let portValue = url.port ?? 443
-        guard let host = url.host,
-              (1...65535).contains(portValue),
-              let port = NWEndpoint.Port(rawValue: UInt16(portValue))
-        else { return .failure(.endpointUnreachable) }
-        let probe = GatewayNetworkTLSFingerprintProbe()
-        return await withCheckedContinuation { continuation in
-            let tlsOptions = NWProtocolTLS.Options()
-            let securityOptions = tlsOptions.securityProtocolOptions
-            serverName.withCString {
-                sec_protocol_options_set_tls_server_name(securityOptions, $0)
-            }
-            let verifyQueue = DispatchQueue(label: "ai.openclaw.gateway.tls-fingerprint-probe")
-            sec_protocol_options_set_verify_block(
-                securityOptions,
-                { _, trust, complete in
-                    let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
-                    let systemTrusted = SecTrustEvaluateWithError(secTrust, nil)
-                    let fp = GatewayTLSFingerprintProbe.certificateFingerprint(secTrust)
-                    if systemTrusted, let fp {
-                        probe.finish(.systemTrusted(fingerprint: fp), continuation: continuation)
-                    } else if let fp {
-                        probe.finish(.fingerprint(fp), continuation: continuation)
-                    } else {
-                        probe.finish(.failure(.certificateUnavailable), continuation: continuation)
-                    }
-                    complete(false)
-                },
-                verifyQueue)
-            let connection = NWConnection(
-                host: NWEndpoint.Host(host),
-                port: port,
-                using: NWParameters(tls: tlsOptions, tcp: NWProtocolTCP.Options()))
-            probe.state.withLock { $0.connection = connection }
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case let .failed(error):
-                    probe.finish(.failure(Self.failure(for: error)), continuation: continuation)
-                case .cancelled:
-                    probe.finish(.failure(.tlsUnavailable), continuation: continuation)
-                default:
-                    break
-                }
-            }
-            connection.start(queue: DispatchQueue(label: "ai.openclaw.gateway.tls-fingerprint-probe.connection"))
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeoutSeconds) {
-                probe.finish(.failure(.tlsHandshakeTimeout), continuation: continuation)
-            }
-        }
-    }
-
-    private func finish(
-        _ result: GatewayTLSFingerprintProbeResult,
-        continuation: CheckedContinuation<GatewayTLSFingerprintProbeResult, Never>)
-    {
-        let connection = self.state.withLock { state -> NWConnection? in
-            guard !state.didFinish else { return nil }
-            state.didFinish = true
-            let connection = state.connection
-            state.connection = nil
-            return connection
-        }
-        guard let connection else { return }
-        connection.cancel()
-        continuation.resume(returning: result)
-    }
-
-    private static func failure(for error: NWError) -> GatewayTLSFingerprintProbeFailure {
-        switch error {
-        case .dns:
-            return .endpointUnreachable
-        case .posix:
-            return .endpointUnreachable
-        case .tls:
-            return .tlsUnavailable
-        case .wifiAware:
-            return .endpointUnreachable
-        @unknown default:
-            return .tlsUnavailable
-        }
     }
 }
