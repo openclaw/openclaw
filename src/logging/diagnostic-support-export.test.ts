@@ -46,6 +46,34 @@ describe("diagnostic support export", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it("excludes capture files selected as config, logs, or a stability bundle", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const capture = `${stateDir}.update-captures`;
+    fs.mkdirSync(capture);
+    const privatePath = path.join(capture, "private.json");
+    const marker = "synthetic-retained-record-not-for-support";
+    fs.writeFileSync(privatePath, JSON.stringify({ agents: { entries: { [marker]: {} } } }));
+    const outputPath = path.join(tempDir, "support.zip");
+    await writeDiagnosticSupportExport({
+      stateDir,
+      env: { OPENCLAW_CONFIG_PATH: privatePath },
+      outputPath,
+      stabilityBundle: privatePath,
+      readLogTail: async () => ({
+        file: privatePath,
+        cursor: 1,
+        size: 1,
+        lines: [JSON.stringify({ msg: marker })],
+        truncated: false,
+        reset: false,
+      }),
+    });
+    const files = await readZipTextEntries(outputPath);
+    expect(Object.values(files).join("\n")).not.toContain(marker);
+    expect(Object.values(files).join("\n")).toContain("Private update captures are excluded");
+    expect(fs.readFileSync(privatePath, "utf8")).toContain(marker);
+  });
+
   it("writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
     const fakeAwsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
