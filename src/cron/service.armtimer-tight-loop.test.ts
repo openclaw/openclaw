@@ -263,4 +263,33 @@ describe("CronService - armTimer tight loop prevention", () => {
     timeoutSpy.mockRestore();
     await store.cleanup();
   });
+
+  it("keeps a maintenance wake armed for legacy jobs without enabled", () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const now = Date.parse("2026-02-28T12:32:00.000Z");
+    const job = {
+      id: "legacy-missing-enabled",
+      name: "legacy-missing-enabled",
+      enabled: undefined as unknown as boolean,
+      deleteAfterRun: false,
+      createdAtMs: now - 60_000,
+      updatedAtMs: now - 60_000,
+      schedule: { kind: "cron" as const, expr: "*/15 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "test" },
+      delivery: { mode: "none" as const },
+      state: {},
+    } satisfies CronJob;
+    const state = createTimerState({ storePath: "/tmp/test-cron/jobs.json", now });
+    state.store = { version: 1, jobs: [job] };
+
+    try {
+      armTimer(state);
+      expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
+      expect(extractTimeoutDelays(timeoutSpy)).toContain(60_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
 });
