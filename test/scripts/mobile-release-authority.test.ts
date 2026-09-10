@@ -2619,6 +2619,22 @@ fi
       /width="\$\{dimensions%x\*\}"\n\s+height="\$\{dimensions#\*x\}"\n\s+\/usr\/bin\/convert \\\n\s+\\\( -size "\$dimensions" 'gradient:#000000-#ff0000' \\\) \\\n\s+\\\( -size "\$\{height\}x\$\{width\}" 'gradient:#000000-#00ff00' -transpose \\\) \\\n\s+-compose plus -composite \\\n\s+-alpha set -channel A -evaluate set 60% \+channel/u,
     );
     expect(tooling).not.toContain("'xc:");
+    expect(tooling).toMatch(
+      /\/usr\/bin\/identify \+ping \\\n\s+-format 'format=%m width=%w height=%h colorspace=%\[colorspace\] type=%\[type\] channels=%\[channels\] quality=%Q\\n'/u,
+    );
+    expect(tooling).not.toContain("/usr/bin/identify -ping");
+  });
+
+  it("fully decodes Android JPEGs before enforcing true-color metadata", () => {
+    const adapter = fs.readFileSync("scripts/android-sips-linux.sh", "utf8");
+
+    expect(adapter).toContain(
+      "\"$identify_bin\" +ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q'",
+    );
+    expect(adapter).not.toContain(
+      "\"$identify_bin\" -ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q'",
+    );
+    expect(adapter).toContain('[[ "$output_type" == "TrueColor" ]]');
   });
 
   it("isolates Ubuntu APT sources before Android tooling setup", () => {

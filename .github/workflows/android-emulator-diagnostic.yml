@@ -197,7 +197,7 @@ jobs:
               "$smoke_dir/input-${dimensions}.png"
             "$adapter" -s format jpeg -s formatOptions best \
               "$smoke_dir/input-${dimensions}.png" --out "$smoke_dir/output-${dimensions}.jpg"
-            /usr/bin/identify -ping \
+            /usr/bin/identify +ping \
               -format 'format=%m width=%w height=%h colorspace=%[colorspace] type=%[type] channels=%[channels] quality=%Q\n' \
               "$smoke_dir/output-${dimensions}.jpg" >"$smoke_dir/output-${dimensions}.txt"
           done
