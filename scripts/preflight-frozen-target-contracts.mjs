@@ -249,7 +249,11 @@ function verifyReaderBootstrap(sha) {
 }
 
 function consumerForLane(name) {
-  if (/^(published-upgrade-survivor|update-migration)(-|$)/u.test(name)) {
+  if (
+    name === "root-managed-vps-upgrade" ||
+    name === "update-restart-auth" ||
+    /^(published-upgrade-survivor|update-migration)(-|$)/u.test(name)
+  ) {
     return "upgrade-survivor";
   }
   if (name.startsWith("npm-onboard-")) {
@@ -262,6 +266,7 @@ function consumerForLane(name) {
     return "live-cli-backend";
   }
   if (
+    name === "plugins-offline" ||
     name === "mcp-channels" ||
     name === "kitchen-sink-rpc" ||
     /^bundled-plugin-install-uninstall(-|$)/u.test(name)
