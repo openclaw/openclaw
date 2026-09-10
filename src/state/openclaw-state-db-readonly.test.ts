@@ -1,8 +1,12 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import * as sqliteReadOnly from "../infra/sqlite-readonly-location.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -38,6 +42,68 @@ function createOptions(stateDir: string) {
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("waits for a transient database lock before a fresh read-only schema inspection", async () => {
+  await withTempDir("openclaw-state-readonly-busy-", async (stateDir) => {
+    const options = createOptions(stateDir);
+    await fsp.mkdir(path.dirname(options.path), { recursive: true });
+    const setup = new DatabaseSync(options.path);
+    try {
+      setup.exec("CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed');");
+    } finally {
+      setup.close();
+    }
+    const before = fs.readFileSync(options.path);
+    const child = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { DatabaseSync } from "node:sqlite";
+          const db = new DatabaseSync(process.argv[1]);
+          db.exec("BEGIN EXCLUSIVE; UPDATE held SET value = 'uncommitted';");
+          process.once("message", () => {
+            setTimeout(() => {
+              db.exec("ROLLBACK");
+              db.close();
+              process.disconnect();
+            }, 200);
+          });
+          process.send({ locked: true });
+        `,
+        options.path,
+      ],
+      { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+    );
+    let stderr = "";
+    const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        child.once("close", (code, signal) => resolve({ code, signal }));
+      },
+    );
+    try {
+      expectDefined(child.stderr, "SQLite lock child stderr pipe").on("data", (chunk) => {
+        stderr += String(chunk);
+      });
+      const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
+      expect(ready).toEqual({ locked: true });
+      // The child releases independently while the synchronous reader waits inside SQLite.
+      child.send({ release: true });
+      const rows = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+        expect(() => db.exec("INSERT INTO held VALUES ('unexpected')")).toThrow(/readonly/);
+        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        return db.prepare("SELECT value FROM held").all();
+      }, options);
+      expect(rows).toEqual([{ value: "committed" }]);
+      expect(await closed, stderr).toEqual({ code: 0, signal: null });
+      expect(fs.readFileSync(options.path)).toEqual(before);
+    } finally {
+      await stopChildProcess(child, 5_000);
+      await closed;
+    }
+  });
 });
 
 describe.each(["admission", "explicit", "async"] as const)("%s read-only state reads", (mode) => {

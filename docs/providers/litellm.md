@@ -30,8 +30,13 @@ spend limits, and backend failover without changing OpenClaw config.
   <Tab title="Manual setup">
     <Steps>
       <Step title="Start LiteLLM Proxy">
+        LiteLLM calls the upstream provider on your behalf, so export that
+        provider's key before starting it — `ANTHROPIC_API_KEY` for the model
+        below. See [Model routing](#advanced) for multi-backend setups.
+
         ```bash
         pip install 'litellm[proxy]'
+        export ANTHROPIC_API_KEY=sk-ant-...
         litellm --model claude-opus-4-6
         ```
       </Step>
@@ -42,6 +47,7 @@ spend limits, and backend failover without changing OpenClaw config.
         ```
       </Step>
     </Steps>
+
   </Tab>
 </Tabs>
 

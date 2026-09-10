@@ -11,16 +11,14 @@ import {
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
-import {
-  createWorkerProjectPreparation,
-  readWorkerProjectSnapshot,
-} from "./project-preparation.js";
+import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { createWorkerMachineCatalog } from "./provider-machine-catalog.js";
 import { createWorkerNodeProvisioning } from "./provider-node-provisioning.js";
 import { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
 import { retireMismatchedWorkerLease } from "./provider-persisted-lease.js";
+import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import { createWorkerRuntimeRefresher } from "./provider-runtime-refresh.js";
 import {
@@ -166,7 +164,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     let preparationComplete = false;
     let executionMode: WorkerExecutionMode | undefined;
     let enrollmentOperation: ReturnType<typeof nodeProvisioning.createEnrollmentOperation>;
-    let projectOperation: ReturnType<typeof createWorkerProjectPreparation> | undefined;
+    let projectOperation: Awaited<ReturnType<typeof prepareWorkerProviderProject>> | undefined;
     try {
       const profile = requireWorkerProfile(record.profileSnapshot.settings);
       const requestedExecutionMode = record.profileSnapshot.executionMode;
@@ -224,32 +222,28 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         ) {
           throw new Error("Worker provider cannot resume its prepared project contract");
         }
-        projectOperation = createWorkerProjectPreparation({
+        const requireProjectOwner = () => {
+          cancellation?.assertActive();
+          beforeProvision?.();
+          const current = requireCurrentOwner(record);
+          if (
+            options.isStopping() ||
+            current.destroyRequestedAtMs !== null ||
+            current.provisionOperationId !== record.provisionOperationId ||
+            !isDeepStrictEqual(current.profileSnapshot.project, record.profileSnapshot.project) ||
+            (current.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now())
+          ) {
+            throw new Error("Worker project preparation owner is no longer current");
+          }
+        };
+        projectOperation = await prepareWorkerProviderProject({
           project,
+          preparation,
+          record,
           namespace: options.projectNamespace,
-          preparation: preparation
-            ? {
-                ...preparation,
-                purpose: record.preparation ? "reserve" : "session",
-                demandAtMs: record.preparation?.demandAtMs ?? record.createdAtMs,
-              }
-            : undefined,
-          setupAuthorized: true,
+          getConfig: options.getConfig,
+          requireCurrent: requireProjectOwner,
           signal: cancellation?.signal,
-          requireCurrent: () => {
-            beforeProvision?.();
-            const current = requireCurrentOwner(record);
-            if (
-              options.isStopping() ||
-              current.destroyRequestedAtMs !== null ||
-              current.provisionOperationId !== record.provisionOperationId ||
-              !isDeepStrictEqual(current.profileSnapshot.project, record.profileSnapshot.project) ||
-              (current.preparation?.consumedAtMs === null &&
-                current.preparation.expiresAtMs <= now())
-            ) {
-              throw new Error("Worker project preparation owner is no longer current");
-            }
-          },
         });
       }
       const provisionOptions = {

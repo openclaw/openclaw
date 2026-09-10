@@ -205,7 +205,9 @@ longer work. Migrate existing Qwen configurations to an active model.
     model idle watchdog before they emit a first response chunk. For custom
     NVIDIA provider entries, raise the provider timeout instead of the whole
     agent runtime timeout; `timeoutSeconds` covers provider HTTP requests and
-    raises the idle/stream watchdog ceiling for that provider:
+    raises the idle/stream watchdog ceiling for that provider. The provider id
+    below (`custom-integrate-api-nvidia-com`) is a name you choose, not a
+    reserved value; any id works as long as your model refs use the same prefix:
 
     ```json5
     {

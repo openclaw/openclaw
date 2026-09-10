@@ -518,7 +518,6 @@ export class ModelRegistry {
           ? mergeProviderModels(existing, provider, {
               providerId,
               modelIdMatching: "exact",
-              manifestPlugins: this.pluginMetadataSnapshot,
             })
           : provider;
       }

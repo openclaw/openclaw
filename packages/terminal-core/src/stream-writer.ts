@@ -10,7 +10,6 @@ export type SafeStreamWriterOptions = {
 export type SafeStreamWriter = {
   write: (stream: NodeJS.WriteStream, text: string) => boolean;
   writeLine: (stream: NodeJS.WriteStream, text: string) => boolean;
-  reset: () => void;
   isClosed: () => boolean;
 };
 
@@ -58,9 +57,6 @@ export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): S
   return {
     write,
     writeLine,
-    reset: () => {
-      closed = false;
-    },
     isClosed: () => closed,
   };
 }

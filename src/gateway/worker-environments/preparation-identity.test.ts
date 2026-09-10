@@ -3,10 +3,10 @@ import {
   createWorkerProjectPreparationIdentity,
   readWorkerProjectPreparation,
 } from "./preparation-identity.js";
-import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
+import type { WorkerLocalProjectSnapshot } from "./workspace-git-base.js";
 
 const input: Omit<Parameters<typeof createWorkerProjectPreparationIdentity>[0], "project"> & {
-  project: WorkerProjectSnapshot;
+  project: WorkerLocalProjectSnapshot;
 } = {
   namespace: "gateway-one",
   providerId: "fake",

@@ -16,6 +16,7 @@ import { createPreparedWorkerPool } from "./prepared-pool.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { createWorkerEnvironmentStore } from "./store.js";
+import type { RepositoryWorkerProjectSnapshot } from "./workspace-git-base.js";
 
 export const PROJECT_KEY = "a".repeat(64);
 export const PREPARATION_KEY = "b".repeat(64);
@@ -85,14 +86,17 @@ export function usePreparedPoolFixture() {
     projectKey = PROJECT_KEY,
     preparationKey = PREPARATION_KEY,
     runSetupScript?: boolean,
+    repository?: RepositoryWorkerProjectSnapshot,
   ): WorkerProfile {
     return {
       settings: {},
       executionMode: "worker-turn",
       project: {
-        key: projectKey,
-        root: path.join(root, projectKey),
-        baseCommit: "d".repeat(40),
+        ...(repository ?? {
+          key: projectKey,
+          root: path.join(root, projectKey),
+          baseCommit: "d".repeat(40),
+        }),
         preparation: {
           key: preparationKey,
           cacheKey: "9".repeat(64),
@@ -120,6 +124,7 @@ export function usePreparedPoolFixture() {
       reserve?: boolean;
       purpose?: "reserve" | "build";
       runSetupScript?: boolean;
+      repository?: RepositoryWorkerProjectSnapshot;
     } = {},
   ) {
     return store.createIntent({
@@ -127,7 +132,12 @@ export function usePreparedPoolFixture() {
       providerId: provider.id,
       profileId: "development",
       provisionOperationId: `provision:${environmentId}`,
-      profileSnapshot: profile(options.projectKey, options.preparationKey, options.runSetupScript),
+      profileSnapshot: profile(
+        options.projectKey,
+        options.preparationKey,
+        options.runSetupScript,
+        options.repository,
+      ),
       preparation:
         options.reserve || options.purpose
           ? {

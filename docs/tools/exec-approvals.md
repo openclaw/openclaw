@@ -479,11 +479,12 @@ Generated `allow-always` entries are bound to both the exact argv and the workin
 directory where you approved them. Choosing **Always allow here** authorizes the
 same command only in that directory. Running it elsewhere is an allowlist miss.
 
-Older generated entries that were not directory-bound are inactive after an
-upgrade. `openclaw update` removes them during its automatic Doctor pass, or you
-can run `openclaw doctor --fix` yourself. Rerun an affected workflow and choose
-**Always allow here** to create the replacement. Manual allowlist rules are not
-changed. For a manual path-only rule, omit both `source` and `argPattern`.
+Generated entries saved before 2026.8.1 are not directory-bound and are inactive
+after upgrading. `openclaw update` removes them during its automatic Doctor pass,
+or you can run `openclaw doctor --fix` yourself. Rerun an affected workflow and
+choose **Always allow here** to create the replacement. Manual allowlist rules
+are not changed. For a manual path-only rule, omit both `source` and
+`argPattern`.
 
 Each allowlist entry supports:
 

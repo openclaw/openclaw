@@ -176,15 +176,22 @@ function openWorkspaceItem<T>(
   openSessionCheckoutSidebar(state, request);
   const isCurrent = () =>
     state.sidebarContent === request && isCurrentSessionWorkspace(state, workspace);
+  const fail = (message: string) => {
+    if (!isCurrent()) {
+      return;
+    }
+    workspace.error = message;
+    const unavailable = { kind: "unavailable" as const, message };
+    trackSessionCheckoutSidebar(unavailable);
+    state.sidebarContent = unavailable;
+  };
   void (async () => {
     workspace.error = null;
     try {
       const result = await load();
       const content = result == null ? null : render(result);
       if (!content) {
-        if (isCurrent()) {
-          workspace.error = missingMessage;
-        }
+        fail(missingMessage);
         return;
       }
       if (isCurrent()) {
@@ -192,9 +199,7 @@ function openWorkspaceItem<T>(
         state.sidebarContent = content;
       }
     } catch (error) {
-      if (isCurrent()) {
-        workspace.error = formatUiError(error);
-      }
+      fail(formatUiError(error));
     } finally {
       if (state.sidebarContent === request) {
         state.sidebarContent = null;

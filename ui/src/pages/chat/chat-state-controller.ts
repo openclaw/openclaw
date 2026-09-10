@@ -295,7 +295,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
       invalidateImageLightbox(state);
-      if (state.sidebarContent?.kind === "loading") {
+      if (
+        state.sidebarContent?.kind === "loading" ||
+        state.sidebarContent?.kind === "unavailable"
+      ) {
         state.sidebarContent = null;
       }
       clearSessionWorkspaceTimers(state);

@@ -166,7 +166,7 @@ describe("models-config merge helpers", () => {
       mergeProviderModels(implicit, explicit, {
         providerId: "ollama",
         sourceModelFields: new Map([
-          ["ollama/qwen3-vl:latest", { inputOmitted: true, cost: undefined }],
+          [JSON.stringify(["ollama", "qwen3-vl:latest"]), { inputOmitted: true, cost: undefined }],
         ]),
       }).models?.[0]?.input,
     ).toEqual(["text", "image"]);

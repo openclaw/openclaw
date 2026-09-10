@@ -6,7 +6,9 @@ read_when:
   - You are running OpenClaw tests on Crabbox or Testbox
 ---
 
-## Agent default
+<a id="agent-default" />
+
+## Remote proof policy for agents
 
 Agent sessions run trusted development tests, changed gates, typecheck/lint,
 and builds locally by default, broadening only when the touched contract

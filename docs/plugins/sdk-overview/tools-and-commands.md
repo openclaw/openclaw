@@ -68,10 +68,15 @@ Guidance entries may be legacy strings, which apply to every prompt surface, or
 structured entries:
 
 ```ts
-agentPromptGuidance: [
-  "Global command hint.",
-  { text: "Only show this in the main OpenClaw prompt.", surfaces: ["openclaw_main"] },
-];
+api.registerCommand({
+  name: "demo_cmd",
+  description: "Demo command",
+  agentPromptGuidance: [
+    "Global command hint.",
+    { text: "Only show this in the main OpenClaw prompt.", surfaces: ["openclaw_main"] },
+  ],
+  handler: async () => ({ text: "ok" }),
+});
 ```
 
 Structured `surfaces` may include `openclaw_main`, `codex_app_server`,

@@ -412,8 +412,11 @@ export function createWorkerPlacementDispatchStartup(options: {
         requireAttachedEnvironment();
       };
       const preparation = readWorkerProjectPreparation(params.environment.profileSnapshot.project);
+      let preparedRepository: Parameters<
+        typeof syncSessionRepositoryWorkspace
+      >[0]["preparedRepository"];
       if (preparation) {
-        await environments.bindPreparedWorkspace({
+        const prepared = await environments.bindPreparedWorkspace({
           environmentId: provisioned.environmentId,
           ownerEpoch,
           sessionId: request.sessionId,
@@ -424,11 +427,26 @@ export function createWorkerPlacementDispatchStartup(options: {
           assertCurrent: assertSyncOwner,
         });
         assertSyncOwner();
+        if (project && "source" in project) {
+          if (
+            params.workspace.kind !== "repository" ||
+            project.source.url !== params.workspace.repository.url
+          ) {
+            throw new Error("Prepared repository does not match this session's source");
+          }
+          preparedRepository = {
+            baseCommit: project.baseCommit,
+            workspaceDir: prepared.workspaceDir,
+            sourceManifestRef: prepared.sourceManifestRef,
+            preparedManifestRef: prepared.preparedManifestRef,
+          };
+        }
       }
       const synced =
         params.workspace.kind === "repository"
           ? await syncSessionRepositoryWorkspace({
               repository: params.workspace.repository,
+              preparedRepository,
               tunnel,
               sessionId: request.sessionId,
               sessionKey: request.sessionKey,

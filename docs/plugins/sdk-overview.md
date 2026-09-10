@@ -67,6 +67,8 @@ Each group of registration methods has its own page:
 | [Exclusive slots](/plugins/sdk-overview/memory-and-context#exclusive-slots)                 | Context engine and memory capability, one active at a time            |
 | [Events and lifecycle](/plugins/sdk-overview/events-and-hooks#events-and-lifecycle)         | Typed lifecycle hooks and conversation binding callbacks              |
 
+### Session discussion provider
+
 Plugins that provide an external team-chat surface for a session can register
 the single process-wide provider exported by
 `openclaw/plugin-sdk/session-discussion`. Its `info({ sessionKey })` method

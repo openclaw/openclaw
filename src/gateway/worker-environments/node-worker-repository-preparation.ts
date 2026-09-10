@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
-import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncResult } from "./tunnel-contract.js";
+import type {
+  PreparedRepositoryWorkspace,
+  WorkerWorkspaceCommand,
+  WorkerWorkspaceSyncResult,
+} from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { workspaceSyncError } from "./workspace-sync-helpers.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
@@ -36,6 +40,32 @@ if (process.platform === "win32") args.unshift("-c", "core.longpaths=true");
 const result = spawnSync("git", args, { env, stdio: ["ignore", "inherit", "inherit"] });
 if (result.error) console.error((result.error.code ? result.error.code + ": " : "") + result.error.message);
 process.exitCode = result.status ?? 1;`;
+
+const BIND_PREPARED_REPOSITORY_JS = String.raw`const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const { origin, commit, branch, workspaceDir } = JSON.parse(fs.readFileSync(0, "utf8"));
+if (fs.realpathSync(process.cwd()) !== fs.realpathSync(workspaceDir)) throw Error("Prepared repository workspace changed");
+const env = { ...process.env };
+for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
+const nil = process.platform === "win32" ? "NUL" : "/dev/null";
+Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: nil, GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1" });
+const git = (args, allowDetached = false) => {
+  const result = spawnSync("git", ["-c", "core.hooksPath=" + nil, "-c", "core.fsmonitor=false", ...args], {
+    env, encoding: "utf8", timeout: 30000, maxBuffer: 262144,
+  });
+  if (allowDetached && result.status === 1) return undefined;
+  if (result.error || result.status !== 0) throw Error("Prepared repository Git verification failed");
+  return result.stdout.trim();
+};
+if (git(["rev-parse", "--verify", "HEAD^{commit}"]) !== commit ||
+    git(["remote", "get-url", "origin"]) !== origin) throw Error("Prepared repository differs from its admitted source");
+git(["check-ref-format", "--branch", branch]);
+const current = git(["symbolic-ref", "--quiet", "--short", "HEAD"], true);
+if (current !== branch) {
+  if (current !== undefined) throw Error("Prepared repository already belongs to another session branch");
+  git(["checkout", "-b", branch, commit]);
+}
+`;
 
 export type NodeWorkerRepositoryOutcome =
   | {
@@ -159,6 +189,37 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
     };
   };
   return {
+    bindPreparedRepository: async (
+      identity: RepositoryIdentity & { commit: string; branch: string },
+      prepared: PreparedRepositoryWorkspace,
+    ): Promise<WorkerWorkspaceSyncResult & { mode: "repository" }> => {
+      if (identity.commit !== prepared.baseCommit) {
+        throw new Error("Prepared repository does not match the pinned session commit");
+      }
+      // Binding changes only the session branch. It must never fetch, reset, or
+      // reseed the fixed workspace that already owns reusable build outputs.
+      const bound = await exec({
+        argv: ["node", "-e", BIND_PREPARED_REPOSITORY_JS],
+        input: JSON.stringify({
+          origin: identity.origin,
+          commit: identity.commit,
+          branch: identity.branch,
+          workspaceDir: prepared.workspaceDir,
+        }),
+        timeoutMs: GIT_TIMEOUT_MS,
+        transportRetry: "never",
+      });
+      if (!succeeded(bound) || bound.workspaceDir !== prepared.workspaceDir) {
+        throw new Error("Prepared repository session binding failed");
+      }
+      return {
+        mode: "repository",
+        remoteWorkspaceDir: prepared.workspaceDir,
+        manifestRef: prepared.preparedManifestRef,
+        baseManifestRef: prepared.sourceManifestRef,
+        baseCommit: prepared.baseCommit,
+      };
+    },
     configureAuthor: async (workspaceDir: string, author: { name?: string; email?: string }) => {
       for (const [key, value] of Object.entries(author)) {
         if (!value) {

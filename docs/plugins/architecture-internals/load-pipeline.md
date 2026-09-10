@@ -61,14 +61,18 @@ actual behavior such as hooks, tools, commands, or provider flows.
 Optional manifest `activation` and `setup` blocks stay on the control plane.
 They are metadata-only descriptors for activation planning and setup discovery;
 they do not replace runtime registration, `register(...)`, or `setupEntry`.
-Live activation consumers use manifest command, channel, and provider hints to
-narrow plugin loading before broader registry materialization:
+Live activation consumers use manifest activation metadata to narrow plugin
+loading before broader registry materialization:
 
 - CLI loading narrows to plugins that own the requested primary command
 - channel setup/plugin resolution narrows to plugins that own the requested
   channel id
 - explicit provider setup/runtime resolution narrows to plugins that own the
   requested provider id
+- agent-runtime planning narrows to plugins that declare the selected embedded
+  harness runtime id in `activation.onAgentHarnesses`
+- startup plugin selection adds plugins whose `activation.onConfigPaths`
+  entries are present and enabled in config
 - Gateway startup planning uses `activation.onStartup` for explicit startup
   imports; plugins without startup metadata load only through narrower
   activation triggers

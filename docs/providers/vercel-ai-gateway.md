@@ -32,6 +32,7 @@ refs such as `vercel-ai-gateway/openai/gpt-5.5` and
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install @openclaw/vercel-ai-gateway-provider
+    openclaw gateway restart
     ```
   </Step>
   <Step title="Set the API key">

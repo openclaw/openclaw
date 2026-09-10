@@ -4,13 +4,16 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
 import { createProjectSetupScript } from "./project-setup-script.js";
+import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import {
   prepareWorkerWorkspaceGitPack,
   workerProjectSeedKey,
+  type WorkerLocalProjectSnapshot,
   type WorkerProjectSnapshot,
 } from "./workspace-git-base.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
@@ -21,7 +24,7 @@ type ProjectPreparation = NonNullable<
 type PreparationResult = Awaited<ReturnType<ProjectPreparation["prepare"]>>;
 
 export async function readWorkerProjectSetupRecipe(
-  project: WorkerProjectSnapshot,
+  project: WorkerLocalProjectSnapshot,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
   const tree = await requireGit(
@@ -37,6 +40,9 @@ export async function readWorkerProjectSetupRecipe(
 export function readWorkerProjectSnapshot(value: unknown): WorkerProjectSnapshot | undefined {
   if (value === undefined) {
     return undefined;
+  }
+  if (isRecord(value) && value.source !== undefined) {
+    return readRepositoryWorkerProjectSnapshot(value);
   }
   if (
     !isRecord(value) ||
@@ -71,6 +77,7 @@ export function createWorkerProjectPreparation(params: {
     runSetupScript?: boolean;
   };
   setupAuthorized?: boolean;
+  revalidateRepositorySource?: (signal: AbortSignal) => Promise<void>;
   requireCurrent: () => void;
   signal?: AbortSignal;
 }): {
@@ -101,6 +108,10 @@ export function createWorkerProjectPreparation(params: {
   // Stop must reach active Git/transport work, not only the next owner check.
   const signal = params.signal ? AbortSignal.any([abort.signal, params.signal]) : abort.signal;
   const seedKey = workerProjectSeedKey(params.project);
+  const label =
+    "source" in params.project
+      ? normalizeCloudRepo(params.project.source.url)
+      : params.project.label;
   let active: Promise<PreparationResult> | undefined;
   let preparedWorkspace: PreparationResult["preparedWorkspace"];
   const requireCurrent = () => {
@@ -201,35 +212,44 @@ export function createWorkerProjectPreparation(params: {
     );
     try {
       requireCurrent();
-      const pack = await prepareWorkerWorkspaceGitPack({
-        root: params.project.root,
-        baseCommit: params.project.baseCommit,
-        ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
-        temporaryRoot,
-        signal,
-      });
-      requireCurrent();
-      const bytes = (await fsp.stat(pack)).size;
-      if (bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
-        throw new Error("Project Git pack exceeds the workspace byte limit");
+      let transfer: Pick<Parameters<typeof createProjectSeedScript>[0], "pack" | "repository">;
+      if ("source" in params.project) {
+        // Public source fetches need no credential transfer or remote secret lifetime.
+        transfer = { repository: { directory, url: params.project.source.url } };
+      } else {
+        const pack = await prepareWorkerWorkspaceGitPack({
+          root: params.project.root,
+          baseCommit: params.project.baseCommit,
+          ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
+          temporaryRoot,
+          signal,
+        });
+        requireCurrent();
+        const bytes = (await fsp.stat(pack)).size;
+        if (bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+          throw new Error("Project Git pack exceeds the workspace byte limit");
+        }
+        const hash = createHash("sha256");
+        for await (const chunk of fs.createReadStream(pack, { signal })) {
+          hash.update(chunk);
+        }
+        requireCurrent();
+        await transport.upload(pack, path.posix.join(directory, "base.pack"), signal);
+        requireCurrent();
+        transfer = {
+          pack: {
+            directory,
+            bytes,
+            sha256: hash.digest("hex"),
+            ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
+          },
+        };
       }
-      const hash = createHash("sha256");
-      for await (const chunk of fs.createReadStream(pack, { signal })) {
-        hash.update(chunk);
-      }
-      requireCurrent();
-      await transport.upload(pack, path.posix.join(directory, "base.pack"), signal);
-      requireCurrent();
       const installed: unknown = JSON.parse(
         await transport.runScript(
           createProjectSeedScript({
             ...scriptInput,
-            pack: {
-              directory,
-              bytes,
-              sha256: hash.digest("hex"),
-              ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
-            },
+            ...transfer,
           }),
           signal,
         ),
@@ -245,6 +265,14 @@ export function createWorkerProjectPreparation(params: {
   };
   const prepare: ProjectPreparation["prepare"] = async (transport) => {
     requireCurrent();
+    if ("source" in params.project) {
+      if (!params.revalidateRepositorySource) {
+        throw new Error("Repository project preparation has no current source authority");
+      }
+      // Retained content does not prove that the repository is still public and accessible.
+      await params.revalidateRepositorySource(signal);
+      requireCurrent();
+    }
     if (!preparation) {
       const result = await prepareSeed(transport);
       requireCurrent();
@@ -286,7 +314,7 @@ export function createWorkerProjectPreparation(params: {
     project: {
       key: params.project.key,
       baseCommit: params.project.baseCommit,
-      ...(params.project.label !== undefined ? { label: params.project.label } : {}),
+      ...(label !== undefined ? { label } : {}),
       ...(preparation
         ? {
             preparation: {
