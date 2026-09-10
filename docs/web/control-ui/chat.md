@@ -308,6 +308,17 @@ Images and video previews in your own messages appear above any accompanying tex
 
 Messages forwarded by `sessions_send` render as left-aligned speech bubbles with a source-session chip above the message. When avatars are shown, messages from a different known agent use that agent's avatar, or initials in a stable identity color if no avatar is available. Same-agent forwards and unknown senders keep the forward icon. Select the chip to open the source session; hover it to see session progress. Each source session has a stable bubble tint. Forwarded messages without a known source session show the source agent when available, or a generic forwarded-message label. The receiving agent's own replies remain flat text.
 
+## Subagent transcripts
+
+Subagents use the same task transcript view, including subagents run by the
+Codex harness. Select a task to read its messages, thinking, and tool calls;
+select **Show earlier** to load older history. Task activity refreshes the view
+while the subagent runs. The generic fallback label is **Subagent**.
+
+The viewer reads history from the runtime that owns it. If that runtime or its
+parent binding is unavailable, the panel shows an error with a retry action.
+Tasks without readable history retain their prompt and output inspector.
+
 ## Chat message width
 
 Drag the side-panel divider to resize a task's **Review** transcript. Messages

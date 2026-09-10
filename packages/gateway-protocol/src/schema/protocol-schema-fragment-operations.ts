@@ -89,6 +89,8 @@ export const OperationsProtocolSchemas = {
   TasksListResult: tasks.TasksListResultSchema,
   TasksGetParams: tasks.TasksGetParamsSchema,
   TasksGetResult: tasks.TasksGetResultSchema,
+  TasksHistoryParams: tasks.TasksHistoryParamsSchema,
+  TasksHistoryResult: tasks.TasksHistoryResultSchema,
   TasksCancelParams: tasks.TasksCancelParamsSchema,
   TasksCancelResult: tasks.TasksCancelResultSchema,
   TasksRecoveryParams: tasks.TasksRecoveryParamsSchema,

@@ -205,7 +205,7 @@ describeLive("codex native subagent monitor live", () => {
             scopeKind: "session",
             agentId: "live",
             runId: recoveryRunId,
-            label: "Codex subagent",
+            label: "Subagent",
             task: "live recovery probe",
             status: "running",
             deliveryStatus: "not_applicable",

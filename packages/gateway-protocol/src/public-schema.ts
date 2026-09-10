@@ -353,6 +353,8 @@ export {
   TasksListResultSchema,
   TasksGetParamsSchema,
   TasksGetResultSchema,
+  TasksHistoryParamsSchema,
+  TasksHistoryResultSchema,
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
   TasksRecoveryParamsSchema,

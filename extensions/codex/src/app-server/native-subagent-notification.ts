@@ -224,7 +224,7 @@ function completedWithoutFinalAssistantMessage(): {
   kind: "no_final_assistant_message";
 } {
   return {
-    text: "Codex native subagent completed without a final assistant message.",
+    text: "Subagent completed without a final assistant message.",
     kind: "no_final_assistant_message",
   };
 }

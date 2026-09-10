@@ -336,6 +336,7 @@ export const validateTaskSuggestionsAcceptParams = compile(S.TaskSuggestionsAcce
 export const validateTaskSuggestionsDismissParams = compile(S.TaskSuggestionsDismissParamsSchema);
 export const validateTasksListParams = compile(S.TasksListParamsSchema);
 export const validateTasksGetParams = compile(S.TasksGetParamsSchema);
+export const validateTasksHistoryParams = compile(S.TasksHistoryParamsSchema);
 export const validateTasksCancelParams = compile(S.TasksCancelParamsSchema);
 export const validateTasksRecoveryParams = compile(S.TasksRecoveryParamsSchema);
 export const validateConfigGetParams = compile(S.ConfigGetParamsSchema);

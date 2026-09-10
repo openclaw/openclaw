@@ -13011,6 +13011,7 @@ public struct TaskSummary: Codable, Sendable {
     public let agentid: String?
     public let sessionkey: String?
     public let childsessionkey: String?
+    public let hastranscript: Bool?
     public let ownerkey: String?
     public let runid: String?
     public let taskid: String?
@@ -13042,6 +13043,7 @@ public struct TaskSummary: Codable, Sendable {
         agentid: String? = nil,
         sessionkey: String? = nil,
         childsessionkey: String? = nil,
+        hastranscript: Bool? = nil,
         ownerkey: String? = nil,
         runid: String? = nil,
         taskid: String? = nil,
@@ -13072,6 +13074,7 @@ public struct TaskSummary: Codable, Sendable {
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.childsessionkey = childsessionkey
+        self.hastranscript = hastranscript
         self.ownerkey = ownerkey
         self.runid = runid
         self.taskid = taskid
@@ -13104,6 +13107,7 @@ public struct TaskSummary: Codable, Sendable {
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case childsessionkey = "childSessionKey"
+        case hastranscript = "hasTranscript"
         case ownerkey = "ownerKey"
         case runid = "runId"
         case taskid = "taskId"
@@ -13201,6 +13205,46 @@ public struct TasksGetResult: Codable, Sendable {
         task: TaskSummary)
     {
         self.task = task
+    }
+}
+
+public struct TasksHistoryParams: Codable, Sendable {
+    public let taskid: String
+    public let cursor: String?
+    public let limit: Int?
+
+    public init(
+        taskid: String,
+        cursor: String? = nil,
+        limit: Int? = nil)
+    {
+        self.taskid = taskid
+        self.cursor = cursor
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+        case cursor
+        case limit
+    }
+}
+
+public struct TasksHistoryResult: Codable, Sendable {
+    public let messages: [AnyCodable]
+    public let nextcursor: String?
+
+    public init(
+        messages: [AnyCodable],
+        nextcursor: String? = nil)
+    {
+        self.messages = messages
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case messages
+        case nextcursor = "nextCursor"
     }
 }
 

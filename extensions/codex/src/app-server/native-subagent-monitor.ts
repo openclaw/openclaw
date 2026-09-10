@@ -485,7 +485,7 @@ class Monitor {
     this.clearPendingDirectSpawnEvidenceForParent(parentThreadId);
     for (const childState of Array.from(this.childStates.values())) {
       if (childState.parentThreadId === parentThreadId) {
-        this.retireChild(state, childState, "Codex native subagent parent session ended.");
+        this.retireChild(state, childState, "Subagent parent session ended.");
       }
     }
     if (this.parentStates.get(parentThreadId) === state) {
@@ -968,7 +968,7 @@ class Monitor {
         continue;
       }
       if (childState) {
-        this.retireChild(state, childState, "Codex native subagent was closed.");
+        this.retireChild(state, childState, "Subagent was closed.");
       } else {
         this.updateChildThreadOwnership("release", childThreadId, this.releaseChildThread);
       }
@@ -1276,8 +1276,8 @@ class Monitor {
         childSessionKey: codexNativeSubagentRunId(completion.childThreadId),
         childSessionId: completion.childThreadId,
         announceId: `codex-native:${state.parentThreadId}:${completion.childThreadId}:${completion.status}`,
-        announceType: "Codex native subagent",
-        taskLabel: "Codex native subagent",
+        announceType: "Subagent",
+        taskLabel: "Subagent",
         status: completion.status,
         statusLabel: completion.statusLabel,
         result: completion.result,
@@ -2127,7 +2127,7 @@ function toChildTurnCompletion(
       childThreadId: childState.childThreadId,
       status: "succeeded",
       statusLabel: result ? "turn_completed" : "completed_without_final_message",
-      result: result ?? "Codex native subagent completed without a final assistant message.",
+      result: result ?? "Subagent completed without a final assistant message.",
     };
   }
   if (status === "failed") {
@@ -2135,7 +2135,7 @@ function toChildTurnCompletion(
       childThreadId: childState.childThreadId,
       status: "failed",
       statusLabel: "turn_failed",
-      result: readTurnErrorMessage(turn) ?? "Codex native subagent failed.",
+      result: readTurnErrorMessage(turn) ?? "Subagent failed.",
     };
   }
   return undefined;
@@ -2172,7 +2172,7 @@ function systemErrorFallbackCompletion(childThreadId: string): RecoveredCompleti
     childThreadId,
     status: "failed",
     statusLabel: "system_error",
-    result: "Codex app-server reported a system error for the native subagent thread.",
+    result: "Subagent runtime reported a system error.",
   };
 }
 
@@ -2193,7 +2193,7 @@ function readTurnCompletion(
       childThreadId,
       status: "succeeded",
       statusLabel: result ? "task_complete" : "completed_without_final_message",
-      result: result ?? "Codex native subagent completed without a final assistant message.",
+      result: result ?? "Subagent completed without a final assistant message.",
       completedAt,
     };
   }
@@ -2207,7 +2207,7 @@ function readTurnCompletion(
       childThreadId,
       status: "failed",
       statusLabel: "task_failed",
-      result: readTurnErrorMessage(turn) ?? result ?? "Codex native subagent failed.",
+      result: readTurnErrorMessage(turn) ?? result ?? "Subagent failed.",
       completedAt,
     };
   }

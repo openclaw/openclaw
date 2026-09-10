@@ -183,6 +183,7 @@ describe("listGatewayMethods", () => {
       "session.publicShare.set",
       "claws.monitors",
       ...pluginDiscoveryMethods,
+      "tasks.history",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -206,6 +207,7 @@ describe("listGatewayMethods", () => {
       "session.publicShare.set",
       "claws.monitors",
       ...pluginDiscoveryMethods,
+      "tasks.history",
     ]);
   });
 
@@ -356,6 +358,7 @@ describe("listGatewayMethods", () => {
       "session.publicShare.set",
       "claws.monitors",
       ...pluginDiscoveryMethods,
+      "tasks.history",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
