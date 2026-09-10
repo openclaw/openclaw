@@ -38,6 +38,7 @@ import { hasMemorySessionTombstone } from "../memory-entry-origins.js";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
+import { MemoryBatchSubmissionOwner } from "./manager-batch-submission.js";
 import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import {
   collectMemoryCachedEmbeddings,
@@ -263,6 +264,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected batchFailure: { count: number; lastError?: string; lastProvider?: string } = {
     count: 0,
   };
+  private readonly batchAbortController = new AbortController();
+  private readonly batchSubmissionOwner = new MemoryBatchSubmissionOwner(() =>
+    this.withPublishedDatabase(() => this.db),
+  );
   protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
   private activeProviderUses = new Map<EmbeddingProvider, number>();
   private providerIdleWaiters = new Map<EmbeddingProvider, Set<() => void>>();
@@ -445,6 +450,26 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       );
   }
 
+  protected readBatchSubmissionQuarantineStatus() {
+    return this.batchSubmissionOwner.readStatus();
+  }
+
+  protected assertNoBatchSubmissionQuarantine(): void {
+    this.batchSubmissionOwner.assertReady();
+  }
+
+  clearBatchSubmissionQuarantine(): boolean {
+    return this.batchSubmissionOwner.clear();
+  }
+
+  protected commitBatchSubmissionQuarantine(): void {
+    this.batchSubmissionOwner.commit();
+  }
+
+  protected abortEmbeddingBatches(): void {
+    this.batchAbortController.abort();
+  }
+
   private async embedChunksWithBatch(
     chunks: IndexedMemoryChunk[],
     source: string,
@@ -467,6 +492,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const missingChunks = missing.map((item) => item.chunk);
     const batchResult = await this.runBatchWithFallback({
       provider: provider.id,
+      failureMode: generation.runtime?.batchFailureMode ?? "fallback",
       run: async () =>
         await batchEmbed({
           agentId: this.agentId,
@@ -475,6 +501,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           concurrency: this.batch.concurrency,
           pollIntervalMs: this.batch.pollIntervalMs,
           timeoutMs: this.batch.timeoutMs,
+          signal: this.batchAbortController.signal,
+          submissionLifecycle: this.batchSubmissionOwner.createLifecycle({
+            provider: { id: provider.id, model: provider.model },
+            providerKey: generation.providerKey,
+          }),
           debug: this.buildBatchDebug(source, chunks, debugContext),
         }),
       fallback: async () => await this.embedChunksInBatches(missingChunks, generation),
@@ -694,16 +725,26 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   private async runBatchWithFallback<T>(params: {
     provider: string;
+    failureMode: "fallback" | "error";
     run: () => Promise<T>;
     fallback: () => Promise<number[][]>;
   }): Promise<T | number[][]> {
     if (!this.batch.enabled) {
       return await params.fallback();
     }
-    const result = await this.runBatchWithTimeoutRetry({
-      provider: params.provider,
-      run: params.run,
-    });
+    let result: MemoryBatchRetryResult<T>;
+    if (params.failureMode === "error") {
+      try {
+        result = { kind: "success", value: await params.run() };
+      } catch (error) {
+        result = { kind: "failure", error, attempts: 1 };
+      }
+    } else {
+      result = await this.runBatchWithTimeoutRetry({
+        provider: params.provider,
+        run: params.run,
+      });
+    }
     // Completion accounting is synchronous: concurrent batches cannot interleave updates.
     if (result.kind === "success") {
       if (this.batchFailure.count > 0) {
@@ -715,6 +756,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     const message = formatErrorMessage(result.error);
+    if (params.failureMode === "error") {
+      this.batchFailure = {
+        count: this.batchFailure.count + result.attempts,
+        lastError: message,
+        lastProvider: params.provider,
+      };
+      log.warn(
+        `memory embeddings: ${params.provider} native batch failed; inline fallback prohibited: ${message}`,
+      );
+      throw result.error;
+    }
     const forceDisable = isEmbeddingBatchUnavailableError(result.error);
     if (this.batch.enabled) {
       const count =

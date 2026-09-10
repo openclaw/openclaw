@@ -76,6 +76,7 @@ export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,
+  MemoryEmbeddingBatchSubmissionLifecycle,
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
   MemoryEmbeddingProviderCallOptions,

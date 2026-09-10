@@ -967,6 +967,48 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("reports durable native-batch quarantine details", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      status: () =>
+        makeMemoryStatus({
+          batch: {
+            enabled: true,
+            failures: 1,
+            limit: 2,
+            wait: true,
+            concurrency: 2,
+            pollIntervalMs: 1_000,
+            timeoutMs: 60_000,
+            submissionQuarantine: {
+              malformed: false,
+              submissions: [
+                {
+                  provider: "gemini",
+                  submissionId: "openclaw-memory-test-safe-id",
+                  batchName: "batches/provider-job-1",
+                  startedAt: "2026-08-10T00:00:00.000Z",
+                },
+              ],
+              recoveryAction:
+                "Reconcile or cancel the listed provider jobs, then run openclaw memory index --force --clear-batch-quarantine.",
+            },
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(log, "Batch quarantine: active (1 submission)");
+    expectLogged(log, "openclaw-memory-test-safe-id");
+    expectLogged(log, "batches/provider-job-1");
+    expectLogged(log, "started 2026-08-10T00:00:00.000Z");
+    expectLogged(log, "--clear-batch-quarantine");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("reports a complete persisted vector index without probing the store", async () => {
     const close = vi.fn(async () => {});
     const probeVectorStoreAvailability = vi.fn(async () => {
@@ -1817,6 +1859,52 @@ describe("memory cli", () => {
       expect(close).toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith("Memory index updated (main): 1 file indexed.");
     });
+  });
+
+  it("requires a forced reindex to clear a batch submission quarantine", async () => {
+    const close = vi.fn(async () => {});
+    const sync = vi.fn(async () => {});
+    const clearBatchSubmissionQuarantine = vi.fn(() => true);
+    mockManager({
+      sync,
+      clearBatchSubmissionQuarantine,
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const error = spyRuntimeErrors(defaultRuntime);
+    await runMemoryCli(["index", "--clear-batch-quarantine"]);
+
+    expect(clearBatchSubmissionQuarantine).not.toHaveBeenCalled();
+    expect(sync).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      "Memory index failed (main): --clear-batch-quarantine requires --force",
+    );
+    expect(process.exitCode).toBe(1);
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("clears a reconciled batch quarantine before a forced reindex", async () => {
+    const close = vi.fn(async () => {});
+    const sync = vi.fn(async () => {});
+    const clearBatchSubmissionQuarantine = vi.fn(() => true);
+    mockManager({
+      sync,
+      clearBatchSubmissionQuarantine,
+      status: () => makeMemoryStatus({ files: 1 }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["index", "--force", "--clear-batch-quarantine"]);
+
+    expect(clearBatchSubmissionQuarantine).toHaveBeenCalledOnce();
+    expect(clearBatchSubmissionQuarantine.mock.invocationCallOrder[0]).toBeLessThan(
+      sync.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+    expect(firstMockCallArg(sync, "sync")).toMatchObject({ reason: "cli", force: true });
+    expectLogged(log, "Memory batch quarantine cleared (main); starting forced reindex.");
+    expect(close).toHaveBeenCalled();
   });
 
   it("describes session index sources without implying active JSONL storage", async () => {

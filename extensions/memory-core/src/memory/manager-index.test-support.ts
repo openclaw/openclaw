@@ -68,6 +68,11 @@ type ProviderControls = {
   providerRuntimeBatchGate: Promise<void> | null;
   providerRuntimeBatchEntered: ((activeCalls: number, texts: readonly string[]) => void) | null;
   providerRuntimeBatchErrors: unknown[];
+  providerRuntimeBatchFailureMode: "fallback" | "error" | undefined;
+  providerRuntimeBatchInvocations: number;
+  providerRuntimeBatchSignals: Array<AbortSignal | undefined>;
+  providerRuntimeBatchWaitForAbort: boolean;
+  providerRuntimeSubmissionMode: "none" | "ambiguous" | "accepted" | "rejected";
   providerRuntimeBatchFailuresRemaining: number;
   providerRuntimeActiveBatchCalls: number;
   providerRuntimeMaxActiveBatchCalls: number;
@@ -134,6 +139,11 @@ const providerState = vi.hoisted(() => ({
     | ((activeCalls: number, texts: readonly string[]) => void)
     | null,
   providerRuntimeBatchErrors: [] as unknown[],
+  providerRuntimeBatchFailureMode: undefined as "fallback" | "error" | undefined,
+  providerRuntimeBatchInvocations: 0,
+  providerRuntimeBatchSignals: [] as Array<AbortSignal | undefined>,
+  providerRuntimeBatchWaitForAbort: false,
+  providerRuntimeSubmissionMode: "none" as "none" | "ambiguous" | "accepted" | "rejected",
   providerRuntimeBatchFailuresRemaining: 0,
   providerRuntimeActiveBatchCalls: 0,
   providerRuntimeMaxActiveBatchCalls: 0,
@@ -331,7 +341,39 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                 runtime: {
                   id: providerId,
                   ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
-                  batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
+                  ...(providerState.providerRuntimeBatchFailureMode
+                    ? { batchFailureMode: providerState.providerRuntimeBatchFailureMode }
+                    : {}),
+                  batchEmbed: async (batch: {
+                    chunks: Array<{ text: string }>;
+                    signal?: AbortSignal;
+                    submissionLifecycle?: {
+                      started: (params: { submissionId: string }) => Promise<void>;
+                      accepted: (params: {
+                        submissionId: string;
+                        batchName: string;
+                      }) => Promise<void>;
+                      rejected: (params: { submissionId: string }) => Promise<void>;
+                    };
+                  }) => {
+                    providerState.providerRuntimeBatchInvocations += 1;
+                    const submissionId = `openclaw-memory-test-${providerState.providerRuntimeBatchInvocations}`;
+                    if (providerState.providerRuntimeSubmissionMode !== "none") {
+                      const lifecycle = batch.submissionLifecycle;
+                      if (!lifecycle) {
+                        throw new Error("expected batch submission lifecycle");
+                      }
+                      await lifecycle.started({ submissionId });
+                      if (providerState.providerRuntimeSubmissionMode === "accepted") {
+                        await lifecycle.accepted({
+                          submissionId,
+                          batchName: `batches/test-${providerState.providerRuntimeBatchInvocations}`,
+                        });
+                      } else if (providerState.providerRuntimeSubmissionMode === "rejected") {
+                        await lifecycle.rejected({ submissionId });
+                      }
+                    }
+                    providerState.providerRuntimeBatchSignals.push(batch.signal);
                     providerState.providerRuntimeActiveBatchCalls += 1;
                     providerState.providerRuntimeMaxActiveBatchCalls = Math.max(
                       providerState.providerRuntimeMaxActiveBatchCalls,
@@ -342,6 +384,25 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                         providerState.providerRuntimeActiveBatchCalls,
                         batch.chunks.map((chunk) => chunk.text),
                       );
+                      if (providerState.providerRuntimeBatchWaitForAbort) {
+                        const signal = batch.signal;
+                        if (!signal) {
+                          throw new Error("expected batch abort signal");
+                        }
+                        await new Promise<void>((_resolve, reject) => {
+                          const rejectAborted = () =>
+                            reject(
+                              signal.reason instanceof Error
+                                ? signal.reason
+                                : new Error("batch aborted"),
+                            );
+                          if (signal.aborted) {
+                            rejectAborted();
+                            return;
+                          }
+                          signal.addEventListener("abort", rejectAborted, { once: true });
+                        });
+                      }
                       await providerState.providerRuntimeBatchGate;
                       providerState.providerRuntimeBatchCalls.push(
                         batch.chunks.map((chunk) => chunk.text),
@@ -577,6 +638,11 @@ export function createManagerIndexFixture(deps: {
     providerState.providerRuntimeBatchGate = null;
     providerState.providerRuntimeBatchEntered = null;
     providerState.providerRuntimeBatchErrors = [];
+    providerState.providerRuntimeBatchFailureMode = undefined;
+    providerState.providerRuntimeBatchInvocations = 0;
+    providerState.providerRuntimeBatchSignals = [];
+    providerState.providerRuntimeBatchWaitForAbort = false;
+    providerState.providerRuntimeSubmissionMode = "none";
     providerState.providerRuntimeBatchFailuresRemaining = 0;
     providerState.providerRuntimeActiveBatchCalls = 0;
     providerState.providerRuntimeMaxActiveBatchCalls = 0;

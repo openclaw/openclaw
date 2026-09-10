@@ -605,6 +605,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         timeoutMs: this.batch.timeoutMs,
         lastError: this.batchFailure.lastError,
         lastProvider: this.batchFailure.lastProvider,
+        submissionQuarantine: this.readBatchSubmissionQuarantineStatus(),
       },
       custom: {
         llamaCppRuntime: getLocalEmbeddingRuntimeFacts(this.provider),
@@ -650,6 +651,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.queuedSessions.clear();
     this.queuedForce = false;
     this.queuedProgressCallbacks.clear();
+    this.abortEmbeddingBatches();
     await this.awaitManagerIdle();
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;

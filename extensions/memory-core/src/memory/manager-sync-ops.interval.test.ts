@@ -64,6 +64,10 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     return this.resolveBatchConfig();
   }
 
+  protected assertNoBatchSubmissionQuarantine(): void {}
+
+  protected commitBatchSubmissionQuarantine(): void {}
+
   protected computeProviderKey(): string {
     return "test";
   }

@@ -78,6 +78,8 @@ const log = createSubsystemLogger("memory");
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   private fallbackProviderInitPromise: Promise<boolean> | null = null;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
+  protected abstract assertNoBatchSubmissionQuarantine(): void;
+  protected abstract commitBatchSubmissionQuarantine(): void;
 
   protected beginSyncProviderGeneration(_options?: { forceFtsOnly?: boolean }): void {}
   protected endSyncProviderGeneration(): void {}
@@ -158,6 +160,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const hasTargetSessionRequest = this.hasRequestedTargetSessionSync(params);
     let needsFullReindex = Boolean(params?.force && !hasTargetSessionRequest);
     try {
+      this.assertNoBatchSubmissionQuarantine();
       // An unavailable configured provider must not replace semantic vectors
       // with FTS-only rows; fresh and already-FTS-only indexes remain safe.
       this.assertFtsOnlySyncAllowed();
@@ -297,6 +300,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           this.sessionsDirty = targetedSessionSync.sessionsDirty;
           if (targetedSessionSync.failure) {
             this.syncOutcomes.recordActiveFailure(targetedSessionSync.failure.error);
+          } else {
+            this.commitBatchSubmissionQuarantine();
           }
           return;
         }
@@ -308,6 +313,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             force: params?.force,
             progress: progress ?? undefined,
           });
+          this.commitBatchSubmissionQuarantine();
           return;
         }
 
@@ -344,6 +350,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             this.refreshSessionDirtyFlag();
           }
         }
+        this.commitBatchSubmissionQuarantine();
       } catch (err) {
         this.dirty ||= this.sources.has("memory");
         const reason = formatErrorMessage(err);
@@ -362,6 +369,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
               progress: progress ?? undefined,
             });
           }
+          this.commitBatchSubmissionQuarantine();
           return;
         }
         if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {

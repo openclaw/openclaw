@@ -2,7 +2,6 @@
 import {
   hasNonTextEmbeddingParts,
   isMissingEmbeddingApiKeyError,
-  mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -47,15 +46,22 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
             "x-goog-api-client",
           ]),
         },
+        batchFailureMode: "error",
         batchEmbed: async (batch) => {
           if (batch.chunks.some((chunk) => hasNonTextEmbeddingParts(chunk.embeddingInput))) {
             return null;
           }
+          if (batch.chunks.some((chunk) => !chunk.hash)) {
+            throw new Error("gemini native batch requires stable memory chunk hashes");
+          }
+          // SAFETY: the preceding guard proves every chunk in this batch has a non-empty hash.
+          const uniqueChunks = new Map(batch.chunks.map((chunk) => [chunk.hash as string, chunk]));
           const byCustomId = await runGeminiEmbeddingBatches({
             gemini: client,
             agentId: batch.agentId,
-            requests: batch.chunks.map((chunk, index) => ({
-              custom_id: String(index),
+            requests: [...uniqueChunks].map(([chunkHash, chunk]) => ({
+              custom_id: chunkHash,
+              chunkHash,
               request: buildGeminiEmbeddingRequest({
                 input: chunk.embeddingInput ?? { text: chunk.text },
                 model: client.model,
@@ -70,8 +76,13 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
             pollIntervalMs: batch.pollIntervalMs,
             timeoutMs: batch.timeoutMs,
             debug: batch.debug,
+            ...(batch.signal ? { signal: batch.signal } : {}),
+            ...(batch.submissionLifecycle
+              ? { submissionLifecycle: batch.submissionLifecycle }
+              : {}),
           });
-          return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
+          // SAFETY: the same all-chunk hash guard remains valid for this unchanged batch array.
+          return batch.chunks.map((chunk) => byCustomId.get(chunk.hash as string) ?? []);
         },
       },
     };

@@ -6,6 +6,19 @@ import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
 import type { GeminiEmbeddingClient } from "./embedding-provider.js";
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
+const loggerMocks = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>();
+  return {
+    ...actual,
+    createSubsystemLogger: () => loggerMocks,
+  };
+});
+
 // Pass-through so onResponse receives real Response objects (required by
 // readProviderJsonResponse which needs a real .body ReadableStream).
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
@@ -26,6 +39,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
 });
 
 afterEach(() => {
+  loggerMocks.info.mockClear();
+  loggerMocks.warn.mockClear();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -95,10 +110,14 @@ function makeGeminiEmbedding2Client(
 }
 
 type GeminiBatchRequest = Parameters<typeof runGeminiEmbeddingBatches>[0]["requests"][number];
+type SubmissionLifecycle = NonNullable<
+  Parameters<typeof runGeminiEmbeddingBatches>[0]["submissionLifecycle"]
+>;
 
 function batchRequest(customId: string, text: string): GeminiBatchRequest {
   return {
     custom_id: customId,
+    chunkHash: customId,
     request: {
       model: "models/gemini-embedding-001",
       content: { parts: [{ text }] },
@@ -170,6 +189,7 @@ function stubBatchFetch(
 function runBatch(
   requests = singleRequest(),
   gemini = makeGeminiClient(),
+  submissionLifecycle?: SubmissionLifecycle,
 ): Promise<Map<string, number[]>> {
   return runGeminiEmbeddingBatches({
     gemini,
@@ -179,7 +199,17 @@ function runBatch(
     concurrency: 1,
     pollIntervalMs: 1,
     timeoutMs: 5_000,
+    ...(submissionLifecycle ? { submissionLifecycle } : {}),
   });
+}
+
+function createSubmissionLifecycle() {
+  return {
+    resumeAccepted: vi.fn<NonNullable<SubmissionLifecycle["resumeAccepted"]>>(async () => null),
+    started: vi.fn<SubmissionLifecycle["started"]>(),
+    accepted: vi.fn<SubmissionLifecycle["accepted"]>(),
+    rejected: vi.fn<SubmissionLifecycle["rejected"]>(),
+  } satisfies SubmissionLifecycle;
 }
 
 async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
@@ -266,6 +296,234 @@ describe("Google embedding-batch bounded JSON reads", () => {
     ).toHaveLength(0);
   });
 
+  it("releases a submission reservation when the deadline expires before create starts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const fetchMock = stubBatchFetch((stage) =>
+      stage === "create"
+        ? jsonResponse({
+            name: "batches/b-0",
+            done: true,
+            metadata: { state: "BATCH_STATE_SUCCEEDED" },
+            response: { responsesFile: "files/out-0" },
+          })
+        : undefined,
+    );
+    const started = vi.fn(async () => {
+      vi.setSystemTime(1_000);
+    });
+    const accepted = vi.fn(async () => {});
+    const rejected = vi.fn(async () => {});
+
+    const result = runGeminiEmbeddingBatches({
+      gemini: makeGeminiClient(),
+      agentId: "main",
+      requests: singleRequest(),
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 1,
+      timeoutMs: 1_000,
+      submissionLifecycle: { started, accepted, rejected },
+    } as unknown as Parameters<typeof runGeminiEmbeddingBatches>[0]);
+
+    await expect(result).rejects.toThrow();
+    expect(started).toHaveBeenCalledOnce();
+    expect(accepted).not.toHaveBeenCalled();
+    expect(rejected).toHaveBeenCalledWith(
+      expect.objectContaining({ submissionId: expect.any(String) }),
+    );
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        fetchInputUrl(input).includes(":asyncBatchEmbedContent"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("does not retry or release ownership after an ambiguous batch-create failure", async () => {
+    const lifecycle = createSubmissionLifecycle();
+    const fetchMock = stubBatchFetch((stage) =>
+      stage === "create"
+        ? jsonResponse({ error: { message: "temporary upstream failure" } }, 503)
+        : undefined,
+    );
+
+    await expect(
+      runBatch([batchRequest("r0", "a"), batchRequest("r1", "b")], makeGeminiClient(), lifecycle),
+    ).rejects.toThrow("gemini.batch-create");
+
+    const stages = fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input)));
+    expect(stages.filter((stage) => stage === "upload")).toHaveLength(1);
+    expect(stages.filter((stage) => stage === "create")).toHaveLength(1);
+    expect(lifecycle.started).toHaveBeenCalledOnce();
+    expect(lifecycle.accepted).not.toHaveBeenCalled();
+    expect(lifecycle.rejected).not.toHaveBeenCalled();
+  });
+
+  it("releases ownership after a definitive batch-create rejection", async () => {
+    const lifecycle = createSubmissionLifecycle();
+    const fetchMock = stubBatchFetch((stage) =>
+      stage === "create" ? jsonResponse({ error: { message: "invalid request" } }, 400) : undefined,
+    );
+
+    await expect(runBatch(singleRequest(), makeGeminiClient(), lifecycle)).rejects.toThrow(
+      "gemini.batch-create",
+    );
+
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        fetchInputUrl(input).includes(":asyncBatchEmbedContent"),
+      ),
+    ).toHaveLength(1);
+    expect(lifecycle.started).toHaveBeenCalledOnce();
+    expect(lifecycle.accepted).not.toHaveBeenCalled();
+    expect(lifecycle.rejected).toHaveBeenCalledWith({
+      submissionId: lifecycle.started.mock.calls[0]?.[0].submissionId,
+    });
+  });
+
+  it("persists ownership before create and records the acknowledged provider job", async () => {
+    const lifecycle = createSubmissionLifecycle();
+    stubBatchFetch((stage) => {
+      if (stage === "create") {
+        expect(lifecycle.started).toHaveBeenCalledOnce();
+        expect(lifecycle.accepted).not.toHaveBeenCalled();
+      }
+      return undefined;
+    });
+
+    await expect(runBatch(singleRequest(), makeGeminiClient(), lifecycle)).resolves.toEqual(
+      new Map([["r0", [1, 0, 0]]]),
+    );
+    const submissionId = lifecycle.started.mock.calls[0]?.[0].submissionId;
+    expect(lifecycle.started).toHaveBeenCalledWith({
+      submissionId,
+      requestFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      manifest: [{ customId: "r0", chunkHash: "r0" }],
+    });
+    expect(lifecycle.accepted).toHaveBeenCalledWith({
+      submissionId,
+      batchName: "batches/b-0",
+    });
+    expect(lifecycle.rejected).not.toHaveBeenCalled();
+  });
+
+  it("resumes an exact acknowledged batch without uploading or creating another job", async () => {
+    const lifecycle = createSubmissionLifecycle();
+    lifecycle.resumeAccepted.mockResolvedValue({
+      submissionId: "submission-existing",
+      batchName: "batches/b-0",
+    });
+    const fetchMock = stubBatchFetch();
+
+    await expect(runBatch(singleRequest(), makeGeminiClient(), lifecycle)).resolves.toEqual(
+      new Map([["r0", [1, 0, 0]]]),
+    );
+
+    expect(lifecycle.resumeAccepted).toHaveBeenCalledWith({
+      requestFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(lifecycle.started).not.toHaveBeenCalled();
+    expect(lifecycle.accepted).not.toHaveBeenCalled();
+    expect(lifecycle.rejected).not.toHaveBeenCalled();
+    const stages = fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input)));
+    expect(stages).toEqual(["status", "download"]);
+  });
+
+  it("publishes restart-safe output across source drift and submits only new chunk hashes", async () => {
+    const lifecycle = createSubmissionLifecycle();
+    const listAccepted = vi.fn(async () => [
+      {
+        submissionId: "submission-existing",
+        batchName: "batches/b-old",
+        requestFingerprint: "fingerprint-old",
+        manifest: [
+          { customId: "r0", chunkHash: "r0" },
+          { customId: "r1", chunkHash: "r1" },
+        ],
+      },
+    ]);
+    const publishRecovered = vi.fn(async () => [
+      { chunkHash: "r0", embedding: [1, 0] },
+      { chunkHash: "r1", embedding: [0, 1] },
+    ]);
+    const recoveryLifecycle = { ...lifecycle, listAccepted, publishRecovered };
+    let uploaded: Blob | undefined;
+    const fetchMock = stubBatchFetch((stage, url, init) => {
+      if (stage === "status" && url.includes("b-old")) {
+        return jsonResponse({
+          name: "batches/b-old",
+          done: true,
+          metadata: { state: "BATCH_STATE_SUCCEEDED" },
+          response: { responsesFile: "files/out-old" },
+        });
+      }
+      if (stage === "download" && url.includes("out-old")) {
+        return new Response(
+          [
+            JSON.stringify({ key: "r0", response: { embedding: { values: [1, 0] } } }),
+            JSON.stringify({ key: "r1", response: { embedding: { values: [0, 1] } } }),
+          ].join("\n"),
+        );
+      }
+      if (stage === "upload") {
+        uploaded = init?.body instanceof Blob ? init.body : undefined;
+      }
+      if (stage === "download") {
+        return new Response(
+          JSON.stringify({ key: "r2", response: { embedding: { values: [0.5, 0.5] } } }),
+        );
+      }
+      return undefined;
+    });
+
+    await expect(
+      runBatch(
+        [batchRequest("r0", "old current"), batchRequest("r2", "new current")],
+        makeGeminiClient(),
+        recoveryLifecycle,
+      ),
+    ).resolves.toEqual(
+      new Map([
+        ["r0", [1, 0]],
+        ["r2", [0.7071067811865475, 0.7071067811865475]],
+      ]),
+    );
+
+    expect(listAccepted).toHaveBeenCalledOnce();
+    expect(publishRecovered).toHaveBeenCalledWith({
+      submissionId: "submission-existing",
+      entries: [
+        { customId: "r0", embedding: [1, 0] },
+        { customId: "r1", embedding: [0, 1] },
+      ],
+    });
+    const uploadedText = await uploaded?.text();
+    expect(uploadedText).toContain('"key":"r2"');
+    expect(uploadedText).not.toContain('"key":"r0"');
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        fetchInputUrl(input).includes(":asyncBatchEmbedContent"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("rejects disabled waiting before any remote side effect", async () => {
+    const fetchMock = stubBatchFetch();
+
+    await expect(
+      runGeminiEmbeddingBatches({
+        gemini: makeGeminiClient(),
+        agentId: "main",
+        requests: singleRequest(),
+        wait: false,
+        concurrency: 1,
+        pollIntervalMs: 1,
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("remote.batch.wait=true");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { stage: "upload", label: "gemini.batch-file-upload" },
     { stage: "create", label: "gemini.batch-create" },
@@ -280,6 +538,23 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect((error as Error).message).toContain(label);
     expect(streamed.wasCanceled()).toBe(true);
     expect(streamed.getReadCount()).toBeLessThan(20);
+  });
+
+  it("reports malformed output without logging response content", async () => {
+    const responseMarker = "secret-response-body-4451";
+    stubBatchFetch((stage) =>
+      stage === "download" ? new Response(`not-json ${responseMarker}`) : undefined,
+    );
+
+    await expect(runBatch()).rejects.toThrow("malformed JSONL record");
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch output reconciliation failed",
+      expect.objectContaining({
+        failureKind: "transport-or-parse",
+        unreconciledResponses: 1,
+      }),
+    );
+    expect(JSON.stringify(loggerMocks.warn.mock.calls)).not.toContain(responseMarker);
   });
 
   it.each([
@@ -297,6 +572,16 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect((error as Error).message).toContain(label);
     expect(streamed.wasCanceled()).toBe(true);
     expect(streamed.getReadCount()).toBeLessThan(20);
+    if (stage === "download") {
+      expect(loggerMocks.warn).toHaveBeenCalledWith(
+        "memory embeddings: gemini batch output reconciliation failed",
+        expect.objectContaining({
+          failureKind: "http",
+          providerStatus: 503,
+          unreconciledResponses: 1,
+        }),
+      );
+    }
   });
 
   it("marks create 404 as unavailable while preserving the structured cause", async () => {
@@ -351,6 +636,179 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
       batch: { inputConfig: { file_name: "files/f-ok" } },
     });
+  });
+
+  it("reports provider lifecycle statistics and output reconciliation", async () => {
+    const requests = [batchRequest("r0", "hello"), batchRequest("r1", "world")];
+    stubBatchFetch((stage) => {
+      if (stage === "create") {
+        return jsonResponse({
+          name: "batches/b-telemetry",
+          done: false,
+          metadata: {
+            state: "BATCH_STATE_PENDING",
+            createTime: "2026-08-09T01:00:00Z",
+            updateTime: "2026-08-09T01:00:01Z",
+            batchStats: { requestCount: "2", pendingRequestCount: "2" },
+          },
+        });
+      }
+      if (stage === "status") {
+        return jsonResponse({
+          name: "batches/b-telemetry",
+          done: true,
+          state: "BATCH_STATE_SUCCEEDED",
+          createTime: "2026-08-09T01:00:00Z",
+          endTime: "2026-08-09T01:00:05Z",
+          batchStats: {
+            requestCount: "2",
+            successfulRequestCount: "2",
+            failedRequestCount: "0",
+            pendingRequestCount: "0",
+          },
+          metadata: {
+            state: "BATCH_STATE_RUNNING",
+            batchStats: { successfulRequestCount: "999" },
+          },
+          output: { responsesFile: "files/out-telemetry" },
+        });
+      }
+      if (stage === "download") {
+        return new Response(
+          [
+            JSON.stringify({ key: "r0", response: { embedding: { values: [1, 0] } } }),
+            JSON.stringify({ key: "r1", response: { embedding: { values: [0, 1] } } }),
+          ].join("\n"),
+        );
+      }
+      return undefined;
+    });
+
+    await expect(runBatch(requests)).resolves.toEqual(
+      new Map([
+        ["r0", [1, 0]],
+        ["r1", [0, 1]],
+      ]),
+    );
+
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch created",
+      expect.objectContaining({
+        batchName: "batches/b-telemetry",
+        state: "pending",
+        submittedRequests: 2,
+        providerCreateTime: "2026-08-09T01:00:00.000Z",
+        providerUpdateTime: "2026-08-09T01:00:01.000Z",
+        providerRequestCount: 2,
+        providerPendingRequests: 2,
+      }),
+    );
+    const createdLog = loggerMocks.info.mock.calls.find(
+      ([message]) => message === "memory embeddings: gemini batch created",
+    )?.[1];
+    expect(createdLog).not.toHaveProperty("providerElapsedMs");
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch completed",
+      expect.objectContaining({
+        state: "succeeded",
+        providerSuccessfulRequests: 2,
+        providerFailedRequests: 0,
+        providerPendingRequests: 0,
+        providerEndTime: "2026-08-09T01:00:05.000Z",
+        providerElapsedMs: 5_000,
+      }),
+    );
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch output reconciled",
+      expect.objectContaining({
+        returnedEmbeddings: 2,
+        missingResponses: 0,
+        outputErrors: 0,
+      }),
+    );
+  });
+
+  it("reconciles later responses after a provider output error", async () => {
+    const requests = [batchRequest("r0", "hello"), batchRequest("r1", "world")];
+    stubBatchFetch((stage) =>
+      stage === "download"
+        ? new Response(
+            [
+              JSON.stringify({
+                key: "r0",
+                response: { error: { message: "provider rejected record" } },
+              }),
+              JSON.stringify({ key: "r1", response: { embedding: { values: [0, 1] } } }),
+            ].join("\n"),
+          )
+        : undefined,
+    );
+
+    await expect(runBatch(requests)).rejects.toThrow("provider rejected record");
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch output reconciliation failed",
+      expect.objectContaining({
+        submittedRequests: 2,
+        returnedEmbeddings: 1,
+        missingResponses: 0,
+        outputErrors: 1,
+      }),
+    );
+  });
+
+  it("never logs request text, authentication, or embedding vectors", async () => {
+    const secretText = "secret-request-text-7f51";
+    const secretApiKey = "secret-api-key-9a32";
+    const secretVectorValue = 987654.321;
+    const gemini = { ...makeGeminiClient(), apiKeys: [secretApiKey] };
+    stubBatchFetch((stage) =>
+      stage === "download"
+        ? new Response(
+            JSON.stringify({
+              key: "r0",
+              response: { embedding: { values: [secretVectorValue, 1] } },
+            }),
+          )
+        : undefined,
+    );
+
+    await runBatch([batchRequest("r0", secretText)], gemini);
+
+    const serializedLogs = JSON.stringify({
+      info: loggerMocks.info.mock.calls,
+      warn: loggerMocks.warn.mock.calls,
+    });
+    expect(serializedLogs).not.toContain(secretText);
+    expect(serializedLogs).not.toContain(secretApiKey);
+    expect(serializedLogs).not.toContain(String(secretVectorValue));
+  });
+
+  it("uses a consistent local observed duration when provider timestamps are absent", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    stubBatchFetch((stage) => {
+      if (stage === "create") {
+        vi.setSystemTime(2_500);
+        return jsonResponse({
+          name: "batches/b-local-clock",
+          done: true,
+          state: "BATCH_STATE_SUCCEEDED",
+          output: { responsesFile: "files/out-local-clock" },
+        });
+      }
+      return undefined;
+    });
+
+    await runBatch();
+
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch completed",
+      expect.objectContaining({ observedElapsedMs: 2_500 }),
+    );
+    const completedLog = loggerMocks.info.mock.calls.find(
+      ([message]) => message === "memory embeddings: gemini batch completed",
+    )?.[1];
+    expect(completedLog).not.toHaveProperty("providerElapsedMs");
   });
 
   it("preserves a configured gateway prefix for output downloads", async () => {
@@ -451,7 +909,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
           ) {
             response.writeHead(200, { "content-type": "application/jsonl" });
             const line = JSON.stringify({
-              key: "0",
+              key: "hash-hello",
               response: { embedding: { values: [1, 0, 0] } },
             });
             response.write(line.slice(0, 17));
@@ -485,7 +943,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
         ]);
         const result = await adapter.runtime?.batchEmbed?.({
           agentId: "main",
-          chunks: [{ text: "hello" }],
+          chunks: [{ text: "hello", hash: "hash-hello" }],
           wait: true,
           concurrency: 1,
           pollIntervalMs: 1,
@@ -496,7 +954,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
         expect(result).toEqual([[1, 0, 0]]);
         const uploadedRequest = uploadBody.split("\r\n\r\n")[2]?.split("\r\n")[0];
         expect(JSON.parse(uploadedRequest ?? "null")).toEqual({
-          key: "0",
+          key: "hash-hello",
           request: {
             content: { parts: [{ text: "hello" }] },
             taskType: "RETRIEVAL_DOCUMENT",
@@ -538,6 +996,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   });
 
   it("keeps a terminal Operation error ahead of stale success metadata", async () => {
+    const providerErrorMarker = "secret-request-text-7f51";
     stubBatchFetch((stage) =>
       stage === "create"
         ? jsonResponse({
@@ -545,12 +1004,17 @@ describe("Google embedding-batch bounded JSON reads", () => {
             done: true,
             metadata: { state: "BATCH_STATE_SUCCEEDED" },
             response: { responsesFile: "files/out-0" },
-            error: { code: 13, message: "provider job failed" },
+            error: { code: 13, message: `provider job failed: ${providerErrorMarker}` },
           })
         : undefined,
     );
 
     await expect(runBatch()).rejects.toThrow("gemini batch batches/b-0 failed");
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch terminal failure",
+      expect.objectContaining({ state: "failed", providerErrorCode: 13 }),
+    );
+    expect(JSON.stringify(loggerMocks.warn.mock.calls)).not.toContain(providerErrorMarker);
   });
 
   it("keeps shipped compatible-endpoint output aliases", async () => {
@@ -600,20 +1064,40 @@ describe("Google embedding-batch bounded JSON reads", () => {
         ? jsonResponse({
             name: "batches/b-0",
             done: true,
+            createTime: "2026-08-09T01:00:00Z",
+            endTime: "2026-08-09T01:00:03Z",
+            batchStats: {
+              requestCount: "1",
+              successfulRequestCount: "0",
+              failedRequestCount: "1",
+              pendingRequestCount: "0",
+            },
             metadata: { state },
           })
         : undefined,
     );
 
     await expect(runBatch()).rejects.toThrow(`gemini batch batches/b-0 ${normalized}`);
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch terminal failure",
+      expect.objectContaining({
+        state: normalized,
+        providerRequestCount: 1,
+        providerFailedRequests: 1,
+        providerPendingRequests: 0,
+        providerElapsedMs: 3_000,
+      }),
+    );
   });
 
-  it("rejects conflicting output files in one Operation", async () => {
-    stubBatchFetch((stage) =>
+  it("prefers canonical output over stale legacy aliases", async () => {
+    const fetchMock = stubBatchFetch((stage) =>
       stage === "create"
         ? jsonResponse({
             name: "batches/b-0",
             done: true,
+            state: "BATCH_STATE_SUCCEEDED",
+            output: { responsesFile: "files/top-level-output" },
             metadata: {
               state: "BATCH_STATE_SUCCEEDED",
               output: { responsesFile: "files/metadata-output" },
@@ -623,6 +1107,66 @@ describe("Google embedding-batch bounded JSON reads", () => {
         : undefined,
     );
 
-    await expect(runBatch()).rejects.toThrow("conflicting output files");
+    await expect(runBatch()).resolves.toEqual(new Map([["r0", [1, 0, 0]]]));
+    expect(fetchMock.mock.calls.map(([input]) => fetchInputUrl(input))).toContain(
+      "https://generativelanguage.googleapis.com/download/v1beta/files/top-level-output:download?alt=media",
+    );
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch completed",
+      expect.objectContaining({ state: "succeeded" }),
+    );
+    expect(loggerMocks.warn).not.toHaveBeenCalledWith(
+      "memory embeddings: gemini batch output metadata unusable",
+      expect.anything(),
+    );
+  });
+
+  it("rejects conflicting legacy output aliases without a canonical output", async () => {
+    const fetchMock = stubBatchFetch((stage) =>
+      stage === "create"
+        ? jsonResponse({
+            name: "batches/b-0",
+            done: true,
+            state: "BATCH_STATE_SUCCEEDED",
+            metadata: {
+              state: "BATCH_STATE_SUCCEEDED",
+              output: { responsesFile: "files/metadata-output" },
+            },
+            response: { responsesFile: "files/response-output" },
+          })
+        : undefined,
+    );
+
+    await expect(runBatch()).rejects.toThrow(
+      "gemini batch operation returned conflicting output files",
+    );
+    expect(
+      fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input))),
+    ).not.toContain("download");
+  });
+
+  it("reports terminal success when the provider omits output metadata", async () => {
+    stubBatchFetch((stage) =>
+      stage === "create"
+        ? jsonResponse({
+            name: "batches/b-no-output",
+            done: true,
+            state: "BATCH_STATE_SUCCEEDED",
+            createTime: "2026-08-09T01:00:00Z",
+            endTime: "2026-08-09T01:00:02Z",
+            batchStats: { requestCount: "1", successfulRequestCount: "1" },
+          })
+        : undefined,
+    );
+
+    await expect(runBatch()).rejects.toThrow("completed without output file");
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch completed",
+      expect.objectContaining({ providerSuccessfulRequests: 1, providerElapsedMs: 2_000 }),
+    );
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "memory embeddings: gemini batch output metadata unusable",
+      expect.objectContaining({ failureKind: "missing-output-file" }),
+    );
   });
 });

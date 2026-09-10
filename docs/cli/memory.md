@@ -76,7 +76,7 @@ the provider and verify the model and provider settings against the existing ind
 ## `memory index`
 
 ```bash
-openclaw memory index [--agent <id>] [--force] [--verbose]
+openclaw memory index [--agent <id>] [--force] [--clear-batch-quarantine] [--verbose]
 ```
 
 Same per-agent scoping as `status`. `--force` runs a full reindex instead of
@@ -102,6 +102,23 @@ The verbose output shows each retry wait.
 Interactive `memory_search` keeps three attempts and at most eight seconds of
 total retry sleep within the agent tool's 15-second deadline. A cancelled caller
 interrupts its retry wait.
+
+If status reports an acknowledged batch with a request fingerprint, retry the same
+index operation first. OpenClaw resumes that exact provider job and does not upload
+or create another one. A changed request cannot adopt the job or submit past its
+durable reservation.
+
+If status instead tells you to reconcile or cancel provider jobs, a native create
+request may have been accepted without OpenClaw receiving a conclusive response.
+Reconcile or cancel every listed provider job before clearing the quarantine;
+automatically resubmitting could create a duplicate paid job. After reconciliation,
+clear the record and rebuild the derived index together:
+
+```bash
+openclaw memory index --agent <id> --force --clear-batch-quarantine
+```
+
+`--clear-batch-quarantine` requires `--force` and never cancels a provider job.
 
 If status reports an index identity warning after changing embedding settings,
 check the affected agent's provider, model, sources, and extra paths, then rebuild:

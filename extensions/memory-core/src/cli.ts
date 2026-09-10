@@ -214,6 +214,11 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .description("Reindex memory files")
     .option("--agent <id>", "Agent id (default: all configured agents)")
     .option("--force", "Force full reindex", false)
+    .option(
+      "--clear-batch-quarantine",
+      "Clear a reconciled native-batch quarantine before forced reindex",
+      false,
+    )
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
       await runMemoryIndex(opts, hostOptions);

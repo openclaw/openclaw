@@ -309,6 +309,10 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return "test";
   }
 
+  protected assertNoBatchSubmissionQuarantine(): void {}
+
+  protected commitBatchSubmissionQuarantine(): void {}
+
   protected resolveProviderIndexIdentities() {
     return [];
   }
