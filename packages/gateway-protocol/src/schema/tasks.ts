@@ -117,6 +117,7 @@ export const TasksHistoryParamsSchema = closedObject({
 });
 
 export const TasksHistoryResultSchema = closedObject({
+  /** Stable messageId or __openclaw.id anchors refreshes; entry IDs can have sibling rows. */
   messages: Type.Array(Type.Unknown()),
   nextCursor: Type.Optional(Type.String({ maxLength: 8192 })),
 });

@@ -64,7 +64,10 @@ hooks are notifications, not the owner of durable binding removal.
 Native subagents can expose the shared task transcript view through the optional
 `taskHistory` harness capability. Declare the owned `taskKinds` and implement
 `read({ task, cfg, cursor, limit, assertCurrent })`. Return chronological chat
-`messages` with stable message IDs and an optional `nextCursor` for older history.
+`messages` with a stable `messageId` (or canonical `__openclaw.id`) and an optional
+`nextCursor` for older history. Internal runtime-only IDs are insufficient: the
+shared viewer must recognize the identity across pages and refreshes. Rows that
+share a transcript entry ID remain one display group.
 Preserve typed thinking, tool-call, and tool-result content so the normal chat
 renderer can display it. Bound native reads and response sizes.
 

@@ -20,6 +20,7 @@ import {
 } from "./shared-client.js";
 import { readCodexThreadHistoryPage } from "./thread-history-page.js";
 import { projectCodexThreadHistoryItem } from "./transcript-history-projection.js";
+import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 type TaskHistoryParams = Parameters<NonNullable<AgentHarnessV2["taskHistory"]>["read"]>[0];
 const MAX_SUBAGENT_ANCESTRY_READS = 32;
@@ -177,7 +178,16 @@ export async function readCodexNativeSubagentHistory(
       {
         project: (entries) =>
           entries.map((entry) =>
-            projectCodexThreadHistoryItem(thread, entry, taskHistoryToolItems),
+            projectCodexThreadHistoryItem(thread, entry, taskHistoryToolItems).map((message) => {
+              const messageIdentity = readMirrorIdentity(message);
+              if (!messageIdentity) {
+                throw new Error("Subagent history message is missing its native identity.");
+              }
+              // The shared transcript reader uses messageId to merge live and older pages.
+              return Object.assign(message, {
+                messageId: JSON.stringify([threadId, messageIdentity]),
+              });
+            }),
           ),
         fits: (result) => Buffer.byteLength(JSON.stringify(result), "utf8") <= 512 * 1024,
       },

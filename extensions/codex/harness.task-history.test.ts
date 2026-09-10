@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { resolveCodexBindingAppServerConnection } from "./src/app-server/binding-connection.js";
@@ -47,6 +48,10 @@ afterEach(async () => {
 });
 
 type ReadParams = Parameters<NonNullable<AgentHarnessV2["taskHistory"]>["read"]>[0];
+function messageIds(messages: unknown[]) {
+  return messages.map((message) => asOptionalRecord(message)?.messageId);
+}
+
 function item(id: string, overrides: Partial<CodexThreadItem>): CodexThreadItem {
   return {
     id,
@@ -210,10 +215,23 @@ describe("native subagent history through the harness", () => {
       },
       { role: "assistant", content: [{ type: "text", text: "Working on it" }] },
     ]);
+    const ids = messageIds(page.messages);
+    expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(new Set(ids).size).toBe(page.messages.length);
     expect(native.acquire).toHaveBeenCalledWith(
       expect.objectContaining({ agentDir: expect.any(String) }),
     );
     expect(native.release).toHaveBeenCalledOnce();
+    f.items[2]!.aggregatedOutput = "/workspace/updated";
+    const updated = await f.read();
+    expect(messageIds(updated.messages)).toEqual(ids);
+    expect(updated.messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "command",
+        content: [{ type: "text", text: "/workspace/updated" }],
+      }),
+    );
   });
 
   it("paginates older messages without replay or loss after a live append", async () => {
@@ -236,9 +254,21 @@ describe("native subagent history through the harness", () => {
       ),
     );
     expect(third.nextCursor).toBeUndefined();
-    expect((await f.read()).messages).toContainEqual(
+    const full = await f.read();
+    expect(full.messages).toContainEqual(
       expect.objectContaining({
         content: [{ type: "text", text: "new live message" }],
+      }),
+    );
+    expect(messageIds([...third.messages, ...second.messages, ...first.messages])).toEqual(
+      messageIds(full.messages.slice(0, -1)),
+    );
+    f.items[5]!.text = "Updated content for the same native item";
+    const refreshed = await f.read();
+    expect(messageIds(refreshed.messages)).toEqual(messageIds(full.messages));
+    expect(refreshed.messages).toContainEqual(
+      expect.objectContaining({
+        content: [{ type: "text", text: "Updated content for the same native item" }],
       }),
     );
   });
