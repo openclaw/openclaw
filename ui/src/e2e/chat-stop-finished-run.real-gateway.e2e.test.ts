@@ -502,9 +502,9 @@ suite.define(() => {
                       sent.indexOf(request) > abortIndex &&
                       ["chat.startup", "chat.history"].includes(request.method ?? "") &&
                       request.params?.sessionKey === sessionKey &&
-                      frame.payload?.sessionKey === sessionKey &&
-                      frame.payload.sessionId === sessionId &&
-                      frame.payload.sessionInfo?.hasActiveRun === false &&
+                      frame.payload?.sessionInfo?.key === sessionKey &&
+                      frame.payload.sessionInfo.sessionId === sessionId &&
+                      frame.payload.sessionInfo.hasActiveRun === false &&
                       frame.payload.sessionInfo.status === "done" &&
                       frame.payload.sessionInfo.lastRunId === runId
                     );
