@@ -338,7 +338,7 @@ describe("ChannelsPage lifecycle", () => {
       return await baseRequest?.(method, params);
     });
     const fetchMock = vi.fn(
-      async () =>
+      async (_input: RequestInfo | URL) =>
         new Response(new Uint8Array([137, 80, 78, 71]), {
           status: 200,
           headers: { "Content-Type": "image/png" },
