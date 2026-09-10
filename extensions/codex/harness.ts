@@ -321,12 +321,19 @@ export function createCodexAppServerAgentHarness(
         });
 
       const cyberFailover = resolveCodexCyberFailoverConfig(pluginConfig);
+      // Authorization is per authenticated workspace, so every lookup and record
+      // below is scoped to this attempt's agent and auth profile.
+      const cyberWorkspace = {
+        agentId: params.agentId,
+        authProfileId: params.authProfileId,
+      };
       // An open window from an answered escalation routes follow-up work straight
       // to Daybreak so related turns do not each spend a refusal round-trip.
       const stickyModel = resolveCodexCyberStickyModel({
         config: cyberFailover,
         sessionKey: params.sessionKey,
         currentModel: attemptModel,
+        workspace: cyberWorkspace,
       });
       const requestedModel = stickyModel ?? attemptModel;
       const result = await runAttemptOnModel(requestedModel);
@@ -339,6 +346,7 @@ export function createCodexAppServerAgentHarness(
           sessionKey: params.sessionKey,
           outcome: "unavailable",
           model: stickyModel,
+          workspace: cyberWorkspace,
           cooloffMs: cyberFailover.cooloffMs,
         });
         await emitCodexCyberNotice(params, {
@@ -353,11 +361,24 @@ export function createCodexAppServerAgentHarness(
       if (!isCodexCyberRefusalResult(result)) {
         return result;
       }
+      // A sticky turn that Daybreak refused proves the window is no longer
+      // earning its keep; stop pre-routing before the cooloff would have ended.
+      if (stickyModel) {
+        recordCodexCyberEscalation({
+          sessionKey: params.sessionKey,
+          outcome: "suppressed",
+          model: stickyModel,
+          workspace: cyberWorkspace,
+          cooloffMs: cyberFailover.cooloffMs,
+        });
+        return result;
+      }
       const plan = planCodexCyberEscalation({
         config: cyberFailover,
         sessionKey: params.sessionKey,
         currentModel: requestedModel,
         replaySafe: isCodexCyberEscalationReplaySafe(result),
+        workspace: cyberWorkspace,
       });
       if (plan.kind !== "escalate") {
         return result;
@@ -369,6 +390,7 @@ export function createCodexAppServerAgentHarness(
         sessionKey: params.sessionKey,
         outcome: "suppressed",
         model: plan.model,
+        workspace: cyberWorkspace,
         cooloffMs: cyberFailover.cooloffMs,
       });
       const escalated = await runAttemptOnModel(plan.model);
@@ -386,6 +408,7 @@ export function createCodexAppServerAgentHarness(
         sessionKey: params.sessionKey,
         outcome: unavailable ? "unavailable" : answered ? "answered" : "suppressed",
         model: plan.model,
+        workspace: cyberWorkspace,
         cooloffMs: cyberFailover.cooloffMs,
       });
       // Announce only the two outcomes this owner can state truthfully. A turn

@@ -64,12 +64,21 @@ type CyberEscalationRecord = {
 const escalationWindows = new Map<string, CyberEscalationRecord>();
 const MAX_ESCALATION_WINDOWS = 256;
 
-// Authorization is a property of the workspace and the target model, not of any
-// one session, so an unauthorized target is remembered once for all of them.
-// Keyed by target model, this is bounded by the number of configured targets and
-// can never be evicted by session churn — which is what makes the expensive
-// 401/403 reconnect ladder genuinely unrepeatable inside its cooloff.
+// Authorization is a property of the authenticated workspace and the target
+// model, not of any one session, so an unauthorized target is remembered once
+// for every session under that workspace. One process can host several
+// agent-scoped Codex homes, so the key carries the workspace identity too: a
+// workspace without entitlement must not disable escalation for one that has it.
+// Bounded by configured targets times workspaces, and never evicted by session
+// churn — which is what makes the expensive 401/403 reconnect ladder genuinely
+// unrepeatable inside its cooloff.
 const unavailableTargets = new Map<string, number>();
+
+/** Identifies the authenticated workspace an authorization result belongs to. */
+export type CodexCyberWorkspace = {
+  agentId?: string | undefined;
+  authProfileId?: string | undefined;
+};
 
 function normalizeModelKey(model: string): string {
   const trimmed = model.trim().toLowerCase();
@@ -77,8 +86,20 @@ function normalizeModelKey(model: string): string {
   return slashIndex >= 0 ? trimmed.slice(slashIndex + 1) : trimmed;
 }
 
-function isTargetUnavailable(model: string, now: number): boolean {
-  const key = normalizeModelKey(model);
+function targetKey(model: string, workspace: CodexCyberWorkspace | undefined): string {
+  return [
+    workspace?.agentId?.trim().toLowerCase() ?? "",
+    workspace?.authProfileId?.trim().toLowerCase() ?? "",
+    normalizeModelKey(model),
+  ].join("\u0000");
+}
+
+function isTargetUnavailable(
+  model: string,
+  workspace: CodexCyberWorkspace | undefined,
+  now: number,
+): boolean {
+  const key = targetKey(model, workspace);
   const expiresAt = unavailableTargets.get(key);
   if (expiresAt === undefined) {
     return false;
@@ -112,6 +133,7 @@ export function recordCodexCyberEscalation(params: {
   sessionKey: string | undefined;
   outcome: CodexCyberEscalationOutcome;
   model: string;
+  workspace?: CodexCyberWorkspace;
   cooloffMs: number;
   now?: number;
 }): void {
@@ -120,7 +142,7 @@ export function recordCodexCyberEscalation(params: {
   }
   const now = params.now ?? Date.now();
   if (params.outcome === "unavailable") {
-    unavailableTargets.set(normalizeModelKey(params.model), now + params.cooloffMs);
+    unavailableTargets.set(targetKey(params.model, params.workspace), now + params.cooloffMs);
     return;
   }
   if (!params.sessionKey) {
@@ -171,6 +193,7 @@ export function resolveCodexCyberStickyModel(params: {
   config: CodexCyberFailoverConfig;
   sessionKey: string | undefined;
   currentModel: string | undefined;
+  workspace?: CodexCyberWorkspace;
   now?: number;
 }): string | undefined {
   if (params.config.mode !== "auto") {
@@ -178,7 +201,10 @@ export function resolveCodexCyberStickyModel(params: {
   }
   const now = params.now ?? Date.now();
   const record = readWindow(params.sessionKey, now);
-  if (record?.outcome !== "answered" || isTargetUnavailable(params.config.model, now)) {
+  if (
+    record?.outcome !== "answered" ||
+    isTargetUnavailable(params.config.model, params.workspace, now)
+  ) {
     return undefined;
   }
   return sameModel(params.currentModel, params.config.model) ? undefined : params.config.model;
@@ -203,6 +229,7 @@ export function planCodexCyberEscalation(params: {
   sessionKey: string | undefined;
   currentModel: string | undefined;
   replaySafe: boolean;
+  workspace?: CodexCyberWorkspace;
   now?: number;
 }): CodexCyberEscalationPlan {
   const { config } = params;
@@ -222,7 +249,7 @@ export function planCodexCyberEscalation(params: {
   const now = params.now ?? Date.now();
   // An unauthorized target is an account-level fact: no session may retry it and
   // pay the transport's full reconnect ladder again.
-  if (isTargetUnavailable(config.model, now)) {
+  if (isTargetUnavailable(config.model, params.workspace, now)) {
     return { kind: "skip", reason: "target_unavailable" };
   }
   // Either session outcome blocks a fresh attempt: an answered one has already
@@ -264,26 +291,30 @@ export function isCodexCyberEscalationReplaySafe(
   return result?.replayMetadata?.replaySafe === true;
 }
 
-function hasCyberRefusalDiagnostic(message: CyberRefusalMessage | undefined): boolean {
+function hasRefusalDiagnostic(
+  message: CyberRefusalMessage | undefined,
+  category?: string,
+): boolean {
   if (message?.role !== "assistant") {
     return false;
   }
   return (
     message.diagnostics?.some(
       (diagnostic) =>
-        diagnostic.type === "provider_refusal" && diagnostic.details?.category === "cyber",
+        diagnostic.type === "provider_refusal" &&
+        (category === undefined || diagnostic.details?.category === category),
     ) === true
   );
 }
 
 /**
- * True when this attempt ended in OpenAI's cyber refusal. Bio and misalignment
- * refusals carry their own categories and are never escalated.
+ * True when this attempt ended in OpenAI's cyber refusal specifically. Bio and
+ * misalignment refusals carry their own categories and are never escalated.
  */
 export function isCodexCyberRefusalResult(result: CodexCyberAttemptOutcome | undefined): boolean {
   // `lastAssistant` may carry an older turn's row, so it only speaks for this
   // attempt when the attempt produced no row of its own.
-  return hasCyberRefusalDiagnostic(result?.currentAttemptAssistant ?? result?.lastAssistant);
+  return hasRefusalDiagnostic(result?.currentAttemptAssistant ?? result?.lastAssistant, "cyber");
 }
 
 /**
@@ -299,6 +330,11 @@ export function isCodexCyberEscalationAnswered(
   }
   const message = result?.currentAttemptAssistant ?? result?.lastAssistant;
   if (message?.role !== "assistant") {
+    return false;
+  }
+  // Any refusal category counts as refused, not answered: bio and misalignment
+  // keep their own handling and must never look like a successful escalation.
+  if (hasRefusalDiagnostic(message)) {
     return false;
   }
   return message.stopReason !== "error" && message.stopReason !== "aborted";

@@ -236,6 +236,41 @@ describe("escalation outcome", () => {
   });
 });
 
+describe("workspace scoping", () => {
+  it("keeps one workspace's authorization failure out of another's way", () => {
+    const now = 1_000;
+    recordCodexCyberEscalation({
+      sessionKey: nextSession(),
+      outcome: "unavailable",
+      model: DAYBREAK,
+      workspace: { agentId: "agent-a", authProfileId: "profile-a" },
+      cooloffMs: 600_000,
+      now,
+    });
+    expect(
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: nextSession(),
+        currentModel: PRIMARY,
+        replaySafe: true,
+        workspace: { agentId: "agent-a", authProfileId: "profile-a" },
+        now: now + 1,
+      }),
+    ).toEqual({ kind: "skip", reason: "target_unavailable" });
+    // A different authenticated workspace may well be entitled.
+    expect(
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: nextSession(),
+        currentModel: PRIMARY,
+        replaySafe: true,
+        workspace: { agentId: "agent-b", authProfileId: "profile-b" },
+        now: now + 1,
+      }),
+    ).toEqual({ kind: "escalate", model: DAYBREAK });
+  });
+});
+
 describe("window bookkeeping", () => {
   it("keeps an unauthorized target suppressed for every session, through churn", () => {
     const now = 1_000;
