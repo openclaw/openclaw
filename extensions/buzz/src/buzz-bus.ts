@@ -237,6 +237,7 @@ export async function startBuzzBus(options: {
   onFatalError?: (error: Error) => void;
   onDedupeError?: (error: Error) => void;
   onHistoryError?: (error: Error) => void;
+  onRoomUnavailable?: (error: Error) => void;
   onPresenceError?: (error: Error) => void;
   profileName?: string;
   onProfilePublished?: (eventId: string) => void;
@@ -386,6 +387,7 @@ export async function startBuzzBus(options: {
             messageLimit: resolveBuzzRoomHistoryLimit(activeChannelIds.length),
             reserveDispatchCapacity: (slots) => dispatchQueue.reserveCapacity(slots),
             onHistoryError: options.onHistoryError,
+            onRoomUnavailable: options.onRoomUnavailable,
             onMessageEvent: (event, isMember, reservation) => {
               if (signal.aborted || event.pubkey === publicKey) {
                 return;

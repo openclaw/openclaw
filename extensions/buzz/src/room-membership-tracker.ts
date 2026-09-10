@@ -69,6 +69,7 @@ export async function createBuzzRoomMembershipTracker(params: {
   ) => void;
   onFatalError?: (error: Error) => void;
   onHistoryError?: (error: Error) => void;
+  onRoomUnavailable?: (error: Error) => void;
   onMembershipsChanged?: (memberships: ReadonlyMap<string, BuzzRoomMembership>) => void;
   onRoomMetadataChanged?: (channelId: string) => void;
   signal?: AbortSignal;
@@ -305,10 +306,24 @@ export async function createBuzzRoomMembershipTracker(params: {
     void handleSystemEvent(event)?.catch(reportSystemEventError);
   };
 
+  // A room the bot cannot read must not take the healthy rooms down with it:
+  // one deleted or demoted room used to abort this loop, so every configured
+  // room lost its subscription and the account went silent. Skip the room,
+  // surface it, and only fail when nothing is left to subscribe to.
+  const subscribedChannelIds: string[] = [];
   for (const channelId of params.channelIds) {
     if (memberships.get(channelId)?.roles.get(params.botPublicKey) !== "bot") {
-      throw new Error(`Buzz bot does not have the Bot role in configured room ${channelId}`);
+      params.onRoomUnavailable?.(
+        new Error(`Buzz bot does not have the Bot role in configured room ${channelId}`),
+      );
+      continue;
     }
+    subscribedChannelIds.push(channelId);
+  }
+  if (params.channelIds.length > 0 && subscribedChannelIds.length === 0) {
+    throw new Error(
+      `Buzz bot does not have the Bot role in any configured room: ${params.channelIds.join(", ")}`,
+    );
   }
 
   let resolveHistorical: (() => void) | undefined;
@@ -327,7 +342,7 @@ export async function createBuzzRoomMembershipTracker(params: {
     // Snapshot membership before room history so startup memory stays bounded.
     // Buzz emits these filters in order: system changes since session start
     // update or deny membership before the following message history is handled.
-    for (const channelId of params.channelIds) {
+    for (const channelId of subscribedChannelIds) {
       const filters: Filter[] = [
         {
           kinds: [BUZZ_ROOM_SYSTEM_KIND, BUZZ_ROOM_METADATA_EDIT_KIND],
@@ -366,7 +381,7 @@ export async function createBuzzRoomMembershipTracker(params: {
             },
             oneose: () => {
               historicalRooms.add(channelId);
-              if (historicalRooms.size === params.channelIds.length) {
+              if (historicalRooms.size === subscribedChannelIds.length) {
                 resolveHistorical?.();
               }
             },
@@ -411,7 +426,7 @@ export async function createBuzzRoomMembershipTracker(params: {
   return {
     memberships: effectiveMemberships,
     catchUpHistory: async () => {
-      for (const channelId of params.channelIds) {
+      for (const channelId of subscribedChannelIds) {
         const page = historyPages.get(channelId);
         if (params.signal?.aborted) {
           return;
