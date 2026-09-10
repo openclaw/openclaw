@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw tasks` (background task ledger and Task Fl
 read_when:
   - You want to inspect, audit, or cancel background task records
   - You are documenting Task Flow commands under `openclaw tasks flow`
-title: "`openclaw tasks`"
+title: "Tasks"
 doc-schema-version: 1
 ---
 

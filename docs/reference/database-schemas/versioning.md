@@ -23,11 +23,21 @@ Matching numeric versions are necessary but not sufficient. A release can add a 
 
 Agent schema 19 records collected input consumption in the nullable
 `session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
-first-use ensure add it when needed; the schema version stays 19. The supported
-beta upgrade runs Doctor from the upcoming release. Intermediate builds that
+first-use ensure add it when needed; the schema version stays 19. The column
+shipped in 2026.8.2 ([#133457](https://github.com/openclaw/openclaw/pull/133457)),
+so the supported beta upgrade runs Doctor from 2026.8.2 or newer. Intermediate builds that
 already validate the optional pending-input table may reject the added column
 despite sharing version 19. Consumed source receipts remain until their session
 window is deleted, so rewriting a transcript cannot make an old input runnable again.
+
+Worker preparation uses the same-version rule for the bare nullable
+`worker_environments.preparation_purpose TEXT` column in the shared state
+database. Shared-state database startup repair adds it without changing state schema 17.
+New admissions write `reserve` or `build`; existing preparation rows retain
+`NULL` and read as `reserve`, without backfilling demand or changing expiry.
+Older readers ignore the column and apply their existing reserve policy to all
+prepared workers; stop pending builds before downgrading if they must complete.
+Reopening preserves purpose, consumption, demand, and cleanup ownership.
 
 The placement-move table uses this same-version rule for its bare nullable
 `abandon_source INTEGER`, `target_machine_class TEXT`, and `target_os TEXT`

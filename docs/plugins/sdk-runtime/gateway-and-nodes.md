@@ -229,6 +229,7 @@ api.registerService({
   start(ctx) {
     unsubscribeSessionsChanged = ctx.gatewayEvents?.onSessionsChanged((event) => {
       // event: { sessionKey, agentId?, label?, displayName?, reason?, phase? }
+      // refreshSession is your plugin's own handler, not an SDK export.
       refreshSession(event.sessionKey);
     });
   },
@@ -253,6 +254,8 @@ that intentionally starts required work in the background must report later fail
 through its generation-bound health reporter:
 
 ```typescript
+// startIndexWorker and stopIndexWorker are your plugin's own background-work
+// helpers, not SDK exports.
 api.registerService({
   id: "index-worker",
   start(ctx) {

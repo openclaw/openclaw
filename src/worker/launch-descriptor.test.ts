@@ -203,6 +203,10 @@ describe("worker launch descriptor", () => {
         "https://github.com/openclaw/openclaw.git\n",
       ].map((remoteUrl) => withBinding({ remoteUrl })),
       withBinding({ gitAuthor: { unexpected: true } }),
+      withBinding({ remoteUrl: undefined }),
+      withBinding({ gitAuthor: undefined }),
+      withBinding({ gitAuthor: { name: undefined } }),
+      withBinding({ gitAuthor: { email: undefined } }),
       ...["name", "email"].flatMap((key) =>
         ["", " ", "author\nvalue", "author\rvalue", "author\u0000value", "x".repeat(257)].map(
           (value) => withBinding({ gitAuthor: { [key]: value } }),

@@ -463,3 +463,5 @@ reload behavior, and legacy cleanup, see
 - [Plugin SDK overview](/plugins/sdk-overview) - runtime registration, hooks, and API fields
 - [Plugin manifest](/plugins/manifest) - manifest and package metadata
 - [Context engines](/concepts/context-engine) - pluggable context assembly plugins
+- [Diffs](/tools/diffs) - read-only diff viewer and file renderer (optional plugin tool)
+- [ACP agents — setup](/tools/acp-agents-setup) - configuring a plugin-provided ACP agent

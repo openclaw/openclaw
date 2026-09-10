@@ -383,7 +383,6 @@ async function killSubagentRunTree(
         result.descendants = true;
       }
       if (result.descendants && tree.canTraverse()) {
-        params.scope.refresh();
         await Promise.all(tree.children.map(visit));
       }
     } catch (error) {

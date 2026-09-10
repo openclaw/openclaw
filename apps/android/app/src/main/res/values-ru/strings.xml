@@ -787,6 +787,7 @@
     <string name="native_6fb4514f19a42ebe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключитесь к Gateway, чтобы загрузить данные сновидений."</string>
     <string name="native_7013af4c42fe4380" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Настройка"</string>
     <string name="native_702312a29580c9e5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открыть голосовой разговор"</string>
+    <string name="native_7047b9af7a4cd070" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открыть переписку"</string>
     <string name="native_707165e9984b51dc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"poll"</string>
     <string name="native_7098dec92670efb0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"role remove"</string>
     <string name="native_70ab6c4383505d40" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ошибка звука · Повторить"</string>
@@ -1210,6 +1211,7 @@
     <string name="native_b0375de83dab3599" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Требуется разрешение на доступ к микрофону."</string>
     <string name="native_b0eeb9e9e45398b5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sд"</string>
     <string name="native_b10d60f36b858926" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Доступно: %1$s"</string>
+    <string name="native_b14406bcc83988e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Статус ответа неизвестен. Откройте беседу перед повторной отправкой."</string>
     <string name="native_b184feda7d0f6f0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Диаграмма недоступна. Проверьте синтаксис или упростите диаграмму. Вы по-прежнему можете прочитать или скопировать её исходный код."</string>
     <string name="native_b1b3f74fe7e32ae1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Поток событий прерван; попробуйте обновить."</string>
     <string name="native_b1c1be6b126d151f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось загрузить узлы и устройства."</string>
@@ -1615,6 +1617,7 @@
     <string name="native_f0d1fb4ac220db11" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обновите этот Gateway, чтобы использовать помощник по настройкам OpenClaw."</string>
     <string name="native_f113b3bd283e216c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Для установки навыков ClawHub этому подключению к Gateway требуются права operator.admin."</string>
     <string name="native_f12b7a9412a51a7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Предложение применено."</string>
+    <string name="native_f14751d33eb91e75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ответ добавлен в очередь"</string>
     <string name="native_f14cc3ede97361fd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"В ожидании: %1$s"</string>
     <string name="native_f14cd8dd44162255" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sч назад"</string>
     <string name="native_f15bf83677856dfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Чтение журнала вызовов"</string>

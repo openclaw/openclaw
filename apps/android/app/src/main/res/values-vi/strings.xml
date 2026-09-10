@@ -787,6 +787,7 @@
     <string name="native_6fb4514f19a42ebe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kết nối với Gateway để tải tính năng mơ."</string>
     <string name="native_7013af4c42fe4380" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Thiết lập"</string>
     <string name="native_702312a29580c9e5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mở trò chuyện bằng giọng nói"</string>
+    <string name="native_7047b9af7a4cd070" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mở cuộc trò chuyện"</string>
     <string name="native_707165e9984b51dc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"poll"</string>
     <string name="native_7098dec92670efb0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"role remove"</string>
     <string name="native_70ab6c4383505d40" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lỗi âm thanh · Thử lại"</string>
@@ -1210,6 +1211,7 @@
     <string name="native_b0375de83dab3599" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cần có quyền truy cập micrô."</string>
     <string name="native_b0eeb9e9e45398b5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ngày"</string>
     <string name="native_b10d60f36b858926" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s có sẵn"</string>
+    <string name="native_b14406bcc83988e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chưa rõ trạng thái trả lời. Hãy mở cuộc trò chuyện trước khi gửi lại."</string>
     <string name="native_b184feda7d0f6f0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sơ đồ không khả dụng. Kiểm tra cú pháp hoặc đơn giản hóa sơ đồ. Bạn vẫn có thể đọc hoặc sao chép mã nguồn của sơ đồ."</string>
     <string name="native_b1b3f74fe7e32ae1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Luồng sự kiện bị gián đoạn; hãy thử làm mới."</string>
     <string name="native_b1c1be6b126d151f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Không thể tải các nút và thiết bị."</string>
@@ -1615,6 +1617,7 @@
     <string name="native_f0d1fb4ac220db11" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cập nhật Gateway này để sử dụng trợ lý cài đặt OpenClaw."</string>
     <string name="native_f113b3bd283e216c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kết nối Gateway này cần quyền operator.admin để cài đặt kỹ năng từ ClawHub."</string>
     <string name="native_f12b7a9412a51a7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đã áp dụng đề xuất."</string>
+    <string name="native_f14751d33eb91e75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đã thêm câu trả lời vào hàng đợi"</string>
     <string name="native_f14cc3ede97361fd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s đang chờ"</string>
     <string name="native_f14cd8dd44162255" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s giờ trước"</string>
     <string name="native_f15bf83677856dfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đọc nhật ký cuộc gọi"</string>

@@ -1,5 +1,6 @@
 {
   "id": "voice-call",
+  "categories": ["voice", "tools"],
   "doctorContract": {
     "resolveSessionStoreAgentIds": true,
     "stateMigrations": [{ "id": "voice-call-calls-jsonl-to-plugin-state" }]

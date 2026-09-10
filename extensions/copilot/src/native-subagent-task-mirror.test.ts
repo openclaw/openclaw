@@ -108,15 +108,15 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       preferMetadata: true,
       startedAt: 100,
       lastEventAt: 100,
-      progressSummary: "Copilot native subagent started.",
+      progressSummary: "Subagent started.",
     });
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
       runId: "copilot-agent:child-1",
       status: "succeeded",
       endedAt: 100,
       lastEventAt: 100,
-      progressSummary: "Copilot native subagent completed.",
-      terminalSummary: "Copilot native subagent completed (2 tool calls, 30 tokens).",
+      progressSummary: "Subagent completed.",
+      terminalSummary: "Subagent completed (2 tool calls, 30 tokens).",
     });
   });
 
@@ -213,9 +213,9 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       status: "cancelled",
       endedAt: 300,
       lastEventAt: 300,
-      error: "Copilot native subagent ended with its parent attempt.",
-      progressSummary: "Copilot native subagent cancelled with its parent attempt.",
-      terminalSummary: "Copilot native subagent cancelled.",
+      error: "Subagent ended with its parent attempt.",
+      progressSummary: "Subagent cancelled with its parent attempt.",
+      terminalSummary: "Subagent cancelled.",
     });
   });
 });

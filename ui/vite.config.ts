@@ -7,7 +7,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { gzip } from "pako";
-import type { Plugin, UserConfig } from "vite";
+import type { Plugin, ResolveModulePreloadDependenciesFn, UserConfig } from "vite";
+import { CONTROL_UI_LOCALE_ENTRIES } from "../scripts/lib/control-ui-i18n-config.ts";
 import {
   CONTROL_UI_ASSET_MANIFEST_FILENAME,
   CONTROL_UI_ASSET_MANIFEST_VERSION,
@@ -15,7 +16,10 @@ import {
   type ControlUiAssetManifestEntry,
 } from "../src/gateway/control-ui-asset-manifest.ts";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../src/gateway/control-ui-root-assets.ts";
-import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
+import {
+  controlUiCodeSplitting,
+  controlUiLocaleConfigHintsChunkPrefix,
+} from "./config/control-ui-chunking.ts";
 import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
@@ -87,6 +91,46 @@ export function createControlUiPrecompressedAssetVariants(
     },
   ];
 }
+
+function escapeControlUiAssetRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+const controlUiLocaleAssetPatterns = CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => ({
+  locale,
+  base: new RegExp(`^assets/${escapeControlUiAssetRegExp(locale)}-[^/]+\\.js$`, "u"),
+  configHints: new RegExp(
+    `^assets/${controlUiLocaleConfigHintsChunkPrefix}${escapeControlUiAssetRegExp(locale)}-[^/]+\\.js$`,
+    "u",
+  ),
+}));
+
+function controlUiLocaleFromAssetPath(file: string, kind: "base" | "configHints"): string | null {
+  return (
+    controlUiLocaleAssetPatterns.find(({ [kind]: pattern }) => pattern.test(file))?.locale ?? null
+  );
+}
+
+export const resolveControlUiModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
+  filename,
+  deps,
+  context,
+) => {
+  if (context.hostType !== "js") {
+    return deps;
+  }
+  const locale = controlUiLocaleFromAssetPath(filename, "base");
+  if (!locale) {
+    return deps;
+  }
+  const matchingHint = deps.find(
+    (dep) => controlUiLocaleFromAssetPath(dep, "configHints") === locale,
+  );
+  if (!matchingHint) {
+    return deps;
+  }
+  return deps.filter((dep) => dep !== filename && dep !== matchingHint);
+};
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
@@ -610,6 +654,10 @@ export default function controlUiViteConfig(
       outDir: buildOutDir,
       emptyOutDir: true,
       sourcemap: true,
+      modulePreload: {
+        polyfill: true,
+        resolveDependencies: resolveControlUiModulePreloadDependencies,
+      },
       rolldownOptions: {
         // Explicit groups do not absorb each other's dependencies. These settings
         // preserve execution order while keeping the startup chunks bounded.

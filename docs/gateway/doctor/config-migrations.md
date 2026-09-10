@@ -66,7 +66,8 @@ beyond the grace period.
       `routing.transcribeAudio`, top-level `agent.*`, or top-level `identity`
       from the pre-multi-agent config shape) no longer have a migration path;
       config using them now fails validation instead of being rewritten. Fix
-      those keys by hand against the current config reference before doctor
+      those keys by hand against the current
+      [configuration reference](/gateway/configuration-reference) before doctor
       can proceed.
     </Note>
 

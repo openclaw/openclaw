@@ -39,6 +39,7 @@ export async function resolveThinkingDefaultWithRuntimeCatalogCore(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentId?: string;
   loadRuntimeCatalog: () => Promise<ModelCatalogEntry[]>;
   agentRuntime?: string | null;
 }): Promise<ThinkLevel> {
@@ -60,6 +61,7 @@ export async function resolveThinkingDefaultWithRuntimeCatalogCore(params: {
       : configuredCatalog;
   return resolveThinkingDefault({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: params.provider,
     model: params.model,
     catalog,

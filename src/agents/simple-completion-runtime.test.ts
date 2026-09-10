@@ -14,6 +14,8 @@ import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "./execution-auth-binding.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
+import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 // Hoisted mocks keep Vitest module replacement stable while the implementation
@@ -43,6 +45,7 @@ vi.mock("../plugins/runtime/generation-scope.js", () => ({
 }));
 
 vi.mock("./sessions/model-registry-runtime.js", () => ({
+  initializeModelRegistryRuntime: vi.fn(),
   getModelRegistryRuntime: () => {
     const apiRegistry = createApiRegistry();
     return {
@@ -91,6 +94,8 @@ import {
   resolveSimpleCompletionSelectionForAgent,
 } from "./simple-completion-runtime.js";
 
+let preparedModelRuntime: PreparedModelRuntimeSnapshot;
+
 beforeEach(() => {
   hoisted.acquireRuntimeLeaseMock.mockReset();
   hoisted.resolveModelMock.mockReset();
@@ -101,23 +106,26 @@ beforeEach(() => {
   hoisted.prepareProviderRuntimeAuthMock.mockReset();
   hoisted.ensureAuthProfileStoreMock.mockReset();
   hoisted.getCurrentPluginMetadataSnapshotMock.mockReset();
+  const authStorage = AuthStorage.inMemory({});
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  preparedModelRuntime = {
+    catalogOwner: undefined,
+    agentDir: "/tmp/openclaw-agent",
+    workspaceDir: "/tmp/runtime-workspace",
+    config: {},
+    observationConfig: {},
+    isCurrent: () => true,
+    authModes: {},
+    metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    allowGatewaySubagentBinding: false,
+    modelCatalog: { entries: [], routeVariants: [] },
+    configuredRuntimeModels: [],
+    inlineProviderModels: [],
+    activeProjectKeys: [],
+    createStores: () => ({ authStorage, modelRegistry }),
+  };
   hoisted.acquireRuntimeLeaseMock.mockResolvedValue({
-    snapshot: {
-      agentDir: "/tmp/openclaw-agent",
-      workspaceDir: "/tmp/runtime-workspace",
-      config: {},
-      authModes: {},
-      metadataSnapshot: createPluginMetadataSnapshotFixture(),
-      allowGatewaySubagentBinding: false,
-      modelCatalog: { entries: [] },
-      configuredRuntimeModels: [],
-      inlineProviderModels: [],
-      activeProjectKeys: [],
-      createStores: () => ({
-        authStorage: { setRuntimeApiKey: hoisted.setRuntimeApiKeyMock },
-        modelRegistry: {},
-      }),
-    },
+    snapshot: preparedModelRuntime,
     release: vi.fn(),
   });
 
@@ -220,6 +228,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -255,6 +264,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: {},
       provider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -316,9 +326,9 @@ describe("prepareSimpleCompletionModel", () => {
       }),
     };
 
-    const before = await prepareSimpleCompletionModel(params);
+    const before = await prepareSimpleCompletionModel({ ...params, preparedModelRuntime });
     credential = { ...credential, access: "access-after-refresh", refresh: "refresh-after" };
-    const after = await prepareSimpleCompletionModel(params);
+    const after = await prepareSimpleCompletionModel({ ...params, preparedModelRuntime });
 
     expectPreparedModelResult(before);
     expectPreparedModelResult(after);
@@ -340,6 +350,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "anthropic",
       modelId: "missing-model",
@@ -358,6 +369,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -392,6 +404,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "amazon-bedrock",
       modelId: "anthropic.claude-sonnet-4-6",
@@ -427,6 +440,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "github-copilot",
       modelId: "gpt-4.1",
@@ -469,6 +483,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "github-copilot",
       modelId: "gpt-4.1",
@@ -503,6 +518,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "github-copilot",
       modelId: "gpt-4.1",
@@ -540,6 +556,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "github-copilot",
       modelId: "gpt-4.1",
@@ -556,6 +573,7 @@ describe("prepareSimpleCompletionModel", () => {
     hoisted.getApiKeyForModelMock.mockRejectedValueOnce(new Error("Profile not found: copilot"));
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -592,6 +610,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "local-openai",
       modelId: "chat-local",
@@ -642,6 +661,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "amazon-bedrock-mantle",
       modelId: "anthropic.claude-opus-4-7",
@@ -697,6 +717,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "ollama",
       modelId: "llama3.2:latest",
@@ -739,6 +760,7 @@ describe("prepareSimpleCompletionModel", () => {
     hoisted.resolveModelMock.mockReset();
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -773,6 +795,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: undefined,
       provider: "mistral",
       modelId: "mistral-medium-3-5",

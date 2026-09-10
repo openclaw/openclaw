@@ -931,6 +931,7 @@ img.chat-avatar.chat-avatar--logo {
 
 .chat-copy-btn__icon-copy,
 .chat-copy-btn__icon-check {
+  display: flex;
   position: absolute;
   top: 0;
   left: 0;
@@ -957,10 +958,28 @@ img.chat-avatar.chat-avatar--logo {
   color: var(--danger);
 }
 
-.chat-copy-btn[data-copy-state="copied"] {
+.chat-copy-btn[data-copy-state="copied"],
+.chat-group
+  :is(.chat-group-footer-actions, .chat-message-actions-row)
+  button[data-copy-state="copied"] {
+  opacity: 1;
   border-color: var(--ok-subtle);
   background: var(--ok-subtle);
   color: var(--ok);
+}
+
+/* The check is the visible confirmation; retain the live status for assistive
+   technology and the footer's transient-feedback disclosure. */
+.chat-group .chat-copy-btn[data-copy-state="copied"] + [data-copy-feedback] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .chat-copy-btn:focus-visible,

@@ -830,6 +830,7 @@ describe("sessions.dispatch", () => {
       const respond = await invoke(
         makeContext({
           workerEnvironmentService: {
+            readMachineShape: () => undefined,
             get: vi.fn(() => {
               if (state === "unavailable") {
                 throw new Error("environment inventory unavailable");

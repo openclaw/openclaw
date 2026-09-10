@@ -440,7 +440,8 @@ no route-specific URL parameters.
 | Logs                | `/logs`                                        | -                         | -                                                                                 |
 | Skill Workshop      | `/skills/workshop`                             | -                         | -                                                                                 |
 | Skills              | `/skills`                                      | -                         | -                                                                                 |
-| Plugins             | `/settings/plugins`                            | -                         | `/settings/plugins/discover`                                                      |
+| Plugins             | `/plugins`                                     | -                         | -                                                                                 |
+| Plugin settings     | `/settings/plugins`                            | -                         | `?tab=advanced`, `/settings/plugins/<pluginId>`                                   |
 | Automations         | `/automations`                                 | `/cron`                   | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                                        |
 | Tasks               | `/tasks`                                       | -                         | -                                                                                 |
 | Devices             | `/settings/devices`                            | `/nodes`                  | Shared settings parameters below                                                  |
@@ -476,6 +477,8 @@ keeping other query parameters and the fragment.
 Agent selection and its `overview|files|tools|skills|channels|cron|memory`
 panels use paths. Older links with `?agent=<agentId>` are replaced once with
 the agent path while keeping other query parameters and the fragment.
+
+<a id="special-documents-and-startup-modes" />
 
 ## Other special documents and startup modes
 

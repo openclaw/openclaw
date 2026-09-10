@@ -3,6 +3,7 @@ import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/acc
 import { parseAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
   createCliPathTextInput,
   createDelegatedSetupWizardProxy,
@@ -371,17 +372,7 @@ function restorePromotedSignalDefaultAccount(cfg: OpenClawConfig): OpenClawConfi
   } else {
     accounts[DEFAULT_ACCOUNT_ID] = remainingDefault;
   }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      signal: {
-        ...signal,
-        account,
-        accounts,
-      },
-    },
-  };
+  return patchTopLevelChannelConfigSection({ cfg, channel, patch: { account, accounts } });
 }
 
 export const signalSetupAdapter: ChannelSetupAdapter<SignalSetupInput> = {

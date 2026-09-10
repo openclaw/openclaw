@@ -1,5 +1,6 @@
 // Markdown block-reply chunking and fence preservation.
 import { describe, expect, it, vi } from "vitest";
+import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import {
   createParagraphChunkedBlockReplyHarness,
   emitAssistantTextDeltaAndEnd,
@@ -59,6 +60,27 @@ describe("paragraph and whole-fence chunking", () => {
 });
 
 describe("oversized fenced block chunking", () => {
+  it("acknowledges the original fenced answer after delivering its wrapped chunks", async () => {
+    const delivered: string[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: (payload) => {
+        delivered.push(payload.text ?? "");
+      },
+      timeoutMs: 5000,
+    });
+    const { emit } = createParagraphChunkedBlockReplyHarness({
+      chunking: { minChars: 8, maxChars: 20 },
+      onBlockReply: (payload) => pipeline.enqueue(payload),
+    });
+    const text = "```ts\nabcdefghijklmnop\n```";
+    emitAssistantTextDeltaAndEnd({ emit, text });
+    await pipeline.flush({ force: true });
+
+    expect(delivered).toEqual(["```ts\nabcdefghij\n```", "```ts\nklmnop\n```"]);
+    expect(pipeline.hasSentPayload({ text })).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "```ts\nabcdefghijklmnopq\n```" })).toBe(false);
+  });
+
   const cases = [
     {
       name: "reopens fenced blocks when splitting inside them",

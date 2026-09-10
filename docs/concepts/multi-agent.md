@@ -559,7 +559,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
 
 Each agent can have its own sandbox and tool restrictions:
 
-```js
+```json5
 {
   agents: {
     entries: {
@@ -567,23 +567,23 @@ Each agent can have its own sandbox and tool restrictions:
         default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: {
-          mode: "off",  // No sandbox for personal agent
+          mode: "off", // No sandbox for personal agent
         },
         // No tool restrictions - all tools available
       },
       family: {
         workspace: "~/.openclaw/workspace-family",
         sandbox: {
-          mode: "all",     // Always sandboxed
-          scope: "agent",  // One container per agent
+          mode: "all", // Always sandboxed
+          scope: "agent", // One container per agent
           docker: {
             // Optional one-time setup after container creation
             setupCommand: "apt-get update && apt-get install -y git curl",
           },
         },
         tools: {
-          allow: ["read"],                    // Only read tool
-          deny: ["exec", "write", "edit", "apply_patch"],    // Deny others
+          allow: ["read"], // Only read tool
+          deny: ["exec", "write", "edit", "apply_patch"], // Deny others
         },
       },
     },
@@ -614,3 +614,4 @@ See [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) for detail
 - [Presence](/concepts/presence) — agent presence and availability
 - [Session](/concepts/session) — session isolation and routing
 - [Sub-agents](/tools/subagents) — spawning background agent runs
+- [`openclaw agents`](/cli/agents) — create and inspect agents from the CLI

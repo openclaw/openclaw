@@ -93,6 +93,16 @@ both groups without reindexing their retained transcripts. Ordinary retained,
 reset, and deleted user-session archives remain eligible until explicitly
 targeted.
 
+When an embedding provider rate-limits indexing, each embedding operation gets
+up to five attempts. Retries honor valid provider cooldown hints, capped at
+60 seconds per wait. Other transient errors keep the shorter three-attempt
+budget. Permanent quota errors without a cooldown hint stop that operation.
+The verbose output shows each retry wait.
+
+Interactive `memory_search` keeps three attempts and at most eight seconds of
+total retry sleep within the agent tool's 15-second deadline. A cancelled caller
+interrupts its retry wait.
+
 If status reports an index identity warning after changing embedding settings,
 check the affected agent's provider, model, sources, and extra paths, then rebuild:
 

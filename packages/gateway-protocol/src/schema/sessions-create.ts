@@ -27,6 +27,13 @@ export const SessionsCreateParamsSchema = closedObject({
         "Prepared presentation title for a newly created session. Unlike label it is not unique and never claims a label; ignored when adopting an existing key.",
     }),
   ),
+  titleSource: Type.Optional(
+    Type.String({
+      maxLength: 1_000,
+      description:
+        "Submitted topic for background naming when the first turn is sent separately. Does not start a turn; ignored when adopting an existing session.",
+    }),
+  ),
   category: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),

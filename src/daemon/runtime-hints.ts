@@ -14,8 +14,7 @@ export function buildPlatformRuntimeLogHints(params: {
     const logs = resolveGatewaySupervisorLogPaths(env, { platform });
     // Preserve the writer's path bytes; backslashes can be literal POSIX filename characters.
     return [
-      `Launchd stdout (if installed): ${logs.stdoutPath}`,
-      "Launchd stderr (if installed): suppressed",
+      `Launchd stdout and stderr (if installed): ${logs.stdoutPath}`,
       `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
     ];
   }

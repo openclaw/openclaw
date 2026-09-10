@@ -75,7 +75,11 @@ test.each([
       totalBytes: 1_000,
       observedAtMs: 350,
     };
-    const identity = { providerId: "machine0", profileId: "team" };
+    const identity = {
+      providerId: "machine0",
+      profileId: "team",
+      machine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
+    };
     const getEnvironment = vi.fn((environmentId: string) =>
       ownerEpoch !== undefined && environmentId === placement.environmentId
         ? { ...identity, ownerEpoch, state: "attached" }
@@ -87,7 +91,12 @@ test.each([
       {
         context: {
           workerSessionPlacementService: { getMany },
-          workerEnvironmentService: { get: getEnvironment, inventoryVersion: () => 0 },
+          workerEnvironmentService: {
+            get: getEnvironment,
+            readMachineShape: () => identity.machine,
+            machineShapeVersion: () => 0,
+            inventoryVersion: () => 0,
+          },
           workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
           workerPlacementRunnerAvailabilityReader: {
             read: () => ({ kind: "device", status: "offline" }),
@@ -161,6 +170,8 @@ test.each(["provisioning", "syncing", "starting"] as const)(
               ownerEpoch: 0,
               state: "provisioning",
             }),
+            readMachineShape: () => undefined,
+            machineShapeVersion: () => 0,
             inventoryVersion: () => 0,
           },
         },
@@ -319,6 +330,8 @@ test.each([
                     ownerEpoch,
                     state: "destroyed",
                   },
+            readMachineShape: () => undefined,
+            machineShapeVersion: () => 0,
             inventoryVersion: () => 0,
           },
         },
@@ -371,6 +384,8 @@ test("sessions.describe requires worker teardown before failed-placement restart
             state: "failed",
             leaseId: "lease-live",
           }),
+          readMachineShape: () => undefined,
+          machineShapeVersion: () => 0,
           inventoryVersion: () => 0,
         },
       },

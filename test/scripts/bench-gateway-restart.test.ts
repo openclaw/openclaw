@@ -820,7 +820,8 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-bench-test-"));
     try {
       const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
-
+      // The benchmark records intent only after Gateway startup creates state.
+      openOpenClawStateDatabase({ env });
       expect(testing.writeRestartIntent(env, 12345, "gateway-restart-bench")).toBe(true);
       const row = readRestartIntentRow(env);
 

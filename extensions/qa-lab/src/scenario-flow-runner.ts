@@ -24,6 +24,7 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
   "./errors.js": () => import("./errors.js"),
+  "./gateway-log-redaction.js": () => import("./gateway-log-redaction.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-allowbots.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-allowbots.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-approval.js": () =>
@@ -52,6 +53,8 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
     import("./live-transports/matrix/scenarios/scenario-runtime-edit.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-media.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-media.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-message-actions.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-message-actions.js"),
   "./voice-preflight.fixture.js": () => import("./voice-preflight.fixture.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-policy.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-policy.js"),
@@ -67,6 +70,7 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
     import("./live-transports/slack/scenario-runtime.js"),
   "./live-transports/whatsapp/scenario-runtime.js": () =>
     import("./live-transports/whatsapp/scenario-runtime.js"),
+  "./suite-artifacts.js": () => import("./suite-artifacts.js"),
   "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
 };
 

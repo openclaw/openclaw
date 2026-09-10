@@ -345,14 +345,14 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       "custom-proxy": {
         baseUrl: "http://localhost:4000/v1",
         apiKey: "LITELLM_KEY",
-        api: "openai-responses",
+        api: "openai-completions",
         authHeader: true,
         headers: { "X-Proxy-Region": "us-west" },
         models: [
           {
             id: "llama-3.1-8b",
             name: "Llama 3.1 8B",
-            api: "openai-responses",
+            api: "openai-completions",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

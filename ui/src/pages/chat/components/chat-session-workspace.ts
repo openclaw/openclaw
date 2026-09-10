@@ -387,6 +387,7 @@ export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: st
   workspace.collapsed = false;
   workspace.browserPath = separator > 0 ? normalizedPath.slice(0, separator) : "";
   workspace.browserSearch = "";
+  workspace.filter = "all";
   workspace.activeId = `file:${path}`;
   loadSessionWorkspace(state, workspace, true);
   requestWorkspaceUpdate(state);
@@ -460,6 +461,12 @@ export function createSessionWorkspaceProps(
     activeId: workspace.activeId,
     dock: workspace.dock,
     narrowLayout: options?.narrowLayout === true,
+    filter: workspace.filter,
+    browserSearch: workspace.browserSearch,
+    onSetFilter: (filter) => {
+      workspace.filter = filter;
+      requestWorkspaceUpdate(state);
+    },
     onToggleCollapsed: () => toggleSessionWorkspace(state),
     onSetDock: (dock) => setSessionWorkspaceDock(state, dock),
     onRefresh: () => loadSessionWorkspace(state, workspace, true),
@@ -480,6 +487,7 @@ export function createSessionWorkspaceProps(
     },
     onSearch: (search) => {
       workspace.browserSearch = search;
+      requestWorkspaceUpdate(state);
       clearWorkspaceTimer(workspace);
       workspace.browserSearchTimer = globalThis.setTimeout(() => {
         workspace.browserSearchTimer = null;

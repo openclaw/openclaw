@@ -1,7 +1,7 @@
 import path from "node:path";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import {
   appendSessionTranscriptReport,
   appendTranscriptMessage,

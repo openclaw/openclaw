@@ -1,6 +1,7 @@
 // QA Lab Matrix plugin module implements tool-progress scenarios.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { QaSuiteScenarioSkipError } from "../../../errors.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   advanceMatrixQaActorCursor,
@@ -26,6 +27,7 @@ import {
   findMatrixQaUnexpectedWorkingEvents,
   hasMatrixQaToolProgressPreviewLine,
 } from "./scenario-runtime-tool-progress-diagnostics.js";
+import { prepareMatrixMentionProgressGate } from "./scenario-runtime-tool-progress-gate.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
 async function runMatrixToolProgressScenario(
@@ -49,6 +51,9 @@ async function runMatrixToolProgressScenario(
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const startObservedIndex = context.observedEvents.length;
   await writeMatrixToolProgressTaskFile(context, params.finalText);
+  await using mentionProgressGate = params.mentionSafety
+    ? await prepareMatrixMentionProgressGate(context)
+    : undefined;
   const triggerBody = params.triggerBodyBuilder(context.sutUserId, params.finalText);
   const driverEventId = await client.sendTextMessage({
     body: triggerBody,
@@ -139,6 +144,7 @@ async function runMatrixToolProgressScenario(
         })
         .catch((err: unknown) => throwProgressTimeout(err, "<not observed>"));
       const progressPreviewEventId = getPreviewRootEventId(progressAfterFinal.event);
+      await mentionProgressGate?.release();
       const unexpectedWorkingEvents = findMatrixQaUnexpectedWorkingEvents({
         events: context.observedEvents,
         finalEventId: preview.event.eventId,
@@ -266,6 +272,7 @@ async function runMatrixToolProgressScenario(
   }
 
   if (params.mentionSafety) {
+    await mentionProgressGate?.release();
     assertMatrixQaToolProgressMentionsInert(progress.event);
   }
   if (
@@ -407,6 +414,11 @@ export async function runToolProgressErrorScenario(context: MatrixQaScenarioCont
 }
 
 export async function runToolProgressMentionSafetyScenario(context: MatrixQaScenarioContext) {
+  if (process.platform === "win32") {
+    throw new QaSuiteScenarioSkipError(
+      "Matrix tool progress mention safety requires POSIX shell support.",
+    );
+  }
   return runMatrixToolProgressScenario(context, {
     expectedPreviewKind: "message",
     finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE"),

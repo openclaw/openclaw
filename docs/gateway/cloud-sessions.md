@@ -67,11 +67,11 @@ See [Cloud Workers](/gateway/cloud-workers) for profiles, requirements, dispatch
 
 ## Viewing the session desktop
 
-Open **Desktop** from a session to view its execution machine. Cloud sessions select their worker desktop; sessions on paired devices select that device. By default, the pop-out window keeps the session in its link, so both viewers follow placement changes and disconnect from the previous machine when the session moves or stops. A stopped cloud session does not switch either viewer to the Gateway desktop.
+Open **Desktop** from a session to connect directly to its execution machine. Cloud sessions select their worker desktop; sessions on paired devices select that device. The chat panel shows connection progress or a retry action instead of offering unrelated machines. The pop-out window keeps the session in its link, so both viewers follow placement changes and disconnect from the previous machine when the session moves or stops. A stopped cloud session does not switch either viewer to the Gateway desktop.
 
 If you choose a source in the Desktop picker, the panel keeps that choice when the session's placement changes. **Open desktop in new window** opens that source and requests the panel's current view-only or control mode. Desktop links contain no credentials and do not grant control; the new viewer still performs its normal authentication and permission checks.
 
-The machine must already support desktop viewing. For cloud workers, enable the [Cloud Worker Desktop lab and desktop profile setting](/gateway/cloud-workers#desktop-interactive). Opening Desktop starts in view-only mode and does not change the machine's permissions or the agent's tool policy. The global Desktop command in the command palette still opens the machine picker, including on chat pages.
+The machine must already support desktop viewing. For cloud workers, enable the [Cloud Worker Desktop lab and desktop profile setting](/gateway/cloud-workers#desktop-interactive). Opening Desktop starts in view-only mode and does not change the machine's permissions or the agent's tool policy. The command palette's Desktop action also follows the current session on chat pages. Outside chat, it opens the machine picker.
 
 To enter text from your local clipboard, take control and choose **Keyboard** before pasting with **Command+V** on macOS or **Ctrl+V** on Windows and Linux. The Keyboard field sends the pasted text to the remote desktop; shortcuts directed at the desktop canvas still operate on the remote machine. Keyboard input stays disabled until the control connection is ready.
 

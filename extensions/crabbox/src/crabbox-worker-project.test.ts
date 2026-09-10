@@ -11,6 +11,9 @@ import { operationLeaseId } from "./crabbox-worker-profile.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   CHECKPOINT_ID,
+  PROJECT_KEY,
+  BASE_COMMIT,
+  createProjectOptions as projectOptions,
   CLASSLESS_PROFILE,
   PROFILE,
   commandResult,
@@ -21,8 +24,6 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
-const PROJECT_KEY = "a".repeat(64);
-const BASE_COMMIT = "b".repeat(40);
 
 function notSubmittedReceipt(leaseId: string) {
   return {
@@ -33,60 +34,6 @@ function notSubmittedReceipt(leaseId: string) {
     checkpointId: "chk_not_submitted",
     localReservation: "removed",
   };
-}
-
-function projectOptions(events: string[], controller = new AbortController()) {
-  let enrollmentStarted = false;
-  const observe = ({ argv }: CommandCall) => {
-    if (argv[1] === "run" && argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")) {
-      events.push(enrollmentStarted ? "enrollment-install" : "runtime-install");
-    }
-    if (argv[1] === "checkpoint" && argv[2] === "create") {
-      events.push("capture");
-    }
-    return undefined;
-  };
-  const options = {
-    nodeRuntimeIdentity: {
-      nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
-      executionMode: "worker-turn" as const,
-      workerBundleSha256: createWorkerArchiveFixture().sha256,
-    },
-    project: {
-      key: PROJECT_KEY,
-      baseCommit: BASE_COMMIT,
-      signal: controller.signal,
-      assertCurrent: () => controller.signal.throwIfAborted(),
-      prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
-        await transport.runScript("project-checkout", controller.signal);
-        events.push("project-prepared");
-        return { seedKey: PROJECT_KEY, cacheHit: false };
-      }),
-    },
-    prepareNodeRuntime: vi.fn(async () => {
-      events.push("runtime-granted");
-      return {
-        nodeBootstrap: createNodeBootstrapFixture(),
-        workerBundle: createWorkerArchiveFixture(),
-        signal: controller.signal,
-      };
-    }),
-    beginNodeEnrollment: vi.fn(async () => {
-      events.push("enrollment-begun");
-      enrollmentStarted = true;
-      return {
-        mode: "connect" as const,
-        setupCode: "synthetic-setup-code",
-        setupId: "project-setup",
-        openclawVersion: "2026.8.1",
-        nodeBootstrap: createNodeBootstrapFixture(),
-        displayName: "Project worker",
-        signal: controller.signal,
-        waitForDeviceId: async () => "project-node",
-      };
-    }),
-  } satisfies ProvisionOptions;
-  return { options, observe };
 }
 
 describe("Crabbox project snapshot provisioning", () => {
@@ -139,6 +86,137 @@ describe("Crabbox project snapshot provisioning", () => {
       } else {
         expect(listCrabboxWarmImages()).toEqual([]);
       }
+    },
+  );
+
+  it("recovers enrolled preparation facts without rerunning setup or capture", async () => {
+    const events: string[] = [];
+    const current = projectOptions(events);
+    const { provider, calls } = createWarmProvider(current.observe);
+    const inspected = vi.fn(async () => {});
+    const options: ProvisionOptions = {
+      ...current.options,
+      project: {
+        ...current.options.project,
+        preparation: {
+          key: "c".repeat(64),
+          cacheKey: "d".repeat(64),
+          purpose: "session",
+          demandAtMs: Date.now(),
+        },
+        inspectPreparedWorkspace: inspected,
+      },
+    };
+    await provider.provision(PROFILE, "enrolled-project-replay", options);
+    const before = calls.length;
+    current.options.project.prepare.mockClear();
+    current.options.prepareNodeRuntime.mockClear();
+    await provider.provision(PROFILE, "enrolled-project-replay", options);
+    expect(inspected).toHaveBeenCalledOnce();
+    expect(current.options.project.prepare).not.toHaveBeenCalled();
+    expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
+    expect(calls.slice(before).some(({ argv }) => argv[2] === "create")).toBe(false);
+  });
+
+  it.each([
+    { crash: "pending", alreadyComplete: false, replayCaptures: 1 },
+    { crash: "prepared", alreadyComplete: false, replayCaptures: 1 },
+    { crash: "published", alreadyComplete: false, replayCaptures: 0 },
+    { crash: "pending", alreadyComplete: true, replayCaptures: 1 },
+    { crash: "none", alreadyComplete: true, replayCaptures: 0 },
+  ])(
+    "preserves reserve capture on $crash replay (image complete=$alreadyComplete)",
+    async ({ crash, alreadyComplete, replayCaptures }) => {
+      const preparation = {
+        key: "c".repeat(64),
+        cacheKey: "d".repeat(64),
+        purpose: "reserve" as const,
+        demandAtMs: Date.now(),
+      };
+      let captures = 0;
+      const command = ({ argv }: CommandCall) =>
+        argv[2] === "create"
+          ? checkpointResult(
+              `${CHECKPOINT_ID}_${++captures}`,
+              argv[argv.indexOf("--id") + 1]!,
+              "completed",
+            )
+          : undefined;
+      const initial = createWarmProvider(command);
+      const baseline = await initial.provider.provision(
+        PROFILE,
+        "replay-baseline",
+        projectOptions([], new AbortController(), preparation).options,
+      );
+      await initial.provider.destroy({ ...baseline, profile: PROFILE });
+      await initial.provider.dispose();
+      const operation = "prepared-capture-replay";
+      const leaseId = operationLeaseId(operation);
+      let completionPublished = alreadyComplete;
+      const optionsFor = (interrupt: boolean) => {
+        const controller = new AbortController();
+        const { options } = projectOptions([], controller);
+        const prepare = options.project.prepare;
+        const project: NonNullable<ProvisionOptions["project"]> = {
+          ...options.project,
+          preparation,
+          inspectPreparedWorkspace: vi.fn(async () => {}),
+          prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
+            const result = await prepare(transport);
+            const captureRequired: true | undefined = completionPublished ? undefined : true;
+            completionPublished = true;
+            if (interrupt && crash === "pending") {
+              controller.abort();
+            }
+            return { ...result, captureRequired };
+          }),
+          assertCurrent: () => {
+            if (
+              interrupt &&
+              crash === "prepared" &&
+              listCrabboxWarmImages()[0]?.allocations[leaseId]?.phase === "prepared"
+            ) {
+              controller.abort();
+            }
+            controller.signal.throwIfAborted();
+          },
+        };
+        const begin = options.beginNodeEnrollment;
+        return {
+          ...options,
+          project,
+          beginNodeEnrollment: vi.fn(async () => {
+            if (interrupt && crash === "published") {
+              controller.abort();
+              controller.signal.throwIfAborted();
+            }
+            return await begin();
+          }),
+        };
+      };
+      const first = createWarmProvider(command, initial.stateDir);
+      if (crash === "none") {
+        await first.provider.provision(PROFILE, operation, optionsFor(false));
+        expect(captures).toBe(1);
+      } else {
+        await expect(
+          first.provider.provision(PROFILE, operation, optionsFor(true)),
+        ).rejects.toThrow();
+        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]?.phase).toBe(
+          crash === "pending" ? "pending" : "prepared",
+        );
+        expect(listCrabboxWarmImages()[0]?.capture).toBeUndefined();
+      }
+      await first.provider.dispose();
+      const before = captures;
+      const resumed = createWarmProvider(command, initial.stateDir);
+      await resumed.provider.provision(PROFILE, operation, optionsFor(false));
+      expect(captures - before).toBe(replayCaptures);
+      const enrolled = optionsFor(false);
+      await resumed.provider.provision(PROFILE, operation, enrolled);
+      expect(enrolled.project.prepare).not.toHaveBeenCalled();
+      expect(enrolled.project.inspectPreparedWorkspace).toHaveBeenCalledOnce();
+      expect(captures - before).toBe(replayCaptures);
     },
   );
 

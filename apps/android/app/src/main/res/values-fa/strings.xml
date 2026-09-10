@@ -787,6 +787,7 @@
     <string name="native_6fb4514f19a42ebe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برای بارگذاری رؤیاپردازی، به Gateway متصل شوید."</string>
     <string name="native_7013af4c42fe4380" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"راه‌اندازی"</string>
     <string name="native_702312a29580c9e5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"باز کردن گفت‌وگوی صوتی"</string>
+    <string name="native_7047b9af7a4cd070" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"باز کردن گفتگو"</string>
     <string name="native_707165e9984b51dc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"poll"</string>
     <string name="native_7098dec92670efb0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"role remove"</string>
     <string name="native_70ab6c4383505d40" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطای صدا · تلاش مجدد"</string>
@@ -1210,6 +1211,7 @@
     <string name="native_b0375de83dab3599" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مجوز دسترسی به میکروفون لازم است."</string>
     <string name="native_b0eeb9e9e45398b5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s روز"</string>
     <string name="native_b10d60f36b858926" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s در دسترس"</string>
+    <string name="native_b14406bcc83988e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وضعیت پاسخ نامشخص است. پیش از ارسال دوباره، گفتگو را باز کنید."</string>
     <string name="native_b184feda7d0f6f0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نمودار در دسترس نیست. نحو را بررسی کنید یا نمودار را ساده‌تر کنید. همچنان می‌توانید کد منبع آن را بخوانید یا کپی کنید."</string>
     <string name="native_b1b3f74fe7e32ae1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جریان رویداد قطع شد; بازآوری را امتحان کنید."</string>
     <string name="native_b1c1be6b126d151f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بارگذاری گره‌ها و دستگاه‌ها ممکن نشد."</string>
@@ -1615,6 +1617,7 @@
     <string name="native_f0d1fb4ac220db11" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برای استفاده از دستیار تنظیمات OpenClaw، این Gateway را به‌روزرسانی کنید."</string>
     <string name="native_f113b3bd283e216c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"این اتصال Gateway برای نصب مهارت‌های ClawHub به operator.admin نیاز دارد."</string>
     <string name="native_f12b7a9412a51a7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پیشنهاد اعمال شد."</string>
+    <string name="native_f14751d33eb91e75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پاسخ در صف قرار گرفت"</string>
     <string name="native_f14cc3ede97361fd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s در انتظار"</string>
     <string name="native_f14cd8dd44162255" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ساعت پیش"</string>
     <string name="native_f15bf83677856dfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خواندن سابقهٔ تماس"</string>

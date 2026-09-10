@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
@@ -317,7 +317,7 @@ function createSessionEventWakeRuntime() {
         let result: SessionEventWakeResult;
         let onAbort: (() => void) | undefined;
         try {
-          result = await runWithGatewayIndependentRootWorkAdmission(() => {
+          result = await runWithGatewayDetachedWorkAdmission(() => {
             signal.throwIfAborted();
             // Subscribe before calling the handler: it can synchronously replace its owner.
             const aborted = new Promise<never>((_resolve, reject) => {

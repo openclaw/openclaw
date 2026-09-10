@@ -20,6 +20,7 @@ let sessionStore: Record<string, { sessionId?: string; lastChannel?: string; las
 
 const { registryRuntimeMock } = vi.hoisted(() => ({
   registryRuntimeMock: {
+    getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => undefined),
     countActiveDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
     countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
     isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),

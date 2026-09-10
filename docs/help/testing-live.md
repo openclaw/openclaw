@@ -90,3 +90,4 @@ entry points at the page that now holds the content.
 ## Related
 
 - [Testing](/help/testing) - unit, integration, QA, and Docker suites
+- [Tests](/reference/test) - index of the testing reference, one page per reader job

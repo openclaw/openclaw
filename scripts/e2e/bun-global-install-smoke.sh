@@ -46,6 +46,7 @@ MOCK_REQUEST_LOG=""
 LOCAL_AGENT_LOG=""
 GATEWAY_LOG=""
 GATEWAY_HEALTH_LOG=""
+GATEWAY_STATUS_LOG=""
 GATEWAY_AGENT_LOG=""
 DIRECT_BUN_LOG=""
 
@@ -74,6 +75,7 @@ dump_debug_logs() {
     "$LOCAL_AGENT_LOG" \
     "$GATEWAY_LOG" \
     "$GATEWAY_HEALTH_LOG" \
+    "$GATEWAY_STATUS_LOG" \
     "$GATEWAY_AGENT_LOG" \
     "$DIRECT_BUN_LOG" >&2 || true
 }
@@ -305,6 +307,7 @@ NODE
   LOCAL_AGENT_LOG="$SMOKE_DIR/local-agent.log"
   GATEWAY_LOG="$SMOKE_DIR/gateway.log"
   GATEWAY_HEALTH_LOG="$SMOKE_DIR/gateway-health.json"
+  GATEWAY_STATUS_LOG="$SMOKE_DIR/gateway-status.json"
   GATEWAY_AGENT_LOG="$SMOKE_DIR/gateway-agent.log"
   DIRECT_BUN_LOG="$SMOKE_DIR/direct-bun.log"
 
@@ -430,6 +433,13 @@ NODE
     "$success_marker" \
     "$GATEWAY_AGENT_LOG" \
     "$MOCK_REQUEST_LOG"
+  run_installed_cli gateway call status \
+    --params '{"includeChannelSummary":false}' \
+    --token "$OPENCLAW_GATEWAY_TOKEN" \
+    --json >"$GATEWAY_STATUS_LOG" 2>&1
+  node scripts/e2e/lib/bun-global-install/assertions.mjs \
+    assert-gateway-diagnostics \
+    "$GATEWAY_STATUS_LOG"
 
   echo "bun-global-install-smoke: Bun $bun_version install with $runtime_label CLI, local agent, and Gateway runtime OK"
 

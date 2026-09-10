@@ -13,6 +13,69 @@ import {
 describe("Control UI GitHub failures", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it.each(["before admission", "during credential revalidation"])(
+    "does not dispatch a caller cancelled %s",
+    async (phase) => {
+      const controller = new AbortController();
+      const cancelled = new Error("Caller cancelled repository preparation");
+      const identity = {
+        revalidate: vi.fn(async () => controller.abort(cancelled)),
+        assertSelected: vi.fn(),
+      };
+      const fetchImpl = vi.fn<typeof fetch>();
+      if (phase === "before admission") {
+        controller.abort(cancelled);
+      }
+      await expect(
+        fetchGitHubApi(
+          "https://api.github.com/repos/owner/repo",
+          fetchImpl,
+          undefined,
+          undefined,
+          identity,
+          undefined,
+          controller.signal,
+        ),
+      ).rejects.toBe(cancelled);
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(identity.revalidate).toHaveBeenCalledTimes(phase === "before admission" ? 0 : 1);
+    },
+  );
+
+  it("joins caller cancellation to the existing HTTP deadline", async () => {
+    const started = createDeferred<AbortSignal>();
+    const controller = new AbortController();
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("HTTP request has no signal");
+      }
+      started.resolve(signal);
+      return await new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("Request aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    });
+    const request = fetchGitHubApi(
+      "https://api.github.com/repos/owner/repo",
+      fetchImpl,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      controller.signal,
+    );
+    const signal = await started.promise;
+    expect(signal).not.toBe(controller.signal);
+    controller.abort();
+    await expect(request).rejects.toMatchObject({ statusCode: 502 });
+    expect(signal.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("keeps the default JSON byte cap when a caller supplies a larger metadata budget", async () => {
     const body = JSON.stringify({ summary: "x".repeat(256 * 1024) });
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response(body));

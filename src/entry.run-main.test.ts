@@ -12,6 +12,7 @@ describe("entry run-main boundary", () => {
 
     expect(runCli).toHaveBeenCalledWith(["node", "openclaw", "status"], {
       additionalStartupTrace: expect.any(Object),
+      runtimeRecoveryEnv: expect.any(Object),
       retainConsoleRoutingUntilProcessExit: true,
     });
   });

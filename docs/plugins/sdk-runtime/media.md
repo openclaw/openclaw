@@ -78,6 +78,7 @@ Speech, media understanding, generation, web search, and the low-level media uti
 
     // Structured image extraction through a specific provider/model.
     // Include at least one image; text inputs are supplemental context.
+    // receiptImageBuffer is your own image bytes, not an SDK-provided value.
     const evidence = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
       provider: "codex",
       model: "gpt-5.6-sol",
@@ -166,6 +167,8 @@ Speech, media understanding, generation, web search, and the low-level media uti
     Low-level media utilities.
 
     ```typescript
+    import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+
     const webMedia = await api.runtime.media.loadWebMedia(url);
     const mime = await api.runtime.media.detectMime(buffer);
     const kind = api.runtime.media.mediaKindFromMime("image/jpeg"); // "image"

@@ -333,6 +333,7 @@ const runLegacyStateMigrations = defineMockFn(
   vi.fn().mockResolvedValue({
     changes: [],
     warnings: [],
+    stepReceipts: [],
   }),
 );
 

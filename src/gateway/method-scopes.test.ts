@@ -40,6 +40,22 @@ afterEach(() => {
 });
 
 describe("method scope resolution", () => {
+  it.each(["openclaw", " "])(
+    "authorizes runtime-aware inventory %j with write scope",
+    (runtimeId) => {
+      const params = { runtimeId };
+      expect(
+        authorizeOperatorScopesForMethod("environments.list", ["operator.read"], params),
+      ).toEqual({
+        allowed: false,
+        missingScope: "operator.write",
+      });
+      expect(
+        authorizeOperatorScopesForMethod("environments.list", ["operator.write"], params),
+      ).toEqual({ allowed: true });
+    },
+  );
+
   it("requires write scope before sessions.assignOwner visibility is considered", () => {
     const params = {
       key: "agent:main:shared",
@@ -74,6 +90,7 @@ describe("method scope resolution", () => {
     ["users.setDisplayName", ["operator.write"]],
     ["users.setAvatar", ["operator.write"]],
     ["tasks.get", ["operator.read"]],
+    ["tasks.history", ["operator.read"]],
     ["taskSuggestions.list", ["operator.read"]],
     ["taskSuggestions.create", ["operator.write"]],
     ["taskSuggestions.accept", ["operator.admin"]],

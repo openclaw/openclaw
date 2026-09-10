@@ -166,81 +166,17 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   });
 
   it.each([
-    {
-      name: "local explicit concurrency",
-      cpus: 2,
-      gib: 16,
-      ci: undefined,
-      actions: undefined,
-      requested: 3,
-      expected: 3,
-    },
-    {
-      name: "CI capacity boundary",
-      cpus: 8,
-      gib: 24,
-      ci: "true",
-      actions: undefined,
-      requested: 2,
-      expected: 2,
-    },
-    {
-      name: "CPU-constrained CI",
-      cpus: 4,
-      gib: 32,
-      ci: "true",
-      actions: undefined,
-      requested: 2,
-      expected: 1,
-    },
-    {
-      name: "memory-constrained CI",
-      cpus: 8,
-      gib: 16,
-      ci: "true",
-      actions: undefined,
-      requested: 2,
-      expected: 1,
-    },
-    {
-      name: "unknown CI CPUs",
-      cpus: Number.NaN,
-      gib: 32,
-      ci: "true",
-      actions: undefined,
-      requested: 2,
-      expected: 1,
-    },
-    {
-      name: "unknown CI memory",
-      cpus: 8,
-      gib: Number.NaN,
-      ci: "true",
-      actions: undefined,
-      requested: 2,
-      expected: 1,
-    },
-    {
-      name: "CI two-plan ceiling",
-      cpus: 16,
-      gib: 64,
-      ci: "true",
-      actions: undefined,
-      requested: 3,
-      expected: 2,
-    },
-    {
-      name: "GitHub Actions capacity",
-      cpus: 4,
-      gib: 32,
-      ci: undefined,
-      actions: "true",
-      requested: 2,
-      expected: 1,
-    },
+    ["local explicit concurrency", 2, 16, undefined, undefined, 3, 3],
+    ["CI capacity boundary", 8, 24, "true", undefined, 2, 2],
+    ["CPU-constrained CI", 4, 32, "true", undefined, 2, 1],
+    ["memory-constrained CI", 8, 16, "true", undefined, 2, 1],
+    ["unknown CI CPUs", Number.NaN, 32, "true", undefined, 2, 1],
+    ["unknown CI memory", 8, Number.NaN, "true", undefined, 2, 1],
+    ["CI two-plan ceiling", 16, 64, "true", undefined, 3, 2],
+    ["GitHub Actions capacity", 4, 32, undefined, "true", 2, 1],
   ])(
-    "runs plans with bounded concurrency and cache isolation for $name",
-    async ({ cpus, gib, ci, actions, requested, expected }) => {
+    "runs plans with bounded concurrency and cache isolation for %s",
+    async (_name, cpus, gib, ci, actions, requested, expected) => {
       vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
       vi.spyOn(os, "totalmem").mockReturnValue(gib * 1024 ** 3);
       const scratchDir = makeScratchDir();

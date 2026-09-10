@@ -23,6 +23,7 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
 import type {
   DeviceAuthToken,
@@ -59,8 +60,6 @@ const DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP = [
   "token_key",
   "ts",
 ] as const satisfies readonly (keyof DeviceBootstrapTokens)[];
-
-type DevicePairingStoreTarget = "pending" | "paired" | "both";
 
 type DevicePairingStoreValidityToken = {
   dataVersion: number;
@@ -491,8 +490,11 @@ export function updatePairedDevicePresenceInTransaction<T>(
 export function persistDevicePairingStoreState(
   state: DevicePairingStoreState,
   baseDir: string | undefined,
-  target: DevicePairingStoreTarget,
-  options?: { clearApnsNodeIds?: readonly string[] },
+  target: "pending" | "paired" | "both",
+  options?: {
+    clearApnsNodeIds?: readonly string[];
+    retiredNodeToken?: { deviceId: string; expectedToken: string };
+  },
 ): void {
   runDevicePairingStoreMutation(baseDir, ({ db }) => {
     const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
@@ -512,6 +514,9 @@ export function persistDevicePairingStoreState(
     }
     for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
       clearApnsRegistrationFromDatabase(db, nodeId);
+    }
+    if (options?.retiredNodeToken) {
+      clearDeviceAuthTokenFromDatabase(db, { ...options.retiredNodeToken, role: "node" });
     }
     return { mutated: true, value: undefined };
   });

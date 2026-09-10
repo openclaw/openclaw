@@ -190,6 +190,18 @@ describe("sidebar entries", () => {
     expect(settingsNavigationOwnerRoute("ai-agents")).toBe("agents");
   });
 
+  it.each(["plugin-settings", "skill-settings"] as const)(
+    "keeps %s visible to admins and read-only operators",
+    (routeId) => {
+      expect(visibleSettingsNavigationGroups(true).flatMap((group) => group.routes)).toContain(
+        routeId,
+      );
+      expect(visibleSettingsNavigationGroups(false).flatMap((group) => group.routes)).toContain(
+        routeId,
+      );
+    },
+  );
+
   it("filters admin-only settings while preserving legacy fail-open visibility", () => {
     const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);
     expect(nonAdminRoutes).toContain("approvals");

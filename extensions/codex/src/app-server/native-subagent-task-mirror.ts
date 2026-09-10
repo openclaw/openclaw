@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,
@@ -24,13 +25,17 @@ import { isJsonObject } from "./protocol.js";
 /** Minimal task-runtime surface needed to mirror native subagent lifecycle. */
 type TaskLifecycleRuntime = Pick<
   AgentHarnessTaskRuntime,
-  "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
+  | "tryCreateRunningTaskRun"
+  | "recordTaskRunProgressByRunId"
+  | "finalizeTaskRunByRunId"
+  | "listTaskRecords"
 >;
 
 /** Stable parent/session context used while mirroring native subagent tasks. */
 type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
+  historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   now?: () => number;
 };
@@ -109,10 +114,10 @@ export class CodexNativeSubagentTaskMirror {
       normalizeOptionalString(thread.agentNickname) ??
       normalizeOptionalString(spawn.agent_role) ??
       normalizeOptionalString(thread.agentRole) ??
-      "Codex subagent";
+      "Subagent";
     const task =
       normalizeOptionalString(thread.preview) ??
-      `Codex native subagent${label === "Codex subagent" ? "" : ` ${label}`}`;
+      `Subagent${label === "Subagent" ? "" : ` ${label}`}`;
     const createdAt = secondsToMillis(thread.createdAt) ?? this.now();
     if (
       !this.createRunningTask({
@@ -120,7 +125,7 @@ export class CodexNativeSubagentTaskMirror {
         label,
         task,
         startedAt: createdAt,
-        progressSummary: "Codex native subagent started.",
+        progressSummary: "Subagent started.",
       })
     ) {
       return;
@@ -156,7 +161,7 @@ export class CodexNativeSubagentTaskMirror {
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: eventAt,
-        progressSummary: "Codex native subagent is active.",
+        progressSummary: "Subagent is active.",
       });
       return;
     }
@@ -164,7 +169,7 @@ export class CodexNativeSubagentTaskMirror {
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: eventAt,
-        progressSummary: "Codex native subagent is idle.",
+        progressSummary: "Subagent is idle.",
       });
       return;
     }
@@ -174,7 +179,7 @@ export class CodexNativeSubagentTaskMirror {
         this.runtime.recordTaskRunProgressByRunId({
           runId,
           lastEventAt: eventAt,
-          progressSummary: "Codex native subagent hit a system error; awaiting recovery.",
+          progressSummary: "Subagent hit a system error; awaiting recovery.",
         });
         return;
       }
@@ -184,9 +189,9 @@ export class CodexNativeSubagentTaskMirror {
         status: "failed",
         endedAt: eventAt,
         lastEventAt: eventAt,
-        error: "Codex app-server reported a system error for the native subagent thread.",
-        progressSummary: "Codex native subagent hit a system error.",
-        terminalSummary: "Codex native subagent failed.",
+        error: "Subagent encountered a system error.",
+        progressSummary: "Subagent hit a system error.",
+        terminalSummary: "Subagent failed.",
       });
       return;
     }
@@ -194,7 +199,7 @@ export class CodexNativeSubagentTaskMirror {
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: eventAt,
-        progressSummary: "Codex native subagent is not loaded.",
+        progressSummary: "Subagent is not loaded.",
       });
     }
   }
@@ -277,9 +282,7 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const message =
-      kind === "interacted"
-        ? "Codex native subagent received more input."
-        : "Codex native subagent was interrupted.";
+      kind === "interacted" ? "Subagent received more input." : "Subagent was interrupted.";
     this.applyCollabAgentStatus(
       threadId,
       kind === "interacted" ? "running" : "interrupted",
@@ -291,10 +294,10 @@ export class CodexNativeSubagentTaskMirror {
     const eventAt = this.now();
     this.createRunningTask({
       threadId,
-      label: "Codex subagent",
-      task: agentPath ? `Codex native subagent ${agentPath}` : "Codex native subagent",
+      label: "Subagent",
+      task: agentPath ? `Subagent ${agentPath}` : "Subagent",
       startedAt: eventAt,
-      progressSummary: "Codex native subagent started.",
+      progressSummary: "Subagent started.",
     });
   }
 
@@ -303,10 +306,10 @@ export class CodexNativeSubagentTaskMirror {
     const createdAt = this.now();
     this.createRunningTask({
       threadId,
-      label: "Codex subagent",
-      task: prompt ?? "Codex native subagent",
+      label: "Subagent",
+      task: prompt ?? "Subagent",
       startedAt: createdAt,
-      progressSummary: "Codex native subagent spawned.",
+      progressSummary: "Subagent spawned.",
     });
   }
 
@@ -323,6 +326,11 @@ export class CodexNativeSubagentTaskMirror {
     }
     this.mirrorStateByThreadId.set(threadId, "mirrored");
     const runId = codexNativeSubagentRunId(threadId);
+    // Creation also refreshes existing metadata. Recovery must preserve the original locator,
+    // including its absence on rows created before native history ownership was recorded.
+    const historyOwner = this.params.historyOwner;
+    const stampHistoryOwner =
+      historyOwner && !this.runtime.listTaskRecords().some((task) => task.runId === runId);
     const taskRecord = this.runtime.tryCreateRunningTaskRun({
       sourceId: runId,
       agentId: this.params.agentId,
@@ -335,6 +343,7 @@ export class CodexNativeSubagentTaskMirror {
       startedAt: params.startedAt,
       lastEventAt: this.now(),
       progressSummary: params.progressSummary,
+      ...(stampHistoryOwner ? { detail: { nativeHistory: { ...historyOwner } } } : {}),
     });
     if (!taskRecord) {
       this.mirrorStateByThreadId.set(threadId, "failed");
@@ -374,16 +383,16 @@ export class CodexNativeSubagentTaskMirror {
         progressSummary:
           normalizeOptionalString(message) ??
           (normalizedStatus === "pendingInit"
-            ? "Codex native subagent is initializing."
+            ? "Subagent is initializing."
             : normalizedStatus === "interrupted"
-              ? "Codex native subagent was interrupted."
-              : "Codex native subagent is running."),
+              ? "Subagent was interrupted."
+              : "Subagent is running."),
       });
       return;
     }
     if (normalizedStatus === "completed") {
       this.terminalRunIds.add(runId);
-      const summary = normalizeOptionalString(message) ?? "Codex native subagent completed.";
+      const summary = normalizeOptionalString(message) ?? "Subagent completed.";
       if (this.expectedAuthoritativeRunIds.has(runId)) {
         this.runtime.recordTaskRunProgressByRunId({
           runId,
@@ -411,8 +420,8 @@ export class CodexNativeSubagentTaskMirror {
         status: "succeeded",
         endedAt: eventAt,
         lastEventAt: eventAt,
-        progressSummary: normalizeOptionalString(message) ?? "Codex native subagent blocked.",
-        terminalSummary: normalizeOptionalString(message) ?? "Codex native subagent blocked.",
+        progressSummary: normalizeOptionalString(message) ?? "Subagent blocked.",
+        terminalSummary: normalizeOptionalString(message) ?? "Subagent blocked.",
         terminalOutcome: "blocked",
       });
       return;
@@ -423,12 +432,9 @@ export class CodexNativeSubagentTaskMirror {
       status: normalizedStatus === "shutdown" ? "cancelled" : "failed",
       endedAt: eventAt,
       lastEventAt: eventAt,
-      error:
-        normalizeOptionalString(message) ?? `Codex native subagent status: ${normalizedStatus}`,
-      progressSummary:
-        normalizeOptionalString(message) ?? `Codex native subagent ${normalizedStatus}.`,
-      terminalSummary:
-        normalizeOptionalString(message) ?? "Codex native subagent did not complete.",
+      error: normalizeOptionalString(message) ?? `Subagent status: ${normalizedStatus}`,
+      progressSummary: normalizeOptionalString(message) ?? `Subagent ${normalizedStatus}.`,
+      terminalSummary: normalizeOptionalString(message) ?? "Subagent did not complete.",
     });
   }
 }

@@ -54,6 +54,9 @@ import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
 import {
   buildPluginCatalogMock,
+  buildPluginDiscoveryCategoriesMock,
+  buildPluginDiscoveryMock,
+  buildPluginInspectMock,
   pluginLifecycleMockInitScript,
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
@@ -73,6 +76,7 @@ type CliOptions = {
     | "code-fences"
     | "dashboards"
     | "goal"
+    | "plugins-dense"
     | "swarm"
     | "update-available"
     | "update-blocked"
@@ -392,6 +396,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "code-fences" &&
     value !== "dashboards" &&
     value !== "goal" &&
+    value !== "plugins-dense" &&
     value !== "swarm" &&
     value !== "update-available" &&
     value !== "update-blocked" &&
@@ -1715,7 +1720,7 @@ async function createChatPickerScenario(
   ]);
   const sessionFileCases = [
     {
-      match: { sessionKey: "agent:alpha" },
+      match: { sessionKey: "agent:main:main" },
       response: {
         browser: {
           entries: [
@@ -1757,7 +1762,7 @@ async function createChatPickerScenario(
     },
   ];
   const sessionFileGetCases = sessionFiles.map((file) => ({
-    match: { sessionKey: "agent:alpha", path: file.path },
+    match: { sessionKey: "agent:main:main", path: file.path },
     response: {
       file: {
         ...file,
@@ -1770,7 +1775,7 @@ async function createChatPickerScenario(
     },
   }));
   const sessionFileSetCases = sessionFiles.map((file) => ({
-    match: { sessionKey: "agent:alpha", path: file.path },
+    match: { sessionKey: "agent:main:main", path: file.path },
     response: {
       file: {
         ...file,
@@ -1989,6 +1994,7 @@ async function createChatPickerScenario(
         environmentId: "worker:9f2c4e7a81d24b06a5c3f8e1b7d94c1a",
         providerId: "machine0",
         profileId: "team",
+        machine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
         activeOwnerEpoch: 4,
         workerBundleHash: "b".repeat(64),
         workspaceBaseManifestRef: "sha256:cloud-refactor-base",
@@ -2814,6 +2820,19 @@ async function createChatPickerScenario(
           },
         ],
       },
+      "plugins.list": buildPluginCatalogMock({
+        installedCopies: fixture === "plugins-dense" ? 10 : 1,
+      }),
+      "plugins.catalog.browse": buildPluginDiscoveryMock(),
+      "plugins.catalog.categories": buildPluginDiscoveryCategoriesMock(),
+      "plugins.inspect": buildPluginInspectMock({
+        installedCopies: fixture === "plugins-dense" ? 10 : 1,
+      }),
+      "skills.status": {
+        workspaceDir: "/Users/demo/Projects/openclaw",
+        managedSkillsDir: "/Users/demo/.openclaw/skills",
+        skills: [],
+      },
       "channels.status": buildChannelsStatusMock(baseTime),
       "channels.pairing.list": buildChannelsPairingMock(baseTime),
       "channels.pairing.approve": {
@@ -3109,7 +3128,7 @@ async function createChatPickerScenario(
       "sessions.files.list": {
         cases: [
           {
-            match: { sessionKey: "agent:alpha", path: "ui" },
+            match: { sessionKey: "agent:main:main", path: "ui" },
             response: {
               browser: {
                 entries: [
@@ -3137,7 +3156,7 @@ async function createChatPickerScenario(
             },
           },
           {
-            match: { sessionKey: "agent:alpha", search: "chat" },
+            match: { sessionKey: "agent:main:main", search: "chat" },
             response: {
               browser: {
                 entries: [
@@ -3171,7 +3190,7 @@ async function createChatPickerScenario(
       "artifacts.list": {
         cases: [
           {
-            match: { sessionKey: "agent:alpha" },
+            match: { sessionKey: "agent:main:main" },
             response: { artifacts: [lobsterArtifact] },
           },
         ],
@@ -3179,7 +3198,7 @@ async function createChatPickerScenario(
       "artifacts.download": {
         cases: [
           {
-            match: { sessionKey: "agent:alpha", artifactId: lobsterArtifact.id },
+            match: { sessionKey: "agent:main:main", artifactId: lobsterArtifact.id },
             response: {
               artifact: lobsterArtifact,
               data: Buffer.from(lobsterSvg, "utf8").toString("base64"),

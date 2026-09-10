@@ -623,3 +623,7 @@ function isEqualTrigger(left: SqliteSchemaRow, right: SqliteSchemaRow): boolean 
 function compareJson(left: unknown, right: unknown): number {
   return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
+
+export function readSqliteSchemaCookie(database: DatabaseSync) {
+  return database.prepare("PRAGMA schema_version").get()?.schema_version;
+}

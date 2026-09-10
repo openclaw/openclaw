@@ -79,6 +79,7 @@ async function renderPanelFixture(
       availableSlots: ["detail", "workspace"],
       callbacks: {
         activatePanel: vi.fn(),
+        togglePanelExpanded: vi.fn(),
         closeSlot: closePanelSlot,
         openSlot: vi.fn(),
         reorderPanel: vi.fn(),

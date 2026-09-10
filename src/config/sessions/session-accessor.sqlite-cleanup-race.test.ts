@@ -15,7 +15,7 @@ import {
   replaceSessionEntrySync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
-import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-state.js";
+import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { runByteLimitedArchiveCleanupFixture } from "./test-helpers.js";

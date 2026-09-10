@@ -19,7 +19,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   getGatewayRestartDrainSignal,
-  runWithGatewayIndependentRootWorkAdmission,
+  runWithGatewayDetachedWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
@@ -107,7 +107,7 @@ export async function runSkillExperienceReview(
 ): Promise<void> {
   // The foreground root has closed by the idle timer's callback. Admit this
   // detached review independently; a real Gateway drain still refuses it.
-  await runWithGatewayIndependentRootWorkAdmission(
+  await runWithGatewayDetachedWorkAdmission(
     () => runSkillExperienceReviewInner(candidate),
     "skills:experience-review",
   );

@@ -9,6 +9,53 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it("warms machine catalogs at startup only for nonterminal environment profiles", async () => {
+    const { store } = support.testState;
+    const active = store.createIntent({
+      environmentId: "startup-worker",
+      providerId: "fake",
+      profileId: "development",
+      profileSnapshot: { settings: { region: "test" } },
+      provisionOperationId: "provision:startup",
+    });
+    store.createIntent({
+      environmentId: "terminal-worker",
+      providerId: "fake",
+      profileId: "terminal",
+      profileSnapshot: { settings: { region: "terminal" } },
+      provisionOperationId: "provision:terminal",
+    });
+    store.transition({ environmentId: "terminal-worker", from: "requested", to: "failed" });
+    support.testState.config.cloudWorkers!.profiles!.terminal = {
+      provider: "fake",
+      settings: { region: "terminal" },
+    };
+    const listMachineOptions = vi.fn(async () => [
+      { id: "medium", label: "Medium", cpu: 4, memoryGb: 16, default: true },
+    ]);
+    const listOperatingSystems = vi.fn(async () => [
+      { id: "linux", label: "Linux", default: true },
+    ]);
+    const service = support.createService(
+      support.createProvider({ listMachineOptions, listOperatingSystems }),
+    );
+    service.installReconcileEnvironmentGuard(async () => {});
+    expect(service.readMachineShape(active.environmentId)).toBeUndefined();
+    service.start();
+    await support.waitForFast(() =>
+      expect(service.readMachineShape(active.environmentId)).toEqual({
+        class: "medium",
+        os: "linux",
+        osLabel: "Linux",
+        cpu: 4,
+        memoryGb: 16,
+      }),
+    );
+    expect(listMachineOptions).toHaveBeenCalledExactlyOnceWith({ region: "test" });
+    expect(listOperatingSystems).toHaveBeenCalledExactlyOnceWith({ region: "test" });
+    expect(store.get(active.environmentId)?.profileSnapshot).toEqual(active.profileSnapshot);
+  });
+
   it("maintains configured providers on the existing timer with no environments", async () => {
     vi.useFakeTimers();
     const maintain = vi.fn(async () => {});
@@ -230,6 +277,9 @@ describe("worker environment service", () => {
     const liveEvents = support.createLiveEvents();
     const unsubscribeTurnClaimClosed = vi.fn();
     const placementStore = {
+      assertWorkerRuntimeRefresh: vi.fn(() => {
+        throw new Error("Runtime refresh is outside this timer fixture");
+      }),
       readWorkerTurnClaim: vi.fn(),
       readWorkerTurnLiveAckCursor: vi.fn(() => 0),
       validateWorkerTurn: vi.fn(() => false),

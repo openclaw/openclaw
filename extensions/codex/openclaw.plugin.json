@@ -1,5 +1,6 @@
 {
   "id": "codex",
+  "categories": ["runtime", "tools", "web"],
   "backupResources": [
     {
       "disposition": "regenerable",

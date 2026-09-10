@@ -72,7 +72,7 @@ Before the first setup-entry load, OpenClaw applies the selected plugin root's f
 
 Runtime entrypoint fields do not override package-boundary checks for source entrypoint fields. For example, `openclaw.runtimeExtensions` cannot make an escaping `openclaw.extensions` path loadable.
 
-`openclaw.install.allowInvalidConfigRecovery` is intentionally narrow. It does not make arbitrary broken configs installable. Today it only allows install flows to recover from specific stale bundled-plugin upgrade failures, such as a missing bundled plugin path or a stale `channels.<id>` entry for that same bundled plugin. Unrelated config errors still block install and send operators to `openclaw doctor --fix`.
+`openclaw.install.allowInvalidConfigRecovery` is intentionally narrow. It does not make arbitrary broken configs installable. It allows install flows to recover only from config issues attributable to the bundled plugin being installed: a missing owned plugin load path, an unknown or invalid `channels.<id>` entry for that plugin, a `plugins.entries.<id>` entry that requires compiled runtime output, or a `tools.web.search.provider` value naming that plugin. Unrelated config errors still block install and send operators to `openclaw doctor --fix`.
 
 `openclaw.channel.persistedAuthState` is package metadata for a tiny checker module:
 

@@ -9,6 +9,9 @@ import {
   type SqliteCapabilities,
 } from "../../node-sqlite.mjs";
 import {
+  canRunOpenClawNodeDiagnostics,
+  classifyUnsupportedNodeCommand,
+  formatUnsupportedNodeDiagnosticWarning,
   isNodeVersionAtLeast,
   isSupportedOpenClawNodeVersion,
   parseNodeReleaseVersion,
@@ -43,6 +46,7 @@ type RuntimeDetails = {
 };
 
 const SEMVER_RE = /(\d+)\.(\d+)\.(\d+)/;
+let diagnosticWarningPrinted = false;
 
 /** Parses the first major/minor/patch triple from a runtime or package version label. */
 export function parseSemver(version: string | null): Semver | null {
@@ -209,6 +213,9 @@ export function nodeVersionSatisfiesEngine(
 export async function assertSupportedRuntime(
   providedRuntime?: RuntimeEnv,
   details: RuntimeDetails = detectRuntime(),
+  argv?: readonly string[],
+  emitDiagnosticWarning = true,
+  recoveryEnv?: NodeJS.ProcessEnv,
 ): Promise<void> {
   if (runtimeSatisfies(details)) {
     const note =
@@ -221,6 +228,28 @@ export async function assertSupportedRuntime(
       } else {
         process.stderr.write(`${note}\n`);
       }
+    }
+    return;
+  }
+  // Only startup callers with a pre-dotenv snapshot may select another runtime.
+  if (details.kind === "node" && argv && recoveryEnv) {
+    const { recoverNodeRuntime } = await import("../../node-runtime-recovery.mjs");
+    await recoverNodeRuntime({ env: recoveryEnv });
+  }
+  if (
+    details.kind === "node" &&
+    canRunOpenClawNodeDiagnostics(details.version, details.hasNodeSqlite) &&
+    argv &&
+    classifyUnsupportedNodeCommand(argv)
+  ) {
+    if (emitDiagnosticWarning && !diagnosticWarningPrinted) {
+      const warning = formatUnsupportedNodeDiagnosticWarning(details.version);
+      if (providedRuntime) {
+        providedRuntime.error(warning);
+      } else {
+        process.stderr.write(`${warning}\n`);
+      }
+      diagnosticWarningPrinted = true;
     }
     return;
   }

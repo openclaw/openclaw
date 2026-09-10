@@ -69,7 +69,7 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
     openclaw onboard --install-daemon
     ```
 
-    The wizard walks you through model auth, channel setup, gateway token generation, and daemon installation (systemd user service).
+    The wizard walks you through model auth, channel setup, Gateway token generation, and daemon installation (systemd user service).
 
   </Step>
 
@@ -83,7 +83,7 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
     ```
   </Step>
 
-  <Step title="Verify the gateway">
+  <Step title="Verify the Gateway">
     ```bash
     openclaw status
     systemctl --user status openclaw-gateway.service
@@ -92,7 +92,7 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
   </Step>
 
   <Step title="Access the Control UI">
-    The gateway binds to loopback by default. Pick one of these options.
+    The Gateway binds to loopback by default. Pick one of these options.
 
     **Option A: SSH tunnel (simplest)**
 
@@ -114,7 +114,7 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
 
     Then open `https://<magicdns>/` from any device on your tailnet.
 
-    Tailscale Serve authenticates Control UI and WebSocket traffic via tailnet identity headers, which assumes the gateway host itself is trusted. HTTP API endpoints still follow the gateway's normal auth mode (token/password) regardless. To require explicit shared-secret credentials over Serve, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
+    Tailscale Serve authenticates Control UI and WebSocket traffic via tailnet identity headers, which assumes the Gateway host itself is trusted. HTTP API endpoints still follow the Gateway's normal auth mode (token/password) regardless. To require explicit shared-secret credentials over Serve, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
 
   </Step>
 </Steps>

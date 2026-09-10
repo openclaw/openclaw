@@ -6,7 +6,11 @@ import {
   stageSessionRepositoryCheckpoint,
   withSessionRepositoryCheckpoint,
 } from "./session-repository-checkpoints.js";
-import type { WorkerTunnelHandle, WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
+import type {
+  PreparedRepositoryWorkspace,
+  WorkerTunnelHandle,
+  WorkerWorkspaceSyncRequest,
+} from "./tunnel-contract.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
 
 /** Prepare source on the worker and durably accept its initial state before activation. */
@@ -20,45 +24,69 @@ export async function syncSessionRepositoryWorkspace(params: {
   gitAuthor?: { name?: string; email?: string };
   runSetupScript?: boolean;
   recovery?: true;
+  preparedRepository?: PreparedRepositoryWorkspace;
   assertCurrent: () => void;
 }) {
   const store = getSessionRepositoryWorkspaceStore();
   let repository = params.repository;
-  if (params.recovery && !repository.checkpointRef && repository.runSetupScript) {
+  const prepared = params.preparedRepository;
+  if (prepared && repository.baseCommit && prepared.baseCommit !== repository.baseCommit) {
+    throw new Error("Prepared repository does not match the pinned session commit");
+  }
+  if (
+    prepared &&
+    repository.baseManifestHash &&
+    prepared.sourceManifestRef !== repository.baseManifestHash
+  ) {
+    throw new Error("Prepared repository does not match the pinned source manifest");
+  }
+  if (params.recovery && !prepared && !repository.checkpointRef && repository.runSetupScript) {
     throw new Error(
       "Repository setup was interrupted before its first checkpoint. Retry dispatch with an administrator to authorize setup again.",
     );
   }
-  if (!repository.checkpointRef && repository.runSetupScript && params.runSetupScript !== true) {
+  if (
+    !prepared &&
+    !repository.checkpointRef &&
+    repository.runSetupScript &&
+    params.runSetupScript !== true
+  ) {
     throw new Error(
       "Repository setup requires administrator authorization; retry dispatch as an administrator.",
     );
   }
   params.assertCurrent();
-  const github = await prepareWorkerGitHubBinding({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    assertCurrent: () => {
-      params.assertCurrent();
-      return true;
-    },
-  });
+  const github = prepared
+    ? undefined
+    : await prepareWorkerGitHubBinding({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        assertCurrent: () => {
+          params.assertCurrent();
+          return true;
+        },
+      });
   params.assertCurrent();
   const source: Extract<WorkerWorkspaceSyncRequest["source"], { kind: "repository" }> = {
     kind: "repository",
     url: repository.url,
     ref: repository.requestedRef ?? undefined,
     branch: repository.branch,
-    baseCommit: repository.baseCommit ?? undefined,
+    baseCommit: repository.baseCommit ?? prepared?.baseCommit,
+    ...(prepared ? { prepared } : {}),
     runSetupScript:
-      !repository.checkpointRef && repository.runSetupScript && params.runSetupScript === true,
+      !prepared &&
+      !repository.checkpointRef &&
+      repository.runSetupScript &&
+      params.runSetupScript === true,
     ...(github ? { gitToken: github.token } : {}),
   };
   const sync = async (checkpoint?: typeof source.checkpoint) => {
     params.assertCurrent();
     return await params.tunnel.syncWorkspace({
       sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
       generation: params.generation,
       gitAuthor: params.gitAuthor,
       source: { ...source, ...(checkpoint ? { checkpoint } : {}) },
@@ -73,6 +101,14 @@ export async function syncSessionRepositoryWorkspace(params: {
   params.assertCurrent();
   if (synced.mode !== "repository") {
     throw new Error("Repository preparation did not return a repository workspace");
+  }
+  if (
+    prepared &&
+    (synced.baseCommit !== prepared.baseCommit ||
+      synced.baseManifestRef !== prepared.sourceManifestRef ||
+      synced.remoteWorkspaceDir !== prepared.workspaceDir)
+  ) {
+    throw new Error("Repository preparation changed its attested prepared workspace");
   }
   if (!repository.baseCommit || !repository.baseManifestHash) {
     repository = store.bindBase({

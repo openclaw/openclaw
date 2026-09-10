@@ -1,5 +1,6 @@
 {
   "id": "memory-wiki",
+  "categories": ["memory", "tools"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [

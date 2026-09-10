@@ -9,8 +9,13 @@ import {
 import { gitNullConfigPath } from "./git-exec.js";
 import { isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
+import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
-import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
+import type {
+  CommandRunner,
+  UpdateRunnerOptions,
+  UpdateStepResult,
+} from "./update-runner-types.js";
 
 function quoteGitConfig(value: string): string {
   return `"${value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n").replace(/\t/gu, "\\t").replaceAll("\b", "\\b")}"`;
@@ -26,7 +31,12 @@ function gitConfigEntry(key: string, value: string): string {
 
 /** Fetch and candidate selection must not update the installed repository before admission. */
 export async function withGitTargetInspectionRoot<T>(
-  params: { root: string; runCommand: CommandRunner; timeoutMs: number },
+  params: {
+    root: string;
+    runCommand: CommandRunner;
+    timeoutMs: number;
+    onWarning: (step: UpdateStepResult) => void;
+  },
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
 ): Promise<T> {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-admission-"));
@@ -106,7 +116,12 @@ export async function withGitTargetInspectionRoot<T>(
     return await inspect(inspectionRoot, runInspectionCommand);
   } finally {
     // Only this invocation's private inspection clone, never the installed checkout.
-    await fs.rm(temporaryRoot, { recursive: true, force: true });
+    await cleanupUpdateTemporaryDirectory({
+      directory: temporaryRoot,
+      root: params.root,
+      name: "git target inspection cleanup",
+      onWarning: params.onWarning,
+    });
   }
 }
 

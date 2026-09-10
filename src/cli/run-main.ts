@@ -964,8 +964,10 @@ export async function runCli(
   options: {
     additionalStartupTrace?: ReturnType<typeof createGatewayDispatchStartupTrace>;
     retainConsoleRoutingUntilProcessExit?: boolean;
+    runtimeRecoveryEnv?: NodeJS.ProcessEnv;
   } = {},
 ) {
+  const runtimeRecoveryEnv = options.runtimeRecoveryEnv ?? { ...process.env };
   const originalArgv = normalizeWindowsArgv(argv);
   const builtInMachineOutput = resolveBuiltInMachineOutput(originalArgv);
   return await withConsoleLogsRoutedToStderrForJson(
@@ -975,6 +977,7 @@ export async function runCli(
         try {
           return await runCliWithPreparedOutputMode(originalArgv, {
             ...options,
+            runtimeRecoveryEnv,
             builtInMachineOutput,
             harnessCleanup,
           });
@@ -1027,6 +1030,7 @@ async function runCliWithPreparedOutputMode(
     additionalStartupTrace?: ReturnType<typeof createGatewayDispatchStartupTrace>;
     builtInMachineOutput: boolean;
     harnessCleanup?: CliHarnessCleanup;
+    runtimeRecoveryEnv: NodeJS.ProcessEnv;
   },
 ) {
   const startupTrace = createGatewayDispatchStartupTrace(originalArgv, "cli.main");
@@ -1109,8 +1113,15 @@ async function runCliWithPreparedOutputMode(
   startupTrace.mark("argv");
 
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
-  const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
-  await assertSupportedRuntime();
+  const { assertSupportedRuntime, isCurrentRuntimeSupported } =
+    await import("../infra/runtime-guard.js");
+  await assertSupportedRuntime(
+    undefined,
+    undefined,
+    normalizedArgv,
+    true,
+    options.runtimeRecoveryEnv,
+  );
 
   if (
     !isHelpOrVersionInvocation &&
@@ -1192,6 +1203,7 @@ async function runCliWithPreparedOutputMode(
     env: process.env,
   });
   const useSourceOnlyBestEffortConfig =
+    !isCurrentRuntimeSupported() ||
     normalizedInvocation.primary === "update" ||
     (normalizedInvocation.primary === "doctor" && hasFlag(normalizedArgv, "--lint"));
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {

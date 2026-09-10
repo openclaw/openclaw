@@ -1,13 +1,10 @@
 // Verifies GitHub Copilot profile token fallback and implicit provider planning.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
-import { planOpenClawModelsJsonWithDeps } from "./models-config.plan.test-support.js";
+import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
+import { resolveImplicitProviders } from "./models-config.providers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
-
-type ResolveImplicitProvidersForModelsJson = NonNullable<
-  NonNullable<Parameters<typeof planOpenClawModelsJsonWithDeps>[1]>["resolveImplicitProviders"]
->;
 
 vi.mock("./model-auth-env.js", () => ({
   resolveEnvApiKey: () => null,
@@ -32,15 +29,20 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("./models-config.providers.js", () => ({
+  materializeConfiguredProviderCatalogModels: (providers: unknown) => providers,
   enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,
   normalizeProviderCatalogModelsForConfig: (providers: unknown) => providers,
   normalizeProviders: ({ providers }: { providers: unknown }) => providers,
-  resolveImplicitProviders: async ({
-    explicitProviders,
-  }: {
-    explicitProviders?: Record<string, unknown>;
-  }) => explicitProviders ?? {},
+  resolveImplicitProviders: vi.fn(),
 }));
+
+const resolveImplicitProvidersMock = vi.mocked(resolveImplicitProviders);
+
+beforeEach(() => {
+  resolveImplicitProvidersMock
+    .mockReset()
+    .mockImplementation(async ({ explicitProviders }) => explicitProviders ?? {});
+});
 
 describe("models-config", () => {
   it("uses the first github-copilot profile when env tokens are missing", () => {
@@ -108,35 +110,28 @@ describe("models-config", () => {
   });
 
   it("passes explicit provider config to implicit discovery so plugins can skip duplicates", async () => {
-    const resolveImplicitProviders = vi.fn<ResolveImplicitProvidersForModelsJson>(
-      async ({ explicitProviders }) => {
-        expect(explicitProviders.vllm?.baseUrl).toBe("http://127.0.0.1:8000/v1");
-        return {};
-      },
-    );
+    resolveImplicitProvidersMock.mockImplementationOnce(async ({ explicitProviders }) => {
+      expect(explicitProviders?.vllm?.baseUrl).toBe("http://127.0.0.1:8000/v1");
+      return {};
+    });
 
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: {
-          models: {
-            providers: {
-              vllm: {
-                baseUrl: "http://127.0.0.1:8000/v1",
-                api: "openai-completions",
-                models: [],
-              },
+    const plan = await planModelsJsonForTest({
+      cfg: {
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              api: "openai-completions",
+              models: [],
             },
           },
         },
-        agentDir: "/tmp/openclaw-agent",
-        env: { VLLM_API_KEY: "test-vllm-key" } as NodeJS.ProcessEnv,
-        existingRaw: "",
-        existingParsed: null,
       },
-      { resolveImplicitProviders },
-    );
+      agentDir: "/tmp/openclaw-agent",
+      env: { VLLM_API_KEY: "test-vllm-key" } as NodeJS.ProcessEnv,
+    });
 
-    expect(resolveImplicitProviders).toHaveBeenCalledOnce();
+    expect(resolveImplicitProvidersMock).toHaveBeenCalledOnce();
     expect(plan).toEqual({
       action: "write",
       pluginCatalogWrites: {},
@@ -176,31 +171,27 @@ describe("models-config", () => {
       2,
     )}\n`;
 
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: {
-          models: {
-            providers: {
-              kilocode: kilocodeProvider,
-            },
+    resolveImplicitProvidersMock.mockResolvedValueOnce({});
+    const plan = await planModelsJsonForTest({
+      cfg: {
+        models: {
+          providers: {
+            kilocode: kilocodeProvider,
           },
         },
-        sourceConfigForSecrets: {
-          models: {
-            providers: {
-              kilocode: kilocodeProvider,
-            },
+      },
+      sourceConfigForSecrets: {
+        models: {
+          providers: {
+            kilocode: kilocodeProvider,
           },
         },
-        agentDir: "/tmp/openclaw-agent",
-        env: {} as NodeJS.ProcessEnv,
-        existingRaw: existingContents,
-        existingParsed: JSON.parse(existingContents),
       },
-      {
-        resolveImplicitProviders: async () => ({}),
-      },
-    );
+      agentDir: "/tmp/openclaw-agent",
+      env: {} as NodeJS.ProcessEnv,
+      existingRaw: existingContents,
+      existingParsed: JSON.parse(existingContents),
+    });
 
     expect(plan).toEqual({ action: "noop", pluginCatalogWrites: {} });
   });
@@ -254,26 +245,13 @@ describe("models-config", () => {
   });
 });
 
-function createCopilotImplicitResolver(
-  provider: ProviderConfig,
-): ResolveImplicitProvidersForModelsJson {
-  // Models planner receives implicit Copilot providers from the auth exchange layer.
-  return async () => ({ "github-copilot": provider });
-}
-
 async function planCopilotWithImplicitProvider(params: { provider: ProviderConfig }) {
-  return await planOpenClawModelsJsonWithDeps(
-    {
-      cfg: { models: { providers: {} } },
-      agentDir: "/tmp/openclaw-agent",
-      env: {} as NodeJS.ProcessEnv,
-      existingRaw: "",
-      existingParsed: null,
-    },
-    {
-      resolveImplicitProviders: createCopilotImplicitResolver(params.provider),
-    },
-  );
+  resolveImplicitProvidersMock.mockResolvedValueOnce({ "github-copilot": params.provider });
+  return await planModelsJsonForTest({
+    cfg: { models: { providers: {} } },
+    agentDir: "/tmp/openclaw-agent",
+    env: {} as NodeJS.ProcessEnv,
+  });
 }
 
 function expectCopilotProviderFromPlan(

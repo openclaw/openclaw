@@ -24,9 +24,9 @@ Setup checklist:
 5. Enable native commands (`commands.native` or `channels.discord.commands.native`).
 6. Configure `channels.discord.voice`.
 
-Use `/vc join|leave|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands.
+Use `/vc join|leave|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands. Type these as slash commands in a Discord message box, not in a shell:
 
-```bash
+```text
 /vc join channel:<voice-channel-id>
 /vc status
 /vc leave
@@ -77,7 +77,7 @@ Auto-join example:
 
 Notes:
 
-- The OpenAI `agent-proxy` response and wake-name policies below require a GA realtime model, such as `gpt-realtime-2.1`. GPT-Live currently responds to audio autonomously and does not enforce those policies; do not rely on wake-name gating with GPT-Live in a shared voice channel.
+- The OpenAI `agent-proxy` response and wake-name policies below require a GA realtime model, such as `gpt-realtime-2.1`. GPT-Live responds to audio autonomously and does not enforce those policies; do not rely on wake-name gating with GPT-Live in a shared voice channel.
 - Discord voice is opt-in for text-only configs; set `channels.discord.voice.enabled=true` (or keep an existing `channels.discord.voice` block) to enable `/vc` commands, the voice runtime, and the `GuildVoiceStates` gateway intent. `channels.discord.intents.voiceStates` can explicitly override the intent subscription; leave it unset to follow effective voice enablement.
 - `voice.mode` controls the conversation path. The default is `agent-proxy`: a realtime voice front end handles turn timing, interruption, and playback, delegates substantive work to the routed OpenClaw agent through `openclaw_agent_consult`, and treats the result like a typed Discord prompt from that speaker. `stt-tts` keeps the older batch STT plus TTS flow. `bidi` lets the realtime model converse directly while exposing `openclaw_agent_consult` for the OpenClaw brain.
 - Realtime voice keeps each speaker's audio in a separate provider connection, so delayed transcripts and tool calls retain that speaker's Discord identity. Everyone still uses the same routed OpenClaw agent conversation and one room playback queue. Direct `bidi` conversation history belongs to each speaker's realtime connection; use the OpenClaw agent consult for shared room history. Multiple speakers can consume more provider connections, and provider account limits still apply. The room retains at most eight speaker connections and reclaims idle connections once their captures, requests, and playback have finished.
@@ -126,6 +126,8 @@ Discord voice messages show a waveform preview and require OGG/Opus audio. OpenC
 - Omit text content (Discord rejects text + voice message in the same payload).
 - Any audio format is accepted; OpenClaw converts to OGG/Opus as needed.
 
-```bash
+The agent sends a voice message with the `message` tool, not from a shell:
+
+```text
 message(action="send", channel="discord", target="channel:123", path="/path/to/audio.mp3", asVoice=true)
 ```

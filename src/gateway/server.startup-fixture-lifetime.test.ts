@@ -1,8 +1,16 @@
-import { expect, test } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterAll, expect, test, type TestContext } from "vitest";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { hasErrnoCode } from "../infra/errno.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   gatewayStartupFixtureSource,
-  runGatewayFixtureFork,
+  createGatewayFixtureFork,
 } from "./server.fixture-lifetime.test-support.js";
+
+const runGatewayFixtureFork = createGatewayFixtureFork(afterAll);
 
 // Each retained failure needs its own fork: a later case must not reset the failed owner.
 for (const scenario of [
@@ -72,3 +80,75 @@ for (const scenario of [
       },
     ));
 }
+
+test("retains shared code when a native fixture has no worker join receipt", async (context) => {
+  const probe = createFixtureLifetime();
+  const root = probe.createTempDir("gateway-fixture-receipt-probe-");
+  const owner = createVitestResourceOwner(root);
+  const env = captureEnv(["TMPDIR", "TMP", "TEMP"]);
+  const cleanups: Array<() => Promise<void>> = [];
+  const finishers: Array<Parameters<TestContext["onTestFinished"]>[0]> = [];
+  const run = createGatewayFixtureFork((cleanup) => cleanups.push(cleanup));
+  let caseRoot: string | undefined;
+  let completion: Promise<void> | undefined;
+  let probeWorkerExited = false;
+  try {
+    for (const key of ["TMPDIR", "TMP", "TEMP"]) {
+      process.env[key] = root;
+    }
+    completion = run(
+      { signal: context.signal, onTestFinished: (callback) => finishers.push(callback) },
+      (_repoRoot, ownedRoot) => {
+        caseRoot = ownedRoot;
+        return `
+import fs from "node:fs";
+import { test } from "vitest";
+test("finishes without publishing the required join receipt", () => {
+  fs.writeFileSync(${JSON.stringify(path.join(ownedRoot, "probe-worker.pid"))}, String(process.pid));
+});
+`;
+      },
+      () => {
+        throw new Error("Journal validation must not run without a worker join receipt");
+      },
+    );
+    const failure = await completion.catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "ENOENT" });
+    for (const finish of finishers) {
+      await expect(finish(context)).rejects.toBe(failure);
+    }
+    expect(caseRoot).toBeDefined();
+    const pid = Number(await fs.readFile(path.join(caseRoot!, "probe-worker.pid"), "utf8"));
+    expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (!hasErrnoCode(error, "ESRCH")) {
+        throw error;
+      }
+      probeWorkerExited = true;
+    }
+    expect(probeWorkerExited).toBe(true);
+    const sharedRoots = (await fs.readdir(root)).filter((name) =>
+      name.startsWith("gateway-fixture-code-"),
+    );
+    expect(sharedRoots).toHaveLength(1);
+    const config = path.join(root, sharedRoots[0]!, "vitest.config.ts");
+    expect(cleanups).toHaveLength(1);
+    await expect(cleanups[0]!()).rejects.toThrow("Fixture cleanup unverified");
+    await expect(fs.access(config)).resolves.toBeUndefined();
+    await expect(fs.access(caseRoot!)).resolves.toBeUndefined();
+    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+  } finally {
+    await Promise.allSettled(completion ? [completion] : []);
+    env.restore();
+    if (!probeWorkerExited) {
+      void probe.verifyCleanup(async () => {
+        throw new Error(`Native receipt probe exit is unverified: ${root}`);
+      });
+    }
+    // This independent PID observation permits probe disposal only; the fixture's
+    // missing join receipt and retained code claim are never repaired or released.
+    await probe.cleanup();
+  }
+});

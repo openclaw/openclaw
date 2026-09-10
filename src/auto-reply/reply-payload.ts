@@ -196,6 +196,8 @@ export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
+  /** Visible source represented by this block, excluding synthetic chunk wrappers. */
+  blockSourceText?: string;
   /** Persisted assistant speech facts; never serialized into channel payloads. */
   tts?: AssistantDeliveryTtsFacts;
   /** Structured message-tool speech is an explicit request, independent of auto-TTS mode. */

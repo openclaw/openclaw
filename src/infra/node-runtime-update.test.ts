@@ -7,7 +7,6 @@ import { resolveUpdatedNodeRuntime } from "../../node-runtime-update.mjs";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
-  exists: vi.fn<(value: string) => boolean>(),
   spawn:
     vi.fn<
       (
@@ -16,10 +15,6 @@ const mocks = vi.hoisted(() => ({
         options: SpawnSyncOptionsWithStringEncoding,
       ) => SpawnSyncReturns<string>
     >(),
-}));
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-  existsSync: mocks.exists,
 }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -41,12 +36,15 @@ it.each([
   vi.stubEnv("NODE_OPTIONS", undefined);
   const childProcess =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  await withTempDir("openclaw-node-recovery-", async (home) => {
+  await withTempDir("openclaw-node-recovery-", async (directory) => {
+    const home = await fs.realpath(directory);
     const nodeRoot = path.join(home, ".openclaw", "tools", "cli-node", "tools", "node");
     const candidate =
       process.platform === "win32"
         ? path.join(nodeRoot, "node.exe")
         : path.join(nodeRoot, "bin", "node");
+    await fs.mkdir(path.dirname(candidate), { recursive: true });
+    await fs.writeFile(candidate, "synthetic runtime; the probe uses the current Node");
     const preload = path.join(home, "binding.mjs");
     await fs.writeFile(
       preload,
@@ -70,7 +68,6 @@ it.each([
       }
     `,
     );
-    mocks.exists.mockImplementation((value) => value === candidate);
     mocks.spawn.mockImplementation((_file, args, options) =>
       childProcess.spawnSync(
         process.execPath,
@@ -79,9 +76,11 @@ it.each([
       ),
     );
 
-    expect(await resolveUpdatedNodeRuntime(home)).toBe(lossless ? candidate : null);
+    expect(await resolveUpdatedNodeRuntime(path.join(home, ".openclaw"))).toBe(
+      lossless ? candidate : null,
+    );
     expect(mocks.spawn).toHaveBeenCalledOnce();
-    expect(mocks.spawn.mock.calls[0]?.[2].timeout).toBe(10_000);
+    expect(mocks.spawn.mock.calls[0]?.[2].timeout).toBe(5_000);
     const result = mocks.spawn.mock.results[0];
     if (result?.type !== "return") {
       throw new Error("Runtime probe did not return");

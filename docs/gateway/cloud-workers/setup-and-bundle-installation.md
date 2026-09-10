@@ -12,6 +12,24 @@ What runs on the leased box before enrollment, how the Gateway prepares and veri
 
 The example profile supports both OpenClaw and Codex. Keep setup focused on machine prerequisites and project tools. You do not need to install OpenClaw globally, append a versioned Codex plugin install, or maintain a package URL in the profile. Remove those old runtime-install steps when updating an existing profile; bootstrap supplies the running Gateway's runtime automatically.
 
+### Native Windows prerequisites
+
+For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. For example, this prerequisite check uses the machine's existing Node and npm installation:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+& (Get-Command node.exe -CommandType Application -ErrorAction Stop).Source --version
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Get-Command npm.cmd -CommandType Application -ErrorAction Stop).Source --version
+exit $LASTEXITCODE
+```
+
+Use a Crabbox bootstrap or image that supplies a supported Node.js release and npm on the machine `PATH`, with npm's CLI installed beside `node.exe` under `node_modules/npm`. OpenClaw fails enrollment with a prerequisite message if Node or that npm installation is missing; it does not install Node. npm installs the node runtime archive, and OpenClaw extracts worker bundles with its Node archive library.
+
+The guest must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
+
+Restart replay verifies the actual `node.exe` child's PID, creation time, executable, and command line. Windows does not expose a cheap working-directory probe, so the launch record binds the runtime and state directories to that verified creation time. Missing or mismatched identity rejects replay and requires reprovisioning.
+
 ## Bundle installation
 
 Before enrolling a cloud node, the Gateway prepares a reusable runtime archive from its current built installation in a temporary staging directory. This works for published packages and source checkouts. It includes the complete node host and the trusted plugins that own the registered remote-execution commands required by the selected execution mode. Codex's plugin and its native dependency pin therefore travel with the node distribution without a separate profile recipe.
@@ -25,6 +43,8 @@ Native dependencies are installed by npm for the cloud machine's operating syste
 Bootstrap emits `CRABBOX_PHASE:openclaw-bootstrap-*` markers into the Crabbox command stream for download, installation, verification, plugin activation, and node launch. Crabbox records these as command phase timings; cached runs emit only the work they perform.
 
 The Gateway reuses its prepared archive for subsequent enrollments with the same execution mode. Nodes keep successful installs under `~/.openclaw-worker/node-runtimes/<sha256>`, so a warm image can reuse the exact artifact. A different digest selects a different installation even when the version is unchanged. The runtime archive omits worker deploy artifacts and the Gateway's Control UI assets, reducing transfer and installation work. The Gateway continues to serve the dashboard. After enrollment, OpenClaw `worker-turn` installs the content-addressed worker bundle from a matching archive retained in a prepared project image, or downloads it through the authenticated node channel when that archive is absent. Prepared archives still undergo validation; see [Warm images](/gateway/cloud-workers/warm-images). Codex `remote-exec` starts the managed exec-server directly. Existing placement checks, node-command allowlists, and invocation approval still govern execution.
+
+While a prepared worker is provisioning, cache cleanup retains the exact worker bundle recorded at admission, including before readiness produces a bootstrap receipt. After the environment reaches a terminal state, normal bundle cleanup can reclaim those bytes when no other environment or placement needs them.
 
 ## Build a complete custom node package
 

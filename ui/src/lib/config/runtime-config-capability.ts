@@ -47,7 +47,7 @@ export type RuntimeConfigCapability = {
   /** Discards pending edits: reloads from disk when connected, else resets locally. */
   discardDraft: () => Promise<void>;
   /** Pauses/resumes all config writes (autosave + manual) while e.g. the app updater runs. */
-  setWritesSuspended: (suspended: boolean) => void;
+  setWritesSuspended: (suspended: boolean, refreshAdmission?: () => Promise<void>) => void;
   /** Resolves once no config write is in flight (used as an updater barrier). */
   waitForPendingWrites: () => Promise<void>;
   save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;

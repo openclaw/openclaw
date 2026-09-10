@@ -21,6 +21,7 @@ import {
   createProviderHttpError,
   providerOperationRetryConfig,
   readProviderJsonObjectResponse,
+  readProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -55,6 +56,11 @@ type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType
 const GEMINI_EMBEDDING_2_MODELS = new Set(["gemini-embedding-2", "gemini-embedding-2-preview"]);
 
 const GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS = 3072;
+const GOOGLE_RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo";
+const GOOGLE_RETRY_DELAY_RE = /^(\d+)(?:\.(\d{1,9}))?s$/u;
+// Mirrors core's own error-body read limit (extractProviderErrorInfo in
+// provider-http-errors.ts) so the clone read below stays bounded like core's.
+const GOOGLE_RETRY_INFO_BODY_LIMIT_BYTES = 16 * 1024;
 const GEMINI_EMBEDDING_2_TASK_PREFIXES: Record<GeminiTaskType, string> = {
   RETRIEVAL_QUERY: "task: search result | query:",
   RETRIEVAL_DOCUMENT: "title: none | text:",
@@ -207,6 +213,42 @@ function normalizeGeminiModel(model: string): string {
   return withoutPrefix;
 }
 
+/**
+ * Parses the delay hint from a `google.rpc.RetryInfo` detail inside a Gemini error
+ * body. Callers should prefer a full (bounded) body read over the 500-char
+ * `ProviderHttpError.errorBody` preview: real Gemini 429 payloads run ~1KB+ with
+ * the RetryInfo detail near the end of `error.details`, so the truncated preview
+ * regularly cuts the hint away.
+ */
+function extractGoogleRetryInfoDelayMs(errorBody: unknown): number | undefined {
+  if (typeof errorBody !== "string" || !errorBody) {
+    return undefined;
+  }
+  try {
+    const details = asOptionalRecord(asOptionalRecord(JSON.parse(errorBody))?.error)?.details;
+    if (!Array.isArray(details)) {
+      return undefined;
+    }
+    let retryAfterMs: number | undefined;
+    for (const rawDetail of details) {
+      const detail = asOptionalRecord(rawDetail);
+      const retryDelay = normalizeOptionalString(detail?.retryDelay);
+      const match = retryDelay ? GOOGLE_RETRY_DELAY_RE.exec(retryDelay) : undefined;
+      if (normalizeOptionalString(detail?.["@type"]) !== GOOGLE_RETRY_INFO_TYPE || !match) {
+        continue;
+      }
+      const delayMs =
+        Number(match[1]) * 1000 + (match[2] ? Math.ceil(Number(`0.${match[2]}`) * 1000) : 0);
+      if (Number.isSafeInteger(delayMs) && delayMs >= 0) {
+        retryAfterMs = Math.max(retryAfterMs ?? delayMs, delayMs);
+      }
+    }
+    return retryAfterMs;
+  } catch {
+    return undefined;
+  }
+}
+
 export function sanitizeGeminiEmbedding(values: number[], expectedDimensions?: number): number[] {
   if (expectedDimensions != null && values.length !== expectedDimensions) {
     throw unexpectedGeminiEmbeddingDimensions(expectedDimensions, values.length);
@@ -241,7 +283,44 @@ async function fetchGeminiEmbeddingPayload(params: {
         },
         onResponse: async (res) => {
           if (!res.ok) {
-            throw await createProviderHttpError(res, "gemini embeddings failed");
+            // Clone before createProviderHttpError consumes the body: core truncates
+            // ProviderHttpError.errorBody to 500 chars, which regularly cuts off the
+            // RetryInfo detail near the end of real (~1KB+) Gemini 429 bodies.
+            let errorBodyClone: Response | undefined;
+            try {
+              errorBodyClone = res.clone();
+            } catch {
+              errorBodyClone = undefined;
+            }
+            try {
+              const error = await createProviderHttpError(res, "gemini embeddings failed", {
+                requestHeaders: headers,
+                signal: params.signal,
+              });
+              let retryInfoSource: unknown = error.errorBody;
+              if (errorBodyClone) {
+                try {
+                  retryInfoSource = await readProviderResponseErrorText(
+                    errorBodyClone,
+                    GOOGLE_RETRY_INFO_BODY_LIMIT_BYTES,
+                    headers,
+                    params.signal,
+                  );
+                } catch {
+                  params.signal?.throwIfAborted();
+                  retryInfoSource = error.errorBody;
+                }
+              }
+              params.signal?.throwIfAborted();
+              const retryAfterMs = extractGoogleRetryInfoDelayMs(retryInfoSource);
+              if (retryAfterMs !== undefined) {
+                error.retryAfterMs = Math.max(retryAfterMs, error.retryAfterMs ?? 0);
+              }
+              throw error;
+            } finally {
+              // An early exit while reading the original must also release its tee.
+              void errorBodyClone?.body?.cancel().catch(() => undefined);
+            }
           }
           return await readProviderJsonObjectResponse(res, "gemini embeddings failed");
         },

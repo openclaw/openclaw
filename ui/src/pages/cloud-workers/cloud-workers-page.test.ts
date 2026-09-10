@@ -43,6 +43,7 @@ const operatingSystems = [
   { id: "linux", label: "Linux", default: true },
   { id: "macos", label: "macOS" },
   { id: "windows/wsl2", label: "Windows (WSL2)" },
+  { id: "future-os", label: "Future OS", disabledReason: "Upgrade the worker provider." },
 ];
 
 describe("Cloud Workers mutation requests", () => {
@@ -147,9 +148,12 @@ describe("Cloud Workers mutation requests", () => {
       provider.append(page);
       document.body.append(provider);
       try {
-        await waitForFast(() =>
-          expect(page.querySelectorAll(".settings-row code")).toHaveLength(2),
-        );
+        await waitForFast(() => {
+          const profiles = [...page.querySelectorAll(".settings-section")].find((section) =>
+            section.querySelector("h2")?.textContent?.trim().startsWith("Profiles"),
+          );
+          expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
+        });
         const row = expectDefined(
           [...page.querySelectorAll(".settings-row")].find(
             (entry) => entry.querySelector("code")?.textContent === "pending",
@@ -180,12 +184,37 @@ describe("Cloud Workers mutation requests", () => {
                 ? [initialTarget]
                 : []),
             ]);
+            for (const system of systems) {
+              if (system.disabledReason) {
+                const option = expectDefined(
+                  [...select.options].find((candidate) => candidate.value === system.id),
+                  "Unavailable operating system",
+                );
+                expect(option.disabled).toBe(true);
+                expect(option.textContent).toContain(system.disabledReason);
+              }
+            }
             select.value = expectDefined(target, "Selected OS");
             select.dispatchEvent(new Event("change", { bubbles: true }));
           }
           const setup = expectDefined(page.querySelector("textarea"), "Setup editor");
           setup.value = "";
           setup.dispatchEvent(new Event("input", { bubbles: true }));
+          await waitForFast(() => expect(actionButton(page, "Save").disabled).toBe(false));
+          actionButton(page, "Save").click();
+          await waitForFast(() =>
+            expect(page.textContent).toContain(
+              "Enter a setup command or clear the setup environment names.",
+            ),
+          );
+          expect(patches).toHaveLength(0);
+          const setupEnv = expectDefined(
+            page.querySelector<HTMLInputElement>('input[aria-label="Setup environment names"]'),
+            "Setup environment names editor",
+          );
+          expect(setupEnv.value).toBe("QA_WORKER_FLAG");
+          setupEnv.value = "";
+          setupEnv.dispatchEvent(new Event("input", { bubbles: true }));
           await waitForFast(() => expect(actionButton(page, "Save").disabled).toBe(false));
           actionButton(page, "Save").click();
         }

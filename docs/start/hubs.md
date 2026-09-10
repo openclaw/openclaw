@@ -68,7 +68,7 @@ Use these hubs to discover more of the documentation, including deep dives and r
 ## Providers + ingress
 
 - [Chat channels hub](/channels)
-- [Model providers hub](/providers/models)
+- [Model providers hub](/providers)
 - [Discord](/channels/discord)
 - [iMessage](/channels/imessage)
 - [Mattermost](/channels/mattermost)

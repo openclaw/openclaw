@@ -1,5 +1,6 @@
 {
   "id": "signal",
+  "categories": ["channels"],
   "name": "Signal",
   "description": "OpenClaw Signal channel plugin.",
   "doctorContract": {

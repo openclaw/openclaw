@@ -25,7 +25,7 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
 
 <Note>
-  **Upgrade note: Telegram's default preview changed.** With `channels.telegram.streaming` unset, Telegram now keeps one editable status draft during the turn (the agent's current status plus its tool lines) and sends the final answer as a normal message. It previously streamed the answer text itself into the preview. No config becomes invalid and no `doctor --fix` is needed; to keep the previous behavior, set:
+  **Upgrade note: Telegram's default preview changed in 2026.8.1.** With `channels.telegram.streaming` unset, Telegram keeps one editable status draft during the turn (the agent's current status plus its tool lines) and sends the final answer as a normal message. It previously streamed the answer text itself into the preview. No config becomes invalid and no `doctor --fix` is needed; to keep the previous behavior, set:
 
 ```json5
 { channels: { telegram: { streaming: { mode: "partial" } } } }
@@ -187,7 +187,7 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
 
     Telegram expects a unicode emoji (for example "👀"); use `""` to disable the reaction for a channel or account.
 
-    **Scope (`messages.ackReactionScope`, default `"group-mentions"`; no Telegram-account or Telegram-channel override today):**
+    **Scope (`messages.ackReactionScope`, default `"group-mentions"`; no Telegram-account or Telegram-channel override):**
 
     `all` (DMs + groups, including ambient room events), `direct` (DMs only), `group-all` (every group message except ambient room events, no DMs), `group-mentions` (groups when the bot is mentioned; **no DMs** — default), `off` / `none` (disabled).
 

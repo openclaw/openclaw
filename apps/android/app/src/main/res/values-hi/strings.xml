@@ -787,6 +787,7 @@
     <string name="native_6fb4514f19a42ebe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"स्वप्न प्रक्रिया लोड करने के लिए Gateway से कनेक्ट करें."</string>
     <string name="native_7013af4c42fe4380" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सेटअप"</string>
     <string name="native_702312a29580c9e5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बातचीत खोलें"</string>
+    <string name="native_7047b9af7a4cd070" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बातचीत खोलें"</string>
     <string name="native_707165e9984b51dc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"poll"</string>
     <string name="native_7098dec92670efb0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"role remove"</string>
     <string name="native_70ab6c4383505d40" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ऑडियो त्रुटि · फिर से प्रयास करें"</string>
@@ -1210,6 +1211,7 @@
     <string name="native_b0375de83dab3599" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"माइक्रोफ़ोन की अनुमति आवश्यक है."</string>
     <string name="native_b0eeb9e9e45398b5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s दिन"</string>
     <string name="native_b10d60f36b858926" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s उपलब्ध"</string>
+    <string name="native_b14406bcc83988e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब की स्थिति अज्ञात है। दोबारा भेजने से पहले बातचीत खोलें।"</string>
     <string name="native_b184feda7d0f6f0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"आरेख उपलब्ध नहीं है. सिंटैक्स जाँचें या आरेख को सरल बनाएँ. आप अभी भी इसका स्रोत पढ़ या कॉपी कर सकते हैं."</string>
     <string name="native_b1b3f74fe7e32ae1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"इवेंट स्ट्रीम बाधित हुई; रीफ़्रेश करके देखें."</string>
     <string name="native_b1c1be6b126d151f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नोड और डिवाइस लोड नहीं किए जा सके."</string>
@@ -1615,6 +1617,7 @@
     <string name="native_f0d1fb4ac220db11" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw सेटिंग्स सहायक का उपयोग करने के लिए इस Gateway को अपडेट करें."</string>
     <string name="native_f113b3bd283e216c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHub कौशल इंस्टॉल करने के लिए इस Gateway कनेक्शन को operator.admin की आवश्यकता है."</string>
     <string name="native_f12b7a9412a51a7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"प्रस्ताव लागू किया गया."</string>
+    <string name="native_f14751d33eb91e75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब कतार में जोड़ा गया"</string>
     <string name="native_f14cc3ede97361fd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s लंबित"</string>
     <string name="native_f14cd8dd44162255" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s घंटे पहले"</string>
     <string name="native_f15bf83677856dfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कॉल लॉग पढ़ें"</string>

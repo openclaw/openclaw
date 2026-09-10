@@ -31,8 +31,11 @@ import type {
   SessionAccessScope,
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
-  SqliteSessionReclamationDiagnostics,
+  SqliteSessionArtifactPreparationDiagnostics,
+  SqliteSessionDatabaseAdmissionDiagnostics,
+  SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
+import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "./store-writer-state.js";
@@ -127,19 +130,68 @@ export function withSqliteSessionDatabase<T>(
   options: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T,
   assertCurrent?: () => void,
+  diagnostics?: SqliteSessionDatabaseAdmissionDiagnostics,
 ): T | Promise<T> {
   assertCurrent?.();
-  if (getOpenClawAgentDatabaseIfOpen(options)) {
-    return operation(openOpenClawAgentDatabase(options));
+  const startedAt = diagnostics ? performance.now() : 0;
+  const finishAdmission = diagnostics
+    ? () => {
+        if (diagnostics.admissionMs === undefined) {
+          diagnostics.admissionMs = performance.now() - startedAt;
+        }
+      }
+    : undefined;
+  const admittedOperation = finishAdmission
+    ? (database: OpenClawAgentDatabase) => {
+        finishAdmission();
+        return operation(database);
+      }
+    : operation;
+  try {
+    if (getOpenClawAgentDatabaseIfOpen(options)) {
+      if (diagnostics) {
+        diagnostics.admissionMode = "cached";
+      }
+      return admittedOperation(openOpenClawAgentDatabase(options));
+    }
+    if (diagnostics) {
+      diagnostics.admissionMode = "async";
+    }
+    // The caller keeps its FIFO section while the existing owner joins the integrity child.
+    const result = withOpenClawAgentDatabaseAsync(options, admittedOperation, assertCurrent);
+    return finishAdmission ? result.finally(finishAdmission) : result;
+  } catch (error) {
+    finishAdmission?.();
+    throw error;
   }
-  // The caller keeps its FIFO section while the existing owner joins the integrity child.
-  return withOpenClawAgentDatabaseAsync(options, operation, assertCurrent);
+}
+
+function artifactPreparationLogFields(diagnostics: SqliteSessionArtifactPreparationDiagnostics) {
+  const milliseconds = (value: number | undefined) =>
+    value === undefined ? undefined : Math.round(value);
+  return {
+    admissionMode: diagnostics.admissionMode,
+    admissionMs: milliseconds(diagnostics.admissionMs),
+    nodeInventoryMs: milliseconds(diagnostics.nodeInventoryMs),
+    referencePlanningMs: milliseconds(diagnostics.referencePlanningMs),
+    orphanPlanningMs: milliseconds(diagnostics.orphanPlanningMs),
+    markerScanMs: milliseconds(diagnostics.markerScanMs),
+    nodeRows: diagnostics.nodeRows,
+    windowRows: diagnostics.windowRows,
+    referenceIds: diagnostics.referenceIds,
+    selectedEntries: diagnostics.selectedEntries,
+    markerWindows: diagnostics.markerWindows,
+    markerRows: diagnostics.markerRows,
+    deletePlans: diagnostics.deletePlans,
+    completed: diagnostics.completed === true,
+  };
 }
 
 export async function runExclusiveSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
-  reclamation?: SqliteSessionReclamationDiagnostics,
+  operation: SqliteSessionWriteOperation,
+  diagnostics?: SqliteSessionWriteDiagnostics,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
@@ -149,9 +201,13 @@ export async function runExclusiveSqliteSessionWrite<T>(
     pid: process.pid,
     threadId,
     isMainThread,
-    ...(reclamation?.kind ? { reclamationKind: reclamation.kind } : {}),
-    ...(reclamation?.workerThreadId !== undefined
-      ? { workerThreadId: reclamation.workerThreadId }
+    operation,
+    ...(diagnostics?.kind ? { reclamationKind: diagnostics.kind } : {}),
+    ...(diagnostics?.workerThreadId !== undefined
+      ? { workerThreadId: diagnostics.workerThreadId }
+      : {}),
+    ...(diagnostics?.artifactPreparation
+      ? { artifactPreparation: artifactPreparationLogFields(diagnostics.artifactPreparation) }
       : {}),
     elapsedMs: Math.round(completedAt - startedAt),
     ...(timing.startedAt !== undefined && timing.finishedAt !== undefined

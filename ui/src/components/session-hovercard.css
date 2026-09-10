@@ -164,6 +164,22 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr);
 }
 
+.session-hovercard__machine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-left: calc(var(--session-hovercard-context-icon-size) + var(--space-2));
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-hovercard__machine-class {
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 58%, transparent);
+  border-radius: var(--radius-sm);
+}
+
 .session-hovercard__plan-row,
 .session-hovercard__branch-row,
 .session-hovercard__pr-row {

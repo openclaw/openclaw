@@ -1393,7 +1393,8 @@
                   "install/node",
                   "install/node-compatibility",
                   "install/bun",
-                  "install/bun-compatibility"
+                  "install/bun-compatibility",
+                  "install/nix"
                 ]
               },
               {
@@ -1425,7 +1426,6 @@
               {
                 "group": "Containers",
                 "pages": [
-                  "install/ansible",
                   "install/docker",
                   {
                     "group": "Docker",
@@ -1436,7 +1436,6 @@
                       "install/docker/sandbox-and-troubleshooting"
                     ]
                   },
-                  "install/nix",
                   "install/podman"
                 ]
               },
@@ -1471,6 +1470,7 @@
                   {
                     "group": "Self-hosted and local",
                     "pages": [
+                      "install/ansible",
                       "install/docker-vm-runtime",
                       "install/kubernetes",
                       "install/macos-vm",
@@ -1650,8 +1650,9 @@
                 "pages": [
                   "channels/pairing",
                   "channels/access-groups",
-                  "channels/group-messages",
+                  "channels/bot-loop-protection",
                   "channels/groups",
+                  "channels/group-messages",
                   "channels/ambient-room-events",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
@@ -1745,6 +1746,7 @@
                 "pages": [
                   "concepts/messages",
                   "concepts/streaming",
+                  "concepts/typing-indicators",
                   "concepts/progress-drafts",
                   "concepts/retry",
                   "concepts/queue",
@@ -1797,6 +1799,7 @@
                       "plugins/codex-supervision"
                     ]
                   },
+                  "plugins/copilot",
                   {
                     "group": "Meetings and calls",
                     "pages": [
@@ -1933,6 +1936,7 @@
                 "group": "Automation",
                 "pages": [
                   "automation/index",
+                  "gateway/heartbeat",
                   "automation/cron-jobs",
                   {
                     "group": "Automations",
@@ -2056,13 +2060,13 @@
                         "pages": [
                           "tools/browser/setup",
                           "tools/browser/profiles",
+                          "tools/browser/existing-session",
                           "tools/browser/configuration",
                           "tools/browser/remote",
                           "tools/browser/security",
-                          "tools/browser/existing-session",
                           "tools/browser/isolation",
-                          "tools/browser/troubleshooting",
-                          "tools/browser/agent-tools"
+                          "tools/browser/agent-tools",
+                          "tools/browser/troubleshooting"
                         ]
                       },
                       "tools/browser-control",
@@ -2203,6 +2207,7 @@
                       "providers/alibaba",
                       "providers/anthropic",
                       "providers/arcee",
+                      "providers/baseten",
                       "providers/bedrock",
                       "providers/bedrock-mantle",
                       "providers/cerebras",
@@ -2384,6 +2389,15 @@
                     "group": "Configuration",
                     "pages": [
                       "gateway/configuration",
+                      {
+                        "group": "Configuration",
+                        "pages": [
+                          "gateway/configuration/common-tasks",
+                          "gateway/configuration/hot-reload",
+                          "gateway/configuration/config-rpc",
+                          "gateway/configuration/environment-variables"
+                        ]
+                      },
                       "gateway/configuration-reference",
                       "gateway/config-agents",
                       {
@@ -2441,6 +2455,16 @@
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
+                      {
+                        "group": "Secrets management",
+                        "pages": [
+                          "gateway/secrets/runtime-model",
+                          "gateway/secrets/secretref-contract",
+                          "gateway/secrets/secret-store-and-egress",
+                          "gateway/secrets/integration-examples",
+                          "gateway/secrets/operations"
+                        ]
+                      },
                       "gateway/1password",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth"
@@ -2450,7 +2474,6 @@
                     "group": "Health and diagnostics",
                     "pages": [
                       "gateway/health",
-                      "gateway/heartbeat",
                       "gateway/doctor",
                       {
                         "group": "Doctor",
@@ -2540,9 +2563,24 @@
                       "gateway/security/rate-limiting",
                       "gateway/security/operator-incident-response",
                       "gateway/security/secure-file-operations",
-                      "gateway/security/dependency-locking",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
+                      {
+                        "group": "Sandboxing",
+                        "pages": [
+                          "gateway/sandboxing/what-gets-sandboxed",
+                          "gateway/sandboxing/modes-scope-and-backend",
+                          "gateway/sandboxing/supported-capability-matrix",
+                          "gateway/sandboxing/docker-backend",
+                          "gateway/sandboxing/podman-backend",
+                          "gateway/sandboxing/ssh-backend",
+                          "gateway/sandboxing/openshell-backend",
+                          "gateway/sandboxing/workspace-access",
+                          "gateway/sandboxing/multiple-folders-for-one-agent",
+                          "gateway/sandboxing/images-and-setup",
+                          "gateway/sandboxing/setup-command"
+                        ]
+                      },
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated",
                       "gateway/permission-modes"
@@ -2551,6 +2589,8 @@
                   {
                     "group": "Protocols and APIs",
                     "pages": [
+                      "gateway/clients",
+                      "gateway/external-apps",
                       "gateway/protocol",
                       {
                         "group": "Gateway protocol",
@@ -2559,17 +2599,26 @@
                           "gateway/protocol/handshake",
                           "gateway/protocol/presence",
                           "gateway/protocol/rpc-methods",
+                          "gateway/protocol/rpc-system-and-channels",
+                          "gateway/protocol/rpc-talk-config-and-agents",
+                          "gateway/protocol/rpc-session-control",
+                          "gateway/protocol/rpc-devices-nodes-and-approvals",
+                          "gateway/protocol/rpc-bootstrap-and-events",
                           "gateway/protocol/ledgers",
                           "gateway/protocol/operator-methods",
                           "gateway/protocol/versioning",
                           "gateway/protocol/auth"
                         ]
                       },
-                      "gateway/clients",
                       "gateway/embedding",
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
-                      "gateway/tools-invoke-http-api",
+                      "gateway/tools-invoke-http-api"
+                    ]
+                  },
+                  {
+                    "group": "Models and local providers",
+                    "pages": [
                       "gateway/cli-backends",
                       "gateway/local-models",
                       "gateway/local-model-services"
@@ -2581,7 +2630,6 @@
                       "network",
                       "gateway/pairing",
                       "gateway/discovery",
-                      "gateway/portals",
                       "gateway/bonjour"
                     ]
                   }
@@ -2601,7 +2649,16 @@
                 "pages": [
                   "security/network-proxy",
                   "security/formal-verification",
+                  "security/incident-response",
                   "security/THREAT-MODEL-ATLAS",
+                  "security/THREAT-MODEL-ATLAS/reconnaissance",
+                  "security/THREAT-MODEL-ATLAS/initial-access",
+                  "security/THREAT-MODEL-ATLAS/execution",
+                  "security/THREAT-MODEL-ATLAS/persistence",
+                  "security/THREAT-MODEL-ATLAS/defense-evasion",
+                  "security/THREAT-MODEL-ATLAS/discovery",
+                  "security/THREAT-MODEL-ATLAS/collection-and-exfiltration",
+                  "security/THREAT-MODEL-ATLAS/impact",
                   "security/CONTRIBUTING-THREAT-MODEL"
                 ]
               },
@@ -2627,8 +2684,7 @@
                       "nodes/media-playback",
                       "nodes/images",
                       "nodes/audio",
-                      "nodes/camera",
-                      "tools/tts"
+                      "nodes/camera"
                     ]
                   },
                   {
@@ -2670,6 +2726,7 @@
                       "web/control-ui/development"
                     ]
                   },
+                  "gateway/portals",
                   "web/notifications",
                   "web/urls",
                   "web/dashboard",
@@ -2692,7 +2749,6 @@
                   {
                     "group": "Running the service",
                     "pages": [
-                      "cli/openclaw",
                       "cli/daemon",
                       "cli/fleet",
                       "cli/gateway",
@@ -2717,6 +2773,7 @@
                       "cli/backup",
                       "cli/migrate",
                       "cli/onboard",
+                      "cli/openclaw",
                       "cli/reset",
                       "cli/setup",
                       "cli/uninstall",
@@ -2763,7 +2820,9 @@
                       "cli/models",
                       "cli/promos",
                       "cli/sessions",
-                      "cli/tasks"
+                      "cli/tasks",
+                      "cli/transcripts",
+                      "cli/wiki"
                     ]
                   },
                   {
@@ -2868,8 +2927,7 @@
                           "cli/mcp/apps"
                         ]
                       },
-                      "cli/proxy",
-                      "cli/wiki"
+                      "cli/proxy"
                     ]
                   }
                 ]
@@ -2878,7 +2936,6 @@
                 "group": "RPC and API",
                 "pages": [
                   "reference/rpc",
-                  "gateway/external-apps",
                   "reference/device-models"
                 ]
               },
@@ -2900,7 +2957,21 @@
                       "plugins/codex-harness-reference/workspace-bootstrap-files"
                     ]
                   },
-                  "plugins/codex-harness-runtime"
+                  "plugins/codex-harness-runtime",
+                  {
+                    "group": "Codex harness runtime",
+                    "pages": [
+                      "plugins/codex-harness-runtime/recovery",
+                      "plugins/codex-harness-runtime/threads",
+                      "plugins/codex-harness-runtime/replies",
+                      "plugins/codex-harness-runtime/hooks",
+                      "plugins/codex-harness-runtime/sandbox-streaming",
+                      "plugins/codex-harness-runtime/v1-support-contract",
+                      "plugins/codex-harness-runtime/permissions",
+                      "plugins/codex-harness-runtime/queue-and-feedback",
+                      "plugins/codex-harness-runtime/compaction"
+                    ]
+                  }
                 ]
               },
               {
@@ -2908,8 +2979,7 @@
                 "pages": [
                   "plugins/plugin-inventory",
                   "plugins/reference",
-                  "plugins/dependency-resolution",
-                  "plugins/install-overrides"
+                  "plugins/dependency-resolution"
                 ]
               },
               {
@@ -3020,6 +3090,7 @@
                     ]
                   },
                   "plugins/compatibility",
+                  "plugins/install-overrides",
                   "plugins/sdk-channel-outbound",
                   "plugins/sdk-channel-inbound",
                   "plugins/sdk-channel-ingress",
@@ -3057,6 +3128,7 @@
                   "reference/openclaw-ai",
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
+                  "concepts/usage-tracking",
                   "reference/transcript-hygiene",
                   "reference/database-schemas",
                   {
@@ -3084,17 +3156,15 @@
                       "reference/session-management-compaction/housekeeping"
                     ]
                   },
-                  "date-time"
+                  "date-time",
+                  "concepts/timezone"
                 ]
               },
               {
                 "group": "Concept internals",
                 "pages": [
                   "concepts/typebox",
-                  "concepts/markdown-formatting",
-                  "concepts/typing-indicators",
-                  "concepts/usage-tracking",
-                  "concepts/timezone"
+                  "concepts/markdown-formatting"
                 ]
               },
               {
@@ -3151,7 +3221,8 @@
                       "reference/full-release-validation/evidence"
                     ]
                   },
-                  "reference/release-performance-sweep"
+                  "reference/release-performance-sweep",
+                  "gateway/security/dependency-locking"
                 ]
               },
               {

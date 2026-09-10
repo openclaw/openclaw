@@ -25,6 +25,10 @@ openclaw approvals get
 openclaw gateway restart
 ```
 
+`openclaw approvals get` prints the requested policy, the host policy sources
+behind it, and the effective result. Use it to confirm the `tools.exec.mode`
+write landed in the source you expect before the restart applies it.
+
 Then verify the effective policy:
 
 ```bash

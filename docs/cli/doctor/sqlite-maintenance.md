@@ -263,7 +263,7 @@ selectors first. Recorded artifacts depend on their original identities;
 replacing them with copies can prevent restoration. If recovery still refuses
 the artifact, retain that evidence for support instead of replacing it.
 
-### Downgrading After Session SQLite Migration
+### Downgrading after session SQLite migration
 
 Follow [Downgrade](/install/updating#downgrade) before starting an older release.
 With writers stopped, `openclaw doctor --session-sqlite restore

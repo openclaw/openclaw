@@ -8,10 +8,22 @@ read_when:
 title: "Mantis Slack desktop runbook"
 ---
 
-Mantis Slack desktop QA is the real-UI lane for Slack-class bugs that need a
-Linux desktop, VNC rescue, Slack Web, a real OpenClaw gateway, screenshots,
-videos, and a PR evidence comment. Use it when unit tests or the headless
-Slack live lane cannot prove the bug.
+[Mantis](/concepts/mantis) Slack desktop QA is the real-UI lane for Slack-class
+bugs that need a Linux desktop, VNC rescue, Slack Web, a real OpenClaw gateway,
+screenshots, videos, and a PR evidence comment. Use it when unit tests or the
+headless Slack live lane cannot prove the bug.
+
+## Terms
+
+- **Mantis** - the OpenClaw system that runs these scenarios and publishes visual
+  CI evidence and a PR comment.
+- **Crabbox** - the `openclaw/crabbox` service that supplies warmed Linux
+  machines, leases, and VNC access.
+- **Convex** - the credential broker that leases QA Slack credentials to a run,
+  so a workflow needs only the Convex broker secret and never a raw Slack token.
+- **Warm lease** - a Crabbox lease that is still alive from an earlier run. A
+  warm lease can keep a logged-in browser profile, a pnpm cache, and a prepared
+  source checkout.
 
 ## Storage model
 
@@ -24,7 +36,7 @@ Mantis uses three storage layers:
   logged-in browser profile, `/var/cache/crabbox/pnpm`, and a prepared source
   checkout while the lease is alive.
 - **Mantis artifacts** - owned by the OpenClaw run. Live under
-  `.artifacts/qa-e2e/mantis/...`; GitHub Actions uploads them and the Mantis
+  `.artifacts/qa-e2e/mantis/...`. GitHub Actions uploads them and the Mantis
   GitHub App comments inline evidence on the PR.
 
 Never bake secrets, browser cookies, Slack login state, repository checkouts,
@@ -107,7 +119,7 @@ pnpm openclaw qa mantis slack-desktop-smoke \
 ```
 
 Use `--hydrate-mode prehydrated` only when the reused remote workspace already
-has `node_modules` and a built `dist/`; Mantis fails closed otherwise.
+has `node_modules` and a built `dist/`. Mantis fails closed otherwise.
 
 Prove native Slack approval UI:
 
@@ -123,7 +135,7 @@ pnpm openclaw qa mantis slack-desktop-smoke \
 
 `--approval-checkpoints` is mutually exclusive with `--gateway-setup`. It runs
 the opt-in `slack-approval-exec-native` and `slack-approval-plugin-native`
-scenarios unless you pass an explicit approval-checkpoint `--scenario`; other
+scenarios unless you pass an explicit approval-checkpoint `--scenario`. Other
 Slack scenarios are rejected before the VM starts. The Slack QA runner writes
 each checkpoint JSON file from the real Slack API message it observed, then
 the remote watcher renders that message into

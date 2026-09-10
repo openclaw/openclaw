@@ -37,6 +37,10 @@ async function makeLauncherVersionFixture(
     path.resolve(process.cwd(), "node-runtime-update.mjs"),
     path.join(fixtureRoot, "node-runtime-update.mjs"),
   );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-runtime-recovery.mjs"),
+    path.join(fixtureRoot, "node-runtime-recovery.mjs"),
+  );
   await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
   await fs.writeFile(
     path.join(fixtureRoot, "package.json"),

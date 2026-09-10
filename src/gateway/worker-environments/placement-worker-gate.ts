@@ -18,6 +18,8 @@ type WorkerPlacementBinding = Readonly<{
 }>;
 
 export type WorkerSessionPlacementGate = {
+  /** Refresh runtime bytes without changing the retained workspace's owner epoch. */
+  assertWorkerRuntimeRefresh(binding: WorkerPlacementBinding): number;
   /** Credential verification only; this does not grant operational worker authority. */
   readWorkerTurnClaim(binding: WorkerPlacementBinding): WorkerSessionTurnClaim | undefined;
   getExecutionIdentityCapability?(
@@ -92,6 +94,25 @@ export function createWorkerSessionPlacementGate(
   const validateWorkerTurn = (claim: WorkerSessionTurnClaim) => isOperational(claim);
 
   return {
+    assertWorkerRuntimeRefresh(binding): number {
+      const placement = store.get(binding.sessionId);
+      if (
+        placement?.state !== "active" ||
+        placement.environmentId !== binding.environmentId ||
+        placement.activeOwnerEpoch !== binding.ownerEpoch ||
+        store.getPlacementMove(binding.sessionId)
+      ) {
+        throw new Error("Worker runtime refresh lost its active placement owner");
+      }
+      const claim = projectWorkerSessionTurnClaim(placement);
+      if (
+        placement.turnClaim &&
+        (!claim || !recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(claim)))
+      ) {
+        throw new Error("Worker runtime refresh is waiting for the current turn to finish");
+      }
+      return placement.generation;
+    },
     readWorkerTurnClaim,
     getExecutionIdentityCapability: (claim) =>
       getWorkerTurnExecutionIdentityCapability(store, claim),

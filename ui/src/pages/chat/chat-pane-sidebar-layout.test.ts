@@ -37,6 +37,7 @@ const requestUpdate = vi.fn();
 function callbacks() {
   return {
     activatePanel: vi.fn(),
+    togglePanelExpanded: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
     reorderPanel: vi.fn(),

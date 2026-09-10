@@ -11,6 +11,12 @@ title: "Database schemas"
 
 OpenClaw stores control-plane state in a global SQLite database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
+Two mechanisms back that contract. CI runs
+`scripts/check-native-state-schema-version.mjs`, which fails the build when the
+Swift and TypeScript state-database contracts declare different schema versions.
+`openclaw doctor --fix` owns file-to-SQLite migrations and records a receipt for
+each one in the shared `migration_runs` and `migration_sources` tables.
+
 This page is an index. The reference is documented on seven pages, one per
 reader job. Open the page that matches your task and stay there.
 
@@ -23,6 +29,12 @@ reader job. Open the page that matches your task and stay there.
 | [Agent schema history](/reference/database-schemas/agent-schema-history)                       | Per-agent database schema versions, their changes, and their first releases.                             |
 | [State schema history](/reference/database-schemas/state-schema-history)                       | Shared state database schema versions, their changes, and their first releases.                          |
 | [Integrity, troubleshooting, and recovery](/reference/database-schemas/integrity-and-recovery) | Integrity checks, common database errors, and the supported downgrade recovery path.                     |
+
+## Related
+
+- [Backups](/install/backups) — archives, per-database snapshots, scheduling, and offsite copies for the databases described here
+- [Updating](/install/updating) — updating safely, including the verified backup to take before a schema bump, and the rollback strategy
+- [Doctor](/gateway/doctor) — the repair and migration tool that fixes stale config/state and reports health problems
 
 ## Where each section moved
 
@@ -53,6 +65,7 @@ page that now holds the content.
 - <a id="keep-engine-specific-capabilities-owned" />[Keep engine-specific capabilities owned](/reference/database-schemas/storage-changes#keep-engine-specific-capabilities-owned)
 - <a id="review-checkpoint-for-material-changes" />[Review checkpoint for material changes](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes)
 - <a id="preflight-a-target-release" />[Preflight a target release](/reference/database-schemas/storage-changes#preflight-a-target-release)
+  - <a id="preflight-an-explicit-agent-copy" />[Preflight an explicit agent copy](/reference/database-schemas/storage-changes#preflight-an-explicit-agent-copy)
 - <a id="agent-schema-history" />[Agent schema history](/reference/database-schemas/agent-schema-history#agent-schema-history)
 - <a id="creator-namespace-migration" />[Creator namespace migration](/reference/database-schemas/agent-schema-history#creator-namespace-migration)
 - <a id="participant-identity-migration" />[Participant identity migration](/reference/database-schemas/agent-schema-history#participant-identity-migration)

@@ -43,7 +43,7 @@ teams status   # verify you're logged in and see your tenant info
 ```
 
 <Note>
-The Teams CLI is currently in preview. Commands and flags may change between releases.
+The Teams CLI is published under the `@preview` dist-tag (see the install command above). Commands and flags may change between releases.
 </Note>
 
 **2. Start a tunnel** (Teams cannot reach localhost)

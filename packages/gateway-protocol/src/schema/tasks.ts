@@ -55,6 +55,7 @@ export const TaskSummarySchema = closedObject({
   agentId: Type.Optional(Type.String()),
   sessionKey: Type.Optional(Type.String()),
   childSessionKey: Type.Optional(Type.String()),
+  hasTranscript: Type.Optional(Type.Boolean()),
   ownerKey: Type.Optional(Type.String()),
   runId: Type.Optional(Type.String()),
   taskId: Type.Optional(Type.String()),
@@ -108,6 +109,19 @@ export const TasksGetResultSchema = closedObject({
   task: TaskSummarySchema,
 });
 
+/** Runtime-independent, bounded transcript pages in chronological order. */
+export const TasksHistoryParamsSchema = closedObject({
+  taskId: NonEmptyString,
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+});
+
+export const TasksHistoryResultSchema = closedObject({
+  /** Stable messageId or __openclaw.id anchors refreshes; entry IDs can have sibling rows. */
+  messages: Type.Array(Type.Unknown()),
+  nextCursor: Type.Optional(Type.String({ maxLength: 8192 })),
+});
+
 /** Cancel request for one task id with optional operator reason. */
 export const TasksCancelParamsSchema = closedObject({
   taskId: NonEmptyString,
@@ -145,6 +159,8 @@ export type TasksListParams = Static<typeof TasksListParamsSchema>;
 export type TasksListResult = Static<typeof TasksListResultSchema>;
 export type TasksGetParams = Static<typeof TasksGetParamsSchema>;
 export type TasksGetResult = Static<typeof TasksGetResultSchema>;
+export type TasksHistoryParams = Static<typeof TasksHistoryParamsSchema>;
+export type TasksHistoryResult = Static<typeof TasksHistoryResultSchema>;
 export type TasksCancelParams = Static<typeof TasksCancelParamsSchema>;
 export type TasksCancelResult = Static<typeof TasksCancelResultSchema>;
 export type TasksRecoveryParams = Static<typeof TasksRecoveryParamsSchema>;

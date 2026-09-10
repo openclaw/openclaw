@@ -162,3 +162,4 @@ instead have unproven ownership. Ingress diagnostics distinguish
 - [Security](/gateway/security)
 - [Configuration](/gateway/configuration)
 - [Trusted proxy auth](/gateway/trusted-proxy-auth)
+- [Gateway exposure runbook](/gateway/security/exposure-runbook) — the pre-flight checklist for the exposure findings above

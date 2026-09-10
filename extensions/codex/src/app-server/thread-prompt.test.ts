@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import { describe, expect, it } from "vitest";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
@@ -191,14 +192,13 @@ describe("buildDeveloperInstructions delegation guidance", () => {
 });
 
 describe("buildDeveloperInstructions UI presentation guidance", () => {
-  const uiTools = ["show_widget", "dashboard", "portal"].map(
-    (name) =>
-      ({
-        type: "function",
-        name,
-        description: `Use ${name}`,
-        inputSchema: { type: "object" },
-      }) satisfies CodexDynamicToolSpec,
+  const uiTools = ["show_widget", "dashboard", "portal", "message"].map(
+    (name): CodexDynamicToolFunctionSpec => ({
+      type: "function",
+      name,
+      description: `Use ${name}`,
+      inputSchema: { type: "object", properties: name === "message" ? { clawhub: {} } : {} },
+    }),
   );
 
   it.each([
@@ -233,6 +233,11 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       expect(instructions).toContain("publicUrl");
       expect(instructions).toContain("result.presentation");
       expect(instructions).toContain("inline support varies by surface");
+      expect(instructions).toContain(
+        `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
+      );
+      expect(instructions).toContain("including when it is already installed");
+      expect(instructions).toContain("desktop app does not establish");
     },
   );
 
@@ -247,6 +252,21 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       "Custom authoring is unavailable this turn, not unsupported by dashboards.",
     );
     expect(instructions).not.toContain("`show_widget`");
+  });
+
+  it("does not advertise ClawHub for a message schema without that capability", () => {
+    const instructions = buildDeveloperInstructions(createParams(), {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "message",
+          description: "Reply to source",
+          inputSchema: { type: "object", properties: { message: { type: "string" } } },
+        },
+      ],
+    });
+
+    expect(instructions).not.toContain("ClawHub");
   });
 
   it.each([

@@ -12,7 +12,10 @@ import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   REQUEST,
@@ -190,7 +193,7 @@ describe("worker workspace recovery transcript reporting", () => {
         failAt: "workspace",
         workspacePath,
       };
-      const harness = createHarness(placements, harnessOptions);
+      const harness = createHarness(openOpenClawStateDatabase(), placements, harnessOptions);
       const active = harness.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("expected active worker placement");
@@ -328,10 +331,14 @@ describe("worker workspace recovery transcript reporting", () => {
         const release = new Promise<void>((resolve) => {
           releaseWriter = resolve;
         });
-        const blocker = runExclusiveSqliteSessionWrite({ agentId: IDENTITY.agentId }, async () => {
-          signalWriterHeld();
-          await release;
-        });
+        const blocker = runExclusiveSqliteSessionWrite(
+          { agentId: IDENTITY.agentId },
+          async () => {
+            signalWriterHeld();
+            await release;
+          },
+          "session.transcript.batch",
+        );
         await writerHeld;
 
         const rebound = upsertSessionEntryCore(IDENTITY, {

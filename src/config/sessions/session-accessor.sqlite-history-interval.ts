@@ -20,15 +20,20 @@ import {
 /** Select display slots without loading custom content or details into history metadata. */
 export function isVisibleHistoryNonMessageEventSql(
   type: Expression<string | null>,
-  event: Expression<string>,
+  event: Expression<string | null>,
+  activeEventSeq: Expression<number>,
+  eventSeq: Expression<number>,
 ): RawBuilder<SqlBool> {
+  const activeEvent = /* kysely-allow-raw: JSON parsing requires the joined active-row key. */ sql<
+    string | null
+  >`CASE WHEN ${activeEventSeq} = ${eventSeq} THEN ${event} END`;
   // Match isVisibleTranscriptRecord; CASE avoids parsing unrelated marker payloads.
-  return /* kysely-allow-raw: query-time display selection leaves canonical events and message indexes unchanged. */ sql<SqlBool>`CASE
+  return /* kysely-allow-raw: query-time display selection leaves canonical events and message indexes unchanged. */ sql<SqlBool>`(${type} IN ('compaction', 'reset', 'custom_message') AND CASE
     WHEN ${type} IN ('compaction', 'reset') THEN 1
     WHEN ${type} = 'custom_message' THEN
-      json_type(${event}, '$.display') = 'true'
-      AND json_extract(${event}, '$.customType') IS NOT ${OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE}
-    ELSE 0 END`;
+      json_type(${activeEvent}, '$.display') = 'true'
+      AND json_extract(${activeEvent}, '$.customType') IS NOT ${OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE}
+    ELSE 0 END)`;
 }
 
 export function parseStoredTranscriptEvent(eventJson: string): TranscriptEvent {
@@ -61,6 +66,8 @@ function selectHistoricalDisplayEvents(
         isVisibleHistoryNonMessageEventSql(
           eb.ref("identity.event_type"),
           eb.ref("event.event_json"),
+          eb.ref("active.event_seq"),
+          eb.ref("event.seq"),
         ),
       ]),
     );
@@ -97,6 +104,8 @@ function readDisplayableActiveEventById(projection: CurrentTranscriptProjection,
           isVisibleHistoryNonMessageEventSql(
             eb.ref("identity.event_type"),
             eb.ref("event.event_json"),
+            eb.ref("active.event_seq"),
+            eb.ref("event.seq"),
           ),
         ]),
       ),

@@ -48,6 +48,13 @@ uses the admitted handle. Coalesced callers retain their own guards. History
 eviction also uses this admission when reopening after archive materialization,
 then rereads candidate protection before preparing reclamation.
 
+Prepared session-store updates, entry replacements, and lifecycle upserts use
+the same admission for cold snapshot reads and actual commits, retaining their
+existing writer position. Warm update callbacks remain direct. Result-only
+no-op commits do not reopen a disposed handle. Native deletion and archive
+preparation still run outside the writer; the subsequent commit rechecks its
+native owner's authority after any awaited admission.
+
 Session reclamation keeps its deletion transaction on a worker connection.
 The worker opens its database under the session writer, then releases that writer
 while full integrity and foreign-key checks run on the same connection. Unrelated
@@ -175,3 +182,24 @@ JSON output is identified by `schema: "openclaw.state-schema-preflight.v1"`.
 Use a SQLite online backup or another WAL-aware snapshot produced while the source is safely coordinated. The resulting preflight input must be one consolidated file with no sibling `-wal`, `-shm`, or `-journal`; sidecars make the result `indeterminate`. Do not copy only the main `.sqlite` file from an active WAL database. Preflight the exact runtime that will be activated; a package version or numeric schema version alone does not prove same-version shape compatibility.
 
 Diagnostic paths that prepare their own private read-only snapshots use the size-derived child-process budget described under [Integrity checks](/reference/database-schemas#integrity-checks).
+
+### Preflight an explicit agent copy
+
+Runtimes that provide the agent reader also support:
+
+```bash
+openclaw database preflight-agent <copied-agent.sqlite> --agent-id main --json
+```
+
+Use the exact canonical agent ID and a canonical regular-file path. This command
+validates integrity, both schema version markers, schema shape, and agent ownership
+through that release's maintenance reader, without creating, registering, migrating,
+or repairing any store. The supplied file must be consolidated with no WAL, SHM,
+or journal siblings. JSON uses `openclaw.agent-schema-preflight.v1`; only `exact`
+is compatibility proof. Other outcomes exit nonzero and require no writes.
+
+Shared-state preflight cannot validate agent databases. Older retained payloads
+without `preflight-agent` remain unsupported; installing a newer CLI elsewhere
+does not make those payloads compatible. Runtime/package identity and serving
+health are separate checks from database compatibility. A successful read-only
+preflight does not authorize checkpoint replay or replacement of live databases.

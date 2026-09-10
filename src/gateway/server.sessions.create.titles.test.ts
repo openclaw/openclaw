@@ -5,7 +5,11 @@ import { waitForFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  interruptSessionWorkAdmissions,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+} from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -40,6 +44,102 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
 });
+
+test.each(["keep", "delete"] as const)(
+  "names a remote session without blocking placement or deletion (%s)",
+  async (outcome) => {
+    const naming = createDeferredCore<string>();
+    titleMocks.generate.mockReturnValue(naming.promise);
+    const { storePath } = await createSessionStoreDir();
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set(["title-listener"]),
+      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+    };
+    let key: string | undefined;
+    try {
+      const created = await directSessionReq<{ key: string; runStarted: boolean }>(
+        "sessions.create",
+        {
+          agentId: "main",
+          repository: { url: "https://github.com/openclaw/openclaw.git" },
+          titleSource: "Explain how the updater safely rolls back a failed release",
+        },
+        { ...controlUiClient, context },
+      );
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(created.payload?.runStarted).toBe(false);
+      key = created.payload!.key;
+      await vi.waitFor(() => expect(titleMocks.generate).toHaveBeenCalledOnce());
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.displayName,
+      ).toBeUndefined();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      // Cloud dispatch uses this drain before provisioning; optional naming cannot hold it.
+      expect(
+        await interruptSessionWorkAdmissions({
+          scope: storePath,
+          identities: [key],
+          timeoutMs: 100,
+        }),
+      ).toBe(true);
+      if (outcome === "delete") {
+        const deleted = await directSessionReq<{ deleted: boolean }>("sessions.delete", { key });
+        expect(deleted.ok, JSON.stringify(deleted.error)).toBe(true);
+        expect(deleted.payload?.deleted).toBe(true);
+      }
+      naming.resolve("Explain safe updater rollback");
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      if (outcome === "delete") {
+        expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+        return;
+      }
+      await vi.waitFor(() =>
+        expect(
+          loadSessionEntry({ agentId: "main", sessionKey: key!, storePath })?.displayName,
+        ).toBe("Explain safe updater rollback"),
+      );
+      await vi.waitFor(() =>
+        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({ sessionKey: key, reason: "chat.title" }),
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      naming.resolve("Explain safe updater rollback");
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await settleWorkspaceRuns(context, storePath, key);
+    }
+  },
+);
+
+test.each(["adopted", "incognito"] as const)(
+  "creation title input leaves an %s session unnamed",
+  async (kind) => {
+    const { storePath } = await createSessionStoreDir();
+    const key = "agent:main:dashboard:adopted-title";
+    const params = { agentId: "main", ...(kind === "incognito" ? { incognito: true } : { key }) };
+    const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
+    if (kind === "adopted") {
+      expect((await directSessionReq("sessions.create", params, client)).ok).toBe(true);
+    }
+    const result = await directSessionReq<{ key: string }>(
+      "sessions.create",
+      { ...params, titleSource: "A different task must not name this existing conversation" },
+      client,
+    );
+    expect(result.ok, JSON.stringify(result.error)).toBe(true);
+    await settleWorkspaceRuns({ chatAbortControllers: new Map() }, storePath, key);
+    expect(titleMocks.generate).not.toHaveBeenCalled();
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: result.payload!.key, storePath })
+        ?.displayName,
+    ).toBeUndefined();
+  },
+);
 
 test("successful naming survives setup failure and is shared with discussion open and retry", async () => {
   const naming = createDeferredCore<string>();

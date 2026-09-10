@@ -45,6 +45,20 @@ still does not invoke a discovery-only engine factory. `dispose()` must not dele
 durable state or disable another registration. Existing raw loader and Gateway
 lifetimes do not gain automatic disposal: keep their `cleanup(ctx)` behavior.
 
+Prepared model runtimes for agent runs also own fresh model-selected registrations.
+They use the same discovery registration mode and plugin selection, but fresh
+registrations bypass the global registry cache. Warm callers share their prepared
+generation. Registration resources remain held through admitted work and cleanup;
+`dispose()` runs after the final claim releases, including any bounded idle
+retention between runs.
+
+Creating a configured or standalone publication does not enable this ownership.
+Existing root registries and raw SDK host registrations keep their original owner;
+borrowing an already managed generation preserves that source's ownership.
+The shared database behind `api.runtime.state` keyed and blob stores remains
+process-owned. A registration's disposer must not close that database or delete
+its durable rows.
+
 Image and music generation also own fresh registrations acquired by
 `api.runtime.imageGeneration.generate(...)` and
 `api.runtime.musicGeneration.generate(...)`. They wait for the provider's complete
@@ -68,7 +82,7 @@ These operations retain managed registrations and preserve raw host ownership.
 Configured fallback catalogs stay separate from direct preference and override
 lookups. Returned audio buffers outlive registration disposal; standard TTS
 transcodes and saves those completed buffers after releasing the provider. The
-separate synchronous speech lookup and request-preparation APIs keep their
+separate synchronous speech lookup and directive-parsing APIs keep their
 existing caller lifetime; streaming speech is not part of this finite operation.
 
 Streaming speech owns its provider registrations until stream cleanup finishes.
@@ -80,6 +94,15 @@ and explicit release start source cancellation and provider cleanup before
 joining both, including tracked producer work. Release also handles an unopened
 stream. Existing raw host registrations keep their host lifetime.
 
+`api.runtime.tts.prepareTtsRequest(...)` can return opaque provider overrides for
+later synthesis. Preparation retains borrowed managed registrations
+until the SDK host closes, even if the original inspection is released first.
+Repeated preparation from the same source shares the host claim. Raw loader and
+Gateway registrations keep their existing lifetime and cache reuse; preparation
+does not create a fresh registration for each utterance. The host joins tracked
+preparation work before releasing its claims, including work started by a failed
+projection.
+
 For `image_generate`, `music_generate`, and `video_generate` tools prepared from an owned inspection,
 resources remain held through preflight and, once accepted, through generation, media saving, and
 any rollback. A `started` result acknowledges acceptance; it does not mean the
@@ -87,6 +110,11 @@ work or cleanup has finished. If the original inspection retires during
 preflight, new task admission is rejected. Prepare tools from the current provider
 setup before retrying.
 An already accepted task keeps its captured resources until its work settles.
+When the prepared view copies callbacks from another managed registration, that
+source remains available through the task and the prepared view's final disposers,
+including cleanup already started by rollback. Final resource release awaits the
+borrowed source's cleanup and reports disposal failures. These physical holds do
+not restore a retired registration's authority to accept new work.
 Raw prepared registries retain their existing host lifetime; this does not enable
 automatic physical disposal for all prepared runtimes.
 
@@ -218,7 +246,10 @@ Use the grouped namespaces for new plugin code:
 - `api.lifecycle.registerRuntimeLifecycle(...)`
 
 The equivalent flat methods remain available as deprecated compatibility
-aliases for existing plugins. Do not add new plugin code that calls
+aliases for existing plugins. The compatibility registry deprecated them on
+2026-07-25 with a `removeAfter` date of 2026-10-01; see the
+[removal timeline](/plugins/sdk-migration/removal-timeline). Do not add new
+plugin code that calls
 `api.registerSessionExtension`, `api.enqueueNextTurnInjection`,
 `api.registerControlUiDescriptor`, `api.registerRuntimeLifecycle`,
 `api.registerAgentEventSubscription`, `api.emitAgentEvent`,

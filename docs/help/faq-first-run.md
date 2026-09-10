@@ -85,6 +85,7 @@ still resolves. Each entry points at the page that now holds the content.
 ## Related
 
 - [FAQ](/help/faq) - the main FAQ (models, sessions, gateway, security, more)
+- [Models FAQ](/help/faq-models) - model defaults, selection, aliases, switching, failover, and auth profiles
 - [Install overview](/install)
 - [Getting started](/start/getting-started)
 - [Troubleshooting](/help/troubleshooting)

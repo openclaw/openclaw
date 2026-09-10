@@ -15,15 +15,18 @@ import {
   INTERNAL_AGENT_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
   INTERNAL_PLUGIN_PATH_PARAM,
+  INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
   INTERNAL_SESSION_PATH_PARAM,
   INTERNAL_WORKBOARD_PATH_PARAM,
+  isLegacyPluginsDiscoveryPath,
   memoryTabFromPath,
   pathForAgentPanel,
   pathForRoute,
+  pluginCatalogIdFromPath,
+  pluginSettingsIdFromPath,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
-  pluginsHubTabFromPath,
   routeIdFromPath,
   sessionRouteNamespaceFromPath,
   setPluginTabSlugs,
@@ -59,13 +62,13 @@ import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
-import { page as pluginsPage } from "./pages/plugins/route.ts";
+import { pages as pluginsPages } from "./pages/plugins/route.ts";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
-import { page as skillsPage } from "./pages/skills/route.ts";
+import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as tasksPage } from "./pages/tasks/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
 import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
@@ -119,8 +122,8 @@ const APP_ROUTE_TREE = [
   debugPage,
   logsPage,
   skillWorkshopPage,
-  skillsPage,
-  pluginsPage,
+  ...skillsPages,
+  ...pluginsPages,
   cronPage,
   tasksPage,
   devicePage,
@@ -197,9 +200,14 @@ function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute 
   if (memoryTab && memoryTab !== "overview") {
     return ["memory", INTERNAL_MEMORY_PATH_PARAM, pathname];
   }
-  const pluginsTab = pluginsHubTabFromPath(pathname, basePath);
-  if (pluginsTab === "discover") {
+  if (isLegacyPluginsDiscoveryPath(pathname, basePath)) {
     return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
+  }
+  if (pluginCatalogIdFromPath(pathname, basePath)) {
+    return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
+  }
+  if (pluginSettingsIdFromPath(pathname, basePath)) {
+    return ["plugin-settings", INTERNAL_PLUGIN_SETTINGS_PATH_PARAM, pathname];
   }
   const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
   return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;

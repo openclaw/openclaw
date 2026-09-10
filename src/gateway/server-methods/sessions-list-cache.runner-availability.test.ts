@@ -47,10 +47,16 @@ function result(status: "available" | "offline"): SessionsListResult {
 
 it("invalidates completed sessions.list identity after a worker environment inventory mutation", async () => {
   let inventoryVersion = 0;
-  let environment = { providerId: "machine0", profileId: "original" };
+  let machineShapeVersion = 0;
+  let environment: { providerId: string; profileId: string; machine?: { cpu: number } } = {
+    providerId: "machine0",
+    profileId: "original",
+  };
   const workerEnvironmentService = {
     get: () => environment,
     inventoryVersion: () => inventoryVersion,
+    readMachineShape: () => undefined,
+    machineShapeVersion: () => machineShapeVersion,
   };
   const context = { workerEnvironmentService } as unknown as GatewayRequestContext;
   const config: OpenClawConfig = {};
@@ -85,6 +91,14 @@ it("invalidates completed sessions.list identity after a worker environment inve
   expect(refreshed).not.toBe(original);
   expect(await requestList()).toBe(refreshed);
   expect(run).toHaveBeenCalledTimes(2);
+
+  environment = { ...environment, machine: { cpu: 4 } };
+  machineShapeVersion += 1;
+  const enriched = await requestList();
+  expect(enriched.sessions[0]?.placement).toMatchObject({ machine: { cpu: 4 } });
+  expect(enriched).not.toBe(refreshed);
+  expect(await requestList()).toBe(enriched);
+  expect(run).toHaveBeenCalledTimes(3);
 });
 
 it("does not publish old in-flight runner availability across a version transition", async () => {

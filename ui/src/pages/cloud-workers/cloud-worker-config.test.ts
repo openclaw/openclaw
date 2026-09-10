@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyMergePatch } from "../../../../src/config/merge-patch.js";
+import { CloudWorkersConfigSchema } from "../../../../src/config/zod-schema.cloud-workers.js";
 import {
   buildCloudWorkerDeletePatch,
   buildCloudWorkerUpsertPatch,
@@ -68,6 +69,10 @@ describe("cloud worker settings state", () => {
         ttl: "24h",
         idleTimeout: "60m",
         setup: "install-node",
+        setupEnv: "QA_WORKER_FLAG",
+        warmImage: "auto",
+        readyWorkers: "",
+        suspendAfter: "30m",
         desktop: true,
         binary: "/opt/crabbox",
       },
@@ -85,11 +90,25 @@ describe("cloud worker settings state", () => {
     ["backend", { backend: " " }],
     ["target", { target: "x".repeat(65) }],
     ["target", { target: " linux " }],
+    ...["macos", "windows/wsl2", "windows/normal"].map(
+      (target) => ["warmImage", { target, warmImage: "on" }] as const,
+    ),
     ["machineClass", { machineClass: "" }],
     ["machineClass", { machineClass: "x".repeat(129) }],
     ["ttl", { ttl: "tomorrow" }],
     ["idleTimeout", { idleTimeout: "0m" }],
     ["binary", { binary: "relative/crabbox" }],
+    ...["-1", "1.5", "Infinity", "9007199254740992"].map(
+      (readyWorkers) => ["readyWorkers", { readyWorkers }] as const,
+    ),
+    ...[
+      "A A",
+      "A,1BAD",
+      "A-B",
+      "CRABBOX_ENV_ALLOW",
+      Array.from({ length: 17 }, (_, index) => `VAR_${index}`).join(","),
+    ].map((setupEnv) => ["setupEnv", { setup: "true", setupEnv }] as const),
+    ["setupEnvRequiresSetup", { setupEnv: "BUILD_FLAG" }],
   ] as const)("returns %s for an invalid add draft", (expected, patch) => {
     const draft = {
       ...createCloudWorkerDraft(),
@@ -110,6 +129,7 @@ describe("cloud worker settings state", () => {
       ttl: "8h",
       idleTimeout: "45m",
       setup: "",
+      setupEnv: "",
       desktop: false,
       binary: "",
     };
@@ -121,6 +141,8 @@ describe("cloud worker settings state", () => {
             production: {
               provider: "crabbox",
               install: "npm",
+              readyWorkers: null,
+              suspendAfter: "30m",
               settings: {
                 provider: "hetzner",
                 target: "linux",
@@ -129,6 +151,7 @@ describe("cloud worker settings state", () => {
                 idleTimeout: "45m",
                 setup: null,
                 setupEnv: null,
+                warmImage: null,
                 desktop: null,
                 binary: null,
               },
@@ -187,12 +210,12 @@ describe("cloud worker settings state", () => {
           },
         },
       });
-      expect(built.replacePaths).toEqual([]);
+      expect(built.replacePaths).toEqual(["cloudWorkers.profiles.production.settings.setupEnv"]);
     },
   );
 
   it.each([{ setupEnv: undefined }, { setupEnv: [] }])(
-    "keeps empty setup environment unchanged ($setupEnv)",
+    "omits empty setup environment ($setupEnv)",
     ({ setupEnv }) => {
       const { setupEnv: _setupEnv, ...settings } = configuredProfile.settings;
       const existingSettings = { ...settings, ...(setupEnv ? { setupEnv } : {}) };
@@ -200,13 +223,15 @@ describe("cloud worker settings state", () => {
       const config = { cloudWorkers: { profiles: { production: profile } } };
       const draft = { ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]), setup: "" };
       const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
-      const { setup: _setup, ...retainedSettings } = existingSettings;
+      const { setup: _setup, setupEnv: _emptyEnv, ...retainedSettings } = existingSettings;
       expect(applyMergePatch(config, built.patch)).toEqual({
         cloudWorkers: {
           profiles: { production: { ...profile, settings: retainedSettings } },
         },
       });
-      expect(built.replacePaths).toEqual([]);
+      expect(built.replacePaths).toEqual(
+        setupEnv ? ["cloudWorkers.profiles.production.settings.setupEnv"] : [],
+      );
     },
   );
 
@@ -228,6 +253,7 @@ describe("cloud worker settings state", () => {
   ])("rejects an edit after its authoritative profile $name", ({ replacement }) => {
     const config = { cloudWorkers: { profiles: { production: replacement } } };
     const draft = createCloudWorkerDraft({
+      ...createCloudWorkerDraft(),
       id: "production",
       providerId: "crabbox",
       install: "bundle",
@@ -286,6 +312,8 @@ describe("cloud worker settings state", () => {
             "build-fleet": {
               provider: "crabbox",
               install: "bundle",
+              readyWorkers: null,
+              suspendAfter: null,
               settings: {
                 provider: "hetzner",
                 target: null,
@@ -293,6 +321,8 @@ describe("cloud worker settings state", () => {
                 ttl: "8h",
                 idleTimeout: "45m",
                 setup: null,
+                setupEnv: null,
+                warmImage: null,
                 desktop: null,
                 binary: null,
               },
@@ -303,6 +333,153 @@ describe("cloud worker settings state", () => {
       replacePaths: [],
     });
     expect(applyMergePatch(config, built.patch)).toMatchObject(config);
+  });
+
+  it.each([
+    ["+1h", false],
+    [".5h", false],
+    ["1m1us", false],
+    ["59s", false],
+    ["60s", true],
+    ["45m", true],
+    ["2h", true],
+    ["1d", true],
+    ["1H", true],
+  ] as const)("matches the suspendAfter schema for %s", (suspendAfter, accepted) => {
+    const draft = {
+      ...createCloudWorkerDraft(),
+      id: "test",
+      backend: "aws",
+      machineClass: "standard",
+      suspendAfter,
+    };
+    expect(
+      CloudWorkersConfigSchema.safeParse({
+        profiles: { test: { provider: "crabbox", suspendAfter } },
+      }).success,
+    ).toBe(accepted);
+    expect(validateCloudWorkerDraft(draft, {}, null)).toBe(accepted ? null : "suspendAfter");
+  });
+
+  it.each(["auto", "on", "off"] as const)(
+    "patches warm images as %s and replaces setup names",
+    (warmImage) => {
+      const config = {
+        cloudWorkers: {
+          profiles: {
+            production: {
+              ...configuredProfile,
+              readyWorkers: 3,
+              settings: { ...configuredProfile.settings, warmImage: true },
+            },
+          },
+        },
+      };
+      const draft = {
+        ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]),
+        warmImage,
+        setupEnv: "BUILD_FLAG, CACHE_MODE\nEXTRA",
+        readyWorkers: "0",
+        suspendAfter: "2h",
+      };
+      const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
+      const merged = applyMergePatch(config, built.patch);
+      expect(merged).toHaveProperty("cloudWorkers.profiles.production.readyWorkers", 0);
+      expect(merged).toHaveProperty("cloudWorkers.profiles.production.suspendAfter", "2h");
+      expect(merged).toHaveProperty("cloudWorkers.profiles.production.settings.setupEnv", [
+        "BUILD_FLAG",
+        "CACHE_MODE",
+        "EXTRA",
+      ]);
+      expect(built.replacePaths).toEqual(["cloudWorkers.profiles.production.settings.setupEnv"]);
+      if (warmImage === "auto") {
+        expect(merged).not.toHaveProperty("cloudWorkers.profiles.production.settings.warmImage");
+      } else {
+        expect(merged).toHaveProperty(
+          "cloudWorkers.profiles.production.settings.warmImage",
+          warmImage === "on",
+        );
+      }
+    },
+  );
+
+  it.each(["", "linux", "macos", "windows/wsl2", "windows/normal"])(
+    "validates warm images after changing an existing profile target to %s",
+    (target) => {
+      const config = { cloudWorkers: { profiles: { production: configuredProfile } } };
+      for (const warmImage of ["auto", "on", "off"] as const) {
+        const draft = {
+          ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]),
+          target,
+          warmImage,
+        };
+        const built = buildCloudWorkerUpsertPatch(config, draft, "production");
+        if (warmImage === "on" && target && target !== "linux") {
+          expect(built).toEqual({ error: "warmImage" });
+        } else {
+          expect(requirePatch(built).patch).toHaveProperty(
+            "cloudWorkers.profiles.production.settings.warmImage",
+            warmImage === "auto" ? null : warmImage === "on",
+          );
+        }
+      }
+    },
+  );
+
+  it("accepts sixteen setup names without dropping or reordering them", () => {
+    const names = Array.from({ length: 16 }, (_, index) => `BUILD_${index}`);
+    const draft = {
+      ...createCloudWorkerDraft(),
+      id: "build",
+      backend: "aws",
+      machineClass: "standard",
+      setup: "true",
+      setupEnv: names.join(" , "),
+    };
+    const built = requirePatch(buildCloudWorkerUpsertPatch({}, draft, null));
+    expect(built.patch).toHaveProperty("cloudWorkers.profiles.build.settings.setupEnv", names);
+  });
+
+  it("removes cleared advanced fields while retaining the rest of the profile", () => {
+    const profile = {
+      ...configuredProfile,
+      readyWorkers: 2,
+      settings: { ...configuredProfile.settings, warmImage: false },
+    };
+    const config = { cloudWorkers: { profiles: { production: profile } } };
+    const draft = {
+      ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]),
+      readyWorkers: "",
+      suspendAfter: "",
+      warmImage: "auto" as const,
+      setupEnv: "",
+    };
+    const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
+    expect(built.patch).toMatchObject({
+      cloudWorkers: {
+        profiles: {
+          production: {
+            readyWorkers: null,
+            suspendAfter: null,
+            settings: { warmImage: null, setupEnv: null },
+          },
+        },
+      },
+    });
+    const merged = applyMergePatch(config, built.patch);
+    for (const path of [
+      "readyWorkers",
+      "suspendAfter",
+      "settings.warmImage",
+      "settings.setupEnv",
+    ]) {
+      expect(merged).not.toHaveProperty(`cloudWorkers.profiles.production.${path}`);
+    }
+    expect(merged).toHaveProperty(
+      "cloudWorkers.profiles.production.settings.opaque",
+      configuredProfile.settings.opaque,
+    );
+    expect(merged).toHaveProperty("cloudWorkers.profiles.production.install", "npm");
   });
 
   it("deletes only the target and its project defaults with exact array intent", () => {

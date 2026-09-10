@@ -22,44 +22,48 @@ export async function rewriteTranscriptMessageAtAnchor<TMessage>(
   rewriteMessage: (message: unknown) => TMessage | undefined,
 ): Promise<TranscriptMessageAnchorRewriteResult<TMessage> | null> {
   const resolved = resolveSqliteTranscriptScope(anchor);
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    let result: TranscriptMessageAnchorRewriteResult<TMessage> | null = null;
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        const row = executeSqliteQueryTakeFirstSync(
-          database.db,
-          getSessionKysely(database.db)
-            .selectFrom("transcript_events")
-            .select("event_json")
-            .where("session_id", "=", resolved.sessionId)
-            .where("seq", "=", anchor.rawSeq),
-        );
-        if (!row) {
-          return;
-        }
-        const event = JSON.parse(row.event_json) as unknown;
-        if (!isRecord(event) || event.type !== "message" || event.id !== anchor.entryId) {
-          return;
-        }
-        const message = rewriteMessage(event.message);
-        if (message === undefined) {
-          return;
-        }
-        rewriteSqliteTranscriptEventRowsInTransaction(database, resolved, [
-          {
-            event: { ...event, message },
-            expectedEventJson: row.event_json,
-            seq: anchor.rawSeq,
-          },
-        ]);
-        const generation = readTranscriptGenerationInTransaction(database, resolved.sessionId);
-        if (generation) {
-          result = { generation, message };
-        }
-      },
-      toDatabaseOptions(resolved),
-      { operationLabel: "session.transcript.message-rewrite" },
-    );
-    return result;
-  });
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      let result: TranscriptMessageAnchorRewriteResult<TMessage> | null = null;
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          const row = executeSqliteQueryTakeFirstSync(
+            database.db,
+            getSessionKysely(database.db)
+              .selectFrom("transcript_events")
+              .select("event_json")
+              .where("session_id", "=", resolved.sessionId)
+              .where("seq", "=", anchor.rawSeq),
+          );
+          if (!row) {
+            return;
+          }
+          const event = JSON.parse(row.event_json) as unknown;
+          if (!isRecord(event) || event.type !== "message" || event.id !== anchor.entryId) {
+            return;
+          }
+          const message = rewriteMessage(event.message);
+          if (message === undefined) {
+            return;
+          }
+          rewriteSqliteTranscriptEventRowsInTransaction(database, resolved, [
+            {
+              event: { ...event, message },
+              expectedEventJson: row.event_json,
+              seq: anchor.rawSeq,
+            },
+          ]);
+          const generation = readTranscriptGenerationInTransaction(database, resolved.sessionId);
+          if (generation) {
+            result = { generation, message };
+          }
+        },
+        toDatabaseOptions(resolved),
+        { operationLabel: "session.transcript.message-rewrite" },
+      );
+      return result;
+    },
+    "session.transcript.message-rewrite",
+  );
 }

@@ -91,6 +91,22 @@ openclaw doctor --lint --json
 openclaw update cleanup --dry-run
 ```
 
+<a id="automatic-checkpoint-recovery" />
+
+### Full-state recovery requires a backup
+
+`openclaw update` does not create or replay a full-state checkpoint. It can
+restore a retained package only under the compatibility checks below. It cannot
+reverse a database migration by replacing the package. Use a verified pre-update
+backup with its matching release when migration has made state incompatible.
+
+An existing pending checkpoint-recovery record blocks further mutable updates.
+The updater reports that it is unsupported and leaves its records, backups, and
+state unchanged. Do not remove or alter retained artifacts to force a clean
+status, and do not use `update finalize` to bypass the refusal. Preserve the
+reported locations for a compatible recovery implementation or an independent
+verified backup. An interrupted or refused restore is not a successful rollback.
+
 ### Automatic schema-neutral rollback
 
 If a newly activated package fails verification, `openclaw update` compares the
@@ -140,7 +156,12 @@ or stopped from the latest service observation, even when a running candidate di
 not pass verification. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
 Automatic triage never follows a verified rollback; it runs only when the update
-ends failed.
+ends failed. In an interactive terminal, you can choose **Diagnose update failure**,
+**Report update failure**, or **Exit**, which is selected by default. Reporting
+shows the sanitized preview and requires separate confirmation before issue
+creation. Skipping or cancelling does not start diagnosis or submit a report.
+JSON, `--yes`, non-interactive, and managed-service handoff invocations do not
+show this menu after rollback.
 
 If the config file changed after the activation Doctor pass or the databases are
 not schema-neutral, rollback is refused with
@@ -165,8 +186,8 @@ A refusal before the live swap restarts the unchanged Gateway and preserves the 
 
 ### Before updating: create a verified backup
 
-`openclaw update` preserves an automatic pre-update config copy, but it does not
-create a full state recovery point. Before a significant update, create one
+`openclaw update` preserves an automatic pre-update config copy, not a full-state
+recovery point. Before a significant update, create an independent verified backup
 explicitly:
 
 ```bash

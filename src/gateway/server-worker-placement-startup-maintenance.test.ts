@@ -97,6 +97,7 @@ function createMaintenanceRuntime(params: {
       goneEnvironmentIds.has(environmentId)
         ? { state: "destroyed" as const, leaseId: null }
         : { state: "attached" as const, leaseId: "cloud-lease" },
+    subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
     installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
     start: vi.fn(),
     stop,

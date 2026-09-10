@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import {
   createGatewayKernel,
   gatewayKernelLogs,
@@ -45,6 +46,8 @@ async function startGatewayServerWithSdkHost(
     deferEarlyRuntime: true,
     sdkResourceHost,
   });
+  // A Gateway restart must refresh restored skill catalogs, even in the same process.
+  bumpSkillsSnapshotVersion({ reason: "manual" });
   if (!gatewayKernel.minimalTestGateway) {
     // Start the Keychain read early so it overlaps bootstrap; post-attach awaits the
     // shared promise before plugins can use TLS.

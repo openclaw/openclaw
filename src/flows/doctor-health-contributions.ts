@@ -298,6 +298,13 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
         recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
         legacySessionSurfaces,
       });
+      recordDoctorHealthWarnings(
+        ctx,
+        [],
+        migrated.stepReceipts.flatMap((receipt) =>
+          receipt.outcome === "warning" ? receipt.warnings : [],
+        ),
+      );
       if (migrated.changes.length > 0) {
         note(migrated.changes.join("\n"), "Doctor changes");
       }

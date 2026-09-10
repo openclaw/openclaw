@@ -111,6 +111,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   };
   timeoutMs?: number;
   signal?: AbortSignal;
+  deadlineAtMs?: number;
   resolveRemainingTimeoutMs?: () => number | undefined;
   onNodeCommandDispatched?: () => void;
   nodeInvokeStream?: GatewayNodeInvokeStream;
@@ -324,6 +325,12 @@ export async function applyPluginNodeInvokePolicy(params: {
           ? Math.min(requestedTimeoutMs, remainingTimeoutMs)
           : remainingTimeoutMs
         : requestedTimeoutMs;
+    const deadlineAtMs =
+      params.deadlineAtMs === undefined
+        ? undefined
+        : typeof requestedTimeoutMs === "number" && requestedTimeoutMs > 0
+          ? Math.min(params.deadlineAtMs, performance.now() + requestedTimeoutMs)
+          : params.deadlineAtMs;
     // Pairing and policy checks above may await. Revalidate the exact runtime
     // capability at the final transport handoff so closure wins that race.
     sessionAuthority?.assertCurrent();
@@ -432,7 +439,10 @@ export async function applyPluginNodeInvokePolicy(params: {
     };
     const res = params.privateTransport
       ? await params.privateTransport.invoke(request)
-      : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, request);
+      : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, {
+          ...request,
+          deadlineAtMs,
+        });
     if (!res.ok) {
       if (nodeCommandDispatched) {
         recordNodeDecision({

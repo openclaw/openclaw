@@ -211,8 +211,7 @@ To go fully dark, disable the existing startup update check:
 This stops both tiers and every automatic update request: no update request, no
 feature statistics, and no update notice, even when `update.auto.enabled` is
 `true`. Setting `OPENCLAW_NO_AUTO_UPDATE=1` also prevents automatic update
-requests and applies. Explicit update commands remain available when you choose
-to run them.
+requests. Explicit update commands remain available when you choose to run them.
 
 See [Configuration reference](/gateway/config-observability#telemetry) for
 the full `telemetry` configuration and

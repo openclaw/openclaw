@@ -56,14 +56,7 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
   });
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer web search",
-    targetIds: scopedTargets.targetIds,
-    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
-    ...(scopedTargets.forcedActivePaths
-      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
-      : {}),
-    ...(scopedTargets.optionalActivePaths
-      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
-      : {}),
+    ...scopedTargets,
     config: rawConfig,
   });
   const result = await runWebSearch({
@@ -94,14 +87,7 @@ async function runWebFetchCommand(params: { url: string; provider?: string; form
   });
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer web fetch",
-    targetIds: scopedTargets.targetIds,
-    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
-    ...(scopedTargets.forcedActivePaths
-      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
-      : {}),
-    ...(scopedTargets.optionalActivePaths
-      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
-      : {}),
+    ...scopedTargets,
     config: rawConfig,
   });
   const resolved = resolveWebFetchDefinition({

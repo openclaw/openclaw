@@ -311,7 +311,10 @@ describe("kitchen-sink plugin assertions", () => {
 
   it("accepts published full-surface installs with stable diagnostic canaries", () => {
     const result = runAssertInstalled({
-      diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
+      diagnostics: diagnosticErrors([
+        ...REQUIRED_FULL_DIAGNOSTIC_CANARIES,
+        "memory prompt preparation registration missing prepare function",
+      ]),
     });
 
     expect(result.status).toBe(0);

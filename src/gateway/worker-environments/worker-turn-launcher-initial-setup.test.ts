@@ -24,6 +24,8 @@ import {
   SESSION_ID,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
+  database,
+  dispatchInitialWorkerPlacement,
   createWorkerSessionTurnPlacementProvider,
   placements,
   root,
@@ -40,44 +42,23 @@ async function setup(executionMode: "worker-turn" | "remote-exec", pauseAt = "sy
   let failure: Error | undefined;
   const dispatch = coordinateWorkerPlacementDispatch(
     createCoordinatorTestService({
-      dispatch: async (_request, report) => {
-        let placement = placements.startDispatch({ ...sessionTarget, executionMode });
-        const publish = async () => {
-          report?.(placement);
-          if (placement.state === pauseAt) {
-            paused.resolve();
-            await finish.promise;
-            if (failure) {
-              throw failure;
+      dispatch: async (_request, report) =>
+        await dispatchInitialWorkerPlacement({
+          database,
+          placements,
+          identity: { ...sessionTarget, executionMode },
+          workspace: root,
+          onTransition: async (placement) => {
+            report?.(placement);
+            if (placement.state === pauseAt) {
+              paused.resolve();
+              await finish.promise;
+              if (failure) {
+                throw failure;
+              }
             }
-          }
-        };
-        await publish();
-        for (const step of [
-          { to: "provisioning", patch: { environmentId: ENVIRONMENT_ID } },
-          { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
-          {
-            to: "starting",
-            patch: {
-              remoteWorkspaceDir: root,
-              workspaceBaseManifestRef: MANIFEST_REF,
-            },
           },
-          { to: "active", patch: { activeOwnerEpoch: OWNER_EPOCH } },
-        ] as const) {
-          placement = placements.transition({
-            sessionId: SESSION_ID,
-            from: placement.state,
-            expectedGeneration: placement.generation,
-            ...step,
-          });
-          await publish();
-        }
-        if (placement.state !== "active") {
-          throw new Error("fixture did not activate");
-        }
-        return placement;
-      },
+        }),
     }),
     (_request, run) => run(),
   );

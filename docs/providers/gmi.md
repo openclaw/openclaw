@@ -44,7 +44,15 @@ Then run:
 openclaw onboard --auth-choice gmi-api-key
 ```
 
-Non-interactive setups can pass `--gmi-api-key <key>`, or set:
+For scripted or CI installs, pass everything on the command line:
+
+```bash
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice gmi-api-key \
+  --gmi-api-key "$GMI_API_KEY"
+```
+
+Or set the key in the environment instead:
 
 ```bash
 export GMI_API_KEY="<your-gmi-api-key>" # pragma: allowlist secret

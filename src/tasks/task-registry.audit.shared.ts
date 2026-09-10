@@ -51,6 +51,22 @@ export function createEmptyTaskAuditSummary(): TaskAuditSummary {
   };
 }
 
+export function summarizeAuditFindings<Code extends string>(
+  findings: Iterable<{ code: Code; severity: TaskAuditSeverity }>,
+  summary: Omit<TaskAuditSummary, "byCode"> & { byCode: Record<Code, number> },
+) {
+  for (const finding of findings) {
+    summary.total += 1;
+    summary.byCode[finding.code] += 1;
+    if (finding.severity === "error") {
+      summary.errors += 1;
+    } else {
+      summary.warnings += 1;
+    }
+  }
+  return summary;
+}
+
 export function compareTaskAuditFindingSortKeys(
   left: TaskAuditComparableFinding,
   right: TaskAuditComparableFinding,

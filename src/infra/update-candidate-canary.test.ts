@@ -102,6 +102,79 @@ afterEach(async () => {
 });
 
 describe("update candidate canary", () => {
+  it("keeps verified readiness and records a warning when rehearsal cleanup fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    const remove = fs.rm.bind(fs);
+    let retained: string | undefined;
+    const denial = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (
+        typeof target === "string" &&
+        path.basename(target).startsWith("openclaw-update-canary-")
+      ) {
+        retained = target;
+        throw new Error("synthetic cleanup permission denied");
+      }
+      return remove(target, options);
+    });
+    const onStep = vi.fn();
+    try {
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 3000,
+        onStep,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({ name: "candidate gateway canary", exitCode: 0 }),
+      );
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "candidate rehearsal cleanup",
+          advisory: expect.objectContaining({
+            message: expect.stringContaining("synthetic cleanup permission denied"),
+          }),
+        }),
+      );
+      expect(onStep).toHaveBeenCalledWith(result.steps.at(-1));
+      expect(result.steps.at(-1)?.advisory?.message).toContain(retained);
+    } finally {
+      denial.mockRestore();
+      if (retained) {
+        await remove(retained, { recursive: true, force: true });
+      }
+    }
+  });
+  it.each([undefined, "unknown-owned-v2"])(
+    "keeps unsupported checkpoint capability out of admission (%s)",
+    async (candidateMutation) => {
+      runtimeContract = {
+        state: 2,
+        agent: 3,
+        executorDelegation: "pid-start-v1",
+        candidateMutation,
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ status: "started", ready: true })),
+      );
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 3000,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
+      expect(result).not.toHaveProperty("checkpointContinuation");
+    },
+  );
   it("reports unavailable validation when the candidate predates the migration-continuation contract", async () => {
     await fs.rm(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"));
     vi.stubGlobal(
@@ -119,6 +192,7 @@ describe("update candidate canary", () => {
     });
     expect(result).toMatchObject({ status: "ok", phase: "runtime" });
     expect(result.candidateSchemaVersions).toBeUndefined();
+    expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps).toEqual([
       expect.objectContaining({
         name: "candidate migration continuation",
@@ -133,6 +207,12 @@ describe("update candidate canary", () => {
   });
 
   it("rehearses and validates only private state before requiring started then ready, and reaps the process group", async () => {
+    runtimeContract = {
+      state: 2,
+      agent: 3,
+      executorDelegation: "pid-start-v1",
+      candidateMutation: "checkpoint-owned-v1",
+    };
     const requests: string[] = [];
     const completed: Array<{ name: string; argv: string[] }> = [];
     let startupCalls = 0;
@@ -173,6 +253,7 @@ describe("update candidate canary", () => {
     });
     expect(result.status).toBe("ok");
     expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
+    expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps.map((step) => step.name)).toEqual([
       "candidate migration rehearsal",
       "candidate doctor lint",

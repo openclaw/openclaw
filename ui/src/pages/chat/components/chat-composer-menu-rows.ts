@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 
@@ -31,7 +32,7 @@ export function renderCapabilityToggleRow(options: {
       class="agent-chat__capability-menu-item agent-chat__capability-menu-toggle"
       value=${options.value}
       type=${options.checkbox ? "checkbox" : "normal"}
-      .checked=${options.checked}
+      .checked=${live(options.checked)}
       ?disabled=${options.disabled}
       title=${options.title ?? ""}
     >

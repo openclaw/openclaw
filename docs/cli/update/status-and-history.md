@@ -47,12 +47,23 @@ gets a separate `runId`.
 
 `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
+If history cannot be read or classified, status still shows update availability
+and runtime findings. Human output explains that run status is unavailable;
+JSON includes `runStatusError` and omits the run fields. This does not mean
+there are no active or past runs, and status does not repair unreadable history.
+
+Status can reconcile an untouched, identityless legacy admission after more than
+24 hours if it remains at its initial `requested/in_progress` step and has no
+retained recovery descriptor. The row stays in history as `failed` with reason
+`legacy-driver-expired`, and status shows a retry advisory. Other history remains
+read-only.
+
 When the active row has been inactive for more than 30 minutes and its recorded
 driver is verifiably dead, status also reports `abandonedRun` with its `runId`
-and reconciliation `rule`. Status remains read-only: the stored row stays in
-`activeRun` until the Gateway or explicit repair commits the outcome.
-Identityless rows are never reconciled automatically, even when their only
-step is `requested/in_progress`. For stale identityless rows, JSON includes
+and reconciliation `rule`. For these rows, status remains read-only: the stored
+row stays in `activeRun` until the Gateway or explicit repair commits the outcome.
+Identityless rows outside the legacy-expiry shape are not reconciled automatically.
+For those stale identityless rows, JSON includes
 `staleRun` with `runId` and `guidance`; human status and Doctor preflight report
 "no activity since &lt;time&gt;; if no update is running, run `openclaw update repair`
 or start a new `openclaw update`".
@@ -75,6 +86,24 @@ Human output, chat completion notices, the Control UI update view, and the
 `openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
 means that check has not been observed.
 
+Recoverable maintenance failures appear as recorded warnings even when the update
+succeeds. Each warning names the skipped work, the cause, and a repair command.
+Doctor also shows warnings from the latest run as historical observations: a later
+repair may already have resolved them. The existing report and history size limits
+still apply.
+
+A foreground updater publishes its final result after required finalization work
+and its local executor have settled. A late ownership or release failure returns
+an error instead of publishing an earlier success. Existing terminal history is
+not overwritten.
+
+Successful installation verification does not imply that obsolete package backups
+were deleted. If the package owner confirms that only obsolete-backup cleanup is
+pending, JSON, history, and human reports include a warning with the retained path
+and follow-up guidance. Unverified recovery, unreadable backup state, and unknown
+completion failures remain errors. Inspect retained paths before manually removing
+obsolete backups; unresolved recovery material is not eligible for this cleanup.
+
 Gateway clients with `operator.admin` can inspect history:
 
 ```bash
@@ -86,6 +115,10 @@ openclaw gateway call update.runs.get --params '{"runId":"<run-id>"}'
 fields and adds optional `activeRun` and `lastRun` records. While a run is active,
 the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 `updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
+
+When a history request needs a read-only snapshot, the Gateway prepares it
+asynchronously so other requests can continue. The snapshot preserves the source
+database and its sidecar files.
 
 Native service-stop observations do not advance the update's recorded phase.
 If the Control UI cannot read fresh progress, it shows the read error alongside
@@ -112,8 +145,8 @@ remain protected, and automatic reconciliation stays disabled for that run.
 Heartbeat write errors warn once per driver run and do not interrupt a running
 build, install, or finalization phase.
 
-Historical rows without a driver identity require explicit `update repair` or
-a new operator-started `openclaw update`.
+Historical identityless rows outside the legacy-expiry shape require explicit
+`update repair` or a new operator-started `openclaw update`.
 An old `requested` row alone does not prove that its updater exited: the 2026.9.2
 updater can still be waiting on package-manager or registry preflight before it
 records its first staging step. Stop an unrecorded old updater before explicitly

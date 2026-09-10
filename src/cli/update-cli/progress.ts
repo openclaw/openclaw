@@ -4,7 +4,7 @@ import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunPhase } from "../../infra/update-run-record.js";
+import type { UpdateRunPhase, UpdateRunRecord } from "../../infra/update-run-record.js";
 import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
@@ -20,16 +20,29 @@ import type { UpdateCommandOptions } from "./shared.js";
 
 // One command owns each observer. The final report flushes it before printing so
 // a fast final transition cannot appear after the report or leave a spinner active.
-const activeUpdateProgress = new Map<string, () => void>();
+const activeUpdateProgress = new Map<string, (record: UpdateRunRecord | undefined) => void>();
 const UPDATE_PROGRESS_POLL_MS = 250;
 
 function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
   return step.advisory !== undefined;
 }
 
+// These CLI-only callbacks can render the row just committed by their ledger owner.
+export type UpdateDisplayProgress = {
+  onHeartbeat?: UpdateStepProgress["onHeartbeat"];
+  onStepStart?: (
+    step: Parameters<NonNullable<UpdateStepProgress["onStepStart"]>>[0],
+    record?: UpdateRunRecord,
+  ) => void;
+  onStepComplete?: (
+    step: Parameters<NonNullable<UpdateStepProgress["onStepComplete"]>>[0],
+    record?: UpdateRunRecord,
+  ) => void;
+};
+
 /** Runner-facing progress callbacks plus terminal spinner cleanup. */
 type ProgressController = {
-  progress: UpdateStepProgress;
+  progress: UpdateDisplayProgress;
   stop: () => void;
   suspend: () => void;
   resume: () => void;
@@ -60,15 +73,14 @@ export function createUpdateProgress(
       timer = undefined;
     }
   };
-  const refresh = () => {
-    // Candidate migrations can advance the ledger beyond this process's reader.
-    // Step callbacks and final cleanup must respect the same fence as the timer.
-    if (observation !== "active") {
-      return undefined;
-    }
-    const record = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
-    if (!record) {
-      return undefined;
+  // Candidate migrations can advance the ledger beyond this process's reader.
+  // Step callbacks and final cleanup must respect the same fence as the timer.
+  const read = () =>
+    observation === "active" && run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
+  const renderRecord = (record: UpdateRunRecord | undefined) => {
+    // Doctor's unbound spinner does not observe ledger phases, even after a write.
+    if (observation !== "active" || !run || !record) {
+      return;
     }
     currentPhase = record.phase;
     // A child process can cross several phases between reads. Replay the recorded
@@ -86,15 +98,15 @@ export function createUpdateProgress(
     if (record.status !== "running") {
       clearTimer();
     }
-    return record;
   };
-  const flush = () => {
-    refresh();
+  const flush = (record: UpdateRunRecord | undefined) => {
+    renderRecord(record);
     stop();
   };
   const poll = () => {
     timer = undefined;
-    const record = refresh();
+    const record = read();
+    renderRecord(record);
     if (record?.status === "running") {
       // The CLI owns this poll only for its active operation; fresh-process
       // finalization and gateway verification write the same ledger row.
@@ -103,12 +115,13 @@ export function createUpdateProgress(
     }
   };
   if (run) {
-    activeUpdateProgress.set(run.runId, flush);
+    // Initial observation can throw; publish only once the caller can own cleanup.
     poll();
+    activeUpdateProgress.set(run.runId, flush);
   }
-  const progress: UpdateStepProgress = {
-    onStepStart: (step) => {
-      flush();
+  const progress: UpdateDisplayProgress = {
+    onStepStart: (step, record) => {
+      flush(record ?? read());
       const label = currentPhase ? `${currentPhase} — ${step.name}` : step.name;
       if (process.stdout.isTTY) {
         currentSpinner = spinner({ indicator: "timer" });
@@ -117,8 +130,8 @@ export function createUpdateProgress(
         defaultRuntime.log(`${label}...`);
       }
     },
-    onStepComplete: (step) => {
-      flush();
+    onStepComplete: (step, record) => {
+      flush(record ?? read());
       printStep(step);
     },
   };
@@ -142,7 +155,7 @@ export function createUpdateProgress(
     },
     dispose: () => {
       try {
-        flush();
+        flush(read());
       } finally {
         observation = "disposed";
         clearTimer();
@@ -181,6 +194,9 @@ function printStep(step: DisplayStep): void {
   // Build tools often report failures on stdout. Keep the final diagnostic from
   // each stream, so npm's stderr footer cannot hide the actual build error.
   const color = isAdvisoryStep(step) ? theme.warn : theme.error;
+  if (step.advisory) {
+    defaultRuntime.log(`    ${color(step.advisory.message)}`);
+  }
   for (const output of [step.stdoutTail, step.stderrTail]) {
     for (const line of (output ?? "").trimEnd().split("\n").slice(-10)) {
       if (line.trim()) {
@@ -218,7 +234,7 @@ export function printResult(
     return;
   }
   if (result.runId) {
-    activeUpdateProgress.get(result.runId)?.();
+    activeUpdateProgress.get(result.runId)?.(run);
   }
   const report = renderUpdateRunReport(run ?? updateRunReportInputFromResult(result), reportHints);
   defaultRuntime.log("");

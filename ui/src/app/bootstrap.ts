@@ -86,6 +86,7 @@ import {
   normalizeLegacyTerminalViewLocation,
   resolveApplicationStartupSettings,
 } from "./startup-settings.ts";
+import { bindUpdateConfigWriteInterlock } from "./update-config-interlock.ts";
 import { openUpdateFailureTriage } from "./update-triage.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
@@ -336,15 +337,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     scopeUpgrade,
     connectionBootstrap,
   });
-  // App-updater interlock: writing config (or restarting the gateway) while
-  // the updater runs can corrupt the install; pause config writes until the
-  // update settles. Wired app-lifetime so page unmounts cannot strand it.
-  const syncConfigWriteSuspension = () => {
-    const update = overlays.snapshot;
-    runtimeConfig.setWritesSuspended(update.updateRunning || update.updateReconciliationPending);
-  };
-  const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
-  syncConfigWriteSuspension();
+  const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);
   const navigation = createApplicationNavigationPreferences(
     settings,
     hasSidebarCollapseIntent &&

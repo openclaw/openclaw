@@ -15,7 +15,6 @@ import {
   installManagedGitHubProfile,
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
-  prepareGitHubReadIdentity,
   prepareGitHubToolEnvironment,
   refreshManagedGitHubProfile,
   resolveGitHubToolIdentityStatus,
@@ -37,10 +36,15 @@ function commandResult(stdout = "", code = 0, stderr = "") {
   };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("GitHub tool identity", () => {
   beforeEach(() => {
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("GITHUB_TOKEN", undefined);
     processMocks.runCommandBuffered.mockReset();
     processMocks.runCommandBuffered.mockImplementation(
       async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
@@ -481,7 +485,7 @@ describe("GitHub tool identity", () => {
     expect(JSON.stringify(status)).not.toContain("stderr");
   });
 
-  it("probes native gh with ambient token precedence and reads Git author in the workspace", async () => {
+  it("resolves native environment precedence and reads Git author in the workspace", async () => {
     const workspace = tempDirs.make("openclaw-github-workspace-");
     await resolveGitHubToolIdentityStatus({
       config: { agents: { defaults: { workspace } } },
@@ -492,10 +496,13 @@ describe("GitHub tool identity", () => {
 
     const ghCall = processMocks.runCommandBuffered.mock.calls.find(([argv]) => argv[0] === "gh");
     const gitCall = processMocks.runCommandBuffered.mock.calls.find(([argv]) => argv[0] === "git");
-    expect(ghCall?.[1]?.env).toMatchObject({
-      GH_TOKEN: "native-primary",
-      GITHUB_TOKEN: "native-fallback",
-    });
+    expect(ghCall).toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.github.com/user",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer native-primary" }),
+      }),
+    );
     expect(gitCall?.[1]).toMatchObject({ cwd: workspace });
   });
 
@@ -711,69 +718,6 @@ describe("GitHub tool identity", () => {
       GH_TOKEN: "native-token",
       NATIVE_GH_CONFIG: "available",
     });
-  });
-
-  it("refreshes before read credential verification and fences native rotation without changing publication snapshots", async () => {
-    const config = { gateway: { controlUi: { github: { token: "resolved-preview-token" } } } };
-    const sourceConfig = {
-      gateway: {
-        controlUi: {
-          github: { token: { source: "env" as const, provider: "default", id: "GH_TOKEN" } },
-        },
-      },
-    };
-    const env = { GH_TOKEN: "preview-only", GITHUB_TOKEN: "native-before" };
-    const refresh = vi.fn(async () => {
-      env.GITHUB_TOKEN = "native-refreshed";
-    });
-    const identity = await prepareGitHubReadIdentity({
-      config,
-      sourceConfig,
-      agentId: "main",
-      env,
-      refresh,
-      getCurrentConfig: () => config,
-      assertActive: () => {},
-    });
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(identity.token).toBe("native-refreshed");
-    expect(identity).not.toHaveProperty("env");
-    expect(identity.cacheScope).not.toContain("native-refreshed");
-    await expect(identity.revalidate()).resolves.toBeUndefined();
-    const publication = await prepareGitHubPublicationIdentity({
-      config,
-      sourceConfig,
-      agentId: "main",
-      env,
-    });
-    env.GITHUB_TOKEN = "native-rotated";
-    await expect(identity.revalidate()).rejects.toThrow("identity changed");
-    expect(publication.env.GH_TOKEN).toBe("native-refreshed");
-    expect(JSON.stringify(processMocks.runCommandBuffered.mock.calls)).not.toContain(
-      "preview-only",
-    );
-  });
-
-  it("does not verify credentials after read authority closes during refresh", async () => {
-    let active = true;
-    await expect(
-      prepareGitHubReadIdentity({
-        config: {},
-        agentId: "main",
-        env: {},
-        getCurrentConfig: () => ({}),
-        assertActive: () => {
-          if (!active) {
-            throw new Error("closed");
-          }
-        },
-        refresh: async () => {
-          active = false;
-        },
-      }),
-    ).rejects.toThrow("closed");
-    expect(fetch).not.toHaveBeenCalled();
-    expect(processMocks.runCommandBuffered).not.toHaveBeenCalled();
   });
 
   it.each([

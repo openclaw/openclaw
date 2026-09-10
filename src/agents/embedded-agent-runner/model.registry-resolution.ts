@@ -220,6 +220,7 @@ export function resolveDynamicModelAuthProfile(params: {
     };
   }
   const store = ensureAuthProfileStore(params.agentDir, {
+    migrationProvider: params.provider,
     allowKeychainPrompt: false,
     profileId: explicitProfileId,
     config: params.cfg,

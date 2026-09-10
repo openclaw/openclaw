@@ -21,7 +21,7 @@ The `google-meet` plugin joins explicit Meet URLs on behalf of an OpenClaw agent
 Install the plugin and the native audio dependencies for the Chrome host, then set a realtime provider key. OpenAI is the default transcription provider for `agent` mode; Google Gemini Live is available as the `bidi`-mode voice provider. On macOS:
 
 ```bash
-openclaw plugins install npm:@openclaw/google-meet
+openclaw plugins install @openclaw/google-meet
 brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
 # only needed when realtime.voiceProvider is "google" for bidi mode
@@ -126,7 +126,7 @@ openclaw googlemeet create --access-type OPEN --transport chrome-node --mode age
 | `TRUSTED`       | Host org's trusted users, invited external users, and dial-in users |
 | `RESTRICTED`    | Invitees only                                                       |
 
-This only applies to API-created rooms, so OAuth must be configured. If you authenticated before this option existed, rerun `openclaw googlemeet auth login --json` after adding the `meetings.space.settings` scope to your OAuth consent screen.
+This only applies to API-created rooms, so OAuth must be configured. If you authorized OpenClaw before access-type control shipped in 2026.5.2, rerun `openclaw googlemeet auth login --json` after adding the `meetings.space.settings` scope to your OAuth consent screen.
 
 If the browser fallback hits a Google login or Meet permission blocker, the tool returns `manualAction: { reason, message }` with the `browser.nodeId`/`browser.targetId`/`browserUrl`. Report that message and stop opening new Meet tabs until the operator finishes the browser step.
 
@@ -156,13 +156,9 @@ openclaw googlemeet test-listen <meet-url> --transport chrome-node
 
 It joins in transcribe mode, waits for fresh caption/transcript movement, and returns `listenVerified`, `listenTimedOut`, manual-action fields, and current caption health.
 
-### Realtime session health
+<a id="notes" />
 
-During talk-back sessions, `google_meet` status reports Chrome/audio bridge health: `inCall`, `manualAction`, `providerConnected`, `realtimeReady`, `audioInputActive`, `audioOutputActive`, last input/output timestamps, byte counters, and bridge-closed state. Managed Chrome sessions only speak the intro/test phrase after health reports `inCall: true`; otherwise `speechReady: false` and the speech attempt is blocked rather than silently no-opping.
-
-Local Chrome joins through the signed-in OpenClaw browser profile and routes its microphone and speaker through the native backend selected by `chrome.audioBackend`. The default shared loopback device is enough for a first smoke test but can echo; use separate virtual devices or a Loopback-style graph for clean duplex audio.
-
-## Notes
+## Audio bridge architecture
 
 Google Meet's official media API is receive-oriented, so speaking into a call still needs a participant path. This plugin keeps that boundary visible: Chrome handles browser participation and local audio routing; Twilio handles phone dial-in participation.
 
@@ -176,6 +172,12 @@ With the command-pair Chrome bridge, `chrome.bargeInInputCommand` can listen to 
 For clean duplex audio, route Meet output and Meet microphone through separate virtual devices or a Loopback-style virtual device graph; the default shared loopback device can echo other participants back into the call.
 
 `googlemeet speak` triggers the active talk-back audio bridge for a Chrome session; `googlemeet leave` stops it (and, for Twilio sessions delegated through Voice Call, hangs up the underlying call). Use `googlemeet end-active-conference` to also close the active Google Meet conference for an API-managed space.
+
+### Realtime session health
+
+During talk-back sessions, `google_meet` status reports Chrome/audio bridge health: `inCall`, `manualAction`, `providerConnected`, `realtimeReady`, `audioInputActive`, `audioOutputActive`, last input/output timestamps, byte counters, and bridge-closed state. Managed Chrome sessions only speak the intro/test phrase after health reports `inCall: true`; otherwise `speechReady: false` and the speech attempt is blocked rather than silently no-opping.
+
+Local Chrome joins through the signed-in OpenClaw browser profile and routes its microphone and speaker through the native backend selected by `chrome.audioBackend`. The default shared loopback device is enough for a first smoke test but can echo; use separate virtual devices or a Loopback-style graph for clean duplex audio.
 
 ## Where each section moved
 
@@ -246,4 +248,5 @@ resolve here.
 - [Meeting plugins overview](/plugins/meeting-plugins)
 - [Voice call plugin](/plugins/voice-call)
 - [Talk mode](/nodes/talk)
+- [ElevenLabs](/providers/elevenlabs) — the speech and transcription provider used in the Meet config examples
 - [Building plugins](/plugins/building-plugins)

@@ -46,7 +46,10 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 - Default output is a timestamped `.tar.gz` archive in the current working directory. Timestamped filenames use your machine's local timezone and include the UTC offset. If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths, unsafe symbolic links, and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
-- `openclaw backup create --only-config` backs up just the active JSON config file.
+- Full archives include the active config and its required `$include` files, including dependencies outside the state directory. They preserve authored bytes, comments, and environment placeholders; resolved secrets are not written into the config copy. These additional files may contain sensitive data, so protect the archive accordingly.
+- Full archives refuse unresolved include graphs, files that change during config capture, and include aliases that cannot be represented safely. Fix missing or unreadable files, use regular-file include paths, or pause concurrent edits and retry. `--no-include-workspace` still includes required config dependencies, even within an excluded workspace.
+- `openclaw backup create --only-config` backs up just the active JSON config file, **not** its `$include` dependencies. It is a root-file export, not a complete modular-config recovery point.
+- Config files are pinned before database capture. SQLite snapshots retain their existing per-database consistency and sanitization; the archive is not one atomic snapshot across config and all databases. Later writes remain live and may not appear in the archive.
 
 ## Restore a full archive
 
@@ -84,6 +87,33 @@ paths. Restore custom agent roots to the locations configured by `agentDir`, or
 update those settings to their new locations before restarting. See
 [Restore a full archive](/install/backups#restore-a-full-archive) for the full
 disaster-recovery sequence.
+
+## Private update captures
+
+The managed `<stateDir>.update-captures/` root is excluded from ordinary archives,
+SQLite snapshots, Git backups, and support exports. Selecting a containing or
+nested workspace does not override this rule. Selecting a capture file as config
+or as a database backup source refuses the backup. Other states' captures are
+recognized by the exact sibling layout: `<owner>/` beside
+`<owner>.update-captures/`, with an existing owner directory. Canonical path
+aliases receive the same protection. Unrelated similarly named workspace
+directories remain included; a suffix alone does not establish ownership.
+
+Marked private directories remain excluded after their owner is removed or
+renamed, or the marked directory is moved or copied. Keep the marker with the
+whole directory. Files copied out without it are not recognized by this rule.
+The fixed `.openclaw-private-update-capture` file contains exactly
+`openclaw-private-update-capture-v1` followed by a newline. Export checks inspect
+only selected paths and their ancestors, including canonical aliases. They do
+not parse workspace manifests or scan for other state roots. A malformed or
+unreadable marker refuses export of that selection; a support bundle reports
+the refusal without including that input.
+
+The marker is an exclusion instruction, not proof of artifact ownership or
+permission to reopen, adopt, or delete it. Producers must durably write it before
+raw data, including in each independently movable staging or capture directory.
+Cleanup must preserve it until private contents are gone. This exclusion does
+not create captures, change retention, or change ordinary backup sanitization.
 
 ## SQLite snapshots
 

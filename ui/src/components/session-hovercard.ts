@@ -16,6 +16,7 @@ import {
   type PersonActivityRouting,
 } from "./person-activity-link.ts";
 import { renderSessionColorDot } from "./session-color.ts";
+import { sessionMachineParts } from "./session-machine.ts";
 import { sessionOwnerInitials, type SessionCreatedActor } from "./session-owner-chip.ts";
 import { progressCardHeadsUp, renderProgressCardMarkdown } from "./session-progress-card.ts";
 import "./session-hovercard.css";
@@ -460,6 +461,8 @@ function renderSessionContext(
           }),
         }
       : undefined;
+  const machineParts = sessionMachineParts(row?.placementMachine);
+  const machineSummary = machineParts.filter(Boolean).join(" · ");
   return html`<div class="session-hovercard__context">
     ${
       context
@@ -496,6 +499,22 @@ function renderSessionContext(
             <span class="session-hovercard__context-value session-hovercard__context-text"
               >${placementIdentity.label}</span
             >
+          </div>`
+        : nothing
+    }
+    ${
+      placementIdentity && machineSummary
+        ? html`<div
+            class="session-hovercard__machine"
+            aria-label=${`${t("sessionHovercard.machineLabel")}: ${machineSummary}`}
+          >
+            ${machineParts.map((part, index) =>
+              part
+                ? html`<span class=${index === 1 ? "session-hovercard__machine-class" : nothing}
+                    >${part}</span
+                  >`
+                : nothing,
+            )}
           </div>`
         : nothing
     }

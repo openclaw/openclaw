@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { SessionPlacementMachine } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type {
   WorkerDesktopApp,
@@ -49,6 +50,7 @@ export type WorkerEnvironmentServiceRecord = {
   desktopAvailable: boolean;
   desktopApps: readonly WorkerDesktopApp["id"][];
   tunnelStatus: WorkerTunnelStatus;
+  preparation?: { purpose: "reserve" | "build"; key: string } | null;
   error?: string;
 };
 
@@ -70,9 +72,15 @@ export type WorkerEnvironmentServiceContract = {
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
   inventoryVersion(): number;
+  readMachineShape(environmentId: string): SessionPlacementMachine | undefined;
+  machineShapeVersion(): number;
   supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
   listOperatingSystems(profileId: string): Promise<readonly WorkerOperatingSystem[] | undefined>;
+  prepare(
+    request: { profileId: string; projectPath: string },
+    authorize?: () => void,
+  ): Promise<{ environmentId: string; preparationKey: string; reused: boolean }>;
   create(
     profileId: string,
     idempotencyKey: string,
@@ -81,6 +89,7 @@ export type WorkerEnvironmentServiceContract = {
     projectPath?: string,
     signal?: AbortSignal,
     os?: string,
+    runSetupScript?: boolean,
   ): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   destroyUnattached(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;

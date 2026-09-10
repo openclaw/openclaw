@@ -7,6 +7,7 @@ import type { SpawnResult } from "../../process/exec.js";
 import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { waitForPendingWorkerResult } from "./worker-turn-admission.js";
@@ -18,6 +19,7 @@ import {
   SESSION_KEY,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
+  database,
   createWorkerSessionTurnPlacementProvider,
   credential,
   measureLaunchTurn,
@@ -70,6 +72,11 @@ describe("worker turn launcher claim admission", () => {
           await assertRejected();
           expect(placements.validateTurnClaim(localClaim)).toBe(true);
           placements.releaseTurn(localClaim);
+          seedAttachedPlacementEnvironment(database, {
+            environmentId: ENVIRONMENT_ID,
+            sessionId: SESSION_ID,
+            ownerEpoch: OWNER_EPOCH,
+          });
           for (const { to, patch } of [
             { to: "provisioning", patch: { environmentId: ENVIRONMENT_ID } },
             { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },

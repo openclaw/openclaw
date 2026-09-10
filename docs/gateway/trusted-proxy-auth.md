@@ -49,10 +49,6 @@ read_when:
 
 ## Configuration
 
-<Note>
-The `deviceAutoApprove` examples below target beta/current-main builds. Stable `v2026.7.1` does not support this option.
-</Note>
-
 ```json5
 {
   gateway: {
@@ -637,3 +633,4 @@ A Gateway token cannot replace proxy authentication. Do not send identity header
 - [Remote access](/gateway/remote) — other remote access patterns
 - [Security](/gateway/security) — full security guide
 - [Tailscale](/gateway/tailscale) — simpler alternative for tailnet-only access
+- [Security audit checks](/gateway/security/audit-checks) — the catalog entry for the trusted-proxy findings

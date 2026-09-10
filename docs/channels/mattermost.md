@@ -169,7 +169,7 @@ Notes:
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is still honored, but `chatmode` is preferred. Per-channel `groups.<channelId>.requireMention` settings win over both.
 - After the bot sends a visible reply in a channel thread, later messages in that same thread are answered without a new @mention or `onchar` prefix, so multi-turn thread conversations keep flowing. Participation is remembered for 7 days after the bot last replied in that thread and persists across gateway restarts. Threads the bot has only observed are unaffected; start a new top-level message to require an explicit mention again.
-- Set `channels.mattermost.implicitMentions.threadParticipation: false` to stop participated-thread follow-ups from bypassing mention gating. Account overrides use `channels.mattermost.accounts.<id>.implicitMentions`. Mattermost does not currently produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
+- Set `channels.mattermost.implicitMentions.threadParticipation: false` to stop participated-thread follow-ups from bypassing mention gating. Account overrides use `channels.mattermost.accounts.<id>.implicitMentions`. Mattermost does not produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
 
 ## Threading and sessions
 
@@ -177,7 +177,7 @@ Use `channels.mattermost.replyToMode` to control whether channel and group repli
 
 - `off` (default): only reply in a thread when the inbound post is already in one.
 - `first`: for top-level channel/group posts, start a thread under that post and route the conversation to a thread-scoped session.
-- `all` and `batched`: same behavior as `first` for Mattermost today, because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
+- `all` and `batched`: same behavior as `first` for Mattermost, because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
 - Direct messages default to `off` even when `replyToMode` is set.
 
 Use `channels.mattermost.replyToModeByChatType` to override the mode for `direct`, `group`, or `channel` chats. Set `direct` to opt direct messages into threading:
@@ -201,7 +201,7 @@ Use `channels.mattermost.replyToModeByChatType` to override the mode for `direct
 Notes:
 
 - Thread-scoped sessions use the triggering post id as the thread root.
-- `first` and `all` are currently equivalent because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
+- `first` and `all` are equivalent because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
 - Per-chat-type overrides take precedence over `replyToMode`. Without a `direct` override, existing deployments keep flat, non-threaded DMs.
 
 ## Access control (DMs)
@@ -326,6 +326,7 @@ Preview streaming is **on by default** in `partial` mode. Configure via `channel
   </Accordion>
   <Accordion title="Streaming behavior notes">
     - If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
+    - Clearing a plan removes an otherwise empty preview; a replacement plan gets a fresh preview even when its text is unchanged. At turn completion, failed deletions of old previews are attempted once more without deleting the finalized reply. If deletion still fails, the old preview may remain; verbose logs include the cleanup failure.
     - Thinking-only payloads are suppressed from channel posts, including text that arrives as a `> Thinking` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
     - See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.
 
@@ -597,7 +598,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
 
 ## Related
 
-- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channel routing](/channels/channel-routing) - session routing for messages
 - [Channels Overview](/channels) - all supported channels
 - [Groups](/channels/groups) - group chat behavior and mention gating
 - [Pairing](/channels/pairing) - DM authentication and pairing flow

@@ -794,30 +794,6 @@ describe("qa mock openai server", () => {
     expect(outputItems(finalBody).some((item) => item.type === "function_call")).toBe(false);
   });
 
-  it("returns a distinct final after the ambiguous Teams message-tool send", async () => {
-    const server = await startMockServer();
-    const prompt = "qa msteams ambiguous gateway timeout. exact marker: `QA-MSTEAMS-AMBIGUOUS-504`";
-
-    const initialBody = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      input: [makeUserInput(prompt)],
-    });
-    const toolCall = outputToolCall(initialBody, "message");
-    expect(outputToolArgsFromItem(toolCall)).toEqual({
-      action: "send",
-      message: "QA-MSTEAMS-AMBIGUOUS-504",
-    });
-
-    const finalBody = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      input: [
-        makeUserInput(prompt),
-        makeToolOutputWithCallId(outputToolCallId(toolCall, "call_msteams_timeout"), "failed"),
-      ],
-    });
-    expect(outputText(finalBody)).toBe("QA-MSTEAMS-AMBIGUOUS-FINAL");
-  });
-
   it("keeps the retry-failure stranded-final fixture as text without a message tool call", async () => {
     const server = await startMockServer();
 
@@ -1829,6 +1805,20 @@ describe("qa mock openai server", () => {
       ],
     });
     expect(outputText(withHumanAttributedSeed)).toBe(missingMarker);
+
+    for (const prefix of [
+      "Please remember this fact for later: ORBIT-22. ",
+      "Reply exactly `SHADOWED-EXACT-REPLY`. ",
+    ]) {
+      const overlappingSeed = await expectOpenAiNonStreamingResponsesJson<unknown>(server, {
+        input: [makeUserInput(prefix + seedPrompt)],
+      });
+      expect(outputText(overlappingSeed)).toMatch(new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u"));
+      const overlappingRecall = await expectOpenAiNonStreamingResponsesJson<unknown>(server, {
+        input: [makeUserInput(prefix + recallPrompt)],
+      });
+      expect(outputText(overlappingRecall)).toBe(missingMarker);
+    }
   });
 
   it("drives repo-contract followthrough as read-read-read-write-then-report", async () => {

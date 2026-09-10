@@ -178,7 +178,7 @@ openclaw nodes invoke --node <idOrNameOrIp> --command system.which --params '{"b
 Notes:
 
 - `system.run` returns stdout/stderr/exit code in the payload.
-- Shell execution now goes through the `exec` tool with `host=node`; `nodes` remains the direct-RPC surface for explicit node commands.
+- Shell execution goes through the `exec` tool with `host=node`; the separate `nodes.run` execution path was removed in 2026.3.31. `nodes` remains the direct-RPC surface for explicit node commands.
 - `nodes invoke` does not expose `system.run` or `system.run.prepare`; those stay on the exec path only.
 - The exec path reads the node policy and prepares a canonical `systemRunPlan`. Full/off execution resolves working-directory aliases without adding approval-only script checks. When caller or node policy requires approval binding, stricter path and script checks remain in place. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
 - `system.notify` respects notification permission state on the macOS app; supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.

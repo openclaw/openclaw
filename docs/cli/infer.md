@@ -15,17 +15,6 @@ Reasons to prefer it over a one-off provider wrapper:
 - Runs the normal local path without the gateway for most subcommands.
 - For end-to-end provider checks, it exercises the shipped CLI, config loading, default-agent resolution, bundled plugin activation, and the shared capability runtime before the provider request goes out.
 
-## Turn infer into a skill
-
-Copy and paste this to an agent:
-
-```text
-Read https://docs.openclaw.ai/cli/infer, then create a skill that routes my common workflows to `openclaw infer`.
-Focus on model runs, image generation, video generation, audio transcription, TTS, web search, and embeddings.
-```
-
-A good infer-based skill maps common user intents to the right subcommand, includes a few canonical examples per workflow, prefers `openclaw infer ...` over lower-level alternatives, and does not re-document the entire infer surface in the skill body.
-
 ## Command tree
 
 ```text
@@ -154,14 +143,14 @@ openclaw infer model run --local --model ollama/qwen2.5vl:7b --prompt "Describe 
 Notes:
 
 - Local `model run` is the narrowest CLI smoke for provider/model/auth health: for non-ChatGPT-Codex providers it sends only the supplied prompt.
-- Local `model run --model <provider/model>` can resolve exact bundled static-catalog rows (the same rows `openclaw models list --all` shows) before that provider is written to config. Provider auth is still required; missing credentials fail as auth errors, not `Unknown model`.
+- Local `model run --model <provider/model>` can resolve exact bundled static-catalog rows (the same rows [`openclaw models list --all`](/cli/models) shows) before that provider is written to config. Provider auth is still required; missing credentials fail as auth errors, not `Unknown model`.
 - For Mistral Medium 3.5 reasoning probes, leave temperature unset/default. Mistral rejects `reasoning_effort="high"` with `temperature: 0`; use default temperature or a non-zero value such as `0.7`.
 - OpenAI ChatGPT/Codex OAuth (`openai-chatgpt-responses` API) local probes add a minimal system instruction so the transport can populate its required `instructions` field — no full agent context, tools, memory, or session transcript.
 - `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model probe.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
 - `model run --prompt` must contain non-whitespace text; empty prompts are rejected before any provider or Gateway call.
 - Local `model run` exits non-zero when the provider returns no text output, so unreachable providers and empty completions do not look like successful probes.
-- Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use `openclaw agent` or a chat surface for full agent context, tools, memory, and session transcript.
+- Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use [`openclaw agent`](/cli/agent) or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
 
@@ -332,6 +321,17 @@ openclaw infer audio transcribe --file ./memo.m4a --model whisper-1 --json
 # Good
 openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --json
 ```
+
+## Turn infer into a skill
+
+Copy and paste this to an agent:
+
+```text
+Read https://docs.openclaw.ai/cli/infer, then create a skill that routes my common workflows to `openclaw infer`.
+Focus on model runs, image generation, video generation, audio transcription, TTS, web search, and embeddings.
+```
+
+A good infer-based skill maps common user intents to the right subcommand, includes a few canonical examples per workflow, prefers `openclaw infer ...` over lower-level alternatives, and does not re-document the entire infer surface in the skill body.
 
 ## Related
 

@@ -136,10 +136,15 @@ async function createFakeGateway(): Promise<FakeGateway> {
     list: () => [worker],
     get: (environmentId: string) => (environmentId === worker.environmentId ? worker : undefined),
     inventoryVersion: () => 0,
+    readMachineShape: () => undefined,
+    machineShapeVersion: () => 0,
     supportsExecutionMode: (profileId, mode) =>
       profileId === "development" && mode === "worker-turn",
     listMachineOptions: async () => undefined,
     listOperatingSystems: async () => undefined,
+    prepare: async () => {
+      throw new Error("build preparation is outside the SDK environment RPC proof");
+    },
     create: async (_profileId: string, _idempotencyKey: string) => {
       const requested = workerRecord("requested");
       worker = workerRecord("ready");

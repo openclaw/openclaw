@@ -39,6 +39,28 @@ The variables below are the supported environment contract for operators. Undocu
 | `OPENCLAW_INCLUDE_ROOTS`  | Allow `$include` to resolve from additional roots.                                                   |
 | `OPENCLAW_SQLITE_LIBRARY` | Override the SQLite library for [Bun on macOS](/install/bun-compatibility#sqlite-library-selection). |
 
+#### `OPENCLAW_HOME`
+
+When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.
+
+`OPENCLAW_HOME` does not grant ownership of the OS account's native Gateway service. Gateway service-management commands treat a relocated home as isolated state; use the OS account home and a named profile when a separate native service identity is required.
+
+**Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > Termux `PREFIX` home fallback on Android > `os.homedir()`
+
+**Example** (macOS LaunchDaemon):
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+  <key>OPENCLAW_HOME</key>
+  <string>/Users/user</string>
+</dict>
+```
+
+`OPENCLAW_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using the same OS home fallback chain before use.
+
+Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_GIT_DIR` still take precedence. OS-account tasks such as shell startup file detection, package-manager setup, and host `~` expansion may still use the real system home.
+
 ### Gateway and authentication
 
 | Variable                    | Purpose                                                         |
@@ -274,28 +296,6 @@ unavailable instead of triggering a network request.
 | `OPENCLAW_DEBUG_MODEL_PAYLOAD`   | Model payload diagnostics: `summary`, `tools`, or `full-redacted`. `full-redacted` is capped and redacted but may include prompt/message text.                                               |
 | `OPENCLAW_DEBUG_SSE`             | Streaming diagnostics: `events` for first/done timing, `peek` to include the first five redacted SSE events.                                                                                 |
 | `OPENCLAW_DEBUG_CODE_MODE`       | Code-mode model-surface diagnostics, including provider-tool hiding and compact control/direct enforcement.                                                                                  |
-
-### `OPENCLAW_HOME`
-
-When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.
-
-`OPENCLAW_HOME` does not grant ownership of the OS account's native Gateway service. Gateway service-management commands treat a relocated home as isolated state; use the OS account home and a named profile when a separate native service identity is required.
-
-**Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > Termux `PREFIX` home fallback on Android > `os.homedir()`
-
-**Example** (macOS LaunchDaemon):
-
-```xml
-<key>EnvironmentVariables</key>
-<dict>
-  <key>OPENCLAW_HOME</key>
-  <string>/Users/user</string>
-</dict>
-```
-
-`OPENCLAW_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using the same OS home fallback chain before use.
-
-Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_GIT_DIR` still take precedence. OS-account tasks such as shell startup file detection, package-manager setup, and host `~` expansion may still use the real system home.
 
 ## nvm users: web_fetch TLS failures
 

@@ -526,8 +526,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       );
     } else if (process.platform === "darwin") {
       const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
-      defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
-      defaultRuntime.error(`${errorText("Errors:")} suppressed`);
+      // The plist points both launchd handles at this file, so startup crashes that
+      // never reached the logger land here too; do not advertise a separate stderr.
+      defaultRuntime.error(
+        `${errorText("Logs (stdout and stderr):")} ${shortenHomePath(logs.stdoutPath)}`,
+      );
     }
     defaultRuntime.error(
       `${errorText("Restart log:")} ${shortenHomePath(resolveGatewayRestartLogPath(serviceEnv))}`,

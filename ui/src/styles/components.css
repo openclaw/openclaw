@@ -971,6 +971,21 @@ openclaw-session-owner-chip {
   line-height: 1.5;
 }
 
+.plugin-official-badge {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--info);
+}
+
+.plugin-official-badge svg {
+  width: 15px;
+  height: 15px;
+}
+
 /* ===========================================
    Stats - Bold values, subtle labels
    =========================================== */
@@ -4055,6 +4070,11 @@ td.data-table-key-col {
   flex: 0 1 96px;
 }
 
+.agent-identity-editor__fields input {
+  min-width: 0;
+  width: 100%;
+}
+
 .agent-identity-editor__hint {
   font-size: 12px;
 }
@@ -6057,16 +6077,16 @@ td.data-table-key-col {
 
 .plugin-tab-embed {
   display: flex;
+  flex: 1;
+  min-width: 0;
   min-height: 0;
-  height: 100%;
 }
 
 .plugin-tab-embed__frame {
   flex: 1;
-  min-height: 480px;
+  min-height: 0;
   width: 100%;
   border: none;
-  border-radius: 10px;
   background: var(--card);
 }
 

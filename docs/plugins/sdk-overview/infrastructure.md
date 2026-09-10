@@ -110,6 +110,7 @@ that detached work onto its own tracked admission root:
 ```typescript
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 
+// processWebhookEvent, event, and runtime are your plugin's own handler, payload, and logger.
 void runDetachedWebhookWork(() => processWebhookEvent(event)).catch((error) => {
   runtime.error?.(`webhook dispatch failed: ${String(error)}`);
 });
@@ -134,6 +135,7 @@ api.registerMcpServerConnectionResolver({
   serverName: "user-email",
   resolve: async (ctx) => {
     // ctx.requesterSenderId is host-trusted; never invent sender identity here.
+    // lookupUserToken is your plugin's own credential-store lookup, not an SDK export.
     const token = await lookupUserToken(ctx.requesterSenderId);
     if (!token) {
       return null; // omit this server for the current run

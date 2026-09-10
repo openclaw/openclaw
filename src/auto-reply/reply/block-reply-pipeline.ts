@@ -7,6 +7,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { runAbortableTimeout } from "../../node-host/with-timeout.js";
 import {
+  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
@@ -49,7 +50,10 @@ export function createAudioAsVoiceBuffer(params: {
       }
     },
     shouldBuffer: (payload) => params.isAudioPayload(payload),
-    finalize: (payload) => (seenAudioAsVoice ? { ...payload, audioAsVoice: true } : payload),
+    finalize: (payload) =>
+      seenAudioAsVoice
+        ? copyReplyPayloadMetadata(payload, { ...payload, audioAsVoice: true })
+        : payload,
   };
 }
 
@@ -139,6 +143,7 @@ export function createBlockReplyPipeline(params: {
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
     const contentKey = createBlockReplyContentKey(payload);
+    const blockSourceText = getReplyPayloadMetadata(payload)?.blockSourceText;
     if (!bypassSeenCheck) {
       if (seenKeys.has(payloadKey)) {
         return;
@@ -189,7 +194,7 @@ export function createBlockReplyPipeline(params: {
         if (isTerminalContent && reply.trimmedText) {
           const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
           const fragments = streamedTextFragmentsByMessage.get(assistantMessageIndex) ?? [];
-          fragments.push(reply.trimmedText);
+          fragments.push(blockSourceText ?? reply.trimmedText);
           streamedTextFragmentsByMessage.set(assistantMessageIndex, fragments);
         }
         if (!isStatusNotice) {

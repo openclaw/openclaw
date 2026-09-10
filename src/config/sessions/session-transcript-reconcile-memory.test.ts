@@ -238,10 +238,14 @@ describe("incognito transcript reconciliation", () => {
       const database = openOpenClawAgentDatabase(options);
       const blocked = createDeferred();
       const release = createDeferred();
-      const blocker = runExclusiveSqliteSessionWrite(options, async () => {
-        blocked.resolve();
-        await release.promise;
-      });
+      const blocker = runExclusiveSqliteSessionWrite(
+        options,
+        async () => {
+          blocked.resolve();
+          await release.promise;
+        },
+        "sessions.transcript-index.preflight",
+      );
       await blocked.promise;
       let pending: Promise<unknown>;
       if (mode === "direct") {
@@ -295,11 +299,15 @@ describe("incognito transcript reconciliation", () => {
               }
               // Enter the real FIFO ahead of the owner handler, then dispose
               // immediately before its queued write could acquire a database.
-              blocker = runExclusiveSqliteSessionWrite(options, async () => {
-                blocked.resolve();
-                await release.promise;
-                closeOpenClawAgentDatabaseByPath(database.path);
-              });
+              blocker = runExclusiveSqliteSessionWrite(
+                options,
+                async () => {
+                  blocked.resolve();
+                  await release.promise;
+                  closeOpenClawAgentDatabaseByPath(database.path);
+                },
+                "sessions.transcript-index.preflight",
+              );
             }
           });
           return worker;
@@ -353,10 +361,14 @@ describe("incognito transcript reconciliation", () => {
         worker.on("message", (workerMessage: { type: string }) => {
           if (workerMessage.type === "done") {
             // Memory's port can close while its final parent write waits in the FIFO.
-            blocker = runExclusiveSqliteSessionWrite(options, async () => {
-              blocked.resolve();
-              await release.promise;
-            });
+            blocker = runExclusiveSqliteSessionWrite(
+              options,
+              async () => {
+                blocked.resolve();
+                await release.promise;
+              },
+              "sessions.transcript-index.preflight",
+            );
           }
         });
         return worker;

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { readDraftCloudProfiles } from "./discovery.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
 function renderPicker(
@@ -69,6 +70,32 @@ function renderPicker(
 }
 
 describe("Where chip", () => {
+  it("keeps unavailable operating systems visible with the provider's repair hint", () => {
+    const reason = "Upgrade Crabbox to 0.53.1 or newer, then restart the Gateway.";
+    const container = renderPicker(true, undefined, {
+      cloudProfileId: "aws",
+      cloudProfiles: readDraftCloudProfiles([
+        {
+          id: "aws",
+          providerId: "crabbox",
+          operatingSystems: [
+            { id: "linux", label: "Linux", default: true },
+            { id: "macos", label: "macOS", disabledReason: reason },
+            { id: "windows/wsl2", label: "Windows (WSL2)", disabledReason: reason },
+          ],
+        },
+      ]),
+    });
+    expect(container.querySelector<HTMLButtonElement>('[data-value="os:linux"]')?.disabled).toBe(
+      false,
+    );
+    for (const os of ["macos", "windows/wsl2"]) {
+      const row = container.querySelector<HTMLButtonElement>(`[data-value="os:${os}"]`);
+      expect(row?.disabled).toBe(true);
+      expect(row?.textContent).toContain(reason);
+    }
+  });
+
   it.each([
     { os: undefined, machineClass: undefined, label: "aws", machine: "Tiny Linux" },
     { os: "linux", machineClass: "tiny", label: "aws · Tiny Linux", machine: "Tiny Linux" },

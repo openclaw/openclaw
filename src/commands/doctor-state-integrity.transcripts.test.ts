@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveSessionStorePathCore,
@@ -286,7 +286,9 @@ describe("doctor transcript and heartbeat session repairs", () => {
     fs.writeFileSync(
       path.join(sessionsDir, "heartbeat-session.jsonl"),
       [
-        JSON.stringify({ message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } }),
+        JSON.stringify({
+          message: { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
+        }),
         JSON.stringify({ message: { role: "assistant", content: "HEARTBEAT_OK" } }),
         "",
       ].join("\n"),
@@ -340,7 +342,9 @@ describe("doctor transcript and heartbeat session repairs", () => {
     fs.writeFileSync(
       path.join(sessionsDir, "mixed-session.jsonl"),
       [
-        JSON.stringify({ message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } }),
+        JSON.stringify({
+          message: { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
+        }),
         JSON.stringify({ message: { role: "assistant", content: "HEARTBEAT_OK" } }),
         JSON.stringify({ message: { role: "user", content: "hello from telegram" } }),
         "",
@@ -371,7 +375,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     const transcriptPath = path.join(sessionsDir, "large-heartbeat-session.jsonl");
     const heartbeatLine = `${JSON.stringify({
-      message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+      message: { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
     })}\n${JSON.stringify({ message: { role: "assistant", content: "HEARTBEAT_OK" } })}\n`;
     // >64 KiB so the sync scanner must read more than one chunk.
     const repeats = Math.ceil((80 * 1024) / heartbeatLine.length);
@@ -424,7 +428,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
     const maxChars = getTranscriptRecordMaxChars();
     const oversizedRecord = `${"x".repeat(maxChars + 1)}\n`;
     const heartbeatLine = `${JSON.stringify({
-      message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+      message: { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
     })}\n`;
     fs.writeFileSync(transcriptPath, `${oversizedRecord}${heartbeatLine}`);
 
@@ -498,7 +502,9 @@ describe("doctor transcript and heartbeat session repairs", () => {
       fs.writeFileSync(
         transcriptPath,
         [
-          JSON.stringify({ message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } }),
+          JSON.stringify({
+            message: { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
+          }),
           JSON.stringify({ message: { role: "user", content: "real follow-up" } }),
           "",
         ].join("\n"),
@@ -521,7 +527,9 @@ describe("doctor transcript and heartbeat session repairs", () => {
       fs.writeFileSync(
         transcriptPath,
         [
-          JSON.stringify({ message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } }),
+          JSON.stringify({
+            message: { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
+          }),
           JSON.stringify({ message: { role: "user", content: "real follow-up" } }),
           "",
         ].join("\n"),
@@ -544,7 +552,9 @@ describe("doctor transcript and heartbeat session repairs", () => {
     try {
       const transcriptPath = path.join(tempDir, "session.jsonl");
       const heartbeatMessages = Array.from({ length: 400 }, () =>
-        JSON.stringify({ message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } }),
+        JSON.stringify({
+          message: { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
+        }),
       );
       fs.writeFileSync(
         transcriptPath,
@@ -568,7 +578,9 @@ describe("doctor transcript and heartbeat session repairs", () => {
       fs.writeFileSync(
         transcriptPath,
         [
-          JSON.stringify({ message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } }),
+          JSON.stringify({
+            message: { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
+          }),
           JSON.stringify({ message: { role: "assistant", content: "HEARTBEAT_OK" } }),
           "",
         ].join("\n"),

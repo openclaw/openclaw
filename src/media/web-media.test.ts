@@ -1683,11 +1683,12 @@ describe("loadWebMedia", () => {
     async (swapOpen, expectedCode) => {
       const id = `signal-hardlink-race-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
       const filePath = path.join(stateDir, "media", "inbound", id);
-      const outsidePath = path.join(fixtureRoot, `${id}.outside`);
+      const outsidePath = path.join(stateDir, `${id}.outside`);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, "inside");
       await fs.writeFile(outsidePath, "outside-secret");
       let matchingOpens = 0;
+      let linkCreated = false;
       __setFsSafeTestHooksForTest({
         afterPreOpenLstat: async (openedPath) => {
           if (path.basename(openedPath) !== id) {
@@ -1699,6 +1700,7 @@ describe("loadWebMedia", () => {
           }
           await fs.rm(filePath);
           await fs.link(outsidePath, filePath);
+          linkCreated = true;
         },
       });
 
@@ -1708,6 +1710,7 @@ describe("loadWebMedia", () => {
           expectedCode,
         );
         expect(matchingOpens).toBe(swapOpen);
+        expect(linkCreated).toBe(true);
       } finally {
         await fs.rm(filePath, { force: true });
         await fs.rm(outsidePath, { force: true });

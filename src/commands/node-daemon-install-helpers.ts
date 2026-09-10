@@ -80,6 +80,7 @@ export async function buildNodeInstallPlan(params: {
 
   const environment = buildNodeServiceEnvironment({
     env: params.env,
+    runtime: params.runtime,
     // Match the Gateway install path so supervised services keep the chosen
     // runtime toolchain on PATH for sibling binaries when needed.
     extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),

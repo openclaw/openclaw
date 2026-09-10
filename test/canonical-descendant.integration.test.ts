@@ -34,6 +34,7 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import { createWorkerSessionPlacementStore } from "../src/gateway/worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environments/placement-test-fixtures.js";
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
@@ -73,6 +74,7 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../src/sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteTransaction } from "../src/state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
 afterEach(() => {
@@ -206,6 +208,11 @@ async function withFixture(
         const placements = workerOwned ? createWorkerSessionPlacementStore() : undefined;
         let workerClaim: ReturnType<NonNullable<typeof placements>["claimTurn"]> | undefined;
         if (placements) {
+          seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+            environmentId: "policy-worker",
+            sessionId,
+            ownerEpoch: 7,
+          });
           let placement = placements.startDispatch(target);
           placement = placements.transition({
             sessionId,

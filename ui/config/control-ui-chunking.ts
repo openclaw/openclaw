@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
@@ -36,8 +37,14 @@ function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   );
 }
 
+export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
+
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
+
+  if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
+    return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
+  }
 
   if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
     return "gateway-runtime";

@@ -34,8 +34,8 @@ Edit English docs in `openclaw/openclaw` and push to `main`. The sync, translati
 ## Files in this folder
 
 - `glossary.<lang>.json` — preferred term mappings used as prompt guidance.
-- `zh-Hans-navigation.json` — curated zh-Hans tab and group labels overlaid onto the current English navigation tree during publish sync.
-- `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `id-navigation.json`, `it-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pl-navigation.json`, `pt-BR-navigation.json`, and `tr-navigation.json` — starter locale labels kept alongside the source repo. Publish sync clones the full English navigation tree, prefixes locale routes, and overlays translated labels by matching shared page anchors.
+- `zh-Hans-navigation.json` — curated zh-Hans tab and group labels overlaid onto the current English navigation tree during publish sync. It labels all 11 published tabs. 8 of 57 top-level groups still show their English label because no translated label exists for them yet.
+- `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `id-navigation.json`, `it-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pl-navigation.json`, `pt-BR-navigation.json`, and `tr-navigation.json` — starter locale labels kept alongside the source repo. Publish sync clones the full English navigation tree, prefixes locale routes, and overlays translated labels by matching shared page anchors. Each starter file currently labels 1 tab and 2 groups, so these locales publish an almost fully English sidebar. Extend a starter file to translate more of the sidebar.
 - `<lang>.tm.jsonl` — translation memory keyed by workflow, prompt version, language, and text hash.
 
 ### Locale code mapping
@@ -74,7 +74,17 @@ Only three locales differ between the two code families: `zh-Hans`/`zh-CN`,
 places. `scripts/docs-i18n` builds the glossary path from the
 directory code (`-lang`), so a glossary must be named `glossary.<dir>.json`, not
 `glossary.<language>.json`. Locales without a navigation file fall back to the
-cloned English tree with route prefixes only.
+cloned English tree with route prefixes only. `composeLocaleNav` in
+`scripts/docs-sync-publish.mjs` prints a warning for each expected navigation file
+that is absent, so the fallback is visible in the sync log.
+
+### The ClawHub tab is excluded from every locale navigation
+
+`cloneEnglishLanguageNav` in `scripts/docs-sync-publish.mjs` drops the `ClawHub`
+tab before it prefixes locale routes. Every locale sidebar therefore omits that
+tab and its pages. ClawHub English docs are authored in `openclaw/clawhub` and
+are copied into the publish tree at publish time (`--clawhub-repo`), so most of
+them have no file in this repository and no locale translation to link to.
 
 In this repo, generated locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `docs/.i18n/zh-TW.tm.jsonl`, `docs/.i18n/ja-JP.tm.jsonl`, `docs/.i18n/es.tm.jsonl`, `docs/.i18n/pt-BR.tm.jsonl`, `docs/.i18n/ko.tm.jsonl`, `docs/.i18n/de.tm.jsonl`, `docs/.i18n/fr.tm.jsonl`, `docs/.i18n/ar.tm.jsonl`, `docs/.i18n/it.tm.jsonl`, `docs/.i18n/vi.tm.jsonl`, `docs/.i18n/nl.tm.jsonl`, `docs/.i18n/fa.tm.jsonl`, `docs/.i18n/tr.tm.jsonl`, `docs/.i18n/uk.tm.jsonl`, `docs/.i18n/id.tm.jsonl`, `docs/.i18n/pl.tm.jsonl`, and `docs/.i18n/th.tm.jsonl` are intentionally no longer committed.
 
@@ -85,7 +95,7 @@ In this repo, generated locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `do
 ```json
 {
   "source": "troubleshooting",
-  "target": "故障排除"
+  "target": "故障排查"
 }
 ```
 
@@ -93,6 +103,12 @@ Fields:
 
 - `source`: English (or source) phrase to prefer.
 - `target`: preferred translation output.
+
+Lookup in `scripts/check-docs-i18n-glossary.mts` is exact and case-sensitive.
+Two entries whose `source` values differ only in case are therefore two separate
+terms. Give them the same `target` when they name the same thing. Keep the
+targets different only when the case itself carries meaning, as it does for a
+display name and its identifier (`Cohere` and `cohere`, `Meta` and `meta`).
 
 ## Translation mechanics
 

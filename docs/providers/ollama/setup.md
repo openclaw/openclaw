@@ -137,14 +137,15 @@ when you want both.
 
 OpenClaw prompts for the base URL, discovers local models, and checks
 `ollama signin` status. When signed in, it suggests hosted defaults
-(`kimi-k2.5:cloud`, `minimax-m2.7:cloud`, `glm-5.1:cloud`, `glm-5.2:cloud`). If
-not signed in, setup stays local-only until you run `ollama signin`.
+(`minimax-m2.7:cloud`, `minimax-m3:cloud`, `kimi-k3:cloud`, `glm-5.1:cloud`,
+`glm-5.2:cloud`). If not signed in, setup stays local-only until you run
+`ollama signin`.
 
 For cloud-only access without a local daemon, use `openclaw onboard --auth-choice ollama-cloud` and see [Ollama Cloud](/providers/ollama-cloud) — that path does not need `ollama signin` or a running server:
 
 ```bash
 openclaw onboard --auth-choice ollama-cloud
-openclaw models set ollama-cloud/kimi-k2.5:cloud
+openclaw models set ollama-cloud/minimax-m2.7:cloud
 ```
 
 The cloud model list shown during `openclaw onboard` is populated live from

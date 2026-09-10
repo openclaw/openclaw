@@ -1,7 +1,11 @@
 /** Normalizes reply directives and delivers block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import { copyReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -156,6 +160,9 @@ export function createBlockReplyDeliveryHandler(params: {
       payload,
       params.applyReplyToMode(mediaNormalizedPayload),
     );
+    if (blockPayload.text?.trim() !== payload.text?.trim()) {
+      setReplyPayloadMetadata(blockPayload, { blockSourceText: undefined });
+    }
     const blockHasNonTextContent = hasOutboundReplyContent({ ...blockPayload, text: undefined });
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).

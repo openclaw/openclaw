@@ -117,23 +117,32 @@ export function findInlineModelMatch(params: {
 }) {
   const inlineModels = params.preparedModels ?? buildInlineProviderModels(params.providers);
   const normalizedProvider = normalizeProviderId(params.provider);
-  const find = (normalizeModelId?: (modelId: string) => string) => {
-    const matchesModelId = (entry: { provider: string; id?: string }) =>
-      matchesProviderScopedModelId({
-        candidateId: entry.id,
-        provider: entry.provider,
-        modelId: params.modelId,
-        ...(normalizeModelId ? { normalizeModelId } : {}),
-      });
-    return (
-      inlineModels.find((entry) => entry.provider === params.provider && matchesModelId(entry)) ??
-      inlineModels.find(
-        (entry) =>
-          normalizeProviderId(entry.provider) === normalizedProvider && matchesModelId(entry),
-      )
-    );
+  const providers = new Set([
+    params.provider,
+    ...inlineModels
+      .filter((entry) => normalizeProviderId(entry.provider) === normalizedProvider)
+      .map((entry) => entry.provider),
+  ]);
+  const find = (providerKeys: Iterable<string>, normalizeModelId?: (modelId: string) => string) => {
+    for (const provider of providerKeys) {
+      const match = findConfiguredProviderModel(
+        { models: inlineModels.filter((entry) => entry.provider === provider) },
+        provider,
+        params.modelId,
+        normalizeModelId,
+      );
+      if (match) {
+        return match;
+      }
+    }
+    return undefined;
   };
-  return find() ?? find(createProviderModelCatalogIdNormalizer(params.provider));
+  // Raw matches choose the provider before declared equivalents are considered.
+  const rawMatch = find(providers);
+  return find(
+    rawMatch ? [rawMatch.provider] : providers,
+    createProviderModelCatalogIdNormalizer(params.provider),
+  );
 }
 
 export function resolveConfiguredProviderConfig(

@@ -28,6 +28,9 @@ describe("computer tool guidance", () => {
     );
 
     expect(description).toContain("Observe first with `get_window_state`");
+    expect(description).toContain("capture the desktop and return frameId");
+    expect(description).toContain("do not accept window or browser targets");
+    expect(description).toContain("observationId for window input");
     expect(description).toContain('`effect:"confirmed"` > `unverifiable` > `suspected_noop`');
     expect(description).toContain("never blind-retry a mutation");
     expect(description).toContain("untrusted input");

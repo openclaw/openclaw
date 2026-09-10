@@ -23,6 +23,25 @@ describe("catalog model identity", () => {
     expect(findModelCatalogEntry(catalog, { modelId: "READER" })).toBeUndefined();
   });
 
+  it.each([false, true])(
+    "prefers a literal catalog row over provider equivalence (reversed=%s)",
+    (reverse) => {
+      const rows = [
+        {
+          provider: "arcee",
+          id: "arcee-ai/trinity-large-thinking",
+          name: "Wire",
+          contextWindow: 32_000,
+        },
+        { provider: "arcee", id: "trinity-large-thinking", name: "Logical", contextWindow: 64_000 },
+      ];
+      const catalog = reverse ? rows.toReversed() : rows;
+      for (const row of rows) {
+        expect(findModelInCatalog(catalog, row.provider, row.id)).toBe(row);
+      }
+    },
+  );
+
   it("keeps unique case-insensitive SDK matches and providerless ambiguity", () => {
     const other = { ...lower, provider: "other" };
     expect(findModelInCatalog([upper], "CUSTOM", " reader ")).toBe(upper);

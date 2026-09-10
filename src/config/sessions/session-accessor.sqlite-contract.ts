@@ -22,6 +22,32 @@ export type SqliteSessionReclamationDiagnostics = {
   workerThreadId?: number;
 };
 
+export type SqliteSessionDatabaseAdmissionDiagnostics = {
+  admissionMode?: "cached" | "async";
+  admissionMs?: number;
+};
+
+/** One cleanup attempt owns these numeric observations; no row or transcript is retained. */
+export type SqliteSessionArtifactPreparationDiagnostics =
+  SqliteSessionDatabaseAdmissionDiagnostics & {
+    nodeInventoryMs?: number;
+    referencePlanningMs?: number;
+    orphanPlanningMs?: number;
+    markerScanMs?: number;
+    nodeRows?: number;
+    windowRows?: number;
+    referenceIds?: number;
+    selectedEntries?: number;
+    markerWindows?: number;
+    markerRows?: number;
+    deletePlans?: number;
+    completed?: boolean;
+  };
+
+export type SqliteSessionWriteDiagnostics = SqliteSessionReclamationDiagnostics & {
+  artifactPreparation?: SqliteSessionArtifactPreparationDiagnostics;
+};
+
 export type SessionTranscriptInstance = SessionEntrySummary & {
   agentId: string;
   /** Stable transcript identity, including rotated history for one logical session key. */

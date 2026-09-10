@@ -48,6 +48,7 @@ vi.mock("../../infra/update-run-ledger.js", () => ({
   findActiveUpdateRun: mocks.findActiveUpdateRun,
   getUpdateRun: mocks.getUpdateRun,
   listUpdateRuns: mocks.listUpdateRuns,
+  reconcileAbandonedUpdateRuns: () => [],
 }));
 vi.mock("../../infra/restart-sentinel.js", () => ({
   readRestartSentinelReadOnly: mocks.readRestartSentinelReadOnly,

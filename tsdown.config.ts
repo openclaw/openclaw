@@ -171,6 +171,8 @@ function nodeBuildConfig(
 ): UserConfig {
   return {
     ...config,
+    // Recovery diagnostics must parse on Node 22; runtime admission still guards live writers.
+    target: "node22",
     dts: declarations,
     hooks: createDeclarationBoundaryHooks(config.hooks),
     env,

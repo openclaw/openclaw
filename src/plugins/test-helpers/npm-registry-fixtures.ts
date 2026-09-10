@@ -24,6 +24,7 @@ type PackPluginParams = {
   dependencies?: Record<string, string>;
   hookName?: string;
   indexJs?: string;
+  manifest?: Record<string, unknown>;
   openclaw?: Record<string, unknown>;
   optionalDependencies?: Record<string, string>;
   packageName: string;
@@ -99,6 +100,7 @@ export async function packPlugins(
             id: params.pluginId ?? params.packageName,
             name: params.pluginId ?? params.packageName,
             configSchema: { type: "object" },
+            ...params.manifest,
           },
           null,
           2,
@@ -192,7 +194,7 @@ export async function startStaticRegistry(
     }
 
     for (const pkg of packageEntries) {
-      if (url.pathname === `/${pkg.encodedPackageName}`) {
+      if (decodeURIComponent(url.pathname) === `/${pkg.packageName}`) {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
           `${JSON.stringify({
@@ -284,7 +286,7 @@ export async function startMutableRegistry(
       return;
     }
 
-    if (url.pathname === `/${encodedPackageName}`) {
+    if (decodeURIComponent(url.pathname) === `/${params.packageName}`) {
       metadataRequests += 1;
       const metadataLatest = latestVersion;
       if (metadataRequests === 1) {

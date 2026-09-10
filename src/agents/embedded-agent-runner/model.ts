@@ -117,13 +117,9 @@ export async function resolveModelAsync(
     options?.agentId,
   );
   const explicitPreparedRuntime = options?.preparedModelRuntime;
-  const emptyDiscoveryStores =
-    options?.skipAgentDiscovery && (!options.authStorage || !options.modelRegistry)
-      ? createEmptyAgentDiscoveryStores()
-      : undefined;
   const needsPreparedSnapshot =
     !explicitPreparedRuntime &&
-    !emptyDiscoveryStores &&
+    !options?.skipAgentDiscovery &&
     (!options?.authStorage || !options?.modelRegistry);
   const publishedSnapshot = needsPreparedSnapshot
     ? resolvePreparedAgentSnapshot(
@@ -153,10 +149,7 @@ export async function resolveModelAsync(
     const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
     let { authStorage, modelRegistry } = options ?? {};
     if (!authStorage || !modelRegistry) {
-      const stores =
-        emptyDiscoveryStores ??
-        preparedModelRuntime?.createStores() ??
-        createEmptyAgentDiscoveryStores();
+      const stores = preparedModelRuntime?.createStores() ?? createEmptyAgentDiscoveryStores();
       authStorage ??= stores.authStorage;
       modelRegistry ??= options?.authStorage
         ? stores.modelRegistry.fork(authStorage)

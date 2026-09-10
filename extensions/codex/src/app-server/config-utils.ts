@@ -7,7 +7,7 @@ import {
   normalizeOptionalString as readNonEmptyString,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenClawExecAsk, OpenClawExecSecurity } from "./config-contracts.js";
+import type { OpenClawExecAsk, OpenClawExecSecurity } from "./config-contracts.shared.js";
 import type { CodexServiceTier } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");

@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
-import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncResult } from "./tunnel-contract.js";
+import type {
+  PreparedRepositoryWorkspace,
+  WorkerWorkspaceCommand,
+  WorkerWorkspaceSyncResult,
+} from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { workspaceSyncError } from "./workspace-sync-helpers.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
@@ -30,8 +34,38 @@ const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" });
 if (token) Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http." + origin + ".extraheader", GIT_CONFIG_VALUE_0: "Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64") });
-const result = spawnSync("git", process.argv.slice(1), { env, stdio: ["ignore", "inherit", "inherit"] });
+const args = process.argv.slice(1);
+// Identity-scoped workspaces can put partial-clone .promisor files at MAX_PATH.
+if (process.platform === "win32") args.unshift("-c", "core.longpaths=true");
+const result = spawnSync("git", args, { env, stdio: ["ignore", "inherit", "inherit"] });
+if (result.error) console.error((result.error.code ? result.error.code + ": " : "") + result.error.message);
 process.exitCode = result.status ?? 1;`;
+
+const BIND_PREPARED_REPOSITORY_JS = String.raw`const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const { origin, commit, branch, workspaceDir } = JSON.parse(fs.readFileSync(0, "utf8"));
+if (fs.realpathSync(process.cwd()) !== fs.realpathSync(workspaceDir)) throw Error("Prepared repository workspace changed");
+const env = { ...process.env };
+for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
+const nil = process.platform === "win32" ? "NUL" : "/dev/null";
+Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: nil, GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1" });
+const git = (args, allowDetached = false) => {
+  const result = spawnSync("git", ["-c", "core.hooksPath=" + nil, "-c", "core.fsmonitor=false", ...args], {
+    env, encoding: "utf8", timeout: 30000, maxBuffer: 262144,
+  });
+  if (allowDetached && result.status === 1) return undefined;
+  if (result.error || result.status !== 0) throw Error("Prepared repository Git verification failed");
+  return result.stdout.trim();
+};
+if (git(["rev-parse", "--verify", "HEAD^{commit}"]) !== commit ||
+    git(["remote", "get-url", "origin"]) !== origin) throw Error("Prepared repository differs from its admitted source");
+git(["check-ref-format", "--branch", branch]);
+const current = git(["symbolic-ref", "--quiet", "--short", "HEAD"], true);
+if (current !== branch) {
+  if (current !== undefined) throw Error("Prepared repository already belongs to another session branch");
+  git(["checkout", "-b", branch, commit]);
+}
+`;
 
 export type NodeWorkerRepositoryOutcome =
   | {
@@ -42,10 +76,26 @@ export type NodeWorkerRepositoryOutcome =
   | {
       kind: "failed";
       reason: "clone-failed" | "checkout-failed" | "manifest-capture-failed" | "manifest-mismatch";
+      detail?: string;
     };
 
 function succeeded(result: SpawnResult): boolean {
   return result.termination === "exit" && result.code === 0;
+}
+
+function gitFailure(
+  reason: "clone-failed" | "checkout-failed",
+  stage: string,
+  result: SpawnResult,
+  invariant?: string,
+): NodeWorkerRepositoryOutcome {
+  return {
+    kind: "failed",
+    reason,
+    detail: boundedWorkerError(
+      `${stage}: ${result.termination} (exit code ${result.code}, signal ${result.signal}): ${invariant ?? (result.stderr.trim() || "no stderr output")}`,
+    ),
+  };
 }
 
 /**
@@ -94,20 +144,30 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
       identity.commit ?? identity.ref ?? "HEAD",
     ]);
     if (!succeeded(fetched)) {
-      return { kind: "failed", reason: "checkout-failed" };
+      return gitFailure("checkout-failed", "git fetch", fetched);
     }
     const resolved = await git(identity, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
     const revision = resolved.stdout.trim();
-    if (
-      !succeeded(resolved) ||
-      !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(revision) ||
-      (identity.commit !== undefined && revision !== identity.commit)
-    ) {
-      return { kind: "failed", reason: "checkout-failed" };
+    if (!succeeded(resolved)) {
+      return gitFailure("checkout-failed", "git rev-parse", resolved);
+    }
+    if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(revision)) {
+      return gitFailure("checkout-failed", "git rev-parse", resolved, "invalid commit revision");
+    }
+    if (identity.commit !== undefined && revision !== identity.commit) {
+      return gitFailure("checkout-failed", "git rev-parse", resolved, "requested commit mismatch");
     }
     const checkedOut = await git(identity, ["checkout", "--detach", "--force", revision]);
-    if (!succeeded(checkedOut) || checkedOut.workspaceDir !== workspaceDir) {
-      return { kind: "failed", reason: "checkout-failed" };
+    if (!succeeded(checkedOut)) {
+      return gitFailure("checkout-failed", "git checkout --detach", checkedOut);
+    }
+    if (checkedOut.workspaceDir !== workspaceDir) {
+      return gitFailure(
+        "checkout-failed",
+        "git checkout --detach",
+        checkedOut,
+        "workspace directory changed during checkout",
+      );
     }
     const captured = await capture(checkedOut.workspaceDir, revision);
     const manifestRef = captured.stdout.trim();
@@ -129,6 +189,37 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
     };
   };
   return {
+    bindPreparedRepository: async (
+      identity: RepositoryIdentity & { commit: string; branch: string },
+      prepared: PreparedRepositoryWorkspace,
+    ): Promise<WorkerWorkspaceSyncResult & { mode: "repository" }> => {
+      if (identity.commit !== prepared.baseCommit) {
+        throw new Error("Prepared repository does not match the pinned session commit");
+      }
+      // Binding changes only the session branch. It must never fetch, reset, or
+      // reseed the fixed workspace that already owns reusable build outputs.
+      const bound = await exec({
+        argv: ["node", "-e", BIND_PREPARED_REPOSITORY_JS],
+        input: JSON.stringify({
+          origin: identity.origin,
+          commit: identity.commit,
+          branch: identity.branch,
+          workspaceDir: prepared.workspaceDir,
+        }),
+        timeoutMs: GIT_TIMEOUT_MS,
+        transportRetry: "never",
+      });
+      if (!succeeded(bound) || bound.workspaceDir !== prepared.workspaceDir) {
+        throw new Error("Prepared repository session binding failed");
+      }
+      return {
+        mode: "repository",
+        remoteWorkspaceDir: prepared.workspaceDir,
+        manifestRef: prepared.preparedManifestRef,
+        baseManifestRef: prepared.sourceManifestRef,
+        baseCommit: prepared.baseCommit,
+      };
+    },
     configureAuthor: async (workspaceDir: string, author: { name?: string; email?: string }) => {
       for (const [key, value] of Object.entries(author)) {
         if (!value) {
@@ -215,7 +306,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
           true,
         );
         if (!succeeded(cloned)) {
-          return { kind: "failed", reason: "clone-failed" };
+          return gitFailure("clone-failed", "git clone", cloned);
         }
         outcome = await checkoutAndCapture(
           identity,
@@ -255,7 +346,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
           outcome.result.baseCommit,
         ]);
         if (!succeeded(bound)) {
-          return { kind: "failed", reason: "checkout-failed" };
+          return gitFailure("checkout-failed", "git checkout -B", bound);
         }
       }
       return outcome;

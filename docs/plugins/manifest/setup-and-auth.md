@@ -51,6 +51,8 @@ resource is missing.
 
 Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenClaw reads this before provider runtime loads. Provider setup lists use these manifest choices, descriptor-derived setup choices, and install-catalog metadata without loading provider runtime.
 
+When a manifest choice is selected, setup resolves its `provider` and `method` in the owning installed plugin. The runtime auth method does not need to repeat `choiceId` in its wizard metadata. A different plugin or auth method cannot satisfy that declared choice. Explicit `provider-plugin:<provider>:<method>` choices retain their encoded target.
+
 | Field                  | Required | Type                                                                  | What it means                                                                                                                       |
 | ---------------------- | -------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `provider`             | Yes      | `string`                                                              | Provider id this choice belongs to.                                                                                                 |
@@ -159,6 +161,15 @@ Because setup lookup can execute plugin-owned `setup-api` code, normalized `setu
 
 When setup runtime executes, setup registry diagnostics report providers or CLI backends that `setup-api` registers without matching manifest declarations. CLI backend descriptors also report a missing runtime registration because setup lookup needs the registered backend configuration. Provider descriptors may remain metadata-only even when the same setup module contributes migrations, CLI backends, probes, or selected provider runtimes.
 
+### setup fields
+
+| Field              | Required | Type       | What it means                                                                                                                                  |
+| ------------------ | -------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `providers`        | No       | `object[]` | Provider setup descriptors exposed during setup and onboarding.                                                                                |
+| `cliBackends`      | No       | `string[]` | Setup-time backend ids used for descriptor-first setup lookup. Keep normalized ids globally unique.                                            |
+| `configMigrations` | No       | `string[]` | Config migration ids owned by this plugin's setup surface.                                                                                     |
+| `requiresRuntime`  | No       | `boolean`  | Whether setup still needs `setup-api` execution after descriptor lookup. Explicit `false` disables it; omission preserves the legacy fallback. |
+
 ### setup.providers reference
 
 | Field          | Required | Type       | What it means                                                                                    |
@@ -174,22 +185,13 @@ Supported evidence entries:
 
 | Field              | Required | Type       | What it means                                                                                                  |
 | ------------------ | -------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
-| `type`             | Yes      | `string`   | Currently `local-file-with-env`.                                                                               |
+| `type`             | Yes      | `string`   | Always `local-file-with-env`.                                                                                  |
 | `fileEnvVar`       | No       | `string`   | Env var containing an explicit credential file path.                                                           |
 | `fallbackPaths`    | No       | `string[]` | Local credential file paths checked when `fileEnvVar` is absent or empty. Supports `${HOME}` and `${APPDATA}`. |
 | `requiresAnyEnv`   | No       | `string[]` | At least one listed env var must be non-empty before the evidence is valid.                                    |
 | `requiresAllEnv`   | No       | `string[]` | Every listed env var must be non-empty before the evidence is valid.                                           |
 | `credentialMarker` | Yes      | `string`   | Non-secret marker returned when the evidence is present.                                                       |
 | `source`           | No       | `string`   | User-facing source label for auth/status output.                                                               |
-
-### setup fields
-
-| Field              | Required | Type       | What it means                                                                                                                                  |
-| ------------------ | -------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `providers`        | No       | `object[]` | Provider setup descriptors exposed during setup and onboarding.                                                                                |
-| `cliBackends`      | No       | `string[]` | Setup-time backend ids used for descriptor-first setup lookup. Keep normalized ids globally unique.                                            |
-| `configMigrations` | No       | `string[]` | Config migration ids owned by this plugin's setup surface.                                                                                     |
-| `requiresRuntime`  | No       | `boolean`  | Whether setup still needs `setup-api` execution after descriptor lookup. Explicit `false` disables it; omission preserves the legacy fallback. |
 
 ## uiHints reference
 

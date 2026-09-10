@@ -145,6 +145,12 @@ Each entry points at the page that now holds the content.
   <Card title="Ollama Web Search" href="/tools/ollama-search" icon="magnifying-glass">
     Full setup and behavior details for Ollama-powered web search.
   </Card>
+  <Card title="LM Studio" href="/providers/lmstudio" icon="desktop">
+    Another local runner for GGUF or MLX models, as a GUI app or a headless server.
+  </Card>
+  <Card title="Memory LanceDB" href="/plugins/memory-lancedb" icon="database">
+    Long-term memory in LanceDB, with local Ollama-compatible embeddings.
+  </Card>
   <Card title="Configuration" href="/gateway/configuration" icon="gear">
     Full config reference.
   </Card>

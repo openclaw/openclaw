@@ -4,6 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as logging from "../../logging/logger.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -14,7 +15,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readArtifactPreparationLogs } from "./session-accessor.sqlite-diagnostics.test-support.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
@@ -51,9 +52,13 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     archiveMaterializationHook.afterMaterialize = undefined;
+    await logging.flushLogger();
+    logging.resetLogger();
     closeOpenClawAgentDatabasesForTest();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("does not start a worker when startup cleanup has nothing to reclaim", async () => {
@@ -85,57 +90,116 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(entry);
   });
 
-  it("rejects cleanup planning when a native scan fails after an orphan marker", async () => {
-    const sessionKey = "agent:main:marker-scan-history";
-    const sessionId = "marker-scan-history";
-    const events = [
-      { type: "metadata", runId: "cleanup-race-marker" },
-      { type: "metadata", runId: "failing-tail" },
-    ];
-    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: 1 });
-    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      { sessionId: "marker-scan-current", updatedAt: Date.now() },
-    );
-    const database = openDatabase(storePath);
-    const failure = new Error("late native transcript read failure");
-    const observed: unknown[] = [];
-    database.db.function("cleanup_marker_event", (eventJson) => {
-      observed.push(eventJson);
-      if (eventJson === JSON.stringify(events[1])) {
-        throw failure;
-      }
-      return eventJson;
-    });
-    // A connection-local view fails during native stepping without changing the saved schema.
-    database.db.exec(`CREATE TEMP VIEW transcript_events AS
-      SELECT session_id, seq, cleanup_marker_event(event_json) AS event_json, created_at
-      FROM main.transcript_events`);
-    let caught: unknown;
-    try {
-      planSessionLifecycleArtifactCleanup(database, {
-        archiveRemovedEntryTranscripts: false,
-        archiveDirectory: path.dirname(storePath),
-        sessionKeySegmentPrefix: "unrelated-prefix-",
-        transcriptContentMarker: "cleanup-race-marker",
-        orphanTranscriptMinAgeMs: 0,
-        nowMs: Date.now(),
+  it.each([false, true])(
+    "reports warm marker phases without changing native failure=%s",
+    async (fail) => {
+      const sessionKey = "agent:main:marker-scan-history";
+      const sessionId = "marker-scan-history";
+      const events = [
+        { type: "metadata", runId: fail ? "cleanup-race-marker" : "ordinary-row" },
+        { type: "metadata", runId: "failing-tail" },
+      ];
+      await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: 1 });
+      await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: "marker-scan-current", updatedAt: Date.now() },
+      );
+      const before = structuredClone(loadSessionEntry({ sessionKey, storePath }));
+      const database = openDatabase(storePath);
+      const failure = new Error("late native transcript read failure");
+      const observed: unknown[] = [];
+      let clock = 0;
+      let advanceClock = true;
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+      database.db.function("cleanup_marker_event", (eventJson) => {
+        observed.push(eventJson);
+        if (advanceClock) {
+          clock += 600;
+        }
+        if (fail && eventJson === JSON.stringify(events[1])) {
+          throw failure;
+        }
+        return eventJson;
       });
-    } catch (error) {
-      caught = error;
-    } finally {
-      database.db.exec("DROP VIEW temp.transcript_events");
-    }
-    expect(caught).toBe(failure);
-    expect(observed).toContain(JSON.stringify(events[0]));
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionId: "marker-scan-current",
-    });
-    await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(
-      events,
-    );
-  });
+      database.db.function("cleanup_event_age", (createdAt) => {
+        if (advanceClock) {
+          clock += 20;
+        }
+        return createdAt;
+      });
+      // Native age and payload reads advance the clock, not the number of timer calls.
+      database.db.exec(`CREATE TEMP VIEW transcript_events AS
+        SELECT session_id, seq, cleanup_marker_event(event_json) AS event_json,
+          cleanup_event_age(created_at) AS created_at
+        FROM main.transcript_events`);
+      const logPath = path.join(tempDirs.make("cleanup-diagnostics-log-"), "writer.log");
+      vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+      logging.setLoggerOverride({ level: "warn", file: logPath });
+      const cleanup = () =>
+        cleanupSessionLifecycleArtifactsCore({
+          storePath,
+          archiveRemovedEntryTranscripts: false,
+          sessionKeySegmentPrefix: "unrelated-prefix-",
+          transcriptContentMarker: "cleanup-race-marker",
+          orphanTranscriptMinAgeMs: 0,
+          nowMs: Date.now(),
+        });
+      let workersStarted = 0;
+      const onWorker = () => {
+        workersStarted += 1;
+      };
+      channel("worker_threads").subscribe(onWorker);
+      try {
+        if (fail) {
+          await expect(cleanup()).rejects.toBe(failure);
+        } else {
+          await expect(cleanup()).resolves.toEqual({
+            removedEntries: 0,
+            archivedTranscriptArtifacts: 0,
+          });
+        }
+        const records = await readArtifactPreparationLogs(logPath);
+        expect(records).toHaveLength(1);
+        expect(records[0]?.message).toBe(
+          fail ? "SQLite session write failed" : "slow SQLite session write",
+        );
+        expect(records[0]?.details.artifactPreparation).toEqual({
+          admissionMode: "cached",
+          admissionMs: 0,
+          nodeInventoryMs: 0,
+          referencePlanningMs: 0,
+          orphanPlanningMs: 40,
+          markerScanMs: 1200,
+          nodeRows: 1,
+          windowRows: 2,
+          referenceIds: 1,
+          selectedEntries: 0,
+          markerWindows: 1,
+          markerRows: fail ? 1 : 2,
+          ...(fail ? {} : { deletePlans: 0 }),
+          completed: !fail,
+        });
+        expect(observed).toEqual(events.map((event) => JSON.stringify(event)));
+        if (!fail) {
+          advanceClock = false;
+          await expect(cleanup()).resolves.toEqual({
+            removedEntries: 0,
+            archivedTranscriptArtifacts: 0,
+          });
+          expect(await readArtifactPreparationLogs(logPath)).toEqual(records);
+        }
+      } finally {
+        channel("worker_threads").unsubscribe(onWorker);
+        database.db.exec("DROP VIEW temp.transcript_events");
+      }
+      expect(workersStarted).toBe(0);
+      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before);
+      await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(
+        events,
+      );
+    },
+  );
 
   it("reclaims orphan-only history and republishes pending archives on an empty pass", async () => {
     const now = Date.now();

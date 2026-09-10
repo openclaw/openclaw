@@ -44,7 +44,7 @@ export function resolveLegacyAuthProfileSourceCandidates(params: {
   return candidates;
 }
 
-/** Detects retired auth files by name only; runtime code must never read their contents. */
+/** Detect retired files by name; only migration diagnostics may inspect provider metadata. */
 export function listLegacyAuthProfileSources(params: {
   agentDir?: string;
   env?: NodeJS.ProcessEnv;

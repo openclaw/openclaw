@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { DatabaseSync } from "node:sqlite";
 import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -16,9 +17,11 @@ import {
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "../../agents/prepared-model-runtime.js";
+import * as preparedRuntimes from "../../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../../agents/sessions/model-registry.js";
+import { acquireSimpleCompletionModelForAgent } from "../../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindModelLlmRuntime, getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import {
@@ -26,7 +29,11 @@ import {
   extractAssistantText,
   prepareSimpleCompletionModelForAgent,
 } from "../../plugin-sdk/simple-completion-runtime.js";
-import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import {
+  AsyncWorkScope,
+  captureAsyncWorkTracker,
+  getAsyncWorkSignal,
+} from "../../shared/async-work-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { LegacyPluginSdkResourceHost } from "../legacy-sdk-resource-host.js";
 import { resetPluginLoaderTestStateForTest } from "../loader.test-fixtures.js";
@@ -39,6 +46,10 @@ import { createSyncSuiteTempRootTracker } from "../test-helpers/fs-fixtures.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
 it.each([
+  "setup-success",
+  "setup-error",
+  "sdk-setup-error",
+  "sdk-setup-close",
   "overlap",
   "config",
   "auth",
@@ -63,6 +74,8 @@ it.each([
 ] as const)("keeps completion ownership coherent: %s", async (testCase) => {
   const sdk = testCase.startsWith("sdk-");
   const mode = testCase.replace(/^sdk-/, "");
+  const setupMode = mode.startsWith("setup-");
+  const setupKey = "__openclawCompletionSetupProof";
   const anthropicReadCancel = mode === "anthropic-read-cancel";
   const roots = createSyncSuiteTempRootTracker("runtime-llm-prepared-owner");
   const root = fs.realpathSync(roots.makeTempDir());
@@ -77,7 +90,17 @@ it.each([
     `module.exports = {
       id: ${JSON.stringify(fixture.pluginId)},
       register(api) {
-        api.registerProvider({ id: ${JSON.stringify(fixture.providerId)}, label: "Lease fixture", auth: [] });
+        const setup = globalThis[${JSON.stringify(setupKey)}];
+        if (setup) {
+          const file = require("node:path").join(__dirname, "setup-" + (++setup.count) + ".sqlite");
+          const db = new (require("node:sqlite").DatabaseSync)(file);
+          db.exec("CREATE TABLE observations (value INTEGER); INSERT INTO observations VALUES (42)");
+          const record = { file, disposed: 0, read: () => db.prepare("SELECT value FROM observations").get().value, close: setup.deferred() };
+          api.registerRuntimeLifecycle({ id: "setup-db", dispose() { record.disposed++; db.close(); record.close.resolve(); } });
+          api.registerProvider({ id: ${JSON.stringify(fixture.providerId)}, label: "Lease fixture", auth: [], prepareRuntimeAuth: () => setup.run(record) });
+        } else {
+          api.registerProvider({ id: ${JSON.stringify(fixture.providerId)}, label: "Lease fixture", auth: [] });
+        }
       },
     };`,
   );
@@ -392,6 +415,111 @@ it.each([
           }),
         ]);
       try {
+        if (setupMode) {
+          type SetupRecord = {
+            file: string;
+            disposed: number;
+            read: () => number;
+            close: ReturnType<typeof createDeferred>;
+          };
+          let record: SetupRecord | undefined;
+          let setupTail: Promise<void> | undefined;
+          let calls = 0;
+          // Use the real already-managed read-only producer; RUN activation is separate.
+          transportSpies.push(
+            vi
+              .spyOn(preparedRuntimes, "acquireAgentRunPreparedModelRuntime")
+              .mockImplementation((runtimeInput, options) =>
+                preparedRuntimes.acquireReadOnlyPreparedModelRuntime(
+                  runtimeInput,
+                  options?.abortSignal,
+                  options?.catalogMode ?? "static",
+                ),
+              ),
+          );
+          Object.defineProperty(globalThis, setupKey, {
+            configurable: true,
+            value: {
+              count: 0,
+              deferred: createDeferred,
+              run: async (source: SetupRecord) => {
+                if (++calls === 1) {
+                  record = source;
+                  setupTail = captureAsyncWorkTracker()(async () => {
+                    workStarted.resolve();
+                    await finishWork.promise;
+                    expect(source.read()).toBe(42);
+                  });
+                  void setupTail.catch(() => {});
+                  if (mode === "setup-error") {
+                    throw new Error("fixture setup failure");
+                  }
+                }
+                return {};
+              },
+            },
+          });
+          const host = sdkHosts[0];
+          const first =
+            mode === "setup-success"
+              ? acquireSimpleCompletionModelForAgent({ cfg, agentId: "main" }).then((acquired) => {
+                  if ("error" in acquired) {
+                    throw new Error(acquired.error);
+                  }
+                  acquired.release();
+                })
+              : sdk
+                ? host
+                    .run(() => prepareSimpleCompletionModelForAgent({ cfg, agentId: "main" }))
+                    .then(() => undefined)
+                : start(0).then(() => undefined);
+          pending.push(first);
+          await Promise.race([
+            workStarted.promise,
+            first.then(() => {
+              throw new Error("Setup did not start its real descendant");
+            }),
+          ]);
+          if (mode === "setup-error") {
+            await expect(first).rejects.toThrow("fixture setup failure");
+            expect(requests).toHaveLength(0);
+          } else if (sdk || mode === "setup-success") {
+            await first;
+          } else {
+            await waitForRequest(0, first);
+            finish(requests[0]!, 0);
+            await first;
+          }
+          if (!record || !setupTail) {
+            throw new Error("Missing setup source or descendant");
+          }
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect.soft(record.disposed).toBe(0);
+          let hostClosed = false;
+          const closing = sdk
+            ? host.close().then(() => {
+                hostClosed = true;
+              })
+            : undefined;
+          await Promise.resolve();
+          if (sdk) {
+            expect.soft(hostClosed).toBe(false);
+          }
+          finishWork.resolve();
+          await setupTail;
+          await closing;
+          await record.close.promise;
+          expect(record.disposed).toBe(1);
+          const reopened = new DatabaseSync(record.file, { readOnly: true });
+          try {
+            expect(reopened.prepare("SELECT value FROM observations").get()?.value).toBe(42);
+          } finally {
+            reopened.close();
+          }
+          return;
+        }
         if (sdk) {
           const [firstHost, secondHost, thirdHost, foreignHost] = sdkHosts;
           await foreignHost.close();
@@ -802,6 +930,7 @@ it.each([
           });
         }
       } finally {
+        Reflect.deleteProperty(globalThis, setupKey);
         finishPrepare.resolve();
         finishWork.resolve();
         finishing = true;

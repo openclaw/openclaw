@@ -1,12 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
+import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -114,6 +116,52 @@ function snapshotTree(root: string): string[] {
 }
 
 describe("Git database admission", () => {
+  it("finishes with a recorded warning when inspection clone cleanup fails", async () => {
+    const state = fixture();
+    const remove = fsPromises.rm.bind(fsPromises);
+    let retained: string | undefined;
+    const denial = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+      if (
+        typeof target === "string" &&
+        path.basename(target).startsWith("openclaw-git-admission-")
+      ) {
+        retained = target;
+        throw new Error("synthetic inspection cleanup denied");
+      }
+      return remove(target, options);
+    });
+    try {
+      const onStepComplete = vi.fn();
+      const result = await state.run({
+        beforeGitMutation: async () => undefined,
+        progress: { onStepComplete },
+      });
+      expect(result.status, JSON.stringify(result)).toBe("ok");
+      expect(state.git(state.install, "rev-parse", "HEAD")).toBe(state.target);
+      expect(onStepComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "git target inspection cleanup",
+          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+        }),
+      );
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "git target inspection cleanup",
+          advisory: expect.objectContaining({
+            message: expect.stringContaining("synthetic inspection cleanup denied"),
+          }),
+        }),
+      );
+      expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+        "inspection cleanup",
+      );
+    } finally {
+      denial.mockRestore();
+      if (retained) {
+        await remove(retained, { recursive: true, force: true });
+      }
+    }
+  });
   it("preserves dev upstream setup from a cold tracking inventory", async () => {
     const state = fixture();
     state.git(state.install, "checkout", "-b", "maintenance");

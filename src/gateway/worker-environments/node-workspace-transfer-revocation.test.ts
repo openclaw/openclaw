@@ -24,11 +24,15 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("workspace upload cancellation", () => {
   it.each([
-    { boundary: "before handler", abort: false },
-    { boundary: "before handler", abort: true },
-    { boundary: "after body", abort: false },
-    { boundary: "after body", abort: true },
-  ] as const)("settles $boundary with owner abort=$abort", async ({ boundary, abort }) => {
+    { boundary: "before handler", cancellation: "none" },
+    { boundary: "before handler", cancellation: "owner" },
+    { boundary: "before handler", cancellation: "discard" },
+    { boundary: "after body", cancellation: "none" },
+    { boundary: "after body", cancellation: "owner" },
+    { boundary: "after body", cancellation: "discard" },
+    { boundary: "after body", cancellation: "discard-and-close" },
+    { boundary: "after body", cancellation: "discard-and-fail" },
+  ] as const)("settles $boundary with $cancellation", async ({ boundary, cancellation }) => {
     const root = tempDirs.make("workspace-upload-cancellation-");
     const localPath = path.join(root, "source");
     await fs.mkdir(localPath);
@@ -65,6 +69,9 @@ describe("workspace upload cancellation", () => {
           // Staged-manifest verification happens after the reader consumes EOF.
           reached.resolve();
           await release.promise;
+          if (cancellation === "discard-and-fail") {
+            throw new Error("Staging validation failed while discard was waiting");
+          }
         }
         return await realpath(...args);
       });
@@ -112,22 +119,53 @@ describe("workspace upload cancellation", () => {
       async (response) => ({ status: response.status, body: await response.json() }),
       () => "rejected" as const,
     );
+    let cleanup: Promise<unknown> | undefined;
+    let cleanupSettled = false;
+    let expectedDisposalError: unknown;
     try {
       await withTestTimeout(reached.promise, 2_000, "upload did not reach cancellation boundary");
       if (boundary === "after body") {
         expect(incoming?.readableEnded).toBe(true);
         expect(incoming?.destroyed).toBe(true);
       }
-      if (abort) {
+      if (cancellation === "owner") {
         owner.abort(new Error("Workspace transfer owner closed"));
       }
-      if (!abort || boundary === "before handler") {
+      if (cancellation.startsWith("discard")) {
+        cleanup = Promise.all([
+          service.discardUpload("environment", token),
+          service.discardUpload("environment", token),
+          ...(cancellation === "discard-and-close" ? [service.close("environment")] : []),
+        ]).then(() => {
+          cleanupSettled = true;
+        });
+        void cleanup.catch(() => undefined);
+        if (boundary === "before handler") {
+          await withTestTimeout(cleanup, 2_000, "discard waited for an unstarted handler");
+        } else {
+          expect(() => service.prepareUpload("environment", snapshot.manifestRef)).toThrow();
+        }
+      }
+      if (cancellation === "none" || boundary === "before handler") {
         release.resolve();
       }
       const result = await withTestTimeout(request, 2_000, "upload response remained open");
+      if (cleanup && boundary === "after body") {
+        expect(cleanupSettled, "cleanup must join blocked staging validation").toBe(false);
+      }
       release.resolve();
       await finished.promise;
-      if (abort) {
+      if (cancellation === "discard-and-fail") {
+        await expect(
+          cleanup?.catch((error: unknown) => {
+            expectedDisposalError = error;
+            throw error;
+          }),
+        ).rejects.toThrow("payload did not match its staged result");
+      } else {
+        await cleanup;
+      }
+      if (cancellation !== "none") {
         expect(result).toBe("rejected");
         expect(() => service.takeUpload("environment", snapshot.manifestRef)).toThrow();
       } else {
@@ -136,15 +174,28 @@ describe("workspace upload cancellation", () => {
           snapshot.manifestRef,
         );
       }
+      if (cancellation === "discard" || cancellation === "discard-and-fail") {
+        const replacement = service.prepareUpload("environment", snapshot.manifestRef);
+        await service.discardUpload("environment", token);
+        expect(() => service.prepareUpload("environment", snapshot.manifestRef)).toThrow(
+          "already active",
+        );
+        await service.discardUpload("environment", replacement);
+      }
     } finally {
       release.resolve();
       server.closeAllConnections();
       await request;
       await finished.promise;
+      await cleanup?.catch(() => undefined);
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
-      await service.closeAll();
+      await service.closeAll().catch((error: unknown) => {
+        if (error !== expectedDisposalError) {
+          throw error;
+        }
+      });
     }
   });
 });

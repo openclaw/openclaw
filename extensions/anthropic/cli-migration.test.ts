@@ -4,6 +4,7 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 
 const { probeClaudeCliAuthStatus } = vi.hoisted(() => ({
   probeClaudeCliAuthStatus: vi.fn(),
@@ -126,11 +127,7 @@ function createProviderAuthContext(
     agentDir: "/tmp/openclaw/agents/main",
     workspaceDir: "/tmp/openclaw/workspace",
     prompter: createTestWizardPrompter(),
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    },
+    runtime: createRuntimeSpies(),
     allowSecretRefPrompt: false,
     isRemote: false,
     openUrl: vi.fn(),
@@ -148,11 +145,7 @@ function createProviderAuthMethodNonInteractiveContext(
     config,
     baseConfig: config,
     opts: {},
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    },
+    runtime: createRuntimeSpies(),
     agentDir: "/tmp/openclaw/agents/main",
     workspaceDir: "/tmp/openclaw/workspace",
     resolveApiKey: vi.fn(async () => null),

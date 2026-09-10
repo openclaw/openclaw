@@ -12,6 +12,8 @@ export type AgentHarnessUserInputQuestion = {
   id: string;
   header: string;
   question: string;
+  /** External step to open without answering the question. */
+  url?: string;
   multiSelect?: boolean;
   isOther?: boolean;
   isSecret?: boolean;
@@ -125,6 +127,10 @@ function buildAgentHarnessQuestionPresentation(params: {
       {
         type: "buttons",
         buttons: [
+          // Navigation must not resolve the question before the external step completes.
+          ...(question.url
+            ? [{ label: "Open link", action: { type: "url" as const, url: question.url } }]
+            : []),
           ...options.map((option) => ({
             label: formatText(option.label),
             action: {

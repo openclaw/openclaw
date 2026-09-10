@@ -125,13 +125,15 @@ suite.define(() => {
       expect(revealDelay.delay).toBeGreaterThanOrEqual(480);
       expect(revealDelay.previousVisible).toBe(false);
       expect(revealDelay.delay).toBeLessThan(1_000);
-      expect(
-        await loader.evaluate((node) => ({
-          opacity: getComputedStyle(node).opacity,
-          duration: getComputedStyle(node).animationDuration,
-          reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
-        })),
-      ).toEqual({ opacity: "1", duration: "1e-05s", reduced: true });
+      await expect
+        .poll(() =>
+          loader.evaluate((node) => ({
+            opacity: getComputedStyle(node).opacity,
+            duration: getComputedStyle(node).animationDuration,
+            reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+          })),
+        )
+        .toEqual({ opacity: "1", duration: "1e-05s", reduced: true });
       expect(
         await page
           .locator(".chat-pane-cache__pane--visible")

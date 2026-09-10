@@ -834,6 +834,8 @@ jobs:
           args=(
             --requested "$REQUESTED_BASELINES"
             --fallback "$fallback_baseline"
+            --candidate-version "$CANDIDATE_VERSION"
+            --candidate-published "$CANDIDATE_PUBLISHED"
             --github-output "$GITHUB_OUTPUT"
           )
           if [[ -n "$npm_versions_json" ]]; then

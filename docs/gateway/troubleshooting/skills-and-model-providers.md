@@ -63,7 +63,7 @@ openclaw config get agents.defaults.models
 
 Look for:
 
-- Selected Anthropic model is a GA-capable 1M Claude 4.x model (Opus 4.6/4.7/4.8, Sonnet 4.6), or the model config still carries legacy `params.context1m: true`.
+- Selected Anthropic model has a native 1M context window (Opus 5, Sonnet 5, Mythos 5, Fable 5.1, Fable 5, Opus 4.6/4.7/4.8, Sonnet 4.6), or the model config still carries legacy `params.context1m: true`.
 - Current Anthropic credential is not eligible for long-context usage.
 - Requests fail only on long sessions/model runs that need the 1M context path.
 

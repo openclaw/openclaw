@@ -11,8 +11,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
-import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { placementTurnOwner } from "./placement-record.js";
 import {
   WorkerRunnerCapacityError,
@@ -43,7 +41,6 @@ import {
   type WorkerTurnEnvironmentService,
   type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 describe("worker turn launcher failure recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
@@ -316,180 +313,6 @@ describe("worker turn launcher failure recovery", () => {
       expect(destroy).not.toHaveBeenCalled();
     },
   );
-
-  it("projects a stale Gateway build teardown and records its durable placement reason", async () => {
-    seedActivePlacement();
-    const terminalReason = `cloud worker disappeared: ${STALE_WORKER_BUILD_REASON}`;
-    const staleEnvironment: NonNullable<ReturnType<WorkerTurnEnvironmentService["get"]>> = {
-      ...attachedEnvironment(),
-      state: "failed" as const,
-      leaseId: null,
-      sshEndpoint: null,
-      sharedHost: null,
-      ownerEpoch: OWNER_EPOCH + 1,
-      attachedSessionIds: [],
-      tunnelStatus: "stopped",
-      error: STALE_WORKER_BUILD_REASON,
-    };
-    const environments: WorkerTurnEnvironmentService = {
-      ...unusedEnvironments(),
-      get: vi.fn(() => staleEnvironment),
-    };
-    const reconcileActivePlacement = vi.fn(async () => {
-      const active = placements.get(SESSION_ID);
-      if (active?.state !== "active") {
-        throw new Error("expected active stale-build placement");
-      }
-      const draining = placements.startDrain({
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        expectedGeneration: active.generation,
-      });
-      if (draining.state !== "draining") {
-        throw new Error("expected draining stale-build placement");
-      }
-      const reconciling = placements.startReconcile({
-        sessionId: draining.sessionId,
-        environmentId: draining.environmentId,
-        ownerEpoch: draining.activeOwnerEpoch,
-        expectedGeneration: draining.generation,
-      });
-      if (reconciling.state !== "reconciling") {
-        throw new Error("expected reconciling stale-build placement");
-      }
-      placements.fail({
-        sessionId: reconciling.sessionId,
-        expectedGeneration: reconciling.generation,
-        recoveryError: terminalReason,
-      });
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments,
-      placements,
-      reconcileActivePlacement,
-    });
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-stale-worker-build",
-        },
-        turn("run-stale-worker-build"),
-        async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toThrow(`Worker turn rejected in placement failed: ${terminalReason}`);
-    expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
-    expect(placements.get(SESSION_ID)).toMatchObject({
-      state: "failed",
-      recoveryError: terminalReason,
-      terminalReason,
-      turnClaim: null,
-    });
-  });
-
-  it("terminalizes a stale build rejected during live tunnel admission", async () => {
-    seedActivePlacement();
-    const terminalReason = `cloud worker disappeared: ${STALE_WORKER_BUILD_REASON}`;
-    let environment = attachedEnvironment();
-    const stopTunnel = vi.fn(async () => {});
-    const destroy = vi.fn(async () => environment);
-    const reconcileOnce = vi.fn(async () => {
-      environment = {
-        ...environment,
-        state: "failed",
-        leaseId: null,
-        sshEndpoint: null,
-        sharedHost: null,
-        ownerEpoch: OWNER_EPOCH + 1,
-        attachedSessionIds: [],
-        tunnelStatus: "stopped",
-        error: STALE_WORKER_BUILD_REASON,
-      };
-    });
-    const environments: WorkerTurnEnvironmentService &
-      Parameters<typeof createWorkerPlacementDispatchService>[0]["environments"] = {
-      ...unusedEnvironments(),
-      recordError: vi.fn(() => {
-        throw new Error("unexpected provisioning interruption");
-      }),
-      supportsProviderExecutionMode: vi.fn(() => true),
-      get: vi.fn(() => environment),
-      acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
-      startTunnel: vi.fn(async () => {
-        throw new StaleWorkerBuildError();
-      }),
-      stopTunnel,
-      destroy,
-      requestDestroy: destroy,
-      attachSession: vi.fn(async () => {
-        throw new Error("unexpected worker session attachment");
-      }),
-      create: vi.fn(async () => {
-        throw new Error("unexpected worker environment creation");
-      }),
-      createFromProfileSnapshot: vi.fn(async () => {
-        throw new Error("unexpected inherited worker environment creation");
-      }),
-      reconcileOnce,
-      reconcileEnvironment: vi.fn(),
-    };
-    const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
-    const dispatch = createWorkerPlacementDispatchService({
-      placements,
-      environments,
-      runnerAvailability: { read: () => undefined, version: () => 0 },
-      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: root }),
-      runActivationBarrier: async ({ activate }) => activate(),
-      runMoveBarrier: async ({ begin }) => begin(),
-      resolveMoveDestination: async () => undefined,
-      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim({ kind: "local", path: root }, begin()),
-      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      workspaceOperations,
-      resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
-      reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments,
-      placements,
-      reconcileActivePlacement: dispatch.reconcileActive,
-      workspaceOperations,
-    });
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-live-stale-worker-build",
-        },
-        turn("run-live-stale-worker-build"),
-        async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toThrow(`Worker turn rejected in placement failed: ${terminalReason}`);
-
-    expect(reconcileOnce).toHaveBeenCalledOnce();
-    expect(placements.get(SESSION_ID)).toMatchObject({
-      state: "failed",
-      recoveryError: terminalReason,
-      terminalReason,
-      turnClaim: null,
-    });
-    expect(placements.get(SESSION_ID)).not.toMatchObject({
-      state: "active",
-      recoveryError: null,
-      terminalReason: null,
-    });
-  });
 
   it("keeps an active placement when tunnel startup fails before remote handoff", async () => {
     seedActivePlacement();

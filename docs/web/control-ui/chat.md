@@ -2,6 +2,7 @@
 summary: "Composer controls, transcript rendering, side chat, and hosted embeds"
 read_when:
   - Using the composer, tool cards, or the session rail
+  - Finding and installing capabilities from chat
   - Rendering tables, Mermaid diagrams, or hosted embeds
   - Adjusting transcript layout or message width
 title: "Chat"
@@ -43,6 +44,8 @@ Select **+** beside the chat composer to open attachments and session capabiliti
 
 These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. The **N session overrides** pill in the composer footer reopens the menu; select its clear action to remove all capability overrides in one click.
 
+When `tools.web.search.enabled` is `false`, **Web search** stays off in Chat and New Session. The disabled control explains the global setting. If a session has an older enable override, selecting the control clears that override while search stays off. An explicit session disable remains saved.
+
 Video files selected in Chat or New Session show a small local frame preview with a play badge beside the filename. The slot keeps its size while loading. If the browser cannot decode the video promptly, the play icon remains. Removing the attachment releases its preview; generating the preview does not upload the video.
 
 In **Connectors**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
@@ -62,7 +65,7 @@ They are generated separately from the agent's work, so a title is not a complet
 status or a report of tool access. Existing titles and manual names are left
 unchanged; click a title to rename it.
 
-Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Running subagents show **Subagent** beside an animated indicator; terminal rows show **Subagent finished**, **Subagent failed**, or **Subagent cancelled**.
+Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Running subagents show **Subagent** beside an animated indicator; terminal rows show **Subagent finished**, **Subagent failed**, or **Subagent cancelled**. Subagent previews and their hover text flatten Markdown into a single plain-text line, including unfinished emphasis in live updates. Open the subagent details to read the full formatted transcript.
 
 A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 
@@ -95,7 +98,7 @@ Chat error banners, including cloud runner failures, show short messages in full
     - When a session's checkout sits on a non-default branch of a GitHub repository, the chat view pins pull request chips above the composer: PR number, repo, branch, diff counts, a CI pill, and draft/merged/closed state, each linking to the PR. The row shows at most two chips — live (open/draft) PRs first — and a "Show more" button reveals collapsed merged/closed history. The CI pill opens a small CI monitoring popover with passed/failed/running/skipped check counts and a link to the PR's checks page. Press Escape to close the active pane's CI popover. The Gateway polls only sessions visible in a connected Control UI and pushes changed snapshots through `controlUi.sessionPullRequests.changed`; it uses the explicit Control UI GitHub credential or the shared process-environment fallback for this read-only preview. When the GitHub API rate limit is hit, chips keep the last known status and show a warning that the status may be out of date; dismissing a chip hides it for that session in the current browser profile. Before any PR exists, the row shows the branch itself — repo, branch name, and the +/− size of the diff against the default-branch merge base (committed and uncommitted work). Open the compact account arrow beside **Publish PR** to inspect the publisher and account help. A single shared account is informational, with no redundant selector; multiple accounts can be chosen in the popover. **My GitHub** requires explicit selection even when it is the only available account; an agent override is labeled as an override, not System. The arrow appears only while publication is idle and account selection is unlocked, before a publication request or result. Pending status, retry actions, confirmation details, errors, and results stay inline. The Gateway-owned broker derives the repository and branch from session ownership, verifies the selected connection rather than using the preview credential, and returns the draft pull request URL or an actionable typed failure. Personal publication requires an idle, reconciled workspace and current write access to the session. Repository-only sessions publish an accepted Git-normalized checkpoint while their worker is idle or after Stop, without creating a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud worker…** first. It never follows another participant's later turn or falls back to another account; unfinished personal publication needs same-owner confirmation after a Gateway restart. See [Publish with your account](/concepts/user-model#publish-with-your-account). The row hides itself while an open or draft PR exists; for Gateway-source checkouts, once the branch's PR is merged and the pushed tip still matches the merged head, the row disappears too. The branch row comes from local Git or the repository session's recorded URL and branch, so it stays available while GitHub is rate limited and carries the same stale-status warning, since "no PR found" cannot be trusted until the limit resets.
     - The session diff panel shows what a session's checkout actually changed: the branch button in the workspace rail or chat title bar opens a dense per-file viewer with normalized added/deleted/modified counts, collapsible files, wrapping and unified/split layouts with source syntax highlighting, file copy/open/editor actions, and "N unmodified lines" markers between hunks. The footer switches between all changes, uncommitted work, and individual commits while showing how far the branch is ahead of its merge base; committed branches also provide a copyable local sync command. Diffs are computed server-side through the `sessions.diff` Gateway method (`operator.read` scope); binary and oversized files degrade to stats-only entries, and the button only appears when the connected Gateway advertises `sessions.diff`.
     - Every Chat pane has a title bar. Click the session title to rename it; the workspace chip copies the checkout path or branch and can reveal local Gateway workspaces in the host file manager. Remote and exec-node sessions keep copy actions but hide reveal.
-    - The **Files** tab in each Chat pane's unified side panel lists thread files, project files, and artifacts. For an active repository-only session it reads the node checkout. After Stop it exposes retained changed-file previews; unchanged upstream files, editing, and full diffs require the worker to run again. The stopped diff panel explains this limitation. Reopen it with ⇧⌘B, the files toggle in the title bar, or the panel's **+** menu; the title-bar toggle carries a changed-file count badge.
+    - The **Files** tab in each Chat pane's unified side panel lists thread files, project files, and artifacts. Search at the top covers session files, artifacts, and the project tree; filter chips show changed files, read files, or artifacts, and collapsible groups share one scroll region. **Show in Files** from Review clears search and filters so the destination project directory is visible. For an active repository-only session it reads the node checkout. After Stop it exposes retained changed-file previews; unchanged upstream files, editing, and full diffs require the worker to run again. The stopped diff panel explains this limitation. Reopen it with ⇧⌘B, the files toggle in the title bar, or the panel's **+** menu; the title-bar toggle carries a changed-file count badge.
     - File paths recognized in chat messages read as their basename with a small glyph for the file type in front — a Markdown page, a `package.json` manifest, a TypeScript source, a `.tsx` component, a config or data file, a shell script, and an image each get their own mark, and anything else falls back to a plain document. When two links in the same message share a basename, each keeps just enough of its trailing path to stay distinct. The full path stays on the link: it is what the tooltip shows, what opens in the file panel, and what the message's **Copy** action returns, since copy hands back the original Markdown. Labels you write yourself in a `[label](path)` link are never rewritten. The glyph is drawn from the bundled icon set, never fetched from the network, and is decorative only: it is not read by screen readers and is not part of copied text. Text that is not a recognizable path — anything carrying spaces, parentheses, a `#` fragment, or a `?` query — stays plain prose.
     - Clicking a file reference in chat, a file path in an expanded read/edit/write tool card, or a file row in **Files** opens the **Review** tab. UTF-8 text files use a CodeMirror-based code view with syntax highlighting, line numbers, jump-to-line, in-file search, copy actions, and an open-in-external-editor menu. AVIF, GIF, JPEG, PNG, and WebP images no larger than 256 KiB render inline; other binary files show metadata without lossy text decoding. When the Gateway advertises `sessions.files.set` to an `operator.admin` connection, the text panel adds an Edit mode with dirty tracking and Cmd/Ctrl-S save; unsaved drafts survive file, panel, and session navigation in the current browser tab until explicitly saved or discarded. Saves are compare-and-swap on a content hash returned by `sessions.files.get`: if the file changed on disk since it was loaded (for example because the agent kept working), the panel shows a conflict notice with Reload (take the latest content) and Overwrite (keep the local edit) actions. Writes go through the same fs-safe workspace guards as reads — path containment, symlink/hardlink rejection, and a 256 KiB UTF-8 cap — and only overwrite existing files; the editor never creates or deletes them. If the editor cannot load, use **Retry** or **View Raw Text**. A missing editor chunk after an update offers **Reload**, which waits for the Gateway to become reachable.
     - Subagent runs opened in the main chat view are view-only. The composer identifies the parent session and offers **Open parent session** so you can continue the conversation there. Message input, reply actions, model and access pickers, microphone, and attachment controls are hidden. This does not change copy or fork availability; **Open parent session** takes you to the conversation where you can reply. **Stop** remains available when the Gateway reports an abortable run. Spawned persistent sessions (visible sessions in the session tree) are not subagents: a subagent run ends, a session does not, and you can always type in it.
@@ -156,6 +159,43 @@ Chat error banners, including cloud runner failures, show short messages in full
 
   </Accordion>
 </AccordionGroup>
+
+### ClawHub recommendation cards
+
+Ask about a capability, such as “Can you install WhatsApp?”, to let the agent find
+an official plugin or skill on ClawHub. When the `message` tool is available, it
+can present up to three matching cards in the conversation.
+
+If you use the `coding` tool profile, include `"message"` in `tools.alsoAllow`
+(for example, `tools: { profile: "coding", alsoAllow: ["message"] }`). Existing
+deny rules still apply. See [Tool access configuration](/gateway/config-tools).
+
+Select a card to open its listing inside the Control UI: plugins open in
+**Plugins**, and skills open in **Skills**. A plugin's **Install** button opens
+the existing installation review; a skill's **Install** button opens its details.
+**Dismiss** dismisses the card from the current view.
+
+An installed capability shows a green checkmark and **Installed**. This means the
+plugin package or linked skill is present. A plugin may still need to be enabled,
+configured, or connected to an account before the agent can use it. The card
+checks the current installation status; select **Status unavailable · Retry** if
+that check fails.
+
+The agent requests cards through `message` with a capability query:
+
+```json
+{
+  "action": "send",
+  "clawhub": { "query": "whatsapp", "kind": "plugin" }
+}
+```
+
+`query` is required; `kind` can be `plugin` or `skill`. Omit `kind` to check plugins
+first, then skills if no official plugin matches. Omit `channel` and `target` to
+reply to the current Control UI conversation. ClawHub supplies the official
+designation, and the Gateway checks installation status; the agent cannot assign
+those badges. A search with no official match or an unavailable catalog returns
+an explanation in chat.
 
 ### Source previews and copying code
 
@@ -269,6 +309,20 @@ The chat transcript uses a centered readable frame aligned with the composer. As
 Images and video previews in your own messages appear above any accompanying text, without a surrounding bubble background. Videos use a still frame with a play icon; select the preview to open the video in the Files panel. If a preview cannot load, the attachment card remains available. Hovering media leaves that layout unchanged, and the text keeps its normal bubble color, including any per-identity tint. Assistant videos retain their inline player.
 
 Messages forwarded by `sessions_send` render as left-aligned speech bubbles with a source-session chip above the message. When avatars are shown, messages from a different known agent use that agent's avatar, or initials in a stable identity color if no avatar is available. Same-agent forwards and unknown senders keep the forward icon. Select the chip to open the source session; hover it to see session progress. Each source session has a stable bubble tint. Forwarded messages without a known source session show the source agent when available, or a generic forwarded-message label. The receiving agent's own replies remain flat text.
+
+## Subagent transcripts
+
+Subagents use the same task transcript view, including subagents run by the
+Codex harness. Select a task to read its messages, thinking, and tool calls;
+select **Show earlier** to load older history. Task activity refreshes the view
+while the subagent runs. The generic fallback label is **Subagent**.
+
+The viewer reads history from the runtime that owns it. New native subagent
+tasks retain their original history source when later turns replace the parent's
+native thread. Changing the parent session or account can make that history
+unavailable. If the runtime or its parent binding is unavailable, the panel shows
+an error with a retry action.
+Tasks without readable history retain their prompt and output inspector.
 
 ## Chat message width
 

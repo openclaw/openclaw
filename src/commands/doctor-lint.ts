@@ -169,7 +169,12 @@ async function executeDoctorLint(
 ): Promise<DoctorLintExecution> {
   const snapshot = await stateView.readConfigSnapshot();
   if (snapshot.exists && !snapshot.valid) {
-    const findings = configValidationIssuesToHealthFindings(snapshot.issues);
+    const { collectNodeRuntimeFindings } = await import("./node-runtime-diagnostics.js");
+    const runtimeFindings = await collectNodeRuntimeFindings(stateView.sourceEnv);
+    const findings = [
+      ...configValidationIssuesToHealthFindings(snapshot.issues),
+      ...runtimeFindings,
+    ];
     const visible = findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
     return {
       exitCode: exitCodeFromFindings(findings, sevMin),
@@ -188,6 +193,13 @@ async function executeDoctorLint(
         for (const issue of snapshot.issues) {
           const issuePath = issue.path || "<root>";
           runtime.error(`- ${issuePath}: ${issue.message}`);
+        }
+        for (const finding of runtimeFindings.filter((entry) =>
+          healthFindingMeetsSeverity(entry, sevMin),
+        )) {
+          runtime.error(
+            finding.fixHint ? `${finding.message}\n${finding.fixHint}` : finding.message,
+          );
         }
       },
     };
@@ -383,12 +395,12 @@ async function withDoctorLintStateEnv<T>(
   }
 }
 
-function createStateSnapshotFailureExecution(
+async function createStateSnapshotFailureExecution(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
   sevMin: NonNullable<ReturnType<typeof parseHealthFindingSeverity>>,
   error: DoctorLintStateSnapshotError,
-): DoctorLintExecution {
+): Promise<DoctorLintExecution> {
   const finding: HealthFinding = {
     checkId: "core/doctor/lint-state-inspection",
     severity: "error",
@@ -401,9 +413,11 @@ function createStateSnapshotFailureExecution(
     fixHint:
       "Keep the current Gateway running, resolve the state database inspection error, then rerun this check.",
   };
-  const visible = healthFindingMeetsSeverity(finding, sevMin) ? [finding] : [];
+  const { collectNodeRuntimeFindings } = await import("./node-runtime-diagnostics.js");
+  const findings = [finding, ...(await collectNodeRuntimeFindings())];
+  const visible = findings.filter((entry) => healthFindingMeetsSeverity(entry, sevMin));
   return {
-    exitCode: exitCodeFromFindings([finding], sevMin),
+    exitCode: exitCodeFromFindings(findings, sevMin),
     findings: visible,
     writeOutput() {
       if (detectMode(opts) === "json") {
@@ -415,8 +429,12 @@ function createStateSnapshotFailureExecution(
         });
         return;
       }
-      runtime.error(`doctor --lint: ${finding.message}`);
-      runtime.error(`fix: ${finding.fixHint}`);
+      for (const entry of visible) {
+        runtime.error(`doctor --lint: ${entry.message}`);
+        if (entry.fixHint) {
+          runtime.error(`fix: ${entry.fixHint}`);
+        }
+      }
     },
   };
 }

@@ -1,5 +1,6 @@
 // OpenClaw release ClawHub plan script supports release workflow routing.
 import { resolve } from "node:path";
+import { resolvePreparedClawHubMatrix } from "../clawhub-prepared-artifact.mjs";
 import {
   collectPluginClawHubReleasePlan,
   type PublishablePluginPackage,
@@ -33,6 +34,7 @@ type OpenClawReleaseClawHubPlanArgs = {
   releasePublishRunId: string;
   pluginPublishScope: PluginReleaseSelectionMode;
   plugins: string[];
+  preparedArtifact?: string;
 };
 
 type OpenClawReleaseClawHubPlan = {
@@ -264,6 +266,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
   let pluginPublishScope: PluginReleaseSelectionMode | undefined;
   let plugins: string[] = [];
   let pluginsFlagProvided = false;
+  let preparedArtifact: string | undefined;
 
   for (let index = 0; index < values.length; index += 1) {
     const arg = values[index];
@@ -277,6 +280,9 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     };
 
     switch (arg) {
+      case "--prepared-artifact":
+        preparedArtifact = next();
+        break;
       case "--bootstrap-workflow-ref":
         bootstrapWorkflowRef = next();
         break;
@@ -338,6 +344,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     releasePublishRunId: requireArg(releasePublishRunId, "--release-publish-run-id"),
     pluginPublishScope: resolvedPluginPublishScope,
     plugins,
+    ...(preparedArtifact ? { preparedArtifact } : {}),
   };
 }
 
@@ -360,13 +367,34 @@ export async function buildOpenClawReleaseClawHubPlan(
     "releasePublishRunAttempt",
   );
   const releasePublishRunId = requireArg(args.releasePublishRunId, "releasePublishRunId");
-  const plan = await collectPluginClawHubReleasePlan({
-    rootDir: options.rootDir ?? resolve("."),
-    selection: args.plugins,
-    selectionMode: args.pluginPublishScope,
-    fetchImpl: options.fetchImpl,
-    registryBaseUrl: options.registryBaseUrl,
-  });
+  const prepared = args.preparedArtifact
+    ? await resolvePreparedClawHubMatrix({
+        descriptor: JSON.parse(args.preparedArtifact),
+        candidateSha: releaseSha,
+        toolingSha: bootstrapWorkflowSha,
+        selectionMode: args.pluginPublishScope,
+        plugins: args.plugins,
+        sourceRoot: options.rootDir ?? resolve("."),
+        token: process.env.GH_TOKEN,
+        fetchImpl: options.fetchImpl,
+      })
+    : undefined;
+  const plan = prepared
+    ? {
+        // Prepared publication requires established normal trusted publishers;
+        // the resolver rejects bootstrap/repair needs before this routing.
+        candidates: prepared,
+        bootstrapCandidates: [],
+        missingTrustedPublisher: [],
+        warnings: [],
+      }
+    : await collectPluginClawHubReleasePlan({
+        rootDir: options.rootDir ?? resolve("."),
+        selection: args.plugins,
+        selectionMode: args.pluginPublishScope,
+        fetchImpl: options.fetchImpl,
+        registryBaseUrl: options.registryBaseUrl,
+      });
 
   const normalPackages = packageNames(plan.candidates);
   const bootstrapPackages = [
@@ -376,7 +404,7 @@ export async function buildOpenClawReleaseClawHubPlan(
   const missingTrustedPlugins = packageNames(plan.missingTrustedPublisher);
   assertNoPackageOverlap(normalPackages, bootstrapPackages);
 
-  return {
+  const result = {
     warnings: plan.warnings,
     bootstrapWorkflowSha,
     clawHubWorkflowRef: bootstrapWorkflowRef,
@@ -418,4 +446,15 @@ export async function buildOpenClawReleaseClawHubPlan(
       clawHubWorkflowRef: bootstrapWorkflowRef,
     },
   };
+  if (args.preparedArtifact && result.normal.shouldDispatch) {
+    // The receipt authorizes the whole frozen roster, including exact versions
+    // already present. Mutable registry candidates must not narrow that set.
+    result.normal.inputs.publish_scope = args.pluginPublishScope;
+    delete result.normal.inputs.plugins;
+    if (args.plugins.length > 0) {
+      result.normal.inputs.plugins = args.plugins.join(",");
+    }
+    result.normal.inputs.prepared_artifact = args.preparedArtifact;
+  }
+  return result;
 }

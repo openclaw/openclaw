@@ -326,7 +326,11 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   };
   const emitBlockReply = (
     payload: BlockReplyPayload,
-    options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
+    options?: {
+      assistantMessageIndex?: number;
+      consumePendingToolMedia?: boolean;
+      blockSourceText?: string;
+    },
   ) => {
     flushAssistantStream();
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
@@ -352,7 +356,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         pendingToolMedia?.attachments?.[index] ?? {},
       ]),
     );
-    const blockPayload =
+    const blockPayload: BlockReplyPayload =
       autoDeliveryMediaUrls.length === 0
         ? withToolMedia
         : markReplyPayloadForSourceSuppressionDelivery({
@@ -372,6 +376,9 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
             ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
           })
         : blockPayload;
+    if (blockPayload.text && options?.blockSourceText !== undefined) {
+      setReplyPayloadMetadata(taggedPayload, { blockSourceText: options.blockSourceText });
+    }
     if (state.deferBlockReplyDelivery) {
       if (pendingToolMedia) {
         deferredToolMediaReplies.set(taggedPayload, {
@@ -409,6 +416,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
       if (!payload.isReasoning && isSuperseded(index)) {
         payload.text = undefined;
+        setReplyPayloadMetadata(payload, { blockSourceText: undefined });
       }
     }
     provisionalAssistantBlocks.clear();

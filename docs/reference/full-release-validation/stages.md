@@ -168,10 +168,11 @@ The verifier uploads the canonical manifest as
 its artifact ID, digest, producer run, and attempt before downloading that exact
 artifact ID. It caps the downloaded ZIP, verifies its bytes against the REST
 `sha256:` digest, and streams the only allowed bounded manifest entry without
-extracting the archive. A stable-name alias remains temporarily for older
-publish consumers. The verifier always prefers the attempt-qualified artifact;
-as a transition, it accepts the stable name only for an attempt-1 manifest v2
-producer. It rejects that legacy name for later attempts and manifest v3.
+extracting the archive. A stable-name alias remains for older publish
+consumers. The verifier always prefers the attempt-qualified artifact and
+accepts the stable name only for an attempt-1 manifest v2 producer. It rejects
+that stable name for later attempts and for manifest v3, so the alias stops
+applying once a producer emits manifest v3.
 
 Concurrency is keyed by Validation SHA, Tooling SHA, rerun group, release
 profile, and effective soak coverage, and does not cancel an older run. The
