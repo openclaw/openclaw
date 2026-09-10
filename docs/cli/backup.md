@@ -78,13 +78,27 @@ and again before restoring. A missing or mismatched payload is a hard failure.
 These sets can contain original credentials and private state; protect them like
 the live state directory.
 
-Writing a new set prunes sets older than the newest three sets for
-that installation. Pending or failed recoveries whose owners are still running
-or cannot be inspected are retained even when older, so active recovery can
-leave more than three sets. This is a fixed product
+Restoring a declared database directory removes migration-created files inside
+that directory before restoring the captured files. This includes newer
+version manifests used by directory databases such as LanceDB. Files outside
+the declared directory remain untouched; directory replacement or alias changes
+refuse restoration.
+
+Writing a new set prunes completed or restored sets older than the newest three
+sets for that installation. Unresolved sets remain retained even after their
+owners exit, so unresolved recovery can leave more than three sets. Process exit
+does not prove that recovery finished. This is a fixed product
 default, with no configuration option. Update recovery sets are separate from
 the archive/SQLite/Git backup repositories and from historical unsupported
 checkpoint-recovery records.
+
+`openclaw update status --json` reports retained unresolved sets and their next
+action. Before manual restoration, Doctor reconciles the set with its exact
+update run. A completed update or recorded state restoration makes a pending
+backup marker stale; Doctor reports the set and does not restore it over newer
+data. Missing or unreadable history, a nonterminal run, or competing newer sets
+refuses automatic restoration and names the inspection command. Keep those sets
+until the recorded outcome is resolved, then follow the reported recovery command.
 
 Coverage is limited to the local resources in the manifest. Remote services and
 external resources that an older plugin does not declare are outside this

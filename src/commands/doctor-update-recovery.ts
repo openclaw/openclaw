@@ -30,6 +30,7 @@ type DoctorRecoveryScope = {
   backup?: UpdateRecoveryBackupRef;
   reference?: UpdateRecoveryBackupRef;
   assertRecoveryClaim?: () => void;
+  revalidatePendingRecovery?: () => Promise<void>;
   maintenance?: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
 };
 
@@ -161,9 +162,17 @@ async function restoreDoctorBackup(
     throw new Error("Doctor recovery lost maintenance ownership.");
   }
   const authority = { assertOwned: () => assertDoctorRecoveryCurrent(scope) };
+  if (scope.revalidatePendingRecovery) {
+    await maintenance.closeStores();
+    scope.storesClosed = true;
+    // Refused admission must not overwrite a reconciled terminal backup outcome.
+    await scope.revalidatePendingRecovery();
+  }
   try {
     // Lease release can write shared state; finish it before restoring the old schema.
-    await maintenance.closeStores();
+    if (!scope.storesClosed) {
+      await maintenance.closeStores();
+    }
     scope.storesClosed = true;
     await restoreUpdateRecoveryBackup(backup, authority);
   } catch (error) {
@@ -293,7 +302,11 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
     });
   }
   const backup = await import("../infra/update-recovery-backup.js");
-  const pending = !updating ? await backup.findPendingUpdateRecoveryBackup() : null;
+  const pending = !updating
+    ? await backup.findPendingUpdateRecoveryBackup({
+        warn: (message) => scope.runtime.error(message),
+      })
+    : null;
   if (!updating && !pending) {
     return;
   }
@@ -344,6 +357,22 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
       assertDoctorRecoveryCurrent(scope),
     );
     await assertPendingRecoveryOffline();
+    scope.revalidatePendingRecovery = async () => {
+      const selected = await backup.findPendingUpdateRecoveryBackup({
+        warn: (message) => scope.runtime.error(message),
+      });
+      if (
+        selected?.directory !== pending.directory ||
+        selected.manifestSha256 !== pending.manifestSha256
+      ) {
+        throw new Error(
+          `Update recovery set ${pending.manifestPath} is no longer eligible. Inspect with \`openclaw update status --json\`.`,
+        );
+      }
+      assertDoctorRecoveryCurrent(scope);
+      await assertPendingRecoveryOffline();
+      assertDoctorRecoveryCurrent(scope);
+    };
     await restoreDoctorBackup(scope, pending);
     // Normal repair now owns the restored state; retain only its maintenance lease.
     return;

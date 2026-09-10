@@ -42,7 +42,8 @@ import {
   withUpdateRecoveryConfigWrites,
   type UpdateRecoveryConfigWrite,
 } from "./update-recovery-config-writes.js";
-import { inspectUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
+import type { UpdateRunDriver } from "./update-run-driver.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 
 const RETAINED_UPDATE_BACKUPS = 3;
 const log = createSubsystemLogger("update/backup");
@@ -64,6 +65,20 @@ const recordedOutcomeSchema = outcomeSchema.extend({
   configWrites: z.array(updateRecoveryConfigWriteSchema).max(512).optional(),
 });
 type RecordedOutcome = z.infer<typeof recordedOutcomeSchema>;
+
+function assertManifestLocation(
+  ref: UpdateRecoveryBackupRef,
+  manifest: UpdateRecoveryBackupManifest,
+) {
+  if (
+    manifest.stateDir !== resolvePathViaExistingAncestorSync(resolveStateDir()) ||
+    manifest.configPath !== canonicalEntryPath(resolveConfigPath()) ||
+    ref.directory !==
+      path.join(installDirectory(manifest.installRoot, manifest.stateDir), manifest.runId, "backup")
+  ) {
+    throw new Error("Update recovery backup belongs to another state directory or update run.");
+  }
+}
 
 /** Parse the exact manifest binding passed to the target Doctor. */
 export function readUpdateRecoveryBackupRef(value: string): UpdateRecoveryBackupRef {
@@ -142,18 +157,7 @@ async function prepareVerifiedBackup(ref: UpdateRecoveryBackupRef) {
       throw new Error("Update recovery manifest hash mismatch.");
     }
     const manifest = parseUpdateRecoveryBackupManifest(raw);
-    const expectedDirectory = path.join(
-      installDirectory(manifest.installRoot, manifest.stateDir),
-      manifest.runId,
-      "backup",
-    );
-    if (
-      ref.directory !== expectedDirectory ||
-      resolvePathViaExistingAncestorSync(resolveStateDir()) !== manifest.stateDir ||
-      canonicalEntryPath(resolveConfigPath()) !== manifest.configPath
-    ) {
-      throw new Error("Update recovery backup belongs to another state directory or update run.");
-    }
+    assertManifestLocation(ref, manifest);
     staging = await createPrivateSqliteTempDirectory(ref.directory, ".verify-");
     const payloads = new Map<string, string>();
     for (const entry of manifest.entries) {
@@ -207,7 +211,7 @@ async function prepareVerifiedBackup(ref: UpdateRecoveryBackupRef) {
   }
 }
 
-/** Restore only the frozen inventory; unrelated files created later remain owned by their creators. */
+/** Restore captured files and declared database directories, preserving unrelated paths. */
 export async function restoreUpdateRecoveryBackup(
   ref: UpdateRecoveryBackupRef,
   authority: Authority,
@@ -287,18 +291,7 @@ async function withRecoveryMetadata<T>(
       throw new Error("Update recovery manifest changed before metadata access.");
     }
     const manifest = parseUpdateRecoveryBackupManifest(bytes.buffer.toString("utf8"));
-    if (
-      manifest.stateDir !== resolvePathViaExistingAncestorSync(resolveStateDir()) ||
-      manifest.configPath !== canonicalEntryPath(resolveConfigPath()) ||
-      ref.directory !==
-        path.join(
-          installDirectory(manifest.installRoot, manifest.stateDir),
-          manifest.runId,
-          "backup",
-        )
-    ) {
-      throw new Error("Update recovery metadata belongs to another installation.");
-    }
+    assertManifestLocation(ref, manifest);
     let outcome: RecordedOutcome | undefined;
     if (await statOrMissing(path.join(ref.directory, "outcome.json"))) {
       outcome = recordedOutcomeSchema.parse(
@@ -461,18 +454,125 @@ async function listBackups(
         ),
       );
       const ref = { directory, manifestPath, manifestSha256: outcome.manifestSha256 };
+      if (digest(raw) !== ref.manifestSha256) {
+        throw new Error(`Update recovery manifest hash mismatch: ${manifestPath}`);
+      }
+      assertManifestLocation(ref, manifest);
       result.push({ ref, manifest, outcome });
     }
   }
   return result.toSorted((a, b) => b.manifest.createdAt.localeCompare(a.manifest.createdAt));
 }
 
-export async function findPendingUpdateRecoveryBackup(
-  params: { installRoot?: string } = {},
-): Promise<UpdateRecoveryBackupRef | null> {
-  const pending = (await listBackups(params.installRoot)).find(
+function settledRunOutcome(run: UpdateRunRecord | undefined): "committed" | "restored" | undefined {
+  if (run?.status === "succeeded") {
+    return "committed";
+  }
+  if (
+    run?.status === "rolled-back" ||
+    run?.steps.some(
+      (step) =>
+        (step.step === "state rollback" || step.step === "previous generation restoration") &&
+        step.status === "completed",
+    )
+  ) {
+    return "restored";
+  }
+  return undefined;
+}
+
+/** Backup-local pending markers cannot override the update's durable terminal result. */
+export async function inspectUpdateRecoveryBackups(params: { installRoot?: string } = {}) {
+  const snapshots = await listBackups(params.installRoot);
+  const pending = snapshots.filter(
     ({ outcome }) => outcome.status === "pending" || outcome.status === "restore-failed",
   );
+  const { getUpdateRunAsync } = await import("./update-run-reader.js");
+  return await Promise.all(
+    pending.map(async ({ ref, manifest }) => {
+      let terminalOutcome: "committed" | "restored" | undefined;
+      let ambiguity: string | undefined;
+      try {
+        const run = await getUpdateRunAsync(manifest.runId);
+        terminalOutcome = settledRunOutcome(run);
+        if (!terminalOutcome && run?.status !== "failed") {
+          ambiguity = run ? `update run is ${run.status}` : "no matching update run exists";
+        }
+      } catch (error) {
+        ambiguity = `update outcome is unreadable: ${formatErrorMessage(error)}`;
+      }
+      if (
+        !terminalOutcome &&
+        !ambiguity &&
+        (pending.length > 1 ||
+          snapshots.some(
+            (snapshot) =>
+              snapshot.ref.directory !== ref.directory &&
+              snapshot.manifest.createdAt >= manifest.createdAt,
+          ))
+      ) {
+        ambiguity =
+          "other recovery sets exist; restoring this set could discard newer database writes";
+      }
+      const status: "stale" | "ambiguous" | "unresolved" = terminalOutcome
+        ? "stale"
+        : ambiguity
+          ? "ambiguous"
+          : "unresolved";
+      const nextAction =
+        status === "unresolved"
+          ? "npx openclaw@latest doctor --fix"
+          : "openclaw update status --json";
+      const reason = terminalOutcome
+        ? `stale: its update already ${terminalOutcome === "committed" ? "succeeded" : "restored state"}`
+        : (ambiguity ?? "unresolved after a failed update");
+      return {
+        ref,
+        runId: manifest.runId,
+        status,
+        terminalOutcome,
+        nextAction,
+        message: `Update recovery set ${ref.manifestPath}: ${reason}. ${status === "unresolved" ? "Keep the Gateway stopped and run" : "Automatic restoration is refused; inspect with"} \`${nextAction}\`.${status === "ambiguous" ? " Resolve the recorded outcome before retrying `npx openclaw@latest doctor --fix`." : ""}`,
+      };
+    }),
+  );
+}
+
+export async function findPendingUpdateRecoveryBackup(
+  params: { installRoot?: string; warn?: (message: string) => void } = {},
+): Promise<UpdateRecoveryBackupRef | null> {
+  const warn = params.warn ?? ((message: string) => log.warn(message));
+  const inspections = await inspectUpdateRecoveryBackups(params);
+  for (const inspection of inspections) {
+    warn(inspection.message);
+    if (inspection.terminalOutcome) {
+      const { getUpdateRun } = await import("./update-run-ledger.js");
+      try {
+        await writeUpdateRecoveryBackupOutcome(
+          inspection.ref,
+          { status: inspection.terminalOutcome, error: inspection.message },
+          {
+            assertOwned: () => {
+              if (
+                settledRunOutcome(getUpdateRun(inspection.runId)) !== inspection.terminalOutcome
+              ) {
+                throw new Error("Update terminal outcome changed during backup reconciliation.");
+              }
+            },
+          },
+        );
+      } catch (error) {
+        warn(
+          `Stale set remains ineligible, but its outcome could not be recorded: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
+  }
+  const ambiguous = inspections.find((inspection) => inspection.status === "ambiguous");
+  if (ambiguous) {
+    throw new Error(ambiguous.message);
+  }
+  const pending = inspections.find((inspection) => inspection.status === "unresolved");
   if (!pending) {
     return null;
   }
@@ -487,12 +587,10 @@ async function pruneUpdateRecoveryBackups(
   for (const snapshot of snapshots.slice(RETAINED_UPDATE_BACKUPS)) {
     const terminal =
       snapshot.outcome.status === "committed" || snapshot.outcome.status === "restored";
-    if (
-      !terminal &&
-      [snapshot.manifest.creator, ...snapshot.manifest.drivers].some(
-        (driver) => inspectUpdateRunDriver(driver) !== "dead",
-      )
-    ) {
+    if (!terminal) {
+      log.warn(
+        `Unresolved update recovery set retained at ${snapshot.ref.manifestPath}. Keep the Gateway stopped and run \`npx openclaw@latest doctor --fix\`; inspect with \`openclaw update status --json\`.`,
+      );
       continue;
     }
     await verifyUpdateRecoveryBackup(snapshot.ref);

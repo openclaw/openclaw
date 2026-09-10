@@ -143,9 +143,13 @@ describe("update recovery backup", () => {
     });
   });
 
-  it.each([false, true])(
-    "restores the original WAL schema and rows through an old updater's open connection (cleanup failure=%s)",
-    async (cleanupFailure) => {
+  it.each([
+    { cleanupFailure: false, directory: false },
+    { cleanupFailure: true, directory: false },
+    { cleanupFailure: false, directory: true },
+  ])(
+    "restores the original WAL schema and rows through an old updater's open connection (cleanup failure=$cleanupFailure, directory=$directory)",
+    async ({ cleanupFailure, directory }) => {
       await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
         const { database, databasePath, installRoot } = await fixture(state);
         const configBefore = await fs.readFile(state.configPath, "utf8");
@@ -155,6 +159,11 @@ describe("update recovery backup", () => {
         const workspaceDatabase = new (requireNodeSqlite().DatabaseSync)(workspaceDatabasePath);
         workspaceDatabase.exec("CREATE TABLE unrelated(value TEXT)");
         workspaceDatabase.close();
+        const declaration = directory
+          ? vi
+              .spyOn(pluginBackupResources, "collectPluginDoctorMigrationBackupResources")
+              .mockResolvedValue([{ path: path.dirname(databasePath), kind: "directory" }])
+          : undefined;
         try {
           const inode = (await fs.stat(databasePath)).ino;
           const ref = await createUpdateRecoveryBackup({
@@ -246,6 +255,7 @@ describe("update recovery backup", () => {
             runId: "restore-open-driver",
           });
         } finally {
+          declaration?.mockRestore();
           database.close();
         }
       });
@@ -446,7 +456,9 @@ describe("update recovery backup", () => {
           },
           authority,
         );
-        expect(await findPendingUpdateRecoveryBackup()).toEqual(refs[3]);
+        await expect(findPendingUpdateRecoveryBackup()).rejects.toThrow(
+          "no matching update run exists",
+        );
       } finally {
         database.close();
       }

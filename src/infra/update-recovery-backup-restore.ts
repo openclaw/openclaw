@@ -4,7 +4,8 @@ import path from "node:path";
 import type { UpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
-import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { pinDirectory, requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { root as safeRoot } from "./fs-safe.js";
 import {
   openNodeSqliteDatabase,
   requireNodeSqlite,
@@ -28,6 +29,45 @@ export async function restorePreparedUpdateRecoveryBackup(
     await prepared.assertCurrent();
     authority.assertOwned();
     return await operation();
+  };
+  const capturedPaths = new Set([
+    ...manifest.entries.map((entry) => entry.sourcePath),
+    // Online restore owns these sidecars; an older updater can still hold them open.
+    ...manifest.entries.flatMap((entry) =>
+      entry.kind === "file" && entry.sqlite
+        ? SQLITE_SIDECAR_SUFFIXES.map((suffix) => `${entry.sourcePath}${suffix}`)
+        : [],
+    ),
+    ...manifest.excludedRoots,
+  ]);
+  const pruneDirectory = async (pathname: string): Promise<void> => {
+    const pin = await pinDirectory(pathname);
+    try {
+      if (pin.receipt.realPath !== pathname) {
+        throw new Error(`Update recovery directory changed location: ${pathname}`);
+      }
+      const directory = await safeRoot(pathname);
+      const remove = async (relativePath: string, isDirectory: boolean): Promise<void> => {
+        if (isDirectory) {
+          for (const child of await directory.list(relativePath, { withFileTypes: true })) {
+            await remove(path.join(relativePath, child.name), child.isDirectory);
+          }
+        }
+        await mutate(async () => {
+          await pin.assertCurrent();
+          authority.assertOwned();
+          await directory.remove(relativePath);
+        });
+      };
+      for (const child of await directory.list("", { withFileTypes: true })) {
+        if (!capturedPaths.has(path.join(pathname, child.name))) {
+          await remove(child.name, child.isDirectory);
+        }
+      }
+      requireDirectorySync(await pin.sync(), "Update recovery directory");
+    } finally {
+      await pin.close();
+    }
   };
   const sqlitePaths = manifest.entries.flatMap((entry) =>
     (entry.kind === "file" || entry.kind === "missing") && entry.sqlite ? [entry.sourcePath] : [],
@@ -79,6 +119,8 @@ export async function restorePreparedUpdateRecoveryBackup(
       }
       await mutate(() => fs.mkdir(entry.sourcePath, { recursive: true, mode: entry.mode }));
       await mutate(() => fs.chmod(entry.sourcePath, entry.mode));
+      // Directory entries belong only to declared migration resources.
+      await pruneDirectory(entry.sourcePath);
       continue;
     }
     await mutate(() => fs.mkdir(path.dirname(entry.sourcePath), { recursive: true, mode: 0o700 }));
