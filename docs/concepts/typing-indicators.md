@@ -73,4 +73,10 @@ Override the policy for one agent:
   <Card title="Streaming and chunking" href="/concepts/streaming" icon="bars-staggered">
     Outbound streaming behavior, chunk boundaries, and channel-specific delivery.
   </Card>
+  <Card title="Heartbeat" href="/gateway/heartbeat" icon="heart-pulse">
+    The system-owned automation that runs periodic agent turns, and the notification rules for its target chat.
+  </Card>
+  <Card title="Groups" href="/channels/groups" icon="users">
+    Group chat behavior and mention gating across group-capable channels.
+  </Card>
 </CardGroup>

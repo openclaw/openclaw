@@ -171,6 +171,7 @@ Related:
 
 ## Related
 
+- [Diagnostics flags](/diagnostics/flags)
 - [Doctor](/gateway/doctor)
 - [FAQ](/help/faq)
 - [Gateway runbook](/gateway)

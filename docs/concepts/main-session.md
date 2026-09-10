@@ -101,9 +101,11 @@ making the model carry its entire history at once:
 - Session lists show the current live conversation, not every historical
   session id behind it.
 - When the per-agent store's physical database, WAL, and session artifacts
-  exceed the disk budget (default 10 GB), OpenClaw extracts the oldest
-  unreferenced history to a verified compressed archive before removing its
-  database rows. Live, routed, and in-flight sessions are never budget victims.
+  exceed the disk budget (`session.maintenance.maxDiskBytes`, default `10gb` —
+  see [Session maintenance](/reference/session-management-compaction/maintenance)),
+  OpenClaw extracts the oldest unreferenced history to a verified compressed
+  archive before removing its database rows. Live, routed, and in-flight
+  sessions are never budget victims.
 
 ## When you want isolation instead
 

@@ -153,3 +153,4 @@ Details: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing),
 - [Gateway Protocol](/gateway/protocol) — WebSocket protocol contract
 - [Queue](/concepts/queue) — command queue and concurrency
 - [Security](/gateway/security) — trust model and hardening
+- [Network](/network) — the hub for how OpenClaw connects, pairs, and secures devices across localhost, LAN, and tailnet

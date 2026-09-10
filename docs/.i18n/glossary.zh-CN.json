@@ -56,6 +56,10 @@
     "target": "SecretRef 凭据覆盖面"
   },
   {
+    "source": "Auth credential semantics",
+    "target": "认证凭据语义"
+  },
+  {
     "source": "Secrets runtime model",
     "target": "密钥运行时模型"
   },
@@ -382,6 +386,10 @@
   {
     "source": "Diagnostics export",
     "target": "诊断导出"
+  },
+  {
+    "source": "Diagnostics flags",
+    "target": "诊断标志"
   },
   {
     "source": "Agent harness plugins",
@@ -2240,6 +2248,14 @@
     "target": "网络代理"
   },
   {
+    "source": "Network",
+    "target": "网络"
+  },
+  {
+    "source": "Proxy",
+    "target": "代理"
+  },
+  {
     "source": "Node troubleshooting",
     "target": "节点故障排查"
   },
@@ -2302,6 +2318,14 @@
   {
     "source": "Threat model",
     "target": "威胁模型"
+  },
+  {
+    "source": "Contributing to the threat model",
+    "target": "参与威胁模型贡献"
+  },
+  {
+    "source": "Formal verification",
+    "target": "形式化验证"
   },
   {
     "source": "Reconnaissance (AML.TA0002)",

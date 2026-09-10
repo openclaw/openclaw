@@ -241,3 +241,4 @@ file-system scan or writing a pre-OOM snapshot.
 - [Logging](/logging)
 - [OpenTelemetry export](/gateway/opentelemetry) - separate flow for streaming diagnostics to a collector
 - [Codex harness runtime](/plugins/codex-harness-runtime) - runtime boundaries, permissions, and diagnostics for the Codex harness
+- [Diagnostics flags](/diagnostics/flags) - the named flags that turn on extra logging for one subsystem without raising `logging.level` globally

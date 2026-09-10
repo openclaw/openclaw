@@ -415,3 +415,4 @@ boundary separation.
 
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — how a trusted proxy supplies the operator identity these scopes attach to
 - [Gateway protocol](/gateway/protocol) — the methods these scopes authorize
+- [Cloud Workers](/gateway/cloud-workers) — worker dispatch, whose environment and session calls are authorized against these scopes

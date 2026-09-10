@@ -274,3 +274,4 @@ Related docs:
 - [Authentication](/gateway/authentication) - model provider auth overview
 - [Secrets](/gateway/secrets) - credential storage and SecretRef
 - [Configuration Reference](/gateway/config-secrets-env#auth-storage) - auth config keys
+- [Auth credential semantics](/auth-credential-semantics) - the canonical rules for auth profile ordering and runtime credential resolution
