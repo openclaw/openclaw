@@ -146,6 +146,35 @@ describe("triage external recovery handoff", () => {
     },
   );
 
+  it("prints a manual handoff instead of launching Claude without safe-mode support", async () => {
+    mocks.resolveExecutablePath.mockImplementation((binary: string) =>
+      binary === "claude" ? "/usr/local/bin/claude" : undefined,
+    );
+    mocks.runUtf8CommandWithTimeout.mockResolvedValue({
+      stdout: "Usage: claude [options]",
+      stderr: "",
+      code: 0,
+      termination: "exit",
+    });
+    const runtime = createTriageRuntime();
+
+    await withOpenClawTestState({ layout: "split" }, async () => {
+      await withTriageTerminal(true, async () => {
+        await expect(triageCommand(runtime, { noExport: true })).rejects.toMatchObject({ code: 1 });
+      });
+    });
+
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.runUtf8CommandWithTimeout).toHaveBeenCalledWith(
+      ["/usr/local/bin/claude", "--help"],
+      expect.objectContaining({ timeoutMs: 10_000, killProcessTree: true }),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Claude Code 2.1.169 or newer is required"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Run without safe mode:"));
+  });
+
   it("reports a missing explicit agent without falling back to an available agent", async () => {
     mocks.resolveExecutablePath.mockImplementation((agent: string) =>
       agent === "claude" ? "/usr/local/bin/claude" : undefined,

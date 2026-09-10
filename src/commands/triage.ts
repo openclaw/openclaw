@@ -463,26 +463,16 @@ export async function triageCommand(
       return;
     }
     if (handoff.agent === "claude" && !automatic) {
-      const { runUtf8CommandWithTimeout } = await import("../process/exec.js");
-      const help = await runUtf8CommandWithTimeout(
-        [handoff.program.command, ...handoff.program.leadingArgv, "--help"],
-        {
-          env: targetEnv,
-          ...agentOptions,
-          timeoutMs: 10_000,
-          killProcessTree: true,
-          outputCapture: "tail",
-          maxOutputBytes: 64 * 1024,
-        },
-      );
+      const { claudeAdvertisesSafeMode } = await import("./triage-claude.js");
+      const supportsSafeMode = await claudeAdvertisesSafeMode({
+        argv: [handoff.program.command, ...handoff.program.leadingArgv],
+        env: targetEnv,
+        ...agentOptions,
+      });
       if (!isCurrent()) {
         return;
       }
-      if (
-        help.termination !== "exit" ||
-        help.code !== 0 ||
-        !`${help.stdout}\n${help.stderr}`.includes("--safe-mode")
-      ) {
+      if (!supportsSafeMode) {
         runtime.error(
           "Installed Claude does not advertise --safe-mode; Claude Code 2.1.169 or newer is required for direct triage launch.",
         );
