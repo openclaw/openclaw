@@ -53,7 +53,8 @@ async function withCurrentOrigin(
       agents: { entries: { main: { workspace: state.workspaceDir } } },
       session: { store: storePath },
     };
-    await replaceSessionEntry(
+    // Keep fixture maintenance outside the preview read counter.
+    replaceSessionEntrySync(
       { agentId: "main", sessionKey, storePath },
       {
         sessionId: "source-session",
