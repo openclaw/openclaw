@@ -10,7 +10,6 @@ import {
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
-import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -181,13 +180,11 @@ export function resolveAuthorizedArtifactSession(
     sessionKey: query.sessionKey ?? resolved.sessionKey,
     target,
   });
-  const roleVisibilityDenied = Boolean(
-    cfg &&
-    hasOperatorBoundary(client, cfg) &&
+  const visibilityDenied = Boolean(
     target &&
     createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false,
   );
-  if (!error && !roleVisibilityDenied) {
+  if (!error && !visibilityDenied) {
     return resolved;
   }
   throw new ArtifactSessionResolutionError(

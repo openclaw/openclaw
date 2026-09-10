@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  roleClient,
+  rolePolicyConfig,
+  sharingPolicyClient,
+} from "../session-sharing.test-utils.js";
 import {
   ArtifactSessionResolutionError,
   resolveAuthorizedArtifactSession,
@@ -95,55 +99,136 @@ describe("artifact session authorization", () => {
     });
   });
 
-  it("hides foreign artifact sessions behind direct, run, and task selectors", async () => {
+  it.each([
+    { name: "draft without roles", visibility: "draft", cfg: {}, role: undefined },
+    { name: "draft without runtime config", visibility: "draft", cfg: undefined, role: undefined },
+    {
+      name: "shared with a none role",
+      visibility: "shared",
+      cfg: rolePolicyConfig(),
+      role: "none",
+    },
+    {
+      name: "draft with a write role",
+      visibility: "draft",
+      cfg: rolePolicyConfig(),
+      role: "write",
+    },
+  ] as const)(
+    "hides $name artifacts behind direct, run, and task selectors",
+    async ({ visibility, cfg, role }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const viewerProfile = ensureProfileForEmail("viewer@example.com");
+        const ownerProfile = ensureProfileForEmail("owner@example.com");
+        const sessionKey = "agent:main:foreign-artifacts";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "session-foreign-artifacts",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: ownerProfile.id },
+            visibility,
+          },
+        );
+        mocks.getTaskSession.mockImplementation((taskId: string) =>
+          taskId === "task-run"
+            ? { runId: "run-foreign", agentId: "main" }
+            : {
+                requesterSessionKey: sessionKey,
+                requesterAgentId: "main",
+                ownerKey: sessionKey,
+              },
+        );
+        mocks.resolveRunSession.mockReturnValue(sessionKey);
+        const viewer = role
+          ? roleClient(role, "artifact-viewer")
+          : identifiedClient(["operator.read"], viewerProfile.id);
+
+        for (const query of [
+          { sessionKey },
+          { runId: "run-foreign" },
+          { taskId: "task-foreign" },
+          { taskId: "task-run" },
+        ]) {
+          expect(() => resolveAuthorizedArtifactSession(query, cfg, viewer)).toThrowError(
+            expect.objectContaining({
+              shape: {
+                code: "INVALID_REQUEST",
+                message: "no session found for artifact query",
+                details: { type: "artifact_scope_not_found" },
+              },
+            }),
+          );
+        }
+
+        expect(
+          resolveAuthorizedArtifactSession(
+            { sessionKey },
+            cfg,
+            identifiedClient(["operator.read"], ownerProfile.id),
+          ),
+        ).toMatchObject({ sessionKey });
+        expect(
+          resolveAuthorizedArtifactSession(
+            { runId: "run-foreign" },
+            cfg,
+            identifiedClient(["operator.admin"], viewerProfile.id),
+          ),
+        ).toMatchObject({ sessionKey });
+      });
+    },
+  );
+
+  it.each(["shared", "read-only", "suggest"] as const)(
+    "allows reading foreign %s artifacts without participation",
+    async (visibility) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const owner = ensureProfileForEmail("artifact-owner@example.test");
+        const viewer = roleClient("view", "artifact-reader");
+        const sessionKey = "agent:main:readable-artifacts";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "session-readable-artifacts",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: owner.id },
+            visibility,
+          },
+        );
+
+        for (const cfg of [undefined, {}, rolePolicyConfig()]) {
+          expect(resolveAuthorizedArtifactSession({ sessionKey }, cfg, viewer)).toMatchObject({
+            sessionKey,
+          });
+        }
+      });
+    },
+  );
+
+  it("preserves solo and system reads while denying identityless reads with roles", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const viewerProfile = ensureProfileForEmail("viewer@example.com");
-      const sessionKey = "agent:main:foreign-artifacts";
+      const sessionKey = "agent:main:solo-artifacts";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
-        {
-          sessionId: "session-foreign-artifacts",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-          visibility: "shared",
-        },
+        { sessionId: "session-solo-artifacts", updatedAt: 1, visibility: "draft" },
       );
-      mocks.getTaskSession.mockReturnValue({
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        ownerKey: sessionKey,
-      });
-      mocks.resolveRunSession.mockReturnValue(sessionKey);
-      const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "none" },
-                agents: "*",
-                scopes: ["operator.read"],
-              },
-            },
-          },
-        },
-      };
-      const viewer = identifiedClient(["operator.read"], viewerProfile.id);
-
-      for (const query of [{ sessionKey }, { taskId: "task-foreign" }, { runId: "run-foreign" }]) {
-        expect(() => resolveAuthorizedArtifactSession(query, cfg, viewer)).toThrow(
-          "no session found for artifact query",
-        );
+      const identityless = sharingPolicyClient({});
+      for (const client of [null, identityless, sharingPolicyClient({ user: "gateway-owner" })]) {
+        expect(resolveAuthorizedArtifactSession({ sessionKey }, {}, client)).toMatchObject({
+          sessionKey,
+        });
       }
-
-      expect(
-        resolveAuthorizedArtifactSession(
-          { runId: "run-foreign" },
-          cfg,
-          identifiedClient(["operator.admin"], viewerProfile.id),
-        ),
-      ).toMatchObject({ sessionKey });
+      const cfg = rolePolicyConfig();
+      expect(() => resolveAuthorizedArtifactSession({ sessionKey }, cfg, identityless)).toThrow(
+        "no session found for artifact query",
+      );
+      const system: GatewayClient = {
+        ...identityless,
+        internal: { operatorRoleActor: { kind: "system" } },
+      };
+      expect(resolveAuthorizedArtifactSession({ sessionKey }, cfg, system)).toMatchObject({
+        sessionKey,
+      });
     });
   });
 });

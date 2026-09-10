@@ -1,5 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { expectErrorDetails, expectFields } from "./artifacts.test-support.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
+import {
+  expectErrorDetails,
+  expectFields,
+  expectFirstArtifact,
+  expectOkPayload,
+  requireNonEmptyString,
+  resultImageMessage,
+  runtimeContext,
+} from "./artifacts.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -62,6 +74,92 @@ describe("managed artifact lifecycle", () => {
       return 1;
     });
   });
+
+  it.each([
+    { name: "list", method: "artifacts.list", managed: false },
+    { name: "get", method: "artifacts.get", managed: false },
+    { name: "inline download", method: "artifacts.download", managed: false },
+    { name: "managed download", method: "artifacts.download", managed: true },
+  ] as const)(
+    "rechecks $name after a shared session becomes draft",
+    async ({ method, managed }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+          visit(resultImageMessage(), 2);
+          return 1;
+        });
+        const owner = ensureProfileForEmail("artifact-owner@example.test");
+        const viewer = ensureProfileForEmail("artifact-viewer@example.test");
+        const sessionKey = "agent:main:artifact-visibility";
+        const scope = { agentId: "main", sessionKey };
+        const entry = {
+          sessionId: "session-artifact-visibility",
+          updatedAt: 1,
+          createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
+        };
+        await upsertSessionEntryCore(scope, { ...entry, visibility: "shared" });
+        const client = sharingPolicyClient({ user: viewer.id, scopes: ["operator.read"] });
+        async function invoke(
+          rpcMethod: "artifacts.list" | "artifacts.get" | "artifacts.download",
+          params: Record<string, unknown>,
+        ) {
+          const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+          await artifactsHandlers[rpcMethod]?.({
+            req: { type: "req", id: rpcMethod, method: rpcMethod, params: {} },
+            params,
+            client,
+            isWebchatConnect: () => false,
+            respond: (ok, payload, error) => calls.push({ ok, payload, error }),
+            context: runtimeContext({}) as never,
+          });
+          return { calls };
+        }
+        const listed = await invoke("artifacts.list", { sessionKey });
+        const inlineArtifactId = requireNonEmptyString(
+          expectFirstArtifact(listed.calls)?.id,
+          "expected visible artifact",
+        );
+        const artifactId = managed
+          ? "artifact_managed_image_11111111-1111-4111-8111-111111111111"
+          : inlineArtifactId;
+        const url = "/api/chat/media/outgoing/fixture/id/full?mediaTicket=fixture-ticket";
+        hoisted.resolveManagedArtifactDownload.mockResolvedValue({
+          artifactId,
+          sessionKey,
+          type: "image",
+          title: "result.png",
+          url,
+          expiresAt: "2026-07-28T05:00:00.000Z",
+        });
+        const params = method === "artifacts.list" ? { sessionKey } : { sessionKey, artifactId };
+        const baseline = await invoke(method, params);
+        expect(baseline.calls).toHaveLength(1);
+        const payload = expectOkPayload(baseline.calls);
+        if (method === "artifacts.download") {
+          expectFields(payload, managed ? { url } : { encoding: "base64", data: "aGVsbG8=" });
+        }
+
+        await upsertSessionEntryCore(scope, { ...entry, updatedAt: 2, visibility: "draft" });
+        vi.clearAllMocks();
+        const denied = await invoke(method, params);
+
+        expect(denied.calls).toEqual([
+          {
+            ok: false,
+            payload: undefined,
+            error: {
+              code: "INVALID_REQUEST",
+              message: "no session found for artifact query",
+              details: { type: "artifact_scope_not_found" },
+            },
+          },
+        ]);
+        expect(hoisted.visitSessionMessagesAsync).not.toHaveBeenCalled();
+        expect(hoisted.resolveManagedArtifactDownload).not.toHaveBeenCalled();
+        expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("does not retarget a stale managed artifact id through a different block URL", async () => {
     const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
