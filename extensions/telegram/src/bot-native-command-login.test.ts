@@ -607,6 +607,7 @@ describe("registerTelegramNativeCommands /login", () => {
         throw new Error("unreachable");
       } catch {
         await params.prompter.note("Trouble with device code login?", "OAuth help");
+        throw new Error("Telegram stopped");
       } finally {
         loginSettled = true;
       }
