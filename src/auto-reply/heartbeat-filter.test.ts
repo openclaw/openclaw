@@ -204,13 +204,18 @@ describe("isHeartbeatOkResponse", () => {
 });
 
 describe("filterHeartbeatTranscriptArtifacts", () => {
-  it("removes no-op heartbeat pairs", () => {
+  it.each([
+    "[OpenClaw heartbeat poll]",
+    "[OpenClaw exec completion]",
+    "[OpenClaw cron wake]",
+    "[OpenClaw session event]",
+  ])("removes no-op wake pairs for %s", (marker) => {
     const messages = [
       { role: "user", content: "Hello" },
       { role: "assistant", content: "Hi there!" },
       { role: "user", content: HEARTBEAT_PROMPT },
       { role: "assistant", content: "NO_REPLY" },
-      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+      { role: "user", content: marker },
       { role: "assistant", content: "HEARTBEAT_OK" },
       { role: "user", content: "What time is it?" },
       { role: "assistant", content: "It is 3pm." },

@@ -3,7 +3,12 @@ import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
-import { requestSessionEventWake, setSessionEventWakeHandler } from "./session-event-wake.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import {
+  requestSessionEventWake,
+  requestSessionEventWakeAndWait,
+  setSessionEventWakeHandler,
+} from "./session-event-wake.js";
 
 let dispose = () => {};
 
@@ -36,4 +41,36 @@ it("dispatches outside the requesting attempt transcript context", async () => {
       }),
   );
   expect(await observedFence).toBeUndefined();
+});
+
+it("dispatches queued sessions after the requesting attempt closes its work scope", async () => {
+  const executed: string[] = [];
+  dispose = setSessionEventWakeHandler(async (request) => {
+    try {
+      await trackAsyncWork(() => executed.push(request.sessionKey!));
+      return { status: "ran", durationMs: 0 };
+    } catch (error) {
+      return { status: "failed", reason: String(error) };
+    }
+  });
+  const request = (sessionKey: string) =>
+    requestSessionEventWakeAndWait({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey,
+      coalesceMs: 0,
+    });
+  const foreground = new AsyncWorkScope();
+  const originating = "agent:main:dashboard:originating";
+  const unrelated = "agent:main:dashboard:unrelated";
+  const first = foreground.run(() => request(originating));
+  const second = request(unrelated);
+  await foreground.drain();
+
+  expect(await Promise.all([first, second])).toEqual([
+    { status: "ran", durationMs: 0 },
+    { status: "ran", durationMs: 0 },
+  ]);
+  expect(executed).toEqual([originating, unrelated]);
 });

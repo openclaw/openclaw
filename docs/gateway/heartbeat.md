@@ -26,6 +26,8 @@ Setting `heartbeat.every: "0m"` also disables only the recurring cadence. A targ
 
 Targeted event wakes retain the same per-agent rate limits when recurring cadence is disabled: a 30-second minimum between event turns, and a flood guard after five starts within 60 seconds. Deferred work resumes when its guard expires. Config reloads preserve this accounting without enrolling the agent in recurring or broadcast heartbeats.
 
+Transcript markers distinguish `[OpenClaw heartbeat poll]` from an exec completion, cron wake, or session event. Scheduled polls use the configured heartbeat session (the agent's main session by default); targeted completion events return to the session that owns the work. Event markers retain their source provenance without copying internal instructions into chat history. Silent acknowledgment pairs remain hidden.
+
 Troubleshooting: [Automations](/automation/cron-jobs#troubleshooting)
 
 ## Quick start (beginner)
