@@ -32,7 +32,7 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - `PATCH` is a sequential monthly release-train number, not a calendar day. Regular final and beta releases advance the current train; alpha-only tags never consume or advance the beta/regular patch number, so ignore legacy alpha-only tags with higher patch numbers when selecting a beta or regular train.
 - Alpha/nightly builds use the next unreleased patch train and increment only `alpha.N` for repeated builds. Once that patch has a beta, new alpha builds move to the following patch.
 - npm versions are immutable: never delete, republish, or reuse a published tag. Cut the next prerelease number or the next monthly patch instead.
-- `latest` continues to follow the current regular/daily npm line; `beta` is the current beta install target
+- `latest` continues to follow the current regular/daily npm line. For core and every published official plugin, `beta` must always resolve to a version greater than or equal to `latest` under semver ordering; a same-train prerelease is older than its final release.
 - `extended-stable` means the supported trailing-month Gateway distribution, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
 - Regular final and regular correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
 - Gateway extended-stable publishes core, every npm-publishable official plugin,
@@ -41,7 +41,7 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 
 ## Release cadence
 
-- Releases move beta-first; stable follows only after the latest beta is validated
+- Releases move beta-first; stable follows only after the latest beta is validated. Publishing or promoting to `latest` requires immediate beta-floor repair through the release ledger; a newer beta remains unchanged.
 - Maintainers normally cut releases from a `release/YYYY.M.PATCH` branch created from current `main`, so release validation and fixes do not block new development on `main`
 - If a beta tag has been pushed or published and needs a fix, maintainers cut the next `-beta.N` tag instead of deleting or recreating the old one
 - Detailed release procedure, approvals, credentials, and recovery notes are maintainer-only
@@ -1180,9 +1180,9 @@ When cutting a regular orchestrated stable release:
 5. Save the successful `preflight_run_id`, `full_release_validation_run_id`, and exact `full_release_validation_run_attempt`.
 6. Run `OpenClaw Release Publish` from the protected `release-publish/<sha12>-<epoch>` tooling tag with the same `tag`, the same `npm_dist_tag`, the optional Windows input pair, the saved `preflight_run_id`, `full_release_validation_run_id`, and `full_release_validation_run_attempt`. It starts plugin npm and ClawHub in parallel, then promotes the prepared OpenClaw npm package once plugin npm succeeds. GitHub finalization waits for npm and Docker evidence; apps attach independently afterward.
 7. If the release landed on `beta`, use the `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow to promote that stable version from `beta` to `latest`.
-8. If the release intentionally published directly to `latest` and `beta` should follow the same stable build immediately, use that same release workflow to point both dist-tags at the stable version, or let its scheduled self-healing sync move `beta` later.
+8. Immediately after publishing or promoting to `latest`, manually dispatch that same release-ledger workflow to repair the beta floor. Every package's `beta` must be at least its own `latest`; preserve a newer beta. The daily scheduled repair is only a backstop, not a substitute for this release step.
 
-The dist-tag mutation lives in the release ledger repo because it still requires `NPM_TOKEN`, while the source repo keeps OIDC-only publish. That keeps the direct publish path and the beta-first promotion path both documented and operator-visible.
+The release ledger owns npm dist-tag promotion and repair because those operations require `NPM_TOKEN`, while the source repo keeps OIDC-only publish. Post-publication verification reads npm dist-tags and fails when core or an official plugin in the release selection has a missing beta or a beta older than latest, listing the affected packages and observed tags. Repair the registry state and rerun verification before completing the release.
 
 If a maintainer must fall back to local npm authentication, run any 1Password CLI (`op`) commands only inside a dedicated tmux session. Do not call `op` directly from the main agent shell; keeping it inside tmux makes prompts, alerts, and OTP handling observable and prevents repeated host alerts.
 
