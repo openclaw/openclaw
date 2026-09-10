@@ -217,6 +217,93 @@ describe("embedded run auth plan provider pin", () => {
   });
 
   it.each([
+    {
+      allowAuthProfileFallback: undefined,
+      configuredBackup: false,
+      profileIds: ["openai:selected", "openai:backup"],
+    },
+    {
+      allowAuthProfileFallback: false,
+      configuredBackup: false,
+      profileIds: ["openai:selected"],
+    },
+    {
+      allowAuthProfileFallback: false,
+      configuredBackup: true,
+      profileIds: ["openai:selected"],
+    },
+  ])(
+    "prepares permitted credentials with fallback=$allowAuthProfileFallback and configured backup=$configuredBackup",
+    async ({ allowAuthProfileFallback, configuredBackup, profileIds }) => {
+      readCodexCliCredentialsCachedMock.mockReturnValue(null);
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: {
+            "openai:selected": { type: "api_key", provider: "openai", key: "selected-key" },
+            "openai:backup": { type: "api_key", provider: "openai", key: "backup-key" },
+          },
+          order: { openai: ["openai:backup", "openai:selected"] },
+        },
+        agentDir,
+      );
+      const model = platformModel;
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: model.baseUrl,
+              models: [],
+              ...(configuredBackup
+                ? { apiKey: { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" } }
+                : {}),
+            },
+          },
+        },
+      };
+      const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+      vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({ ...stores, model });
+      const prepared = await withPluginRuntimeGenerationScope(
+        { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+        () =>
+          prepareEmbeddedRunAuthPlan({
+            runParams: {
+              sessionId: "verify-session",
+              runId: "verify-run",
+              workspaceDir: state.workspaceDir,
+              prompt: "Verify the selected credential",
+              timeoutMs: 5_000,
+              config,
+              authProfileId: "openai:selected",
+              authProfileIdSource: "user",
+              allowAuthProfileFallback,
+            },
+            provider: "openai",
+            modelId: model.id,
+            model,
+            agentDir,
+            workspaceDir: state.workspaceDir,
+            nativeModelOwned: false,
+            ...stores,
+            getAgentHarness: () => openClawHarness,
+            setAgentHarness: () => {},
+            getRuntimeModel: () => model,
+            getEffectiveModel: () => model,
+            applyResolvedRuntimeModel: () => {},
+            selectHarnessForPreparedAttempts: () => openClawHarness,
+          }),
+      );
+
+      expect(prepared.preparedAuthAttempts.map((attempt) => attempt.profileId)).toEqual(profileIds);
+      expect(prepared.activePreparedAuthPlan.forwardedAuthProfileCandidateIds).toEqual(profileIds);
+      expect(Object.keys(prepared.attemptAuthProfileStore.profiles).toSorted()).toEqual([
+        "openai:backup",
+        "openai:selected",
+      ]);
+    },
+  );
+
+  it.each([
     { pin: true, authMode: "api-key", authRequirement: "api-key", kind: "direct" },
     { pin: false, authMode: "oauth", authRequirement: "subscription", kind: "profile" },
   ])(

@@ -235,6 +235,7 @@ export async function runSetupInferenceTurn(params: {
           ? { authProfileId: route.authProfileId, authProfileIdSource: "user" as const }
           : {}),
         authProfileStateMode: "read-only",
+        allowAuthProfileFallback: false,
         preparedModelRuntimeMode: "isolated-read-only",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
