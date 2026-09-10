@@ -78,8 +78,7 @@ The public Doctor migration path stages transcript payloads and performs branch
 and provider repairs in a private, temporary SQLite database instead of retaining
 complete histories in memory. It keeps the raw transcript untouched until archiving it through an
 exclusive same-filesystem move, avoiding both an extra full `.pre-doctor` raw
-copy and a rewritten intermediate file. Standalone transcript repair retains
-its original backup behavior.
+copy and a rewritten intermediate file.
 
 For large histories, plan space for the original JSON/JSONL files, the temporary
 SQLite spool, and the destination database and WAL at the same time. Keep free
