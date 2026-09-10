@@ -21,11 +21,11 @@ import {
   type UpdateStateSchemaVersion,
 } from "../../infra/update-candidate-state.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import {
   restoreUpdateRecoveryBackup,
   verifyUpdateRecoveryBackup,
   writeUpdateRecoveryBackupOutcome,
-  type UpdateRecoveryBackupRef,
 } from "../../infra/update-recovery-backup.js";
 import {
   assertUpdateRecoveryConfigUnchanged,

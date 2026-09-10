@@ -100,7 +100,7 @@ function createPostPluginDoctorExecutionFailure(
 }
 
 export async function runUpdateFinalizationDoctorInFreshProcess(params: {
-  updateRecoveryBackup?: import("../../infra/update-recovery-backup.js").UpdateRecoveryBackupRef;
+  updateRecoveryBackup?: import("../../infra/update-recovery-backup-contract.js").UpdateRecoveryBackupRef;
   phase: UpdateDoctorPhase;
   root: string;
   yes: boolean;
@@ -230,7 +230,7 @@ async function validatePostPluginConfigInFreshProcess(params: {
 }
 
 export async function completePostCorePluginUpdate(params: {
-  updateRecoveryBackup?: import("../../infra/update-recovery-backup.js").UpdateRecoveryBackupRef;
+  updateRecoveryBackup?: import("../../infra/update-recovery-backup-contract.js").UpdateRecoveryBackupRef;
   root: string;
   pluginUpdate: PostCorePluginUpdateResult;
   freshDoctorRequired: boolean;

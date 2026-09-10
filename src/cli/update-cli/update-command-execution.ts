@@ -16,7 +16,7 @@ import {
   canResolveRegistryVersionForPackageTarget,
   verifyPackageUpdateRecovery,
 } from "../../infra/update-global.js";
-import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -594,9 +594,7 @@ export async function executeMutableUpdate(
         installTarget: params.packageInstallTarget,
         validateCandidate,
         beforeActivate,
-        get managedServiceEnv() {
-          return doctorEnv();
-        },
+        managedServiceEnv: preManagedServiceStop?.serviceEnv ?? opts.run?.env,
         get updateRecoveryBackup() {
           return doctorRecoveryBackup();
         },

@@ -52,7 +52,7 @@ export async function convergeUpdatePlugins(
 }
 
 async function convergeUpdatePluginsInternal(params: {
-  updateRecoveryBackup?: import("../../infra/update-recovery-backup.js").UpdateRecoveryBackupRef;
+  updateRecoveryBackup?: import("../../infra/update-recovery-backup-contract.js").UpdateRecoveryBackupRef;
   candidateUpdateRecovery?: "parent-v1";
   coreAlreadyCurrent?: boolean;
   result: UpdateRunResult;

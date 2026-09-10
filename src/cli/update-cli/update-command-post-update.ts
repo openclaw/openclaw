@@ -30,6 +30,7 @@ import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
   resolveAutomaticUpdateTriage,
+  resolveCompletedUpdateResult,
   recordUpdateResultNextAction,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
@@ -115,13 +116,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     }
   };
   // Finalization owns the complete outcome, including recovery, restart, and completion work.
-  const completedResult = (result: UpdateRunResult): UpdateRunResult => ({
-    ...result,
-    ...(result.status === "error" && params.rollbackBlockedReason && !params.updateRecoveryBackup
-      ? { reason: params.rollbackBlockedReason }
-      : {}),
-    durationMs: Math.max(0, Date.now() - params.startedAt),
-  });
+  const completedResult = (result: UpdateRunResult) => resolveCompletedUpdateResult(params, result);
   const recordNextAction = (result: UpdateRunResult) => {
     assertCurrent();
     return recordUpdateResultNextAction(params, result);

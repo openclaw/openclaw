@@ -6,7 +6,7 @@ import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { GlobalInstallManager } from "./update-global.js";
-import type { UpdateRecoveryBackupRef } from "./update-recovery-backup.js";
+import type { UpdateRecoveryBackupRef } from "./update-recovery-backup-contract.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 
 export type UpdateStepAdvisory =

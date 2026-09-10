@@ -22,7 +22,7 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
-import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import { normalizeFallbackFailureReason } from "../../infra/update-runner-command.js";
 import {
   buildUpdateDoctorEnv,

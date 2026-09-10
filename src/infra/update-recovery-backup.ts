@@ -20,6 +20,10 @@ import { root as safeRoot } from "./fs-safe.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import {
+  updateRecoveryBackupRefSchema,
+  type UpdateRecoveryBackupRef,
+} from "./update-recovery-backup-contract.js";
 import { captureUpdateRecoveryBackup } from "./update-recovery-backup-create.js";
 import {
   backupStore,
@@ -42,14 +46,6 @@ import { inspectUpdateRunDriver, type UpdateRunDriver } from "./update-run-drive
 
 const RETAINED_UPDATE_BACKUPS = 3;
 const log = createSubsystemLogger("update/backup");
-const refSchema = z
-  .object({
-    directory: z.string().min(1),
-    manifestPath: z.string().min(1),
-    manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  })
-  .strict();
-export type UpdateRecoveryBackupRef = z.infer<typeof refSchema>;
 type Authority = { assertOwned: () => void };
 type CreateOptions = Authority & {
   runId: string;
@@ -64,14 +60,14 @@ const outcomeSchema = z
   .strict();
 type Outcome = z.infer<typeof outcomeSchema>;
 const recordedOutcomeSchema = outcomeSchema.extend({
-  manifestSha256: refSchema.shape.manifestSha256,
+  manifestSha256: updateRecoveryBackupRefSchema.shape.manifestSha256,
   configWrites: z.array(updateRecoveryConfigWriteSchema).max(512).optional(),
 });
 type RecordedOutcome = z.infer<typeof recordedOutcomeSchema>;
 
 /** Parse the exact manifest binding passed to the target Doctor. */
 export function readUpdateRecoveryBackupRef(value: string): UpdateRecoveryBackupRef {
-  return refSchema.parse(JSON.parse(value));
+  return updateRecoveryBackupRefSchema.parse(JSON.parse(value));
 }
 
 /** Capture all owned recovery inputs after the caller has stopped writers. */
@@ -110,7 +106,7 @@ export async function verifyUpdateRecoveryBackup(
 }
 
 async function prepareVerifiedBackup(ref: UpdateRecoveryBackupRef) {
-  refSchema.parse(ref);
+  updateRecoveryBackupRefSchema.parse(ref);
   if (
     path.resolve(ref.directory) !== ref.directory ||
     ref.manifestPath !== path.join(ref.directory, "manifest.json")
@@ -271,7 +267,7 @@ async function withRecoveryMetadata<T>(
   }) => Promise<T>,
 ): Promise<T> {
   authority.assertOwned();
-  refSchema.parse(ref);
+  updateRecoveryBackupRefSchema.parse(ref);
   if (
     path.resolve(ref.directory) !== ref.directory ||
     ref.manifestPath !== path.join(ref.directory, "manifest.json")

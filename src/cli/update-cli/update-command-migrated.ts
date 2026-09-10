@@ -37,6 +37,7 @@ import {
 } from "./update-command-recovery.js";
 import {
   recordUpdateResultNextAction,
+  resolveCompletedUpdateResult,
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
@@ -196,11 +197,10 @@ async function recoverMigratedUpdateInParent(
         `Update recovery could not restore ${params.updateRecoveryBackup?.directory ?? "the missing backup"}. Run \`npx openclaw@latest doctor --fix\` to recover.`,
     );
   }
-  const finalResult = {
+  const finalResult = resolveCompletedUpdateResult(params, {
     ...rollback.result,
     runId: run?.runId,
-    durationMs: Math.max(0, Date.now() - params.startedAt),
-  };
+  });
   if (run) {
     for (const step of bufferedSteps) {
       assertCurrent();

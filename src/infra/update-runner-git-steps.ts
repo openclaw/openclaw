@@ -5,6 +5,7 @@ import {
   createUpdatePostInstallDoctorResultPath,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
 } from "./update-doctor-result.js";
+import type { UpdateRecoveryBackupRef } from "./update-recovery-backup-contract.js";
 import { runStep } from "./update-runner-command.js";
 import type { RunStepOptions } from "./update-runner-types.js";
 

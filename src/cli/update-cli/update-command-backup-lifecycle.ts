@@ -1,9 +1,9 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import {
   createUpdateRecoveryBackup,
   writeUpdateRecoveryBackupOutcome,
-  type UpdateRecoveryBackupRef,
 } from "../../infra/update-recovery-backup.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";

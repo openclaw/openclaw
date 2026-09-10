@@ -10,8 +10,8 @@ import {
   withConfigFileWriteCapture,
   type ConfigFileWrite,
 } from "../config/write-capture.js";
+import type { UpdateRecoveryBackupRef } from "./update-recovery-backup-contract.js";
 import { canonicalEntryPath, digest, statOrMissing } from "./update-recovery-backup-files.js";
-import type { UpdateRecoveryBackupRef } from "./update-recovery-backup.js";
 
 type Authority = { assertOwned: () => void };
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);

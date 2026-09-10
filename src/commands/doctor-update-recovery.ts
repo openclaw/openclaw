@@ -12,7 +12,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
-import type { UpdateRecoveryBackupRef } from "../infra/update-recovery-backup.js";
+import type { UpdateRecoveryBackupRef } from "../infra/update-recovery-backup-contract.js";
 import {
   inspectUpdateRunAbandonment,
   recordedUpdateRunDrivers,
@@ -282,6 +282,15 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
   scope.prepared = true;
   if (!updating && options.repair !== true && options.yes !== true) {
     return;
+  }
+  if (updating) {
+    // A backup cannot supply publication metadata required by the old driver's live reader.
+    const { guardUpdateDoctorSchemaUpgrade } = await import("./doctor-update-schema-guard.js");
+    await guardUpdateDoctorSchemaUpgrade({
+      runtime: scope.runtime,
+      json: options.json,
+      statePublicationOnly: true,
+    });
   }
   const backup = await import("../infra/update-recovery-backup.js");
   const pending = !updating ? await backup.findPendingUpdateRecoveryBackup() : null;

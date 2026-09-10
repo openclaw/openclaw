@@ -24,6 +24,7 @@ import { root as safeRoot } from "./fs-safe.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import type { UpdateRecoveryBackupRef } from "./update-recovery-backup-contract.js";
 import {
   backupStore,
   canonicalEntryPath,
@@ -33,7 +34,6 @@ import {
   MAX_MANIFEST_BYTES,
   statOrMissing,
 } from "./update-recovery-backup-files.js";
-import type { UpdateRecoveryBackupRef } from "./update-recovery-backup.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 
 function within(candidate: string, root: string): boolean {

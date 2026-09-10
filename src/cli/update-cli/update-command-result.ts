@@ -52,7 +52,7 @@ export type MutableUpdateExecutionResult = {
   ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   recoveryEnv: NodeJS.ProcessEnv | undefined;
   packageTransaction?: PackageUpdateTransaction;
-  updateRecoveryBackup?: import("../../infra/update-recovery-backup.js").UpdateRecoveryBackupRef;
+  updateRecoveryBackup?: import("../../infra/update-recovery-backup-contract.js").UpdateRecoveryBackupRef;
   schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
   candidateSchemaVersions?: OpenClawSchemaVersions;
   candidateUpdateRecovery?: "parent-v1";
@@ -60,6 +60,19 @@ export type MutableUpdateExecutionResult = {
   previousVerified?: boolean;
   activationConfig?: UpdateConfigSnapshot;
 };
+
+export function resolveCompletedUpdateResult(
+  params: Pick<FinishUpdateParams, "startedAt" | "rollbackBlockedReason" | "updateRecoveryBackup">,
+  result: UpdateRunResult,
+): UpdateRunResult {
+  return {
+    ...result,
+    ...(result.status === "error" && params.rollbackBlockedReason && !params.updateRecoveryBackup
+      ? { reason: params.rollbackBlockedReason }
+      : {}),
+    durationMs: Math.max(0, Date.now() - params.startedAt),
+  };
+}
 
 /** Report rejected read-only admission without creating a run or recovery diagnostics. */
 export async function withUpdateAdmissionReporting<T>(
