@@ -47,6 +47,7 @@ import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import {
   isLiveBillingDrift,
+  isLiveProviderUnavailableDrift,
   isLiveRateLimitDrift,
   shouldSkipLiveProviderDrift,
 } from "../agents/live-test-provider-drift.js";
@@ -965,6 +966,46 @@ describe("formatGatewayLiveAgentWaitFailure", () => {
     ).toContain(
       "anthropic prompt: agent.wait timeout for runId=run-1 (timeoutPhase=provider, providerStarted=true, stopReason=rpc)",
     );
+  });
+});
+
+describe("hasFreshProviderUnavailableFailure", () => {
+  it("classifies only unavailable failures appended by the current turn", () => {
+    const entries: SessionAssistantEntry[] = [
+      {
+        text: "",
+        stopReason: "error",
+        errorMessage: "Upstream request failed: Model is unavailable.",
+      },
+      {
+        text: "",
+        stopReason: "error",
+        errorMessage: "400: Upstream request failed: Model is unavailable.",
+      },
+    ];
+
+    expect(hasFreshProviderUnavailableFailure(entries, 1)).toBe(true);
+    expect(hasFreshProviderUnavailableFailure(entries, 2)).toBe(false);
+  });
+
+  it("does not reclassify generic schema failures or successful turns", () => {
+    expect(
+      hasFreshProviderUnavailableFailure(
+        [
+          {
+            text: "",
+            stopReason: "error",
+            errorMessage: "provider rejected the request schema or tool payload",
+          },
+          {
+            text: "ok",
+            stopReason: "stop",
+            errorMessage: "Upstream request failed: Model is unavailable.",
+          },
+        ],
+        0,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -2831,6 +2872,7 @@ function extractTranscriptMessageText(message: unknown): string {
 }
 
 type SessionAssistantEntry = {
+  errorMessage?: string;
   stopReason?: string;
   text: string;
 };
@@ -2884,15 +2926,47 @@ async function readSessionAssistantEntries(
       continue;
     }
     const stopReason = (message as { stopReason?: unknown }).stopReason;
+    const errorMessage = (message as { errorMessage?: unknown }).errorMessage;
     assistantEntries.push({
       text: maybeStripAssistantScaffoldingForLiveModel(
         extractTranscriptMessageText(message),
         modelKey,
       ),
       ...(typeof stopReason === "string" ? { stopReason } : {}),
+      ...(typeof errorMessage === "string" ? { errorMessage } : {}),
     });
   }
   return assistantEntries;
+}
+
+function hasFreshProviderUnavailableFailure(
+  entries: readonly SessionAssistantEntry[],
+  baselineAssistantCount: number,
+): boolean {
+  return entries
+    .slice(baselineAssistantCount)
+    .some(
+      (entry) =>
+        entry.stopReason === "error" &&
+        entry.errorMessage !== undefined &&
+        isLiveProviderUnavailableDrift(entry.errorMessage),
+    );
+}
+
+async function normalizeGatewayLiveAgentWaitError(params: {
+  error: unknown;
+  sessionKey: string;
+  modelKey?: string;
+  baselineAssistantCount: number;
+  context: string;
+}): Promise<Error> {
+  const entries = await readSessionAssistantEntries(params.sessionKey, params.modelKey);
+  if (hasFreshProviderUnavailableFailure(entries, params.baselineAssistantCount)) {
+    // Preserve only the closed classification. Raw provider bodies can contain
+    // credentials or unrelated response data and must not enter CI output.
+    return new Error(`${params.context}: provider unavailable`);
+  }
+  return params.error instanceof Error ? params.error : new Error(String(params.error));
 }
 
 async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
@@ -3274,9 +3348,13 @@ async function requestGatewayAgentText(params: {
     // can otherwise trip the takeover fence.
     const waitResult = await agentWaitPromise;
     if (waitResult.kind === "agent-error") {
-      throw waitResult.error instanceof Error
-        ? waitResult.error
-        : new Error(String(waitResult.error));
+      throw await normalizeGatewayLiveAgentWaitError({
+        error: waitResult.error,
+        sessionKey: params.sessionKey,
+        modelKey: params.modelKey,
+        baselineAssistantCount,
+        context: params.context,
+      });
     }
     return await waitForSessionAssistantText({
       sessionKey: params.sessionKey,
@@ -3290,7 +3368,13 @@ async function requestGatewayAgentText(params: {
   }
   void transcriptPromise.catch(() => undefined);
   if (first.kind === "agent-error") {
-    throw first.error instanceof Error ? first.error : new Error(String(first.error));
+    throw await normalizeGatewayLiveAgentWaitError({
+      error: first.error,
+      sessionKey: params.sessionKey,
+      modelKey: params.modelKey,
+      baselineAssistantCount,
+      context: params.context,
+    });
   }
   return await waitForSessionAssistantText({
     sessionKey: params.sessionKey,
