@@ -1058,24 +1058,19 @@ function buildAllowedModelSetFromPrepared(
       manifestPlugins: params.manifestPlugins,
     })?.ref;
   };
-  const catalogKeys = new Set<string>();
-  for (const entry of catalog) {
-    catalogKeys.add(modelKey(entry.provider, entry.id));
-  }
+  const allowAll = (): AllowedModelSet => {
+    const allowedKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
+    if (defaultKey) {
+      allowedKeys.add(defaultKey);
+    }
+    return { allowAny: true, allowedCatalog: catalog, allowedKeys };
+  };
 
   if (allowAny) {
-    if (defaultKey) {
-      catalogKeys.add(defaultKey);
-    }
-    return {
-      allowAny: true,
-      allowedCatalog: catalog,
-      allowedKeys: catalogKeys,
-    };
+    return allowAll();
   }
 
   const allowedKeys = new Set<string>();
-  const allowedRefKeys = new Set<string>();
   const catalogIdentities = new Set(catalog.map(resolveModelCatalogIdentityKey));
   const allowedCatalogIdentities = new Set<string>();
   const allowedCaseInsensitiveIdentities = new Set<string>();
@@ -1086,14 +1081,10 @@ function buildAllowedModelSetFromPrepared(
     allowedKeys.add(wildcardKey);
   }
   const addAllowedCatalogRef = (ref: ModelRef) => {
-    const key = modelKey(ref.provider, ref.model);
-    if (!allowedRefKeys.has(key)) {
-      allowedRefKeys.add(key);
-      allowedCatalogIdentities.add(
-        resolveModelCatalogIdentityKey({ provider: ref.provider, id: ref.model }),
-      );
-      allowedCaseInsensitiveIdentities.add(caseInsensitiveIdentity(ref.provider, ref.model));
-    }
+    allowedCatalogIdentities.add(
+      resolveModelCatalogIdentityKey({ provider: ref.provider, id: ref.model }),
+    );
+    allowedCaseInsensitiveIdentities.add(caseInsensitiveIdentity(ref.provider, ref.model));
   };
   for (const entry of expandModelCatalogWildcards(catalog, wildcardModelKeys)) {
     allowedKeys.add(modelKey(entry.provider, entry.id));
@@ -1107,18 +1098,19 @@ function buildAllowedModelSetFromPrepared(
     const key = modelKey(parsed.provider, parsed.model);
     allowedKeys.add(key);
     addAllowedCatalogRef(parsed);
+    const syntheticKey = modelCatalogEntryKey({ provider: parsed.provider, id: parsed.model });
 
     if (
       !catalogIdentities.has(
         resolveModelCatalogIdentityKey({ provider: parsed.provider, id: parsed.model }),
       ) &&
       !findModelCatalogEntry(catalog, { provider: parsed.provider, modelId: parsed.model }) &&
-      !syntheticCatalogEntries.has(key)
+      !syntheticCatalogEntries.has(syntheticKey)
     ) {
       // Config can allow a model before it appears in live provider catalogs.
       // Synthetic entries keep UI/model switchers aligned with that allowlist.
       const alias = metadata.aliasByKey.get(key);
-      syntheticCatalogEntries.set(key, {
+      syntheticCatalogEntries.set(syntheticKey, {
         id: parsed.model,
         name: parsed.model,
         provider: parsed.provider,
@@ -1152,14 +1144,7 @@ function buildAllowedModelSetFromPrepared(
   ];
 
   if (allowedCatalog.length === 0 && allowedKeys.size === 0 && wildcardModelKeys.size === 0) {
-    if (defaultKey) {
-      catalogKeys.add(defaultKey);
-    }
-    return {
-      allowAny: true,
-      allowedCatalog: catalog,
-      allowedKeys: catalogKeys,
-    };
+    return allowAll();
   }
 
   return {
@@ -1631,17 +1616,7 @@ export function dedupeModelCatalogEntries(
 ): ModelCatalogEntry[] {
   // Preserve the first occurrence after precedence merging while removing
   // provider/id duplicates from configured and auth-backed catalogs.
-  const seen = new Set<string>();
-  const next: ModelCatalogEntry[] = [];
-  for (const entry of entries) {
-    const key = modelKey(entry.provider, entry.id);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    next.push(entry);
-  }
-  return next;
+  return dedupeByKey(entries, modelCatalogEntryKey);
 }
 
 export function createModelVisibilityPolicyWithFallbacks(

@@ -1113,6 +1113,145 @@ describe("model-selection", () => {
   });
 
   describe("buildAllowedModelSet", () => {
+    it.each([
+      ["absent", false],
+      ["absent", true],
+      ["forward", false],
+      ["forward", true],
+      ["reversed", false],
+      ["reversed", true],
+      ["first-only", false],
+      ["first-only", true],
+      ["nested-only", false],
+      ["nested-only", true],
+    ] as const)(
+      "keeps literal provider-prefixed models visible (%s catalog; reversed policy=%s)",
+      (catalogOrder, reversePolicy) => {
+        const rows = [
+          { provider: "custom", id: "model", name: "model" },
+          { provider: "custom", id: "custom/model", name: "custom/model" },
+        ];
+        const allow = rows.map((entry) => `custom/${entry.id}`);
+        if (reversePolicy) {
+          allow.reverse();
+        }
+        const catalogRows =
+          catalogOrder === "reversed" || catalogOrder === "nested-only" ? rows.toReversed() : rows;
+        const availableRows = catalogOrder.endsWith("-only")
+          ? catalogRows.slice(0, 1)
+          : catalogRows;
+        const policy = createModelVisibilityPolicy({
+          cfg: {
+            agents: {
+              defaults: { modelPolicy: { allow } },
+            },
+            models: {
+              providers: {
+                custom: {
+                  api: "openai-completions",
+                  baseUrl: "https://custom.example/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          catalog: [
+            ...(catalogOrder === "absent" ? [] : availableRows),
+            { provider: "other", id: "model", name: "Excluded" },
+          ],
+          defaultProvider: "custom",
+        });
+
+        expect(policy.allowAny).toBe(false);
+        expect([...policy.allowedKeys]).toEqual(["custom/model"]);
+        expect(policy.visibleCatalog({ catalog: [], defaultVisibleCatalog: [] })).toEqual(
+          catalogOrder === "absent" && reversePolicy ? rows.toReversed() : catalogRows,
+        );
+      },
+    );
+
+    it.each([
+      ["case-insensitive", "Model", "model", false],
+      ["case-insensitive", "model", "Model", false],
+      ["literal slash", "team/Reader", "Reader", true],
+      ["literal slash", "Reader", "team/Reader", true],
+    ] as const)(
+      "preserves %s matching when only %s is catalogued",
+      (_kind, id, missing, expectSynthetic) => {
+        const catalog = [{ provider: "custom", id, name: id }];
+        const policy = createModelVisibilityPolicy({
+          cfg: {
+            agents: {
+              defaults: { modelPolicy: { allow: [`custom/${id}`, `custom/${missing}`] } },
+            },
+            models: {
+              providers: {
+                custom: {
+                  api: "openai-completions",
+                  baseUrl: "https://custom.example/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          catalog,
+          defaultProvider: "custom",
+        });
+
+        expect(policy.visibleCatalog({ catalog: [], defaultVisibleCatalog: [] })).toEqual([
+          ...catalog,
+          ...(expectSynthetic ? [{ provider: "custom", id: missing, name: missing }] : []),
+        ]);
+      },
+    );
+
+    it.each([false, true])(
+      "preserves literal Arcee refs while matching equivalent catalog rows (catalog supplied=%s)",
+      (supplied) => {
+        const direct = {
+          provider: "arcee",
+          id: "trinity-large-thinking",
+          name: "trinity-large-thinking",
+        };
+        const wire = {
+          provider: "arcee",
+          id: "arcee-ai/trinity-large-thinking",
+          name: "arcee-ai/trinity-large-thinking",
+        };
+        const catalog = supplied ? [wire] : [];
+        const policy = createModelVisibilityPolicy({
+          cfg: {
+            agents: {
+              defaults: {
+                modelPolicy: {
+                  allow: [
+                    "arcee/*",
+                    "arcee/trinity-large-thinking",
+                    "arcee/arcee-ai/trinity-large-thinking",
+                  ],
+                },
+              },
+            },
+            models: {
+              providers: {
+                arcee: {
+                  api: "openai-completions",
+                  baseUrl: "https://arcee.example/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          catalog,
+          defaultProvider: "arcee",
+        });
+
+        expect(policy.visibleCatalog({ catalog, defaultVisibleCatalog: catalog })).toEqual(
+          supplied ? [wire] : [direct, wire],
+        );
+      },
+    );
+
     it("retains every configured row in a large allowlist without admitting other rows", () => {
       const catalog = Array.from({ length: 400 }, (_, index) => ({
         provider: "custom",
@@ -1533,7 +1672,7 @@ describe("model-selection", () => {
       ]);
     });
 
-    it("keeps exact same-provider entries visible beside wildcard catalog rows", () => {
+    it("keeps literal wildcard rows and exact entries with the first duplicate's metadata", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -1545,10 +1684,12 @@ describe("model-selection", () => {
           },
         },
       } as unknown as OpenClawConfig;
+      const nested = { provider: "vllm", id: "vllm/qwen-local", name: "Namespaced Qwen" };
+      const catalog = [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }, nested];
 
       const policy = createModelVisibilityPolicy({
         cfg,
-        catalog: [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }],
+        catalog,
         defaultProvider: "anthropic",
         defaultModel: "claude-sonnet-4-6",
       });
@@ -1556,12 +1697,9 @@ describe("model-selection", () => {
       expect(
         policy.visibleCatalog({
           catalog: [],
-          defaultVisibleCatalog: [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }],
+          defaultVisibleCatalog: [...catalog, { ...nested, name: "Duplicate row" }],
         }),
-      ).toEqual([
-        { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
-        { provider: "vllm", id: "manual", name: "manual" },
-      ]);
+      ).toEqual([...catalog, { provider: "vllm", id: "manual", name: "manual" }]);
     });
 
     it("does not re-add a default outside mixed wildcard and exact filters", () => {
