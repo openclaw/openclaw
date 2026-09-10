@@ -88,6 +88,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
           return;
         }
         await resumeScheduledTaskAutoStartAfterUpdate(params.serviceEnv, {
+          assertCurrent: params.assertCurrent,
           beforeMutation: async () => {
             params.assertCurrent?.();
             await guard?.();
@@ -124,6 +125,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
         await restorePromise?.catch(() => undefined);
         if (!restartSafe && restorationAttempted && (await suspensionPromise.catch(() => false))) {
           await suspendScheduledTaskAutoStartForUpdate(params.serviceEnv, {
+            assertCurrent: params.assertCurrent,
             beforeMutation: async () => {
               params.assertCurrent?.();
               await guard?.();
@@ -188,6 +190,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
   const suspensionPromise = params.alreadySuspended
     ? Promise.resolve(true)
     : suspendScheduledTaskAutoStartForUpdate(params.serviceEnv, {
+        assertCurrent: params.assertCurrent,
         beforeMutation: async () => {
           params.assertCurrent?.();
           await guard?.();

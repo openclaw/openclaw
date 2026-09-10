@@ -271,8 +271,17 @@ export async function suspendScheduledTaskAutoStartForUpdate(
     restoreOnFailure?: boolean;
   },
 ): Promise<boolean> {
-  return withGatewayServiceOperationLock(env, async () =>
-    changeScheduledTaskEnabledState({ env, enabled: false, ...options }),
+  const assertCaller = options?.assertCurrent;
+  return withGatewayServiceOperationLock(env, async (assertNative) =>
+    changeScheduledTaskEnabledState({
+      env,
+      enabled: false,
+      ...options,
+      assertCurrent: () => {
+        assertNative();
+        assertCaller?.();
+      },
+    }),
   );
 }
 
@@ -280,8 +289,17 @@ export async function resumeScheduledTaskAutoStartAfterUpdate(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   options?: { beforeMutation?: () => Promise<void>; assertCurrent?: () => void },
 ): Promise<boolean> {
-  return withGatewayServiceOperationLock(env, async () =>
-    changeScheduledTaskEnabledState({ env, enabled: true, ...options }),
+  const assertCaller = options?.assertCurrent;
+  return withGatewayServiceOperationLock(env, async (assertNative) =>
+    changeScheduledTaskEnabledState({
+      env,
+      enabled: true,
+      ...options,
+      assertCurrent: () => {
+        assertNative();
+        assertCaller?.();
+      },
+    }),
   );
 }
 

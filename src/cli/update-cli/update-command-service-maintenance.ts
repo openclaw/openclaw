@@ -359,10 +359,17 @@ async function stopManagedServiceBeforeMutableUpdate(
   assertNative?: () => void,
 ): Promise<PreManagedServiceStop> {
   // Retain the original live owner across daemon awaits; history is not authority.
-  const executorFence = params.updateRun?.executorFence;
+  const updateRun = params.updateRun;
+  const executorFence = updateRun?.executorFence;
+  const assertExecutor = () => {
+    if (params.updateRun !== updateRun || updateRun?.executorFence !== executorFence) {
+      throw new Error("Native preparation lost its original update executor.");
+    }
+    executorFence?.assertCurrent();
+  };
   const assertCurrent = () => {
     assertNative?.();
-    executorFence?.assertCurrent();
+    assertExecutor();
   };
   assertCurrent();
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
@@ -497,7 +504,6 @@ async function stopManagedServiceBeforeMutableUpdate(
     }
     return blockMessage ? { ...inspected, blockMessage } : inspected;
   }
-  const updateRun = params.updateRun;
   const suspendTask = async () => {
     return await maybeSuspendWindowsTaskAutoStartForUpdate({
       serviceEnv: serviceState.env,
@@ -509,7 +515,9 @@ async function stopManagedServiceBeforeMutableUpdate(
       }),
       assertCurrent: updateRun
         ? () => {
-            assertCurrent();
+            // Recovery outlives this preparation callback. Its later task
+            // operations acquire their own native lock, but retain this executor.
+            assertExecutor();
             if (getUpdateRun(updateRun.runId, { env: updateRun.env })?.status !== "running") {
               throw new Error("Update run no longer owns Windows task activation.");
             }

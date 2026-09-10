@@ -1,11 +1,22 @@
 import type { SpawnSyncOptions } from "node:child_process";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as openClawTmp from "../infra/tmp-openclaw-dir.js";
+import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
+import {
+  heldServiceLockCoordinate,
+  seedRetainedBorrower,
+} from "../infra/update-retained-custody.test-support.js";
 import * as commands from "../process/exec.js";
 import * as launchdCurrent from "./launchd-current-service.js";
 import * as launchctl from "./launchd-exec.js";
 import { stopLaunchAgent } from "./launchd-stop.js";
-import { suspendScheduledTaskAutoStartForUpdate } from "./schtasks-control.js";
+import {
+  resumeScheduledTaskAutoStartAfterUpdate,
+  suspendScheduledTaskAutoStartForUpdate,
+} from "./schtasks-control.js";
 import * as schtasksExec from "./schtasks-exec.js";
 import { terminateGatewayProcessTree } from "./schtasks-process.js";
 import * as systemctl from "./systemd-exec.js";
@@ -138,5 +149,57 @@ it.each(["timeout", "signal"] as const)(
     });
     const result = await schtasksExec.execSchtasks(["/End", "/TN", "Native Fence Proof"]);
     expect(result.code).not.toBe(0);
+  },
+);
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+it.each(["suppress", "restore"] as const)(
+  "refuses task %s when retained native custody appears during its guard",
+  async (operation) => {
+    const root = dirs.make("task-native-custody-");
+    vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+    const store = createManagedHandoffLeaseStore();
+    const acquired = store.acquire(root, "run", { kind: "update" });
+    if (acquired.kind !== "acquired") {
+      throw new Error("Expected an independent fixture executor");
+    }
+    const dispatch = vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue({
+      code: 0,
+      stdout: "<Task><Settings><Enabled>true</Enabled></Settings></Task>",
+      stderr: "",
+    });
+    const beforeMutation = async () => {
+      await Promise.resolve();
+      seedRetainedBorrower(
+        path.join(root, "managed-update-handoffs.sqlite"),
+        acquired.lease,
+        {
+          runId: "run",
+          transactionId: "transaction",
+          claimId: "claim",
+          revision: 1,
+          recordSha256: "a".repeat(64),
+          lifetimeId: "lifetime",
+          serviceKey: heldServiceLockCoordinate(root),
+          configPaths: [path.join(root, "config.json")],
+        },
+        "reserved",
+      );
+    };
+    const change =
+      operation === "suppress"
+        ? suspendScheduledTaskAutoStartForUpdate
+        : resumeScheduledTaskAutoStartAfterUpdate;
+    await expect(
+      change(
+        { HOME: root, OPENCLAW_WINDOWS_TASK_NAME: "Native Custody Proof" },
+        { beforeMutation },
+      ),
+    ).rejects.toThrow();
+    expect(dispatch.mock.calls.map(([args]) => args[0])).toEqual(
+      operation === "suppress" ? ["/Query"] : [],
+    );
+    expect(store.read(root)).toMatchObject({ kind: "current", lease: { version: 3 } });
+    expect(store.release(acquired.lease)).toBe(false);
   },
 );
