@@ -2370,6 +2370,18 @@ async function prepareCliRunContextWithinReadFence(
       ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
       cwdHash,
       ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
+      // Record the exact ledger slot the loopback send tools write under so the
+      // settlement terminal can delete only that (session, run) pair. runId is
+      // required for a slot to exist; without it no send was keyed to this run.
+      ...(mcpGrantContext?.runId
+        ? {
+            turnSendLedgerScope: {
+              agentId: mcpGrantContext.agentId,
+              sessionKey: mcpGrantContext.sessionKey,
+              runId: mcpGrantContext.runId,
+            },
+          }
+        : {}),
     };
   } catch (err) {
     try {

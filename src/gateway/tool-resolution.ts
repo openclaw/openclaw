@@ -293,6 +293,7 @@ export function resolveGatewayScopedTools(
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
     currentChannelId: params.currentChannelId ?? params.agentTo,
+    currentMessagingTarget: params.currentMessagingTarget ?? params.agentTo,
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,
     replyToMode: params.replyToMode,

@@ -62,6 +62,7 @@ import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js"
 import type { SessionManager } from "../../sessions/index.js";
 import type { TrustedSubagentCompletionHandoff } from "../../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode, PromptMode } from "../../system-prompt.types.js";
+import type { TurnSendLedgerScope } from "../../tools/turn-send-ledger.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
@@ -302,6 +303,7 @@ export type RunEmbeddedAgentParams = {
   fastModeAutoProgressState?: FastModeAutoProgressState;
   /** True when the outer model fallback loop has reached its final candidate. */
   isFinalFallbackAttempt?: boolean;
+  onDeferredTurnSendLedgerScope?: (scope: TurnSendLedgerScope) => void;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;

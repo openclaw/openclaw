@@ -5,6 +5,7 @@ import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import type { TurnSendLedgerScope } from "../../agents/tools/turn-send-ledger.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ThinkLevel } from "../thinking.js";
@@ -40,6 +41,13 @@ export type AgentFallbackCandidateCommonParams = {
   userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: RunEmbeddedAgentParams["onContextEngineTurnCandidate"];
+  // The enclosing logical-run owner (run-entry.ts) clears the per-turn send ledger for
+  // this run at terminal. A CLI-dispatched candidate commits its loopback send under a
+  // canonicalized grant scope the owner's raw identity cannot reproduce, so the candidate
+  // must hand that exact scope back through this callback or the slot leaks (no eviction).
+  // Required, not optional: run-entry always supplies it, and a silent drop is the defect
+  // this field guards against.
+  onDeferredTurnSendLedgerScope: (scope: TurnSendLedgerScope) => void;
   assistantErrorTranscript: RunEmbeddedAgentParams["assistantErrorTranscript"];
   notifyUserMessagePersisted: () => void;
   fastModeStartedAtMs: number;

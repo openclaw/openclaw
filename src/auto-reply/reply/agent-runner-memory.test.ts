@@ -501,6 +501,7 @@ describe("runMemoryFlushIfNeeded", () => {
                 modelRoutingProvenance: options.modelRoutingProvenance,
                 contextEngineLogicalTurnLease: {} as never,
                 onContextEngineTurnCandidate: () => {},
+                onDeferredTurnSendLedgerScope: () => {},
               }),
           })) as {
             outcome?: "completed" | "exhausted";

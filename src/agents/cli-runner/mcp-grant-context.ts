@@ -138,6 +138,9 @@ export function buildCliMcpGrantContext(params: {
     params.run.messageChannel ?? params.run.messageProvider,
   );
   const currentChannelId = normalizeOptionalMcpContextValue(params.run.currentChannelId);
+  const currentMessagingTarget = normalizeOptionalMcpContextValue(
+    params.run.currentMessagingTarget,
+  );
   const grantedToolsAllow = params.run.cliToolAvailability?.openClaw ?? params.toolsAllow;
   const delegationCapability = readCliMcpDelegationCapability(params.run);
   // Trusted message-only completions stay restricted even when source routing
@@ -179,6 +182,7 @@ export function buildCliMcpGrantContext(params: {
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
     ...(params.run.pinnedWidgetAuthoring === true ? { pinnedWidgetAuthoring: true } : {}),
     currentChannelId,
+    currentMessagingTarget,
     currentThreadTs: normalizeOptionalMcpContextValue(params.run.currentThreadTs),
     currentMessageId:
       params.run.currentMessageId == null

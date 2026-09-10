@@ -494,6 +494,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                   ? (params.opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
                   : fastModeState.fastAutoOnSeconds,
               isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+              onDeferredTurnSendLedgerScope: runOptions.onDeferredTurnSendLedgerScope,
               timeoutMs,
               runTimeoutOverrideMs,
               runId,

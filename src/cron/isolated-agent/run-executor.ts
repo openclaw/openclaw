@@ -27,6 +27,7 @@ import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-p
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
+import type { TurnSendLedgerScope } from "../../agents/tools/turn-send-ledger.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../../audit/execution-owner-binding.js";
 import {
   resolveAgentLifecycleTerminalMetadata,
@@ -287,6 +288,7 @@ type CronRunExecutionParams = {
   onLaneWait?: (info?: { waiting?: boolean }) => void;
   executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
   runStartedAt?: number;
+  onDeferredTurnSendLedgerScope?: (scope: TurnSendLedgerScope) => void;
 };
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
@@ -707,6 +709,7 @@ function createCronPromptExecutor(
                 fastModeStartedAtMs,
                 fastModeAutoProgressState,
                 isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+                onDeferredTurnSendLedgerScope: params.onDeferredTurnSendLedgerScope,
                 contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
                 onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
                 userTurnTranscriptRecorder,

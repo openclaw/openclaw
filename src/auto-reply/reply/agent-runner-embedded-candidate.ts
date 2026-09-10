@@ -196,6 +196,11 @@ export async function runEmbeddedFallbackCandidate(
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
         onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
+        // An embedded candidate can internally dispatch a CLI backend
+        // (cli-backend-dispatch.ts), which commits loopback sends under a
+        // canonicalized grant scope. Forward the owner's collector so that scope
+        // is cleared at terminal instead of leaking.
+        onDeferredTurnSendLedgerScope: params.onDeferredTurnSendLedgerScope,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,
         currentInboundContext: turn.followupRun.currentInboundContext,
         explicitSkillSelections: turn.followupRun.explicitSkillSelections,
