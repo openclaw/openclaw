@@ -66,19 +66,15 @@ export function renderSkillWorkshopPage(
   return html`
     <section class="content--skill-workshop">
       ${renderPluginsHubHeader({
-        active: "skills",
+        active: "skill-workshop",
         onSelect: (tab) => context.navigate(tab),
-        secondaryAction: {
-          label: t("pluginsPage.backToSkills"),
-          onClick: () => context.navigate("skills"),
-        },
       })}
       <wa-tab-panel
         id=${PLUGINS_HUB_PANEL_ID}
         class="sw-hub-panel"
-        name="skills"
+        name="skill-workshop"
         active
-        aria-labelledby="plugins-tab-skills"
+        aria-labelledby="plugins-tab-skill-workshop"
       >
         <div class="sw-workshop-toolbar">
           ${renderAgentScopeControl({

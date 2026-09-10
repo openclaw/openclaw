@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   PackageRecoveryEffectSchema,
   PackageTransactionDescriptorSchema,
-} from "./package-update-recovery.js";
+} from "./package-update-recovery-contract.js";
 
 /** Private storage validation of the producer's typed facts, not evidence of live authority. */
 const RecoveryPackageObservationSchema = z.strictObject({

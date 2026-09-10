@@ -463,3 +463,5 @@ The slot is exclusive at run time - only one registered context engine is resolv
 - [Plugin Architecture](/plugins/architecture) - registering context engine plugins
 - [Plugin manifest](/plugins/manifest) - plugin manifest fields
 - [Plugins](/tools/plugin) - plugin overview
+- [Session management deep dive](/reference/session-management-compaction) - the session store, transcript events, and auto-compaction internals
+- [System prompt](/concepts/system-prompt) - what OpenClaw assembles into the system prompt for every agent run, and the layers it renders from

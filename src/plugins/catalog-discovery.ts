@@ -194,7 +194,8 @@ export function joinClawHubPluginCatalog(params: {
     .map((plugin) =>
       projectLocalDiscoveryEntry(plugin, params.local.mutationAllowed, params.includeBundledOnly),
     );
-  return [...localOnly, ...remote];
+  const joined = [...localOnly, ...remote];
+  return params.intent === "all" && !query ? joined.toSorted(compareOfficialDownloads) : joined;
 }
 
 function localDiscoveryCategories(plugin: PluginCatalogEntry): string[] {
@@ -233,6 +234,14 @@ function projectLocalDiscoveryEntry(
   };
 }
 
+function compareOfficialDownloads(left: PluginDiscoveryEntry, right: PluginDiscoveryEntry): number {
+  if (left.catalog.official !== right.catalog.official) {
+    return left.catalog.official ? -1 : 1;
+  }
+  const downloadOrder = (right.catalog.downloads ?? 0) - (left.catalog.downloads ?? 0);
+  return downloadOrder || left.catalog.name.localeCompare(right.catalog.name);
+}
+
 export function findLocalPluginByIdentity(
   local: PluginsListResult,
   identity: string,
@@ -258,7 +267,7 @@ export function joinLocalPluginDetail(params: {
       topics: [],
       configuration: [],
       mcpServers: inspection?.declared.mcpServers ?? [],
-      skills: (inspection?.declared.skills ?? []).map((name) => ({ name })),
+      skills: (inspection?.components.skills ?? []).map((name) => ({ name })),
       versions: [],
     },
   };

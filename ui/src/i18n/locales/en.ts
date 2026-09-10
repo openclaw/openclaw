@@ -268,6 +268,9 @@ export const en: TranslationMap & {
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
     runsOn: "Runs on {providerId} · {profileId}",
+    machineLabel: "Machine",
+    machineCpu: "{cpu} vCPU",
+    machineMemory: "{memory} GB",
     more: "+{count} more",
     changedFile: "{count} file",
     changedFiles: "{count} files",
@@ -2385,7 +2388,7 @@ export const en: TranslationMap & {
     tasks: "Tasks",
     skills: "Skills",
     plugins: "Plugins",
-    skillWorkshop: "Skill Workshop",
+    skillWorkshop: "Skill workshop",
     devices: "Devices",
     cloudWorkers: "Cloud workers",
     chat: "Chat",
@@ -2429,7 +2432,7 @@ export const en: TranslationMap & {
     usage: "API usage and costs.",
     cron: "Scheduled tasks and recurring agent runs.",
     tasks: "Background tasks: subagents, automation runs, CLI.",
-    skills: "Manage agent skills and find new ones on ClawHub.",
+    skills: "Manage your agent skills",
     plugins: "Extend your Claw with tools",
     skillWorkshop:
       "The skills your agent uses now, suggestions waiting for review, and past decisions.",
@@ -5483,7 +5486,8 @@ export const en: TranslationMap & {
       modes: {
         "read-only": {
           label: "Read Only",
-          description: "Read within the session root; writes and commands are blocked.",
+          description:
+            "Agent tools can read within the session root, but cannot write or run commands.",
         },
         guarded: {
           label: "Guarded",
@@ -5547,6 +5551,7 @@ export const en: TranslationMap & {
       editFile: "Edit file",
       searchInFile: "Search in file",
       showInFiles: "Show in Files",
+      unavailable: "Unable to open",
       previousMatch: "Previous match",
       nextMatch: "Next match",
       overwrite: "Overwrite",
@@ -5683,6 +5688,10 @@ export const en: TranslationMap & {
         skills: "Skills",
         connectors: "Connectors",
         webSearch: "Web search",
+        webSearchGloballyDisabled:
+          "Web search is disabled in config (tools.web.search.enabled). Session overrides cannot turn it back on.",
+        webSearchClearStaleEnable:
+          "Web search is disabled in config. Click to clear this session’s enable override.",
         managePlugins: "Manage plugins",
         manageSkills: "Manage skills",
         addMcpServer: "Add MCP server…",
@@ -6066,11 +6075,11 @@ export const en: TranslationMap & {
       truncated: "Showing the first matching files. Refine the search to narrow results.",
       session: "Session",
       missing: "Missing",
-      summary: "Session workspace summary",
+      filterAll: "All",
+      filters: "Filter files",
       changedCount: "{count} changed",
       readCount: "{count} read",
       artifactCount: "{count} artifacts",
-      browserCount: "{count} shown",
       actions: "Workspace file actions",
       preview: "Preview",
       copyPath: "Copy path",

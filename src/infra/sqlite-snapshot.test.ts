@@ -342,8 +342,13 @@ describe("createVerifiedSqliteSnapshot", () => {
 
       await expectSnapshotSuccess({ sourcePath, targetPath });
 
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
-      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      expect((await fs.readFile(sourcePath)).equals(sourceBefore), "source bytes unchanged").toBe(
+        true,
+      );
+      expect(
+        (await fs.readFile(`${sourcePath}-journal`)).equals(journalBefore),
+        "journal bytes unchanged",
+      ).toBe(true);
       withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
         expect(
           snapshot.prepare("SELECT COUNT(*) AS count FROM records WHERE value = 'committed'").get(),
@@ -403,8 +408,13 @@ describe("createVerifiedSqliteSnapshot", () => {
         /super-journal.*cannot be recovered privately/iu,
       );
 
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
-      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      expect((await fs.readFile(sourcePath)).equals(sourceBefore), "source bytes unchanged").toBe(
+        true,
+      );
+      expect(
+        (await fs.readFile(`${sourcePath}-journal`)).equals(journalBefore),
+        "journal bytes unchanged",
+      ).toBe(true);
       await expect(fs.readFile(superJournalPath)).resolves.toEqual(superJournalBefore);
       await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
     },

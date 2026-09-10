@@ -12,6 +12,24 @@ What runs on the leased box before enrollment, how the Gateway prepares and veri
 
 The example profile supports both OpenClaw and Codex. Keep setup focused on machine prerequisites and project tools. You do not need to install OpenClaw globally, append a versioned Codex plugin install, or maintain a package URL in the profile. Remove those old runtime-install steps when updating an existing profile; bootstrap supplies the running Gateway's runtime automatically.
 
+### Native Windows prerequisites
+
+For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. For example, this prerequisite check uses the machine's existing Node and npm installation:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+& (Get-Command node.exe -CommandType Application -ErrorAction Stop).Source --version
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Get-Command npm.cmd -CommandType Application -ErrorAction Stop).Source --version
+exit $LASTEXITCODE
+```
+
+Use a Crabbox bootstrap or image that supplies a supported Node.js release and npm on the machine `PATH`, with npm's CLI installed beside `node.exe` under `node_modules/npm`. OpenClaw fails enrollment with a prerequisite message if Node or that npm installation is missing; it does not install Node. npm installs the node runtime archive, and OpenClaw extracts worker bundles with its Node archive library.
+
+The guest must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
+
+Restart replay verifies the actual `node.exe` child's PID, creation time, executable, and command line. Windows does not expose a cheap working-directory probe, so the launch record binds the runtime and state directories to that verified creation time. Missing or mismatched identity rejects replay and requires reprovisioning.
+
 ## Bundle installation
 
 Before enrolling a cloud node, the Gateway prepares a reusable runtime archive from its current built installation in a temporary staging directory. This works for published packages and source checkouts. It includes the complete node host and the trusted plugins that own the registered remote-execution commands required by the selected execution mode. Codex's plugin and its native dependency pin therefore travel with the node distribution without a separate profile recipe.

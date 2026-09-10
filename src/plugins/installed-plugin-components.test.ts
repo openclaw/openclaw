@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import type { PluginDeclaredSurface } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { projectInstalledPluginComponents } from "./installed-plugin-components.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
@@ -15,6 +18,8 @@ const emptyDeclared: PluginDeclaredSurface = {
   skills: [],
   dangerousConfigFlags: [],
 };
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("projectInstalledPluginComponents", () => {
   it("projects declared native components as runtime-mapped tabs", () => {
@@ -60,5 +65,28 @@ describe("projectInstalledPluginComponents", () => {
         lspServers: [],
       },
     });
+  });
+
+  it("projects skill metadata names instead of manifest root paths", () => {
+    const rootDir = tempDirs.make("openclaw-plugin-skills-");
+    const skillDir = path.join(rootDir, "skills", "discord");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: discord\ndescription: Discord workflows.\n---\n\n# Discord\n",
+    );
+
+    expect(
+      projectInstalledPluginComponents({
+        manifest: {
+          id: "discord",
+          format: "openclaw",
+          origin: "bundled",
+          rootDir,
+          skills: ["./skills"],
+        } as PluginManifestRecord,
+        declared: { ...emptyDeclared, skills: ["./skills"] },
+      }).skills,
+    ).toEqual(["discord"]);
   });
 });

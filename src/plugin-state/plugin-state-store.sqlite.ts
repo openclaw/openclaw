@@ -13,12 +13,10 @@ import {
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import {
-  isSqliteCorruptionError,
-  runSqliteImmediateTransactionSync,
-} from "../infra/sqlite-transaction.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import {
   hasOpenClawStateTablesBeyondStartupCheckpoint,

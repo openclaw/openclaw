@@ -284,6 +284,54 @@ OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
 
+### Lifecycle queue waits
+
+When process diagnostics are enabled, the `sessions/lifecycle` logger emits
+`session lifecycle queue waiting` once when a queue acquisition is still pending
+after one second. It identifies the `mutation` or `lifecycle` queue and samples
+its current holder at that instant. The holder can have changed since the
+waiter entered the queue. A delayed timer that runs after acquisition emits no
+holder sample.
+
+`operationId` and `holderOperationId` identify diagnostic operation instances
+within `diagnosticEpoch`, PID and thread. Operations use the fixed boundary
+labels `lifecycle`, `mutation` and `compaction`; they do not name arbitrary
+callers. Existing request traces appear in `operationTraceId`/`operationSpanId`
+and separate `holderTraceId`/`holderSpanId` fields when present. Missing trace
+fields remain unknown; no new trace or audit execution identity is created.
+
+`identityHash` is a salted digest of the already-normalized store/session
+identity. It correlates only inside the same JavaScript runtime isolate and
+diagnostic epoch. Raw session keys and paths are omitted. The digest is
+operational correlation, not anonymization or authorization evidence.
+
+`slow session lifecycle operation` records operations taking at least one
+second through their actual queued work's settlement. It separates
+`mutationQueueWaitMs`, `lifecycleQueueWaitMs`, `completionDelayMs` and
+`phaseDurationsMs.prepare`, `.run` and `.finalize`. The holder's current
+`holderPhase` can also identify activation, admission or release work. A
+`lifecycle` operation describes its queue attempt after the existing active-
+mutation idle wait; that prior idle wait is not measured here. Calls with no
+normalized identities have no queue and emit no queue-operation summary. A
+caller can cancel before all of its queued work unwinds; `signalAborted`
+reports the signal without claiming that the holder has released.
+
+The tracker preserves outer ownership across reentrant work and retires a
+holder only when its actual queue callback exits. Its state weakly follows
+existing queue objects; it does not create another execution queue. Per
+runtime isolate, it retains at most 128 holder descriptors and 32 one-shot
+wait timers, and emits at most 60 records per minute. The queue timing owner
+explicitly distinguishes reentry, so unobserved outer holders stay unknown at
+capacity or after enablement. `omittedObservations` on a later record reports
+suppressed observations; missing records never prove no wait.
+
+Elapsed intervals can include asynchronous waits and nested work, so phase
+and queue totals need not form a disjoint partition. A holder sample identifies
+who owns that queue at the sampled instant, not every predecessor responsible
+for the entire wait or which work consumed CPU. These are ordinary performance
+logs. They do not use or change [audit identity](/gateway/audit), decisions,
+retention, principal attribution or admission authority.
+
 ### Slow agent database opens
 
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
@@ -339,6 +387,19 @@ It excludes database opening and the separately timed begin and commit steps.
 These elapsed durations do not measure SQL CPU time or establish a causal link
 to a nearby request.
 
+Immediate `BEGIN` warnings also include `beginAdmission`: `nativeAttempts` counts
+actual native `BEGIN IMMEDIATE` calls and `nativeMs` measures those calls;
+`serviceCalls` counts synchronous admission-service callbacks and `serviceMs`
+measures them. A service callback may find no work, so its count does not mean
+that reclamation was authorized. Failed attempts and throwing callbacks retain
+their partial measurements. Deferred `BEGIN` and `COMMIT` have no breakdown.
+
+These fields use the same wall clock as the unchanged `elapsedMs` total. Native
+time excludes busy-timeout configuration and restoration; other bookkeeping can
+leave a remainder. A service can synchronously join another transaction, whose
+time is already included in the outer `serviceMs`; do not add nested warnings
+together. The breakdown does not identify CPU time or a physical lock holder.
+
 ### SQLite session writes
 
 The `session-sqlite` subsystem emits `slow SQLite session write` when total
@@ -360,6 +421,32 @@ Use `operation` to locate the owning code path. It does not identify a specific
 SQL statement, measure CPU time or lock contention, or establish that a nearby
 RPC caused the delay. Older records may lack `operation`; do not infer it from
 adjacent log messages.
+
+`session.reclamation.worker-commit` labels every numbered Worker write admission,
+not only its final commit. `reclamationAdmissionId` is the actual request ID,
+scoped to that Worker and process. `reclamationAdmissionReleaseCause` records the
+observed `worker-release` message or `worker-exit` event. It does not infer an
+initial/final phase or prove successful commit or cleanup. An early failure can
+leave the release cause absent because neither event has been observed yet.
+
+For `session.lifecycle.artifacts-prepare`, the same warning includes a bounded
+`artifactPreparation` object. `admissionMode` distinguishes an existing cached
+handle from asynchronous acquisition; `admissionMs` stops when the planner
+receives that handle. Asynchronous acquisition may include shared admission and
+integrity-check waits, so it is not a CPU measurement.
+
+The remaining millisecond fields separate node inventory and selection
+(`nodeInventoryMs`), references and entry deletion plans (`referencePlanningMs`),
+orphan selection and plans (`orphanPlanningMs`), and transcript marker iteration
+(`markerScanMs`). Orphan planning excludes marker time. Counts report existing
+node/window rows before agent or prefix filtering, referenced IDs, selected entries, entered marker queries,
+consumed marker rows, and deletion plans. They are observed result counts, not
+SQLite internal row visits. No identifiers, marker text, transcript contents, or
+byte counts are added. `completed: false` marks partial observations when
+preparation failed; absent fields were not completed. These fields do not change
+the warning threshold or prove that a nearby request caused the work. Rounding
+and work outside the measured subphases can leave a difference from
+`writerExecutionMs`; do not assign that remainder to a specific phase.
 
 ### Slow reply preparation
 

@@ -4,6 +4,7 @@ import type {
   PluginInstalledComponents,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { loadHookEntriesFromDir } from "../hooks/discovery.js";
+import { resolvePluginSkillNames } from "../skills/loading/plugin-skills.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import {
   inspectBundleMcpRuntimeSupport,
@@ -34,6 +35,9 @@ export function projectInstalledPluginComponents(params: {
   declared: PluginDeclaredSurface;
 }): PluginInstalledComponents {
   const { manifest, declared } = params;
+  const skillNames = manifest?.rootDir
+    ? resolvePluginSkillNames(manifest)
+    : sorted(declared.skills);
   if (manifest?.format !== "bundle" || !manifest.bundleFormat) {
     const mcp = manifest?.rootDir
       ? inspectNativePluginMcpRuntimeSupport({
@@ -41,7 +45,7 @@ export function projectInstalledPluginComponents(params: {
           mcpServers: manifest.mcpServers ?? {},
         })
       : undefined;
-    const skills = sorted(declared.skills);
+    const skills = skillNames;
     const mcpServers = sorted(mcp?.supportedServerNames ?? declared.mcpServers);
     const commands = sorted(declared.cliCommands);
     const hooks = sorted(declared.hooks);
@@ -103,7 +107,7 @@ export function projectInstalledPluginComponents(params: {
     : undefined;
   return {
     mapped: sorted(mapped),
-    skills: mapped.has("skills") ? sorted(declared.skills) : [],
+    skills: mapped.has("skills") ? skillNames : [],
     mcpServers: mapped.has("mcpServers") ? sorted(mcp?.supportedServerNames ?? []) : [],
     commands: [],
     hooks,

@@ -2,13 +2,15 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
-import type { GatewayService } from "../../daemon/service.js";
+import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
 import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -18,7 +20,11 @@ import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
+import {
+  maybeStopManagedServiceBeforeMutableUpdate,
+  revalidateManagedGatewayServiceAfterUpdate,
+  type PreManagedServiceStop,
+} from "./update-command-service-maintenance.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
@@ -47,6 +53,7 @@ afterEach(() => vi.restoreAllMocks());
 
 async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await makeTempWorkspace("openclaw-update-service-");
+  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
   try {
     await withEnvAsync(
       {
@@ -425,6 +432,89 @@ it.each([
       await expect(next).rejects.toThrow(/ownership|manager identity/);
     }
     expect(stop).toHaveBeenCalledTimes(scenario.uid === 2001 ? 1 : 0);
+  }),
+);
+
+it.each([
+  "shipped handoff",
+  "matching UID",
+  "mismatching UID",
+  "unavailable manager",
+  "different unit",
+  "different profile",
+  "foreign executable",
+  "changed protected command",
+])("revalidates the shipped managed-service stop record: %s", (scenario) =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    const root = process.cwd();
+    const command = {
+      programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
+      environment: { HOME: home },
+    };
+    // v2026.9.2/v2026.9.3 forward this stop record to the fresh migration finalizer.
+    const before: PreManagedServiceStop = {
+      stoppedAtMs: 1,
+      stopped: true,
+      inspected: true,
+      runtimeInspected: true,
+      running: true,
+      offline: false,
+      serviceEnv: { HOME: home },
+      serviceDefinitionEnv: command.environment,
+      serviceNodeRunner: process.execPath,
+      serviceUpdateVerdict: {
+        kind: "owned",
+        root,
+        fingerprint: sha256Hex(stableStringify(command)),
+        refreshDefinition: scenario !== "changed protected command",
+      },
+    };
+    if (scenario === "matching UID" || scenario === "mismatching UID") {
+      before.serviceManagerUid = scenario === "matching UID" ? 2001 : 3002;
+    }
+    const service = createMockGatewayService({
+      readCommand: async () => ({
+        ...command,
+        programArguments:
+          scenario === "foreign executable"
+            ? [process.execPath, path.join(home, "other", "openclaw.mjs"), "gateway"]
+            : scenario === "changed protected command"
+              ? [...command.programArguments, "--verbose"]
+              : command.programArguments,
+        environment: {
+          ...command.environment,
+          ...(scenario === "different unit" ? { OPENCLAW_SYSTEMD_UNIT: "other-gateway" } : {}),
+          ...(scenario === "different profile"
+            ? {
+                OPENCLAW_PROFILE: "other",
+                OPENCLAW_STATE_DIR: path.join(home, ".openclaw-other"),
+                OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw-other", "openclaw.json"),
+              }
+            : {}),
+        },
+      }),
+      readRuntime: async () => ({
+        status: "stopped",
+        systemd: { managerUid: scenario === "unavailable manager" ? undefined : 2001 },
+      }),
+      isLoaded: async () => true,
+    });
+    const state = await readGatewayServiceState(service, {
+      env: before.serviceEnv,
+      requireEffective: true,
+      requireLoadedCommand: true,
+    });
+    const revalidated = revalidateManagedGatewayServiceAfterUpdate({
+      state,
+      root,
+      preManagedServiceStop: before,
+    });
+    if (scenario === "shipped handoff" || scenario === "matching UID") {
+      await expect(revalidated).resolves.toMatchObject({ kind: "owned", refreshDefinition: true });
+    } else {
+      await expect(revalidated).rejects.toThrow(/ownership or manager identity changed/);
+    }
   }),
 );
 

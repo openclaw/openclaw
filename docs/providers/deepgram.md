@@ -29,7 +29,7 @@ returns them.
 <Steps>
   <Step title="Set your API key">
     ```bash
-    DEEPGRAM_API_KEY=dg_...
+    export DEEPGRAM_API_KEY=dg_...
     ```
   </Step>
   <Step title="Enable the audio provider">

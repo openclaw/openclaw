@@ -1,14 +1,10 @@
-import { formatErrorMessage } from "./error-utils.js";
-import type { SsrFPolicy } from "./openclaw-runtime-network.js";
+import { createProviderHttpError, type SsrFPolicy } from "./openclaw-runtime-network.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
-import {
-  readMemoryHostResponseTextSnippet,
-  readResponseJsonWithLimit,
-} from "./response-snippet.js";
+import { readResponseJsonWithLimit } from "./response-snippet.js";
 
 // Shared JSON POST helper for guarded remote memory provider calls.
 
-/** POST JSON, parse bounded response JSON, and attach status metadata when requested. */
+/** POST JSON, parse bounded response JSON, and preserve provider error metadata. */
 export async function postJson<T>(params: {
   url: string;
   headers: Record<string, string>;
@@ -17,7 +13,6 @@ export async function postJson<T>(params: {
   signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
-  attachStatus?: boolean;
   maxResponseBytes?: number;
   parse: (payload: unknown) => T | Promise<T>;
 }): Promise<T> {
@@ -33,16 +28,11 @@ export async function postJson<T>(params: {
     },
     onResponse: async (res) => {
       if (!res.ok) {
-        const text = await readMemoryHostResponseTextSnippet(res, { signal: params.signal });
-        const err = new Error(
-          `${params.errorPrefix}: ${res.status} ${formatErrorMessage(text)}`,
-        ) as Error & {
-          status?: number;
-        };
-        if (params.attachStatus) {
-          err.status = res.status;
-        }
-        throw err;
+        throw await createProviderHttpError(res, params.errorPrefix, {
+          requestHeaders: params.headers,
+          signal: params.signal,
+          maxBodyBytes: 8 * 1024,
+        });
       }
       const payload = await readResponseJsonWithLimit(res, {
         errorPrefix: params.errorPrefix,

@@ -71,6 +71,7 @@ import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "./openclaw-state-schema-v12
 import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "./openclaw-state-schema-v13-widerow.test-support.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
@@ -904,34 +905,6 @@ function insertAuditMarker(
   );
 }
 
-function createUnsafeIndexDrift(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(`
-      CREATE TABLE unsafe_index_records (
-        id INTEGER PRIMARY KEY,
-        indexed_value TEXT NOT NULL,
-        alternate_value TEXT NOT NULL
-      );
-      CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value);
-      INSERT INTO unsafe_index_records (indexed_value, alternate_value)
-      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
-    `);
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    database
-      .prepare(
-        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_index_records_value ON unsafe_index_records(alternate_value)' WHERE name = 'unsafe_index_records_value'",
-      )
-      .run();
-    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
-    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-  } finally {
-    database.close();
-  }
-}
-
 function createTaskRunStatusIndexPhysicalDrift(databasePath: string): void {
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
@@ -1226,14 +1199,17 @@ function runConcurrentSchemaProbe(params: {
     const readyPath = process.env.OPENCLAW_SCHEMA_TEST_READY_PATH;
     const startPath = process.env.OPENCLAW_SCHEMA_TEST_START_PATH;
     const workerIndex = process.env.OPENCLAW_SCHEMA_TEST_WORKER_INDEX;
-    fs.writeFileSync(readyPath, "ready");
-    const deadline = Date.now() + 15_000;
-    while (!fs.existsSync(startPath)) {
-      if (Date.now() >= deadline) {
-        throw new Error("timed out waiting for concurrent schema upgrade start");
+    async function waitForMarker(markerPath, label) {
+      const deadline = Date.now() + 15_000;
+      while (!fs.existsSync(markerPath)) {
+        if (Date.now() >= deadline) {
+          throw new Error(\`timed out waiting for \${label}\`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2));
       }
-      await new Promise((resolve) => setTimeout(resolve, 2));
     }
+    fs.writeFileSync(readyPath, "ready");
+    await waitForMarker(startPath, "concurrent schema upgrade start");
     fs.writeFileSync(enteringPath, \`entering-\${workerIndex}\`);
     try {
       const database = openOpenClawStateDatabase({ path: databasePath });
@@ -1241,9 +1217,17 @@ function runConcurrentSchemaProbe(params: {
       if (integrity?.integrity_check !== "ok") {
         throw new Error("state database integrity check failed");
       }
-    } finally {
-      closeOpenClawStateDatabaseForTest();
+      fs.writeFileSync(readyPath + ".opened", "opened");
+      await waitForMarker(readyPath + ".retire", "schema probe retirement permission");
+    } catch (error) {
+      try {
+        closeOpenClawStateDatabaseForTest();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "schema probe and worker cleanup failed");
+      }
+      throw error;
     }
+    closeOpenClawStateDatabaseForTest();
   `;
   const orchestratorSource = `
     import assert from "node:assert/strict";
@@ -1519,6 +1503,21 @@ function runConcurrentSchemaProbe(params: {
       }
       let results;
       try {
+        if (!roundError) {
+          const openedPaths = readyPaths.map((readyPath) => readyPath + ".opened");
+          await waitForMarkers(workers, openedPaths, "successful open markers", round);
+          // Opens contend together; explicit WAL-capable retirement intentionally fails
+          // on contention, so each worker stays live until granted its own close phase.
+          for (const [index, worker] of workers.entries()) {
+            assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited before retirement\`);
+            assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled before retirement\`);
+            fs.writeFileSync(readyPaths[index] + ".retire", "retire");
+            const [result] = await waitForOutcomes([outcomes[index]], round);
+            if (result.error || result.code !== 0) {
+              throw new Error(\`round \${round} worker \${index} retirement failed: \${JSON.stringify(result)}\`);
+            }
+          }
+        }
         results = await waitForOutcomes(outcomes, round);
       } catch (error) {
         roundError = roundError

@@ -22,11 +22,12 @@ The [Control UI](/web/control-ui) already highlights inline tool diffs and sessi
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install clawhub:@openclaw/diffs
+    openclaw gateway restart
     ```
 
     `diffs` and its language pack ship as separate packages rather than with
     OpenClaw, so the install needs a scoped locator. The `clawhub:` prefix
-    selects the ClawHub copy of `@openclaw/diffs`; use
+    selects the ClawHub copy of `@openclaw/diffs`. Use
     `npm:@openclaw/diffs` to install from npm instead.
 
   </Step>
@@ -97,7 +98,7 @@ All fields are optional unless noted.
 </ParamField>
 <ParamField path="lang" type="string">
   Language override hint for before/after mode. Unknown values and languages outside the default viewer set fall back to plain text unless the
-  Diff Viewer Language Pack plugin is installed.
+  Diffs Language Pack plugin is installed.
 </ParamField>
 <ParamField path="title" type="string">
   Viewer title override.
@@ -159,7 +160,7 @@ Built-in languages:
 
 Common aliases (`js`, `ts`, `bash`, `md`, `yml`, `c++`, `dockerfile`, `rb`, `kt`, `ps1`, etc.) normalize to those languages.
 
-Install the Diff Viewer Language Pack plugin for more languages (Astro, Vue, Svelte, MDX, GraphQL, Terraform/HCL, Nix, Clojure, Elixir, Haskell, OCaml, Scala, Zig, Solidity, Verilog/VHDL, Fortran, MATLAB, LaTeX, Mermaid, Sass/Less/SCSS, Nginx, Apache, CSV, dotenv, INI, diff, and more):
+Install the Diffs Language Pack plugin for more languages (Astro, Vue, Svelte, MDX, GraphQL, Terraform/HCL, Nix, Clojure, Elixir, Haskell, OCaml, Scala, Zig, Solidity, Verilog/VHDL, Fortran, MATLAB, LaTeX, Mermaid, Sass/Less/SCSS, Nginx, Apache, CSV, dotenv, INI, diff, and more):
 
 ```bash
 openclaw plugins install clawhub:@openclaw/diffs-language-pack
@@ -169,7 +170,7 @@ Without the pack, unsupported languages still render as readable plain text. See
 
 ## Output details contract
 
-All successful results include `changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.
+All successful results include `changed`: identical before/after input returns `false` without creating an artifact. Rendered results return `true`.
 
 <AccordionGroup>
   <Accordion title="Viewer fields (view and both modes)">
@@ -208,11 +209,18 @@ All successful results include `changed`: identical before/after input returns `
 
 ### Collapsed unchanged sections
 
-The viewer shows rows like `N unmodified lines`. Expand controls only appear when the rendered diff has expandable context data (typical for before/after input). Many unified patches omit context bodies in their hunks, so the row can appear without an expand control -- expected, not a bug. `expandUnchanged` only applies when expandable context exists.
+The viewer shows rows like `N unmodified lines`. Expand controls only appear when the rendered diff has expandable context data (typical for before/after input). Many unified patches omit context bodies in their hunks. The row can then appear without an expand control. That is expected, not a bug. `expandUnchanged` only applies when expandable context exists.
 
 ### Multi-file navigation
 
-Patches that touch more than one file start with a changed-files summary card: total `+N` / `-N` counts, per-file counts, added/deleted/renamed badges, and anchor links that jump to each file. Rendered PNG/PDF files keep the per-file header counts but drop the interactive view toggles, since those are dead controls in a static file.
+Patches that touch more than one file start with a changed-files summary card. The card shows:
+
+- total `+N` / `-N` counts
+- per-file counts
+- added, deleted, and renamed badges
+- anchor links that jump to each file
+
+Rendered PNG/PDF files keep the per-file header counts. They drop the interactive view toggles, because those are dead controls in a static file.
 
 ## Plugin defaults
 
@@ -297,8 +305,8 @@ Supported `defaults` keys: `fontFamily`, `fontSize`, `lineSpacing`, `layout`, `s
 
 ## Artifact lifecycle and storage
 
-- Viewer HTML and metadata live in the shared `state/openclaw.sqlite` database under the Diffs plugin blob namespace. HTML is gzip-compressed; SQLite stores only a SHA-256 hash of the random URL token, not the token itself.
-- Rendered PNG/PDF files remain temporary materializations under `$TMPDIR/openclaw-diffs` because channel delivery requires a file path. SQLite owns their expiry metadata; no JSON sidecars are written.
+- Viewer HTML and metadata live in the shared `state/openclaw.sqlite` database under the Diffs plugin blob namespace. HTML is gzip-compressed. SQLite stores only a SHA-256 hash of the random URL token, not the token itself.
+- Rendered PNG/PDF files remain temporary materializations under `$TMPDIR/openclaw-diffs` because channel delivery requires a file path. SQLite owns their expiry metadata. OpenClaw writes no JSON sidecars.
 - Default artifact TTL: 30 minutes. Maximum accepted TTL: 6 hours.
 - Cleanup runs opportunistically after each artifact create call. Expired SQLite rows are deleted first, followed by any corresponding PNG/PDF directory.
 - A fallback sweep removes rowless temporary folders older than 24 hours. Legacy `meta.json`, `file-meta.json`, and `viewer.html` caches are not imported or read.
@@ -313,11 +321,15 @@ Viewer assets:
 - `/plugins/diffs/assets/viewer-runtime.js`
 - `/plugins/diffs-language-pack/assets/viewer.js` (only when the diff uses a language pack language)
 
-The viewer document resolves these assets relative to the viewer URL, so an optional `baseUrl` path prefix carries through to asset requests too.
+The viewer document resolves these assets relative to the viewer URL. An optional `baseUrl` path prefix therefore carries through to asset requests too.
 
 URL resolution order: tool-call `baseUrl` (after strict validation) -> plugin `viewerBaseUrl` -> `gateway.publicOrigin` -> the existing bind-aware Gateway fallback.
 
-`baseUrl` rules: must be `http://` or `https://`; query and hash are rejected; origin plus optional base path is allowed.
+`baseUrl` rules:
+
+- The scheme must be `http://` or `https://`.
+- A `baseUrl` that carries a query string or a hash is rejected.
+- An origin plus an optional base path is allowed.
 
 ## Security model
 
@@ -325,7 +337,7 @@ URL resolution order: tool-call `baseUrl` (after strict validation) -> plugin `v
   <Accordion title="Viewer hardening">
     - Loopback-only by default.
     - Tokenized viewer paths with strict ID and token pattern validation.
-    - Viewer response CSP: `default-src 'none'`; scripts/assets only from self; no outbound `connect-src`.
+    - Viewer response CSP: `default-src 'none'`. Scripts and assets load only from self. The viewer makes no outbound `connect-src` requests.
     - Remote miss throttling when remote access is enabled: 40 failures per 60 seconds triggers a 60-second lockout (`429 Too Many Requests`).
 
   </Accordion>
@@ -374,13 +386,13 @@ Common failure text: `Diff PNG/PDF rendering requires a Chromium-compatible brow
   <Accordion title="Viewer accessibility">
     - Viewer URL resolves to `127.0.0.1` by default.
     - For remote access, set `gateway.publicOrigin`, set plugin `viewerBaseUrl`, or pass `baseUrl` per call.
-    - If `gateway.trustedProxies` includes loopback for a same-host proxy (for example Tailscale Serve), raw loopback viewer requests without forwarded client-IP headers fail closed by design.
-    - For that proxy topology, prefer `mode: "file"`/`"both"` for an attachment, or intentionally enable `security.allowRemoteViewer` plus plugin `viewerBaseUrl`/a proxy `baseUrl` for a shareable viewer link.
+    - `gateway.trustedProxies` can include loopback for a same-host proxy such as Tailscale Serve. Raw loopback viewer requests without forwarded client-IP headers then fail closed by design.
+    - For that proxy topology, prefer `mode: "file"`/`"both"` for an attachment. For a shareable viewer link, intentionally enable `security.allowRemoteViewer` plus plugin `viewerBaseUrl`/a proxy `baseUrl`.
     - Enable `security.allowRemoteViewer` only when external viewer access is intended.
 
   </Accordion>
   <Accordion title="Unmodified-lines row has no expand button">
-    Expected for patch input that lacks expandable context; not a viewer failure.
+    Expected for patch input that lacks expandable context. This is not a viewer failure.
   </Accordion>
   <Accordion title="Artifact not found">
     - Artifact expired due to TTL.

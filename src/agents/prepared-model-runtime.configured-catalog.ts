@@ -1,10 +1,11 @@
 import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
@@ -16,7 +17,7 @@ type ConfiguredCatalogAgentFacts = {
 };
 
 type ConfiguredCatalogWorkspaceFacts = {
-  configuredCatalogEntries: readonly ModelCatalogEntry[];
+  pluginMetadataSnapshot: PluginMetadataSnapshot;
   inlineProviderModels: readonly InlineModelEntry[];
 };
 
@@ -26,27 +27,30 @@ function createConfiguredModelCatalogSnapshot(params: {
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
 }): ModelCatalogSnapshot {
-  const entries = new Map<string, ModelCatalogEntry>();
-  const addEntry = (entry: ModelCatalogEntry) => {
-    const key = resolveModelCatalogIdentityKey(entry);
-    if (!entries.has(key)) {
-      entries.set(key, entry);
-    }
-  };
-  for (const entry of params.workspaceFacts.configuredCatalogEntries) {
-    addEntry(entry);
-  }
-  for (const configured of params.configuredRuntimeModels) {
-    addEntry(modelCatalogRowToEntry(configured.model));
-  }
-  for (const { provider, modelId } of params.agentFacts.configuredModelRefs) {
-    const model = params.templateModelRegistry.find(provider, modelId);
-    if (model) {
-      addEntry(modelCatalogRowToEntry(model));
-    }
-  }
-  const configuredEntries = [...entries.values()];
-  const staticEntries = params.configuredRuntimeModels.map(({ model }) =>
+  const replace = params.agentFacts.input.config.models?.mode === "replace";
+  const configuredEntries = dedupeByKey(
+    [
+      ...buildConfiguredModelCatalog({
+        cfg: params.agentFacts.input.config,
+        catalog:
+          params.agentFacts.input.config.models?.mode === "replace"
+            ? []
+            : params.templateModelRegistry.getAll().map(modelCatalogRowToEntry),
+        manifestPlugins: params.workspaceFacts.pluginMetadataSnapshot,
+      }),
+      ...(replace
+        ? []
+        : params.configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model))),
+      ...(replace
+        ? []
+        : params.agentFacts.configuredModelRefs.flatMap(({ provider, modelId }) => {
+            const model = params.templateModelRegistry.find(provider, modelId);
+            return model ? [modelCatalogRowToEntry(model)] : [];
+          })),
+    ],
+    resolveModelCatalogIdentityKey,
+  );
+  const staticEntries = (replace ? [] : params.configuredRuntimeModels).map(({ model }) =>
     modelCatalogRowToEntry(model),
   );
   return {

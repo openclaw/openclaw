@@ -422,6 +422,7 @@ describe("prepared worker reserve lifecycle", () => {
     expect(fixture.reserves().filter((record) => record.state === "requested")).toEqual([
       expect.objectContaining({
         preparation: {
+          purpose: "reserve",
           key: nextKey,
           demandAtMs: 1_100,
           expiresAtMs: 2_100,
@@ -560,6 +561,7 @@ describe("prepared worker reserve lifecycle", () => {
                 provisionOperationId: "previous-global-operation",
                 profileSnapshot: fixture.profile("1".repeat(64)),
                 preparation: {
+                  purpose: "reserve",
                   key: PREPARATION_KEY,
                   demandAtMs: fixture.nowMs,
                   expiresAtMs: fixture.nowMs + IDLE_TIMEOUT_MS,
@@ -638,6 +640,7 @@ describe("prepared worker reserve lifecycle", () => {
         tarballPath: path.join(fixture.root, "unused.tgz"),
       });
       const lifecycle = createWorkerProviderLifecycle({
+        warn: () => {},
         ...lifecycleOptions,
         getConfig: () => fixture.config,
         resolveProvider: (providerId) =>
@@ -704,6 +707,7 @@ describe("prepared worker reserve lifecycle", () => {
             provisionOperationId: "later-global-operation",
             profileSnapshot: fixture.profile("1".repeat(64)),
             preparation: {
+              purpose: "reserve",
               key: PREPARATION_KEY,
               demandAtMs: fixture.nowMs,
               expiresAtMs: fixture.nowMs + IDLE_TIMEOUT_MS,

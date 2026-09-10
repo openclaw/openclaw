@@ -16,6 +16,7 @@ import {
   resetPluginLoaderTestStateForTest,
 } from "../../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import {
@@ -74,8 +75,8 @@ function fixture(): Fixture {
   return expectDefined(active.fixture, "active delegate fixture");
 }
 
-// RUN ownership is not activated here. Supply the existing managed read-only
-// producer to the real delegate, leaving selection, sessions, and disposal intact.
+// Exercise the read-only producer alongside borrowing an actual raw standalone owner.
+// Selection, sessions, and disposal still run through the real delegate.
 vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../prepared-model-runtime.js")>();
   return {
@@ -85,6 +86,28 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
       options: Parameters<typeof actual.acquireAgentRunPreparedModelRuntime>[1],
     ) => {
       const current = fixture();
+      let standalone: Awaited<ReturnType<typeof actual.activateStandalonePreparedModelRuntime>>;
+      if (current.mode === "raw") {
+        const metadataSnapshot = resolvePluginMetadataSnapshot({
+          config: input.config,
+          env: input.env,
+          workspaceDir: input.workspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        });
+        standalone = await actual.activateStandalonePreparedModelRuntime(
+          {
+            ...input,
+            runtimePluginSelections: [
+              ...(input.runtimePluginSelections ?? []),
+              ...(options?.deriveRuntimePluginSelections?.({
+                config: input.config,
+                metadataSnapshot,
+              }) ?? []),
+            ],
+          },
+          { catalogMode: "static" },
+        );
+      }
       const lease =
         current.mode === "raw"
           ? await actual.acquireAgentRunPreparedModelRuntime(input, options)
@@ -100,15 +123,24 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
               options?.abortSignal,
               "static",
             );
-      expect(current.registrations.length).toBe(1);
-      if (current.mode === "before_compaction" || current.mode === "after_compaction") {
-        expect(
-          lease.snapshot.pluginRegistry?.typedHooks.filter((hook) => hook.hookName === current.mode)
-            .length,
-        ).toBe(1);
+      try {
+        expect(current.registrations.length).toBe(1);
+        if (current.mode === "raw") {
+          expect(lease.snapshot === standalone).toBe(true);
+        }
+        if (current.mode === "before_compaction" || current.mode === "after_compaction") {
+          expect(
+            lease.snapshot.pluginRegistry?.typedHooks.filter(
+              (hook) => hook.hookName === current.mode,
+            ).length,
+          ).toBe(1);
+        }
+        current.source = expectDefined(current.registrations[0], "selected registration");
+        return lease;
+      } catch (error) {
+        lease.release();
+        throw error;
       }
-      current.source = expectDefined(current.registrations[0], "selected registration");
-      return lease;
     },
   };
 });

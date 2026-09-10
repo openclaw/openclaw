@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { applyPrivateModeSync } from "./private-mode.js";
-import { isSqliteLockError } from "./sqlite-transaction.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 
 export class SqliteCoordinatorError extends Error {
   constructor(

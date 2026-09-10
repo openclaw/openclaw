@@ -216,6 +216,14 @@ throws after the service lease is revoked. Hosts that do not provide this
 optional capability leave runtime identity unavailable. This diagnostic fact
 does not grant authority or identify a service-reload epoch.
 
+Their `ctx.internalDiagnostics.onEvent(listener, filter?, options?)` subscription
+delivers events, trust metadata, and a frozen private-data object. Exporters that
+only need events and metadata can pass `{ includePrivateData: false }` as the
+third registration argument to skip private payload copies and receive a frozen
+empty object instead. This preserves event filters, trusted-only delivery, and
+service lease cleanup. Private data remains enabled by default; older hosts
+ignore the optional argument and retain their existing copying behavior.
+
 Long-lived services registered with `api.registerService(...)` receive a process-local
 `ctx.gatewayEvents` facade when the process runs a Gateway broadcaster; in runtimes without one the
 field is absent, so feature-detect it and keep a fallback (for example a coarse poll). Use
@@ -229,6 +237,7 @@ api.registerService({
   start(ctx) {
     unsubscribeSessionsChanged = ctx.gatewayEvents?.onSessionsChanged((event) => {
       // event: { sessionKey, agentId?, label?, displayName?, reason?, phase? }
+      // refreshSession is your plugin's own handler, not an SDK export.
       refreshSession(event.sessionKey);
     });
   },
@@ -253,6 +262,8 @@ that intentionally starts required work in the background must report later fail
 through its generation-bound health reporter:
 
 ```typescript
+// startIndexWorker and stopIndexWorker are your plugin's own background-work
+// helpers, not SDK exports.
 api.registerService({
   id: "index-worker",
   start(ctx) {

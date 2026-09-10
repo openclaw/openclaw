@@ -11,7 +11,7 @@ import {
   readRequiredClawHubBooleanField,
   readRequiredClawHubNumberField,
   readRequiredClawHubStringField,
-  requestClawHub,
+  withClawHubResponse,
   type ClawHubFetch,
 } from "./clawhub-client.js";
 import {
@@ -387,34 +387,37 @@ function parseVersions(value: unknown): ClawHubPluginVersion[] {
 async function fetchOptionalReadme(
   params: ClawHubReadOptions & { packageName: string; version?: string },
 ): Promise<string | undefined> {
-  const { response, url, hasToken } = await requestClawHub({
-    baseUrl: params.baseUrl,
-    token: params.token,
-    skipAuth: params.skipAuth,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    path: `/api/v1/packages/${encodeURIComponent(params.packageName)}/file`,
-    search: {
-      path: "README.md",
-      preview: "1",
-      version: params.version,
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      token: params.token,
+      skipAuth: params.skipAuth,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      path: `/api/v1/packages/${encodeURIComponent(params.packageName)}/file`,
+      search: {
+        path: "README.md",
+        preview: "1",
+        version: params.version,
+      },
+      headers: { Accept: "text/plain" },
     },
-    headers: { Accept: "text/plain" },
-  });
-  if ([403, 404, 415, 423].includes(response.status)) {
-    await response.body?.cancel().catch(() => undefined);
-    return undefined;
-  }
-  if (!response.ok) {
-    throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  const bytes = await readClawHubBytes({
-    response,
-    maxBytes: 512 * 1024,
-    timeoutMs: params.timeoutMs,
-    resourceLabel: `${url.pathname} README`,
-  });
-  return decodeClawHubResponseBody(bytes);
+    async ({ response, url, hasToken }) => {
+      if ([403, 404, 415, 423].includes(response.status)) {
+        return undefined;
+      }
+      if (!response.ok) {
+        throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      const bytes = await readClawHubBytes({
+        response,
+        maxBytes: 512 * 1024,
+        timeoutMs: params.timeoutMs,
+        resourceLabel: `${url.pathname} README`,
+      });
+      return decodeClawHubResponseBody(bytes);
+    },
+  );
 }
 
 export async function fetchClawHubPluginCatalog(
@@ -454,12 +457,14 @@ export async function fetchClawHubPluginCatalog(
       cursor: params.cursor,
       featured: params.intent === "featured" ? "true" : undefined,
       isOfficial: params.intent === "official" ? "true" : undefined,
+      officialFirst:
+        params.intent === "featured" || params.intent === "trending" ? undefined : "true",
       sort:
         params.intent === "featured"
           ? undefined
           : params.intent === "trending"
             ? "trending"
-            : "recommended",
+            : "downloads",
       limit: params.limit ? String(params.limit) : undefined,
     },
   });

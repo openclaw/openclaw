@@ -26,6 +26,7 @@ import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModel,
+  acquireSimpleCompletionModel,
   acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 
@@ -193,13 +194,17 @@ module.exports = {
           }
           return acquired;
         }
-        return await prepareSimpleCompletionModel({
+        const acquired = await acquireSimpleCompletionModel({
           cfg: config,
           agentId: "main",
           modelResolver,
           provider: selected.providerId,
           modelId: expectedModelId,
         });
+        if (!("error" in acquired)) {
+          release = acquired.release;
+        }
+        return acquired;
       });
       expect(result).toMatchObject({
         error: `stop after selected resolver ${selected.providerId}/${expectedModelId}`,
@@ -330,6 +335,7 @@ module.exports = {
                   },
                   { catalogMode: "static" },
                 );
+          let releasePreparedModel: (() => void) | undefined;
           try {
             if (mode === "empty") {
               expect(lease?.snapshot.pluginRegistry).toBeUndefined();
@@ -347,15 +353,27 @@ module.exports = {
             // Loading the public SDK must retain the host's registered metadata owners.
             const metadataReaders = readHostMetadataReaders();
             expect(metadataReaders.every((reader) => typeof reader === "function")).toBe(true);
-            const prepared = await prepareSimpleCompletionModel({
+            const modelParams = {
               cfg,
               agentId: "main",
               agentDir: input.agentDir,
               workspaceDir: input.workspaceDir,
               provider: selected.providerId,
               modelId: "selected-model",
-              ...(lease ? { preparedModelRuntime: lease.snapshot } : {}),
-            });
+            };
+            let prepared: Awaited<ReturnType<typeof prepareSimpleCompletionModel>>;
+            if (lease) {
+              prepared = await prepareSimpleCompletionModel({
+                ...modelParams,
+                preparedModelRuntime: lease.snapshot,
+              });
+            } else {
+              const acquired = await acquireSimpleCompletionModel(modelParams);
+              if (!("error" in acquired)) {
+                releasePreparedModel = acquired.release;
+              }
+              prepared = acquired;
+            }
             if ("error" in prepared) {
               throw new Error(prepared.error);
             }
@@ -386,6 +404,7 @@ module.exports = {
               "public SDK loading must preserve registered host metadata readers",
             ).toEqual(metadataReaders);
           } finally {
+            releasePreparedModel?.();
             lease?.release();
           }
         });
@@ -405,6 +424,7 @@ module.exports = {
     const tempRoot = fs.realpathSync(tempRoots.makeTempDir());
     const selected = createTransportOwnerFixture(path.join(tempRoot, "selected"), "A", false);
     const requestPaths: string[] = [];
+    let releasePreparedModel: (() => void) | undefined;
     const server = createServer((request, response) => {
       request.resume();
       const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -479,7 +499,7 @@ module.exports = {
         OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
       };
       await withEnvAsync(env, async () => {
-        const prepared = await prepareSimpleCompletionModel({
+        const prepared = await acquireSimpleCompletionModel({
           cfg,
           agentId: "main",
           agentDir: path.join(tempRoot, "agent"),
@@ -490,6 +510,7 @@ module.exports = {
         if ("error" in prepared) {
           throw new Error(prepared.error);
         }
+        releasePreparedModel = prepared.release;
         const completionTransport = getModelCompletionTransport(prepared.model);
         if (!completionTransport) {
           throw new Error("Managed completion transport was not prepared");
@@ -534,6 +555,7 @@ module.exports = {
         expect(modelRequestIndex).toBeGreaterThan(reloadIndex);
       }
     } finally {
+      releasePreparedModel?.();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

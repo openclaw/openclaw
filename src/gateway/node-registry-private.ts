@@ -20,6 +20,7 @@ import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
+import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
 import {
@@ -49,34 +50,11 @@ export type {
 
 type NodeRegistryPrivateSession = NodeRunnerRegistrySession;
 
-type NodeInvokeResult = {
-  ok: boolean;
-  payload?: unknown;
-  payloadJSON?: string | null;
-  error?: { code?: string; message?: string } | null;
-};
-
 type PairingBoundNodeSession = NodeRegistryPrivateSession & { pairingIdentity: string };
 type PairingLeaseResolution =
   | { status: "current"; session: PairingBoundNodeSession }
   | { status: "stale"; presenceInvalidated: boolean }
   | { status: "unavailable" };
-
-type NodeInvokeParams = {
-  nodeId: string;
-  expectedConnId?: string;
-  expectedPairingGeneration?: string;
-  command: string;
-  params?: unknown;
-  timeoutMs?: number;
-  idleTimeoutMs?: number;
-  onProgress?: (chunk: string) => void;
-  signal?: AbortSignal;
-  idempotencyKey?: string;
-  sessionKey?: string;
-  onDispatchReady?: (invokeId: string, deadlineAtMs?: number) => void;
-  isDispatchAuthorized?: () => boolean;
-};
 
 type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 
@@ -266,7 +244,10 @@ async function invokeNodeRegistryCore(
   // Explicit budgets include pairing and serialization; omitted budgets retain
   // the post-dispatch default, and zero keeps long-lived invokes unbounded.
   const deadlineAtMs =
-    Number.isFinite(params.timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
+    params.deadlineAtMs ??
+    (Number.isFinite(params.timeoutMs) && timeoutMs > 0
+      ? performance.now() + timeoutMs
+      : undefined);
   if (isPrivateNodeInvokeCommand(params.command) && !allowPrivateCommand) {
     return {
       ok: false,
@@ -310,6 +291,7 @@ async function invokeNodeRegistryCore(
     const resolution = await awaitWithinDeadline(
       () => state.context.resolvePairingLease(pairingNode),
       deadlineAtMs,
+      () => performance.now(),
     );
     if (resolution === ABSOLUTE_DEADLINE_EXPIRED) {
       return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
@@ -383,11 +365,13 @@ async function invokeNodeRegistryCore(
     };
   }
   if (deadlineAtMs !== undefined) {
-    timeoutMs = Math.max(0, deadlineAtMs - Date.now());
+    timeoutMs = Math.max(0, deadlineAtMs - performance.now());
     if (timeoutMs === 0) {
       return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
     }
-    payload.timeoutMs = timeoutMs;
+    // Keep the precise monotonic budget for Gateway timers, but satisfy the integer
+    // node-event contract without turning a sub-millisecond budget into "unbounded".
+    payload.timeoutMs = Math.ceil(timeoutMs);
   }
   const result = new Promise<NodeInvokeResult>((resolve, reject) => {
     const pending: PendingInvoke = {
@@ -423,6 +407,7 @@ async function invokeNodeRegistryCore(
       requestId,
       pending,
       timeoutMs,
+      deadlineAtMs,
       idleTimeoutMs,
       ...(signal ? { signal } : {}),
     });

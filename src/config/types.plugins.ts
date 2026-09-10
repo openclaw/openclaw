@@ -1,5 +1,5 @@
 // Defines plugin entry and install configuration types.
-import type { InstallRecordBase } from "./types.installs.js";
+import type { PluginAcceptedDeclaredSurface, PluginInstallRecord } from "./zod-schema.installs.js";
 export type PluginEntryConfig = {
   enabled?: boolean;
   hooks?: {
@@ -59,33 +59,7 @@ export type PluginsLoadConfig = {
   paths?: string[];
 };
 
-export type PluginAcceptedDeclaredSurface = {
-  channels: string[];
-  providers: string[];
-  tools: string[];
-  contracts: string[];
-  hooks: string[];
-  mcpServers: string[];
-  cliCommands: string[];
-  cliBackends: string[];
-  skills: string[];
-  dangerousConfigFlags: string[];
-};
-
-export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
-  source: InstallRecordBase["source"] | "marketplace";
-  marketplaceName?: string;
-  marketplaceSource?: string;
-  marketplacePlugin?: string;
-  /** Sorted, manifest-declared capability surface accepted by the operator. */
-  acceptedSurface?: PluginAcceptedDeclaredSurface;
-  /** SHA-256 hex digest of the canonical accepted capability surface. */
-  acceptedSurfaceHash?: string;
-  /** ISO timestamp when the operator accepted this capability surface. */
-  acceptedSurfaceAt?: string;
-  /** Installed artifact integrity or Git commit the acceptance is anchored to. */
-  acceptedSurfaceIntegrity?: string;
-};
+export type { PluginAcceptedDeclaredSurface, PluginInstallRecord };
 
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */

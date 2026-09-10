@@ -505,7 +505,10 @@ describe("successful update finalization ordering", () => {
         detail: expect.stringContaining("unlink denied"),
       });
       expect(rollback).toHaveBeenCalledOnce();
-      expect(complete).toHaveBeenCalledExactlyOnceWith({ activationVerified: false });
+      expect(complete).toHaveBeenCalledExactlyOnceWith(
+        { activationVerified: false },
+        expect.any(Function),
+      );
       expect(mocks.printResult).toHaveBeenCalledOnce();
       expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
         status: "error",

@@ -347,3 +347,4 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 - [Tailscale](/gateway/tailscale)
 - [Authentication](/gateway/authentication)
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — authenticating remote access through a reverse proxy
+- [Network](/network) — the hub for how OpenClaw connects, pairs, and secures devices across localhost, LAN, and tailnet

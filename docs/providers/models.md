@@ -57,9 +57,9 @@ For the full provider catalog and advanced configuration, see
 
 ## Additional provider variants
 
-- `anthropic-vertex` - install `@openclaw/anthropic-vertex-provider` for implicit Anthropic on Google Vertex support when Vertex credentials are available; no separate onboarding auth choice
-- `copilot-proxy` - local VS Code Copilot Proxy bridge; use `openclaw onboard --auth-choice copilot-proxy`
-- `google-gemini-cli` - optional explicit runtime for canonical `google/*` models; requires a local `gemini` install and a supported Google AI Studio API-key profile; new Gemini CLI or Antigravity OAuth setup is not offered
+- `anthropic-vertex` - install `@openclaw/anthropic-vertex-provider` for implicit Anthropic on Google Vertex support. That support applies when Vertex credentials are available. There is no separate onboarding auth choice.
+- `copilot-proxy` - local VS Code Copilot Proxy bridge. Use `openclaw onboard --auth-choice copilot-proxy`.
+- `google-gemini-cli` - optional explicit runtime for canonical `google/*` models. It requires a local `gemini` install and a supported Google AI Studio API-key profile. New Gemini CLI or Antigravity OAuth setup is not offered.
 
 ## Related
 

@@ -32,6 +32,7 @@ const routes = [
   "labs",
   "model-providers",
   "plugin-settings",
+  "skill-settings",
   "mcp",
   "memory",
   "automation",
@@ -57,7 +58,7 @@ suite.define(() => {
   for (const destination of [
     { from: "memory", route: "memory-import", title: "Import Memory", tab: "Settings" },
     { from: "skills", route: "plugins", title: "Plugins", tab: "Plugins" },
-    { from: "skills", route: "skill-workshop", title: "Skill Workshop", tab: null },
+    { from: "skills", route: "skill-workshop", title: "Skill workshop", tab: "Skill workshop" },
   ] as const) {
     it(`returns from embedded ${destination.route} through its page link and direct entry`, async () => {
       await suite.withPage(
@@ -84,10 +85,8 @@ suite.define(() => {
           if (destination.from === "memory") {
             await page.getByRole("tab", { name: destination.tab, exact: true }).click();
             await page.locator('a[href="/memory-import"]').click();
-          } else if (destination.tab) {
-            await page.getByRole("tab", { name: destination.tab, exact: true }).click();
           } else {
-            await page.getByRole("button", { name: "Workshop", exact: true }).click();
+            await page.getByRole("tab", { name: destination.tab, exact: true }).click();
           }
           await waitForControlUiRoute(page, { routeId: destination.route });
           const header = page.locator(".native-embed-header");

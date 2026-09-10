@@ -18,6 +18,7 @@ COPY openclaw.mjs ./
 COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
 COPY node-runtime-update.mjs ./
+COPY node-runtime-recovery.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY packages ./packages
 COPY extensions ./extensions

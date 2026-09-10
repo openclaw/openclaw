@@ -73,7 +73,13 @@ channel records with `toInboundMediaFacts(...)` from
 inbound context. When a plugin must authorize local media reads, import
 `getAgentScopedMediaLocalRoots(...)` or
 `getAgentScopedMediaLocalRootsForSources(...)` from the focused
-`openclaw/plugin-sdk/media-local-roots` subpath. The old
+`openclaw/plugin-sdk/media-local-roots` subpath. Agent-scoped roots do not grant
+the shared sandbox parent. To send a file generated in the active sandbox, pass
+its authoritative session workspace as the third argument to
+`getAgentScopedMediaLocalRoots(...)` or as `sessionWorkspaceDir` to the sources
+helper. Obtain that value from trusted host session context; never derive it
+from the requested media path. Without that context, workspace-only policy
+intentionally rejects sandbox paths. The old
 `agent-media-payload` builder/root facade is deprecated compatibility.
 
 ## Native payload shaping

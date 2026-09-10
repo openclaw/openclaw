@@ -85,7 +85,6 @@ function resolveVisibleHistoryProjection(
       )
       .select([
         "identity.event_id",
-        "identity.event_type",
         "identity.seq",
         /* kysely-allow-raw: history byte caps include each event's JSONL newline. */
         sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
@@ -102,17 +101,29 @@ function resolveVisibleHistoryProjection(
           .as("next_message_position"),
       )
       .where("active.session_id", "=", projection.resolved.sessionId)
-      .where((eb) =>
-        isVisibleHistoryNonMessageEventSql(
-          eb.ref("identity.event_type"),
-          eb.ref("event.event_json"),
-        ),
-      )
+      .where((eb) => {
+        const type = eb.ref("identity.event_type");
+        const event = eb.ref("event.event_json");
+        const activeEventSeq = eb.ref("active.event_seq");
+        const eventSeq = eb.ref("event.seq");
+        if (visibleMessages.boundaryActivePosition === undefined) {
+          return isVisibleHistoryNonMessageEventSql(type, event, activeEventSeq, eventSeq);
+        }
+        const inWindow = eb("active.active_position", ">=", visibleMessages.boundaryActivePosition);
+        // Fence the JSON argument while leaving type/range predicates visible to the planner.
+        return eb.and([
+          inWindow,
+          isVisibleHistoryNonMessageEventSql(
+            type,
+            eb.case().when(inWindow).then(event).else(null).end(),
+            activeEventSeq,
+            eventSeq,
+          ),
+        ]);
+      })
       .orderBy("active.active_position", "asc"),
   ).rows;
-  const resetIndex = rows.findLastIndex((row) => row.event_type === "reset");
-  const visibleRows = rows.slice(Math.max(0, resetIndex));
-  const boundaries = visibleRows.map((row, index): VisibleHistoryBoundary => {
+  const boundaries = rows.map((row, index): VisibleHistoryBoundary => {
     // Kept messages precede the latest reset; later markers share its logical window.
     // Rebase raw positions so discarded messages cannot shift those markers.
     const nextMessagePosition = row.next_message_position ?? projection.state.activeMessageCount;
@@ -186,6 +197,8 @@ function readBoundaryEvents(
           isVisibleHistoryNonMessageEventSql(
             eb.ref("identity.event_type"),
             eb.ref("event.event_json"),
+            eb.ref("active.event_seq"),
+            eb.ref("event.seq"),
           ),
         )
         .where("identity.seq", ">=", firstSeq)

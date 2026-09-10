@@ -11,6 +11,7 @@ import {
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import type { RepositoryWorkerProjectSnapshot } from "./workspace-git-base.js";
 
 const DEFAULT_READY_WORKERS = 1;
 const DEFAULT_MAX_TOTAL = 4;
@@ -25,6 +26,7 @@ type PoolOptions = {
     options: {
       projectPath?: string;
       projectCommit?: string;
+      projectRepository?: RepositoryWorkerProjectSnapshot;
       runSetupScript?: boolean;
       machineClass?: string;
       os?: string;
@@ -48,16 +50,20 @@ type PoolOptions = {
   warn: (message: string) => void;
 };
 
-/** Environment rows own reserve inventory; placement activation establishes fresh demand. */
+/** Environment rows own inventory; placement activation and explicit builds establish demand. */
 export function createPreparedWorkerPool(options: PoolOptions) {
   const { store, signal, now } = options;
   let inFlight: Promise<void> | undefined;
   let requested = false;
+  const preparations = new Map<string, AbortController>();
   const current = () => signal.throwIfAborted();
   const policy = (record: Pick<WorkerEnvironmentRecord, "profileId" | "providerId">) => {
     const config = options.getConfig().cloudWorkers;
     const profile = config?.profiles?.[record.profileId];
     return {
+      configured: Boolean(
+        profile && normalizeCapabilityProviderId(profile.provider) === record.providerId,
+      ),
       target:
         profile && normalizeCapabilityProviderId(profile.provider) === record.providerId
           ? (profile.readyWorkers ?? DEFAULT_READY_WORKERS)
@@ -75,9 +81,9 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     record.lastActivatedAtMs ?? record.preparation?.demandAtMs;
   const retire = (record: WorkerEnvironmentRecord, reason: "expired" | "invalidated") => {
     if (!record.preparation) {
-      return;
+      return undefined;
     }
-    store.requestPreparedDestroy({
+    return store.requestPreparedDestroy({
       environmentId: record.environmentId,
       ownerEpoch: record.ownerEpoch,
       preparationKey: record.preparation.key,
@@ -94,17 +100,39 @@ export function createPreparedWorkerPool(options: PoolOptions) {
   };
   const runPass = async () => {
     current();
+    const inventory = store.list();
     const sources = new Map<string, { record: WorkerEnvironmentRecord; demandAtMs: number }>();
-    for (const record of store.list()) {
+    const buildingKeys = new Set<string>();
+    for (const record of inventory) {
       const demandAtMs = demandAt(record);
       const key = groupKey(record);
+      if (
+        key &&
+        record.preparation?.purpose === "build" &&
+        record.preparation.consumedAtMs === null &&
+        record.destroyRequestedAtMs === null &&
+        record.state !== "ready" &&
+        record.state !== "failed" &&
+        record.state !== "destroyed"
+      ) {
+        buildingKeys.add(key);
+      }
       if (
         key &&
         demandAtMs !== undefined &&
         readWorkerProjectPreparation(record.profileSnapshot.project)
       ) {
         const previous = sources.get(key);
-        if (!previous || demandAtMs > previous.demandAtMs) {
+        if (
+          !previous ||
+          demandAtMs > previous.demandAtMs ||
+          (demandAtMs === previous.demandAtMs &&
+            record.preparation?.purpose === "build" &&
+            record.preparation.consumedAtMs === null &&
+            record.destroyRequestedAtMs === null &&
+            record.state !== "failed" &&
+            record.state !== "destroyed")
+        ) {
           sources.set(key, { record, demandAtMs });
         }
       }
@@ -123,7 +151,11 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     >();
     for (const [key, { record, demandAtMs }] of sources) {
       const limits = policy(record);
-      if (limits.target === 0 || limits.maxTotal === 0) {
+      if (
+        !limits.configured ||
+        (limits.target === 0 && !buildingKeys.has(key)) ||
+        limits.maxTotal === 0
+      ) {
         continue;
       }
       try {
@@ -204,7 +236,17 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       beforeReconcile();
       const latest = store.get(record.environmentId);
       if (latest?.preparation?.consumedAtMs === null) {
-        await options.reconcile(latest, signal, beforeReconcile);
+        const controller = new AbortController();
+        preparations.set(record.environmentId, controller);
+        try {
+          await options.reconcile(
+            latest,
+            AbortSignal.any([signal, controller.signal]),
+            beforeReconcile,
+          );
+        } finally {
+          preparations.delete(record.environmentId);
+        }
       }
     };
     const reconcileAll = (records: WorkerEnvironmentRecord[]) =>
@@ -225,8 +267,12 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       let totalKept = 0;
       const cleanup: WorkerEnvironmentRecord[] = [];
       const work: WorkerEnvironmentRecord[] = [];
-      for (const record of store.list().toSorted((a, b) => a.createdAtMs - b.createdAtMs)) {
+      // Builds admitted during an await belong to the next scheduled pass's
+      // source snapshot. Existing rows still use live promotion and cleanup state.
+      for (const snapshot of inventory.toSorted((a, b) => a.createdAtMs - b.createdAtMs)) {
+        const record = store.get(snapshot.environmentId);
         if (
+          !record ||
           record.preparation?.consumedAtMs !== null ||
           record.state === "destroyed" ||
           record.state === "failed"
@@ -243,7 +289,8 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           !expired &&
           generation?.preparationKey === record.preparation.key &&
           (!requireRetention || generation.retention !== undefined) &&
-          count < limits.target &&
+          ((record.preparation.purpose === "build" && record.state !== "ready") ||
+            count < limits.target) &&
           totalKept < limits.maxTotal;
         if (record.destroyRequestedAtMs === null && !valid) {
           retire(record, expired ? "expired" : "invalidated");
@@ -300,8 +347,9 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       try {
         const preparation = readWorkerProjectPreparation(source.profileSnapshot.project)!;
         const intent = await options.prepareIntent(source.profileId, {
-          projectPath: project.root,
-          projectCommit: project.baseCommit,
+          ...("source" in project
+            ? { projectRepository: project }
+            : { projectPath: project.root, projectCommit: project.baseCommit }),
           ...(typeof source.profileSnapshot.machineClass === "string"
             ? { machineClass: source.profileSnapshot.machineClass }
             : {}),
@@ -351,7 +399,12 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             providerId: intent.providerId,
             profileId: source.profileId,
             profileSnapshot: intent.profileSnapshot,
-            preparation: { key: intent.preparationKey!, demandAtMs, expiresAtMs },
+            preparation: {
+              purpose: "reserve",
+              key: intent.preparationKey!,
+              demandAtMs,
+              expiresAtMs,
+            },
           },
           projectKey: project.key,
           ...limits,
@@ -464,5 +517,13 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       return false;
     }
   };
-  return { schedule, noteDemand, candidates, maintain, canPruneDemand };
+  const cancelBuild = (environmentId: string) => {
+    const record = store.get(environmentId);
+    if (record?.preparation?.purpose === "build" && retire(record, "invalidated")) {
+      // The durable cancellation fences readiness; the lifecycle retains provider
+      // custody until its aborted operation and physical cleanup actually settle.
+      preparations.get(environmentId)?.abort();
+    }
+  };
+  return { schedule, noteDemand, candidates, maintain, canPruneDemand, cancelBuild };
 }

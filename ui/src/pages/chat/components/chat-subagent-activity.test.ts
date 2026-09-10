@@ -93,6 +93,46 @@ afterEach(() => {
 });
 
 describe("subagent activity rows", () => {
+  it.each([
+    {
+      lastActivity: "**Evidence limits:** original regression",
+      expected: "Evidence limits: original regression",
+    },
+    { lastActivity: "**Block", expected: "Block" },
+    {
+      progressSummary: "All runs bind `abc123`, **not final** qualification",
+      expected: "All runs bind abc123, not final qualification",
+    },
+    { lastToolName: "read_file", expected: "read_file" },
+    { lastActivity: "Inspecting items[0", expected: "Inspecting items[0" },
+    {
+      status: "completed" as const,
+      terminalSummary: "## Done\n- Read [results](https://example.com/results)",
+      expected: "Done Read results",
+    },
+    {
+      lastActivity: "Checking foo_bar_baz at ~/.openclaw: 1 < 2 and ~5 files",
+      expected: "Checking foo_bar_baz at ~/.openclaw: 1 < 2 and ~5 files",
+    },
+  ])("shows readable preview text for $expected", ({ expected, ...overrides }) => {
+    const task = makeTask({ id: "markdown-subagent", ...overrides });
+    const container = renderStatusRow({
+      tasks: [task],
+      subagentActivity: deriveSubagentActivity({
+        tasks: [task],
+        sessionKey: "agent:main:current",
+        terminalObservedAtByTask: new Map(),
+        canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
+        now: 3_000,
+      }),
+    });
+
+    const snippet = container.querySelector(".chat-subagent-activity__snippet");
+    expect(snippet?.textContent).toBe(expected);
+    expect(snippet?.getAttribute("title")).toBe(expected);
+    expect(snippet?.childElementCount).toBe(0);
+  });
+
   it("opens the selected subagent from an accessible activity control", () => {
     const task = makeTask({ id: "clickable-subagent" });
     const onOpenTaskDetail = vi.fn();

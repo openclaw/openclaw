@@ -99,9 +99,16 @@ sidebarTitle: "Setup"
         For hybrid cloud access, run `ollama signin` on the same host.
       </Step>
       <Step title="Set a credential">
+        For a local or LAN host, any value works:
+
         ```bash
-        export OLLAMA_API_KEY="ollama-local"    # local/LAN host, any value works
-        export OLLAMA_API_KEY="your-real-key"   # https://ollama.com only
+        export OLLAMA_API_KEY="ollama-local"
+        ```
+
+        For `https://ollama.com`, use the real key instead:
+
+        ```bash
+        export OLLAMA_API_KEY="your-real-key"
         ```
 
         Or in config: `openclaw config set models.providers.ollama.apiKey "OLLAMA_API_KEY"`.
@@ -137,14 +144,15 @@ when you want both.
 
 OpenClaw prompts for the base URL, discovers local models, and checks
 `ollama signin` status. When signed in, it suggests hosted defaults
-(`kimi-k2.5:cloud`, `minimax-m2.7:cloud`, `glm-5.1:cloud`, `glm-5.2:cloud`). If
-not signed in, setup stays local-only until you run `ollama signin`.
+(`minimax-m2.7:cloud`, `minimax-m3:cloud`, `kimi-k3:cloud`, `glm-5.1:cloud`,
+`glm-5.2:cloud`). If not signed in, setup stays local-only until you run
+`ollama signin`.
 
 For cloud-only access without a local daemon, use `openclaw onboard --auth-choice ollama-cloud` and see [Ollama Cloud](/providers/ollama-cloud) — that path does not need `ollama signin` or a running server:
 
 ```bash
 openclaw onboard --auth-choice ollama-cloud
-openclaw models set ollama-cloud/kimi-k2.5:cloud
+openclaw models set ollama-cloud/minimax-m2.7:cloud
 ```
 
 The cloud model list shown during `openclaw onboard` is populated live from

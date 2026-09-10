@@ -69,6 +69,31 @@ already exist.
 `--yes`, `--json`, non-interactive runs, and managed-service handoffs never
 submit a report.
 
+## Automation and SSH
+
+For an authorized update on another host, use the target installation's owning
+account and a non-interactive SSH command:
+
+```bash
+ssh -T user@gateway-host 'openclaw update --yes' </dev/null
+```
+
+Ensure `openclaw` resolves to the intended installation in that account's SSH
+environment. Add the existing global `--profile <name>` before `update` when
+targeting a named profile.
+
+An active chat session alone does not prevent an explicit update. `--yes` skips
+confirmation and optional shell-completion prompts. Without it, ordinary upgrades
+can still run with piped input, but an operation requiring confirmation, such as a
+downgrade, fails promptly. Failure-report menus and triage consent prompts do not
+wait for input when stdin is not a terminal. `--yes` does not grant exec approval
+or accept changed plugin capabilities.
+
+An agent updating the Gateway that hosts its own session should use the
+`gateway` tool's `update.run` action when available. The SSH recipe is for another
+host; verify that the destination is not that same Gateway. Normal execution
+approvals and deployment ownership still apply.
+
 ## Options
 
 Updater-managed `openclaw update finalize` runs repair Doctor without an automatic

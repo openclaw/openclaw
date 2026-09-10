@@ -9,43 +9,16 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
   normalizeUpdateChannel,
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
-import {
-  inspectUpdateRunAbandonment,
-  staleUpdateRunGuidance,
-} from "../../infra/update-run-activity.js";
-import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
-
-function readUpdateRunStatus() {
-  try {
-    const activeRun = findActiveUpdateRun();
-    const lastRun = listUpdateRuns({ limit: 1 })[0];
-    const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
-    const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
-    return {
-      ...(activeRun ? { activeRun } : {}),
-      ...(lastRun ? { lastRun } : {}),
-      ...(staleGuidance && activeRun
-        ? { staleRun: { runId: activeRun.runId, guidance: staleGuidance } }
-        : {}),
-      ...(abandonment && activeRun
-        ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
-        : {}),
-    };
-  } catch (error) {
-    // History is optional diagnostic context; an unavailable read is not an empty ledger.
-    return { runStatusError: formatErrorMessage(error) };
-  }
-}
 
 /** Print update status in JSON or table form for scripts and humans. */
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
@@ -151,12 +124,23 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   );
   defaultRuntime.log("");
 
+  if ("runReconciliationError" in runStatus) {
+    defaultRuntime.log(
+      theme.warn(`Update run reconciliation failed: ${runStatus.runReconciliationError}`),
+    );
+    defaultRuntime.log("");
+  }
   if ("runStatusError" in runStatus) {
     defaultRuntime.log(theme.warn(`Update run status unavailable: ${runStatus.runStatusError}`));
     defaultRuntime.log("");
   } else {
-    const { activeRun, lastRun, staleRun, abandonedRun } = runStatus;
+    const { activeRun, lastRun, staleRun, abandonedRun, advisories } = runStatus;
     const run = activeRun ?? lastRun;
+    for (const advisory of advisories ?? []) {
+      if (advisory.runId !== run?.runId) {
+        defaultRuntime.log(advisory.message);
+      }
+    }
     if (run) {
       if (staleRun) {
         defaultRuntime.log(`Update ${run.runId}: ${staleRun.guidance}`);

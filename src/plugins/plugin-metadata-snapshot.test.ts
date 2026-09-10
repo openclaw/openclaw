@@ -795,7 +795,7 @@ describe("plugin metadata snapshot", () => {
           expect(normalizeStaticProviderModelId("missing", "latest")).toBe("latest");
           expect(resolveDefaultModelForAgent({ cfg })).toEqual({
             provider: "demo",
-            model: "final-model",
+            model: "middle-model",
           });
           expect(buildConfiguredModelCatalog({ cfg })).toMatchObject([
             { provider: "demo", id: "middle-model" },

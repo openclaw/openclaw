@@ -99,6 +99,17 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
+  recordWarnings(warnings: readonly string[]): void {
+    warnings.forEach((detail, index) => {
+      this.record(
+        { phase: "doctor", step: `warning:finalize:doctor:${index}` },
+        "completed",
+        Date.now(),
+        detail,
+      );
+    });
+  }
+
   budget(phase: DoctorPhase): number | undefined;
   budget(phase: Exclude<Phase, DoctorPhase>): number;
   budget(phase: Phase): number | undefined;

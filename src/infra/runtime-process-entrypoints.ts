@@ -1,6 +1,8 @@
 // Runtime launchers and the package build share these subprocess locations.
 const currentModuleUrl = import.meta.url;
 
+export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
+
 export const runtimeProcessEntrypoints = {
   stateMigrationSnapshot: {
     currentModuleUrl,

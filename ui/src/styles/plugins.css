@@ -27,6 +27,10 @@
   justify-self: start;
 }
 
+.plugins-hub-header .hub-tabs--sub wa-tab.hub-tab::part(base) {
+  padding-block: var(--space-2);
+}
+
 .content-header.plugins-hub-header .hub-page-header__title {
   grid-area: title;
 }
@@ -693,16 +697,6 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
   flex: 0 0 auto;
 }
 
-.plugin-catalog-pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding-top: var(--space-3);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 @media (max-width: 1100px) {
   .plugin-catalog-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -910,22 +904,6 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
 .plugins-item__detail-button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-.clawhub-skill-result__button {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.clawhub-skill-result__copy {
-  display: grid;
-  min-width: 0;
-}
-
-.clawhub-skill-result__copy:first-child {
-  grid-column: 1 / -1;
 }
 
 .clawhub-skill-icon {

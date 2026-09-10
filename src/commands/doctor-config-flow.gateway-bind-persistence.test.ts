@@ -7,10 +7,12 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
 } from "../config/config.js";
-import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import {
   planLegacyConfigForUpdateChannel,
   repairLegacyConfigForUpdateChannel,
@@ -25,8 +27,8 @@ describe("Doctor gateway bind persistence", () => {
     ["localhost", "loopback"],
     ["0.0.0.0", "lan"],
   ] as const)("persists gateway bind %s as %s", async (legacyBind, canonicalBind) => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         // This core writer regression needs the authoritative empty bundled-plugin inventory.
         const configPath = await writeOpenClawConfig(home, {
           gateway: { mode: "local", bind: legacyBind },
@@ -49,7 +51,7 @@ describe("Doctor gateway bind persistence", () => {
   it.each(["ordinary", "include", "invalid", "doctor"] as const)(
     "preserves authored plugin scope during %s config repair",
     async (scenario) => {
-      await withTempHome(async (home) => {
+      await withDoctorConfigPreflightHome(async (home) => {
         const diagnostics = {
           otel: { enabled: true, endpoint: "http://collector.test:4317", protocol: "grpc" },
         };
@@ -130,7 +132,7 @@ describe("Doctor gateway bind persistence", () => {
     "persists a prepared legacy plan only for its original source: %s",
     async (scenario) => {
       await withTempHome(async (home) => {
-        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const configPath = await writeOpenClawConfig(home, {
             gateway: { $include: "gateway.json" },
           });
@@ -161,7 +163,7 @@ describe("Doctor gateway bind persistence", () => {
           } else if (scenario === "different profile") {
             const otherPath = path.join(path.dirname(configPath), "other.json");
             await fs.writeFile(otherPath, original);
-            await withEnvOverride({ OPENCLAW_CONFIG_PATH: otherPath }, async () => {
+            await withEnvAsync({ OPENCLAW_CONFIG_PATH: otherPath }, async () => {
               await expect(persist()).rejects.toThrow(/config path changed/);
             });
             expect(await fs.readFile(otherPath, "utf8")).toBe(original);

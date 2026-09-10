@@ -1,6 +1,7 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { staleUpdateRunGuidance } from "../infra/update-run-activity.js";
 import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
+import { updateRunWarningMessages } from "../infra/update-run-step.js";
 
 /** Startup and proven-pristine preflights do not need a public ledger snapshot. */
 export async function noteStaleUpdateRuns(options: {
@@ -14,6 +15,16 @@ export async function noteStaleUpdateRuns(options: {
     const guidance = staleUpdateRunGuidance(run);
     if (guidance) {
       note(`Update ${run.runId}: ${guidance}`, "Update history");
+    }
+  }
+  const [latest] = await listUpdateRunsAsync({ limit: 1 });
+  if (latest) {
+    const warnings = updateRunWarningMessages(latest.steps);
+    if (warnings.length) {
+      note(
+        `Recorded warnings from update ${latest.runId} (a later repair may have resolved them):\n${warnings.slice(-3).join("\n")}`,
+        "Update history",
+      );
     }
   }
 }

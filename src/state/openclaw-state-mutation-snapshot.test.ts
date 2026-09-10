@@ -2,7 +2,7 @@ import { AsyncResource } from "node:async_hooks";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeTrackedStateDatabase, openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import {

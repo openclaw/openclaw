@@ -348,6 +348,7 @@ export function buildOpenAICompletionsRequest(
     endpointClass !== "modelstudio-native" &&
     !(endpointClass === "default" && ["modelstudio", "dashscope", "qwen"].includes(model.provider));
   const cacheOptOutIndexes = new Set<number>();
+  // The converter needs intact boundaries for Runtime relocation or cache markers.
   let messages: unknown[] = convertMessages(model as never, context, compat as never, {
     cacheOptOutIndexes,
     preserveSystemPromptCacheBoundary:

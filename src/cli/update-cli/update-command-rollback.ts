@@ -300,7 +300,7 @@ export async function rollbackFailedUpdate(params: {
         throw new Error("The retained package transaction is unavailable.");
       }
       assertCurrent();
-      const { activePackageRoot, ...restored } = await packageTransaction.rollback();
+      const { activePackageRoot, ...restored } = await packageTransaction.rollback(assertCurrent);
       // Restoration changes the active runtime before any later reporting or
       // restart can fail. Carry that identity through every recovery outcome.
       result = {

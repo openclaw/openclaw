@@ -324,57 +324,40 @@ export function registerImageCapabilityCommands(capability: Command): void {
     });
   });
 
-  image
-    .command("describe")
-    .description("Describe one image file")
-    .requiredOption("--file <path>", "Image file")
-    .option("--prompt <text>", "Prompt hint")
-    .option("--model <provider/model>", "Model override")
-    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
-    .option(
-      "--agent <id>",
-      "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
-    )
-    .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runImageDescribe({
-          capability: "image.describe",
-          files: [String(opts.file)],
-          model: opts.model as string | undefined,
-          prompt: opts.prompt as string | undefined,
-          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
-          agent: resolveCapabilityAgentOption(command, opts.agent),
+  for (const [commandName, description] of [
+    ["describe", "Describe one image file"],
+    ["describe-many", "Describe multiple image files"],
+  ] as const) {
+    const describe = image.command(commandName).description(description);
+    const multiple = commandName === "describe-many";
+    if (multiple) {
+      describe.requiredOption("--file <path>", "Image file", collectOption);
+    } else {
+      describe.requiredOption("--file <path>", "Image file");
+    }
+    describe
+      .option("--prompt <text>", "Prompt hint")
+      .option("--model <provider/model>", "Model override")
+      .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
+      .option(
+        "--agent <id>",
+        "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+      )
+      .option("--json", "Output JSON", false)
+      .action(async (opts, command) => {
+        await runCommandWithRuntime(defaultRuntime, async () => {
+          const result = await runImageDescribe({
+            capability: `image.${commandName}`,
+            files: multiple ? (opts.file as string[]) : [String(opts.file)],
+            model: opts.model as string | undefined,
+            prompt: opts.prompt as string | undefined,
+            timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+            agent: resolveCapabilityAgentOption(command, opts.agent),
+          });
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
-    });
-
-  image
-    .command("describe-many")
-    .description("Describe multiple image files")
-    .requiredOption("--file <path>", "Image file", collectOption)
-    .option("--prompt <text>", "Prompt hint")
-    .option("--model <provider/model>", "Model override")
-    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
-    .option(
-      "--agent <id>",
-      "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
-    )
-    .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runImageDescribe({
-          capability: "image.describe-many",
-          files: opts.file as string[],
-          model: opts.model as string | undefined,
-          prompt: opts.prompt as string | undefined,
-          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
-          agent: resolveCapabilityAgentOption(command, opts.agent),
-        });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
-    });
+  }
 
   registerLocalProvidersCommand(
     image,

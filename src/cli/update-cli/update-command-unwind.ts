@@ -12,6 +12,7 @@ import {
 } from "./update-command-result.js";
 import { completeUpdateCommandRun, failUpdateCommandRun } from "./update-command-run.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service-maintenance.js";
+import { hasDeferredUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 /** Unwind only legacy updates; pending publication cannot authorize compensation or diagnostics. */
 export async function withUpdateCommandRecoveryUnwind(
@@ -129,7 +130,7 @@ export async function withUpdateCommandRecoveryUnwind(
     failure = mergeWindowsTaskRecoveryFailure(failure, error);
   }
   if (failure) {
-    if (!recoveryState.ledgerHandoffOwned) {
+    if (!recoveryState.ledgerHandoffOwned && !hasDeferredUpdateCommandTerminalResult(run)) {
       if (failure.error instanceof UpdateCommandFailure) {
         completeUpdateCommandRun(failure.error.result, run);
       } else {

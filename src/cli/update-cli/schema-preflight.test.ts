@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { planLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
 import { createConfigIO } from "../../config/io.js";
-import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../../config/test-helpers.js";
+import { withTempHome, writeOpenClawConfig } from "../../config/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
@@ -19,6 +19,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
@@ -248,7 +249,7 @@ describe("planned legacy configuration admission", () => {
     "preserves original config and fences %s",
     async (scenario) => {
       await withTempHome(async (home) => {
-        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const configPath = await writeOpenClawConfig(home, {
             gateway: { $include: "gateway.json" },
           });
@@ -270,7 +271,7 @@ describe("planned legacy configuration admission", () => {
             reason: "database-schema-preflight",
           });
           // Exercise the real caller admission forwarding, without inspecting a live service.
-          const { contexts } = await withEnvOverride({ OPENCLAW_CONFIG_PATH: configPath }, () =>
+          const { contexts } = await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, () =>
             inspectUpdateDatabaseContexts({
               roots: [],
               updateInstallKind: "package",
@@ -345,7 +346,7 @@ describe("planned migration managed profile isolation", () => {
     "other invalid source",
   ] as const)("admits only the owned service's config: %s", async (scenario) => {
     await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const callerPath = await writeOpenClawConfig(home, {
           gateway: { mode: "local", bind: "localhost" },
         });
@@ -415,7 +416,7 @@ describe("planned migration managed profile isolation", () => {
 
   it("does not admit unrelated invalid settings alongside a migratable field", async () => {
     await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
           gateway: { mode: "local", bind: "localhost", port: "invalid" },
         });

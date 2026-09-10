@@ -52,6 +52,18 @@
     "target": "密钥管理"
   },
   {
+    "source": "Secrets CLI",
+    "target": "密钥 CLI"
+  },
+  {
+    "source": "SecretRef credential surface",
+    "target": "SecretRef 凭据覆盖面"
+  },
+  {
+    "source": "Auth credential semantics",
+    "target": "认证凭据语义"
+  },
+  {
     "source": "Secrets runtime model",
     "target": "密钥运行时模型"
   },
@@ -224,6 +236,14 @@
     "target": "Azure Speech provider"
   },
   {
+    "source": "Fish Audio provider",
+    "target": "Fish Audio provider"
+  },
+  {
+    "source": "ElevenLabs",
+    "target": "ElevenLabs"
+  },
+  {
     "source": "Web tools",
     "target": "Web 工具"
   },
@@ -242,6 +262,10 @@
   {
     "source": "Gateway protocol",
     "target": "Gateway 协议"
+  },
+  {
+    "source": "RPC adapters",
+    "target": "RPC 适配器"
   },
   {
     "source": "Gateway RPC methods",
@@ -368,6 +392,10 @@
     "target": "诊断导出"
   },
   {
+    "source": "Diagnostics flags",
+    "target": "诊断标志"
+  },
+  {
     "source": "Agent harness plugins",
     "target": "Agent harness plugins"
   },
@@ -482,6 +510,10 @@
   {
     "source": "Getting started",
     "target": "入门指南"
+  },
+  {
+    "source": "Personal assistant setup",
+    "target": "个人助理设置"
   },
   {
     "source": "Quick start",
@@ -632,8 +664,20 @@
     "target": "Moonshot AI"
   },
   {
+    "source": "Mistral",
+    "target": "Mistral"
+  },
+  {
+    "source": "OpenRouter",
+    "target": "OpenRouter"
+  },
+  {
     "source": "Model providers",
     "target": "模型提供商"
+  },
+  {
+    "source": "Models FAQ",
+    "target": "模型常见问题"
   },
   {
     "source": "Quick rules",
@@ -708,6 +752,18 @@
     "target": "VPS 托管"
   },
   {
+    "source": "Ansible",
+    "target": "Ansible"
+  },
+  {
+    "source": "Kubernetes",
+    "target": "Kubernetes"
+  },
+  {
+    "source": "Cloudflare Containers",
+    "target": "Cloudflare Containers"
+  },
+  {
     "source": "Fly.io",
     "target": "Fly.io"
   },
@@ -722,6 +778,10 @@
   {
     "source": "Linux server",
     "target": "Linux 服务器"
+  },
+  {
+    "source": "macOS VMs",
+    "target": "macOS 虚拟机"
   },
   {
     "source": "Platforms",
@@ -770,6 +830,10 @@
   {
     "source": "Credits",
     "target": "致谢"
+  },
+  {
+    "source": "OpenClaw lore",
+    "target": "OpenClaw 传说"
   },
   {
     "source": "Features",
@@ -1148,6 +1212,10 @@
     "target": "发布策略"
   },
   {
+    "source": "Full release validation",
+    "target": "完整发布验证"
+  },
+  {
     "source": "Release notes",
     "target": "发布说明"
   },
@@ -1209,7 +1277,7 @@
   },
   {
     "source": "troubleshooting",
-    "target": "故障排除"
+    "target": "故障排查"
   },
   {
     "source": "FAQ",
@@ -1420,6 +1488,18 @@
     "target": "Lobster 插件参考"
   },
   {
+    "source": "ACPx plugin reference",
+    "target": "ACPx 插件参考"
+  },
+  {
+    "source": "Llama Cpp plugin reference",
+    "target": "Llama Cpp 插件参考"
+  },
+  {
+    "source": "Policy plugin reference",
+    "target": "Policy 插件参考"
+  },
+  {
     "source": "A2A plugin reference",
     "target": "A2A 插件参考"
   },
@@ -1524,6 +1604,22 @@
     "target": "插件入口点"
   },
   {
+    "source": "Plugin runtime helpers",
+    "target": "插件运行时辅助函数"
+  },
+  {
+    "source": "Plugin setup and config",
+    "target": "插件设置与配置"
+  },
+  {
+    "source": "Building channel plugins",
+    "target": "构建渠道插件"
+  },
+  {
+    "source": "Building provider plugins",
+    "target": "构建提供商插件"
+  },
+  {
     "source": "Plugin SDK tool policy and sandbox helpers",
     "target": "插件 SDK 工具策略与沙箱辅助方法"
   },
@@ -1600,6 +1696,10 @@
     "target": "迁移"
   },
   {
+    "source": "Backups",
+    "target": "备份"
+  },
+  {
     "source": "Migrating from Hermes",
     "target": "从 Hermes 迁移"
   },
@@ -1610,6 +1710,14 @@
   {
     "source": "Agent workspace",
     "target": "Agent 工作区"
+  },
+  {
+    "source": "Default AGENTS.md",
+    "target": "默认 AGENTS.md"
+  },
+  {
+    "source": "Bootstrapping",
+    "target": "引导初始化"
   },
   {
     "source": "Migration",
@@ -1646,6 +1754,14 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Tests",
+    "target": "测试"
+  },
+  {
+    "source": "Scripts",
+    "target": "脚本"
   },
   {
     "source": "Update and plugin tests",
@@ -1817,7 +1933,7 @@
   },
   {
     "source": "Multi-agent sandbox and tools",
-    "target": "多 Agent 沙盒和工具"
+    "target": "多智能体沙箱与工具"
   },
   {
     "source": "Exec tool",
@@ -1924,6 +2040,10 @@
     "target": "Control UI"
   },
   {
+    "source": "Hosted embeds",
+    "target": "托管嵌入"
+  },
+  {
     "source": "Control UI URLs",
     "target": "Control UI 地址"
   },
@@ -1998,6 +2118,14 @@
   {
     "source": "Channel routing",
     "target": "渠道路由"
+  },
+  {
+    "source": "Bot loop protection",
+    "target": "机器人循环保护"
+  },
+  {
+    "source": "Access groups",
+    "target": "访问组"
   },
   {
     "source": "Channels Overview",
@@ -2148,6 +2276,14 @@
     "target": "网络代理"
   },
   {
+    "source": "Network",
+    "target": "网络"
+  },
+  {
+    "source": "Proxy",
+    "target": "代理"
+  },
+  {
     "source": "Node troubleshooting",
     "target": "节点故障排查"
   },
@@ -2204,12 +2340,24 @@
     "target": "Task Flow"
   },
   {
+    "source": "Tasks",
+    "target": "任务"
+  },
+  {
     "source": "Telegram reaction notifications",
     "target": "Telegram 表情回应通知"
   },
   {
     "source": "Threat model",
     "target": "威胁模型"
+  },
+  {
+    "source": "Contributing to the threat model",
+    "target": "参与威胁模型贡献"
+  },
+  {
+    "source": "Formal verification",
+    "target": "形式化验证"
   },
   {
     "source": "Reconnaissance (AML.TA0002)",
@@ -2598,6 +2746,10 @@
   {
     "source": "Session management",
     "target": "会话管理"
+  },
+  {
+    "source": "Transcript hygiene",
+    "target": "转录净化"
   },
   {
     "source": "Session tools",
@@ -3950,6 +4102,14 @@
   {
     "source": "Node file transfers",
     "target": "节点文件传输"
+  },
+  {
+    "source": "File transfers",
+    "target": "文件传输"
+  },
+  {
+    "source": "File Transfer plugin reference",
+    "target": "文件传输插件参考"
   },
   {
     "source": "Node command policy",

@@ -27,6 +27,7 @@ import type {
   ResetSessionEntryLifecycleResult,
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
+  SqliteSessionArtifactPreparationDiagnostics,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import {
@@ -44,8 +45,8 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
+import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import {
-  planSessionLifecycleArtifactCleanup,
   planSessionStateDeleteIfUnreferenced,
   readSessionGenerationIdsForKeys,
   planSessionStateAfterEntryRemoval,
@@ -141,22 +142,29 @@ export async function cleanupSessionLifecycleArtifactsCore(
   if (!withOpenClawAgentDatabaseReadOnly(() => true, databaseOptions).found) {
     return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
   }
+  const artifactPreparation: SqliteSessionArtifactPreparationDiagnostics = {};
   const cleanupPlan = await runExclusiveSqliteSessionWrite(
     resolved,
     async () =>
-      withSqliteSessionDatabase(databaseOptions, (database) =>
-        planSessionLifecycleArtifactCleanup(database, {
-          ...(params.agentId !== undefined ? { agentId: resolved.agentId } : {}),
-          archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts !== false,
-          archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-          ...(pluginOwnerId ? { pluginOwnerId } : {}),
-          sessionKeySegmentPrefix,
-          transcriptContentMarker,
-          orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
-          nowMs: params.nowMs ?? Date.now(),
-        }),
+      withSqliteSessionDatabase(
+        databaseOptions,
+        (database) =>
+          planSessionLifecycleArtifactCleanup(database, {
+            ...(params.agentId !== undefined ? { agentId: resolved.agentId } : {}),
+            archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts !== false,
+            archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+            ...(pluginOwnerId ? { pluginOwnerId } : {}),
+            sessionKeySegmentPrefix,
+            transcriptContentMarker,
+            orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+            nowMs: params.nowMs ?? Date.now(),
+            diagnostics: artifactPreparation,
+          }),
+        undefined,
+        artifactPreparation,
       ),
     "session.lifecycle.artifacts-prepare",
+    { artifactPreparation },
   );
   if (cleanupPlan.entries.length === 0 && cleanupPlan.deletePlans.length === 0) {
     // Startup probes need no reclamation Worker, but previously committed archives

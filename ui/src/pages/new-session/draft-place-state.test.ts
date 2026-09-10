@@ -362,6 +362,7 @@ describe("DraftPlaceState cloud machine selection", () => {
         operatingSystems: [
           { id: "linux", label: "Linux", default: true },
           { id: "windows/wsl2", label: "Windows (WSL2)" },
+          { id: "macos", label: "macOS", disabledReason: "Upgrade the worker provider." },
         ],
         machines: [
           { id: "tiny", label: "Tiny Linux", os: "linux", default: true },
@@ -394,6 +395,7 @@ describe("DraftPlaceState cloud machine selection", () => {
     expect(state.resolve("aws")).toBe("custom");
     expect(state.resolveOs("other")).toBe("other-os");
     expect(state.selectOs("aws", "windows/wsl2", profiles, true)).toBe(false);
+    expect(state.selectOs("aws", "macos", profiles)).toBe(false);
     expect(state.resolveOs("aws")).toBe("");
   });
 

@@ -20,6 +20,7 @@ import {
   readSessionTranscriptHistoryAnchorPage,
   readSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,
+  readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventPage,
 } from "./session-accessor.sqlite-history-events.js";
 
@@ -301,71 +302,214 @@ describe("SQLite transcript history events", () => {
     },
   );
 
-  it("does not read an inactive boundary between active sequence bounds", async () => {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],
-      touchSessionEntry: false,
-    });
-    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-    const boundaryEvents = [
+  it("excludes pre-reset custom metadata while retaining the reset prefix and later markers", async () => {
+    // Valid transcript JSON can exceed SQLite's 1,000-level JSON nesting limit.
+    const details: unknown = JSON.parse(`${"[".repeat(1_001)}0${"]".repeat(1_001)}`);
+    const oldNotice = {
+      type: "custom_message",
+      id: "old-notice",
+      parentId: null,
+      customType: "display-report",
+      content: "old report",
+      display: true,
+      details,
+      timestamp: "2026-09-07T00:00:00.000Z",
+    };
+    const events = [
+      { type: "session", version: 3, id: scope.sessionId },
+      oldNotice,
       {
-        seq: 2,
-        id: "active-boundary-2",
-        eventJson: JSON.stringify({
-          type: "compaction",
-          id: "active-boundary-2",
-          parentId: "seed",
-          timestamp: "2026-08-15T00:00:01.000Z",
-          summary: "active",
-        }),
-        activePosition: 1,
+        type: "message",
+        id: "kept-user",
+        parentId: "old-notice",
+        message: { role: "user", content: "retained prompt" },
       },
-      { seq: 3, id: "inactive-boundary", eventJson: "{", activePosition: undefined },
+      { ...oldNotice, id: "shallow-notice", parentId: "kept-user", details: {} },
       {
-        seq: 4,
-        id: "active-boundary-4",
-        eventJson: JSON.stringify({
-          type: "compaction",
-          id: "active-boundary-4",
-          parentId: "active-boundary-2",
-          timestamp: "2026-08-15T00:00:02.000Z",
-          summary: "active",
-        }),
-        activePosition: 2,
+        type: "message",
+        id: "kept-assistant",
+        parentId: "shallow-notice",
+        message: { role: "assistant", content: "retained reply" },
+      },
+      {
+        type: "reset",
+        id: "reset",
+        parentId: "kept-assistant",
+        firstKeptEntryId: "kept-user",
+        reason: "new",
+        timestamp: "2026-09-07T01:00:00.000Z",
+      },
+      {
+        type: "compaction",
+        id: "compaction",
+        parentId: "reset",
+        summary: "current summary",
+        timestamp: "2026-09-07T02:00:00.000Z",
       },
     ];
-    const insertEvent = database.db.prepare(
-      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-    );
-    const insertIdentity = database.db.prepare(
-      `INSERT INTO transcript_event_identities
+    await replaceTranscriptEvents(scope, events);
+
+    const history = readSessionTranscriptHistoryEvents(scope);
+    expect(history.map(historyEventId)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "reset",
+      "compaction",
+    ]);
+    expect(history.map(({ seq }) => seq)).toEqual([1, 2, 3, 4]);
+    expect(readSessionTranscriptHistoryEventCount(scope)).toBe(4);
+
+    const recent = readRecentSessionTranscriptHistoryEvents(scope, {
+      maxBytes: 65_536,
+      maxLines: 2,
+      maxMessages: 2,
+    });
+    expect(recent.totalMessages).toBe(4);
+    expect(recent.events.map(historyEventId)).toEqual(["reset", "compaction"]);
+    expect(recent.events.map(({ seq }) => seq)).toEqual([3, 4]);
+
+    const page = readSessionTranscriptHistoryEventPage(scope, { offset: 2, maxMessages: 2 });
+    expect(page.totalMessages).toBe(4);
+    expect(page.events.map(historyEventId)).toEqual(["kept-user", "kept-assistant"]);
+    expect(page.events.map(({ seq }) => seq)).toEqual([1, 2]);
+
+    const anchored = readSessionTranscriptHistoryAnchorPage(scope, {
+      messageId: "reset",
+      maxMessages: 4,
+    });
+    expect(anchored).toMatchObject({ found: true, totalMessages: 4 });
+    expect(anchored.events.map(historyEventId)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "reset",
+      "compaction",
+    ]);
+
+    expect(() =>
+      readSessionTranscriptHistoryAnchorPage(scope, { messageId: "old-notice", maxMessages: 3 }),
+    ).toThrow(/malformed JSON/i);
+
+    await replaceTranscriptEvents(scope, [
+      ...events,
+      { ...oldNotice, id: "current-notice", parentId: "compaction" },
+    ]);
+    expect(() => readSessionTranscriptHistoryEvents(scope)).toThrow(/malformed JSON/i);
+  });
+
+  it.each([
+    ["compaction", "malformed", false, false],
+    ["compaction", "malformed", false, true],
+    ["custom_message", "malformed", false, false],
+    ["custom_message", "malformed", false, true],
+    ["custom_message", "deep", false, false],
+    ["custom_message", "deep", false, true],
+    ["custom_message", "malformed", true, false],
+    ["custom_message", "malformed", true, true],
+    ["custom_message", "deep", true, false],
+    ["custom_message", "deep", true, true],
+  ] as const)(
+    "respects active membership for %s with %s JSON (active=%s, analyzed=%s)",
+    async (eventType, payloadKind, active, analyzed) => {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],
+        touchSessionEntry: false,
+      });
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+      const boundaryEvents = [
+        {
+          seq: 2,
+          id: "active-boundary-2",
+          eventType: "compaction",
+          eventJson: JSON.stringify({
+            type: "compaction",
+            id: "active-boundary-2",
+            parentId: "seed",
+            timestamp: "2026-08-15T00:00:01.000Z",
+            summary: "active",
+          }),
+          activePosition: 1,
+        },
+        {
+          seq: 3,
+          id: "candidate-boundary",
+          eventType,
+          eventJson:
+            payloadKind === "malformed"
+              ? "{"
+              : JSON.stringify({
+                  type: "custom_message",
+                  id: "candidate-boundary",
+                  parentId: "seed",
+                  timestamp: "2026-08-15T00:00:01.000Z",
+                  customType: "boundary-notice",
+                  content: "boundary",
+                  display: true,
+                  // SQLite rejects valid JSON beyond its nesting limit.
+                  details: JSON.parse("[".repeat(1001) + "0" + "]".repeat(1001)),
+                }),
+          activePosition: active ? 2 : undefined,
+        },
+        {
+          seq: 4,
+          id: "active-boundary-4",
+          eventType: "compaction",
+          eventJson: JSON.stringify({
+            type: "compaction",
+            id: "active-boundary-4",
+            parentId: "active-boundary-2",
+            timestamp: "2026-08-15T00:00:02.000Z",
+            summary: "active",
+          }),
+          activePosition: active ? 3 : 2,
+        },
+      ];
+      const insertEvent = database.db.prepare(
+        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+      );
+      const insertIdentity = database.db.prepare(
+        `INSERT INTO transcript_event_identities
          (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
-       VALUES (?, ?, ?, 'compaction', NULL, NULL, ?)`,
-    );
-    const insertActive = database.db.prepare(
-      `INSERT INTO session_transcript_active_events
+       VALUES (?, ?, ?, ?, NULL, NULL, ?)`,
+      );
+      const insertActive = database.db.prepare(
+        `INSERT INTO session_transcript_active_events
          (session_id, active_position, event_seq, message_position, context_eligible)
        VALUES (?, ?, ?, NULL, 1)`,
-    );
-    for (const event of boundaryEvents) {
-      insertEvent.run(scope.sessionId, event.seq, event.eventJson, event.seq);
-      insertIdentity.run(scope.sessionId, event.id, event.seq, event.seq);
-      if (event.activePosition !== undefined) {
-        insertActive.run(scope.sessionId, event.activePosition, event.seq);
+      );
+      for (const event of boundaryEvents) {
+        insertEvent.run(scope.sessionId, event.seq, event.eventJson, event.seq);
+        insertIdentity.run(scope.sessionId, event.id, event.seq, event.eventType, event.seq);
+        if (event.activePosition !== undefined) {
+          insertActive.run(scope.sessionId, event.activePosition, event.seq);
+        }
       }
-    }
-    database.db
-      .prepare(
-        `UPDATE session_transcript_index_state
-         SET indexed_seq = 4, leaf_event_id = 'active-boundary-4', active_event_count = 3
+      database.db
+        .prepare(
+          `UPDATE session_transcript_index_state
+         SET indexed_seq = 4, leaf_event_id = 'active-boundary-4', active_event_count = ?
          WHERE session_id = ?`,
-      )
-      .run(scope.sessionId);
+        )
+        .run(active ? 4 : 3, scope.sessionId);
+      if (analyzed) {
+        database.db.exec("ANALYZE");
+      }
 
-    const events = readSessionTranscriptHistoryEvents(scope);
+      if (active) {
+        expect(() => readSessionTranscriptHistoryEventCount(scope)).toThrow(/malformed JSON/i);
+        expect(() => readSessionTranscriptHistoryEvents(scope)).toThrow(/malformed JSON/i);
+        return;
+      }
 
-    expect(events.map(historyEventId)).toEqual(["seed", "active-boundary-2", "active-boundary-4"]);
-  });
+      expect(readSessionTranscriptHistoryEventCount(scope)).toBe(3);
+      const events = readSessionTranscriptHistoryEvents(scope);
+
+      expect(events.map(historyEventId)).toEqual([
+        "seed",
+        "active-boundary-2",
+        "active-boundary-4",
+      ]);
+    },
+  );
 
   it.each([REGRESSION_MAX_MESSAGES, REGRESSION_SQLITE_VARIABLE_LIMIT + 1])(
     "reads %s recent messages with bounded metadata bindings",
@@ -612,6 +756,7 @@ describe("SQLite transcript history events", () => {
                 content: "This turn ended before a reply.",
                 display: true,
                 timestamp: "2026-09-07T00:00:00.000Z",
+                details: JSON.parse("[".repeat(1001) + "0" + "]".repeat(1001)),
               }
             : { message: { role: "assistant", content: "stale answer" } }),
         },
@@ -641,6 +786,12 @@ describe("SQLite transcript history events", () => {
         "fresh",
       ]);
       expect(historyEventId(readSessionTranscriptHistoryEventById(scope, "root"))).toBe("root");
+      expect(
+        readSessionTranscriptHistoryAnchorPage(scope, {
+          maxMessages: 10,
+          messageId: "root",
+        }).events.map(historyEventId),
+      ).toEqual(["root", "active", "reset"]);
       expect(readSessionTranscriptHistoryEventById(scope, "inactive")).toBeUndefined();
       expect(
         readSessionTranscriptHistoryAnchorPage(scope, {

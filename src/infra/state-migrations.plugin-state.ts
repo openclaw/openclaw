@@ -306,9 +306,10 @@ async function withPluginStateImportEnv(stateDir: string | undefined, run: () =>
 
 export async function runLegacyMigrationPlans(
   plans: ChannelLegacyStateMigrationPlan[],
-): Promise<{ changes: string[]; warnings: string[] }> {
+): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
+  let hasRefusal = false;
   // The declared source may feed several imports. Retire it after its last consumer,
   // while keeping unrelated sources in order and unique-source cleanup immediate.
   const lastConsumers = new Map(plans.map((plan, index) => [plan.sourcePath, index]));
@@ -316,6 +317,7 @@ export async function runLegacyMigrationPlans(
   const incompleteSources = new Set<string>();
   for (const [index, plan] of plans.entries()) {
     const recordIncomplete = (message: string) => {
+      hasRefusal = true;
       incompleteSources.add(plan.sourcePath);
       warnings.push(message);
     };
@@ -525,7 +527,23 @@ export async function runLegacyMigrationPlans(
             } catch (err) {
               cleanupWarnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
             }
-            cleanupWarnings.forEach(recordIncomplete);
+            // Shared-source cleanup is advisory only when every consumer permits it.
+            const recoverable = plans.every(
+              (consumer) =>
+                consumer.sourcePath !== plan.sourcePath ||
+                (consumer.kind === "plugin-state-import" &&
+                  consumer.cleanupWarningDisposition === "recoverable"),
+            );
+            if (recoverable && cleanupWarnings.length > 0) {
+              incompleteSources.add(plan.sourcePath);
+              warnings.push(
+                ...cleanupWarnings.map(
+                  (warning) => `Run openclaw doctor --fix to retry legacy cleanup. ${warning}`,
+                ),
+              );
+            } else {
+              cleanupWarnings.forEach(recordIncomplete);
+            }
           });
           cleanups.set(plan.sourcePath, pending);
         });
@@ -557,5 +575,9 @@ export async function runLegacyMigrationPlans(
       }
     }
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(warnings.length > 0 && !hasRefusal ? { warningDisposition: "recoverable" as const } : {}),
+  };
 }

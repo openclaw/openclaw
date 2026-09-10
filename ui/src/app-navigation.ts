@@ -205,7 +205,16 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "labs", "model-providers", "plugin-settings", "mcp", "memory", "automation"],
+    routes: [
+      "agents",
+      "labs",
+      "model-providers",
+      "plugin-settings",
+      "skill-settings",
+      "mcp",
+      "memory",
+      "automation",
+    ],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -226,7 +235,7 @@ const NON_ADMIN_SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "model-providers", "plugin-settings", "memory"],
+    routes: ["agents", "model-providers", "plugin-settings", "skill-settings", "memory"],
   },
   { labelKey: "nav.settingsGroupSecurity", routes: ["approvals"] },
   {
@@ -328,6 +337,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   cron: ["calendarClock", "tabs.cron", "subtitles.cron"],
   tasks: ["listChecks", "tabs.tasks", "subtitles.tasks"],
   skills: ["zap", "tabs.skills", "subtitles.skills"],
+  "skill-settings": ["zap", "tabs.skills", "subtitles.skills"],
   plugins: ["plug", "tabs.plugins", "subtitles.plugins"],
   "plugin-settings": ["plug", "tabs.plugins", "subtitles.plugins"],
   "skill-workshop": ["wrench", "tabs.skillWorkshop", "subtitles.skillWorkshop"],

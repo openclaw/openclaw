@@ -9,7 +9,6 @@ import { formatErrorMessage } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { completePendingPackageLifecycle } from "./package-lifecycle.js";
 import { readPackageVersionIfPresent } from "./package-update-integrity.js";
-import type { PackageRecoveryHooks, PreparePackageRecovery } from "./package-update-recovery.js";
 import {
   isBlockingPackageUpdateStep,
   PackageUpdateActivationError,
@@ -21,6 +20,7 @@ import {
 import { trimLogTail } from "./restart-sentinel.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+  normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
@@ -299,24 +299,52 @@ export function markPackagePostInstallDoctorAdvisory<
   result: UpdatePostInstallDoctorResult | null,
 ): T & {
   advisory?: UpdateStepResult["advisory"];
+  warnings?: UpdateStepResult["warnings"];
 } {
   if (
-    step.exitCode !== UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE ||
-    result?.status !== "advisory" ||
-    !isNormalProcessExit(step)
+    !result ||
+    result.status === "error" ||
+    !isNormalProcessExit(step) ||
+    !(
+      (step.exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
+        result.status === "advisory") ||
+      (step.exitCode === 0 && result.warnings?.length)
+    )
   ) {
     return step;
   }
+  const repairGuidance = "Run openclaw doctor --fix to finish deferred repairs.";
+  const deferredWarnings =
+    result.status === "advisory"
+      ? normalizeUpdatePostInstallDoctorWarnings(result.advisory.details).map(
+          (detail) => `${detail}\n${repairGuidance}`,
+        )
+      : [];
   const advisoryTail = [
     step.stderrTail,
-    ...result.advisory.details,
+    ...(result.status === "advisory" ? result.advisory.details : []),
+    ...(result.warnings ?? []),
     PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
   ]
     .filter((line): line is string => Boolean(line?.trim()))
     .join("\n");
   return {
     ...step,
-    advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+    warnings: [
+      ...new Set([
+        ...normalizeUpdatePostInstallDoctorWarnings(result.warnings ?? []),
+        ...deferredWarnings,
+      ]),
+    ].slice(0, 32),
+    advisory: {
+      ...PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+      message: [
+        ...(result.warnings ?? []),
+        ...(result.status === "advisory" ? result.advisory.details : []),
+        PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
+        repairGuidance,
+      ].join("\n"),
+    },
     stderrTail: trimLogTail(advisoryTail) ?? step.stderrTail,
   };
 }
@@ -670,8 +698,6 @@ export async function runGlobalPackageUpdateSteps(params: {
   validateCandidate?: (packageRoot: string) => Promise<UpdateStepResult[]>;
   beforeActivate?: () => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
-  recovery?: PackageRecoveryHooks;
-  prepareRecovery?: PreparePackageRecovery;
   expectedGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;
 }): Promise<PackageUpdateStepsResult> {
@@ -680,12 +706,9 @@ export async function runGlobalPackageUpdateSteps(params: {
     params.validateCandidate ||
     params.beforeActivate ||
     params.onTransaction ||
-    params.recovery ||
-    params.prepareRecovery ||
     params.activateGitRoot,
   );
   let stagedInstall: StagedPackageInstall | null = null;
-  let recoveryOwnsStage = false;
   let packedInstallDir: string | null = null;
   const originalPackageRoot = params.installTarget.packageRoot ?? params.packageRoot ?? null;
   let activePackageRoot = originalPackageRoot;
@@ -1172,10 +1195,6 @@ export async function runGlobalPackageUpdateSteps(params: {
             process.platform === "win32" ? "junction" : undefined,
           );
         }
-        const recovery = params.recovery;
-        // Candidate validation can select durable startup. Pin that decision at
-        // this boundary rather than evaluating it before its live owner exists.
-        const prepareRecovery = params.prepareRecovery;
         const swap = await swapStagedPackageInstall({
           timeoutMs: params.timeoutMs,
           stage: stagedInstall,
@@ -1187,24 +1206,6 @@ export async function runGlobalPackageUpdateSteps(params: {
             liveTreeMutated = true;
           },
           onTransaction: params.onTransaction,
-          prepareRecovery: prepareRecovery
-            ? async (source) => {
-                // Startup persistence may commit before its acknowledgement fails.
-                recoveryOwnsStage = true;
-                return await prepareRecovery(source);
-              }
-            : undefined,
-          recovery: recovery
-            ? {
-                ...recovery,
-                persistDescriptor: (observed) => {
-                  // Persistence may commit before its acknowledgement fails.
-                  // Once offered to Recovery, staging is no longer disposable.
-                  recoveryOwnsStage = true;
-                  return recovery.persistDescriptor(observed);
-                },
-              }
-            : undefined,
         });
         steps.push(swap.step);
         if (swap.postVerifyStep) {
@@ -1274,9 +1275,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     };
     return await packageUpdateFailure(failedStep, [...steps, failedStep]);
   } finally {
-    if (!recoveryOwnsStage) {
-      await cleanupStagedPackageInstall(stagedInstall);
-    }
+    await cleanupStagedPackageInstall(stagedInstall);
     if (packedInstallDir) {
       await removePackageUpdatePath(packedInstallDir);
     }

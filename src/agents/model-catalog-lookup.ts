@@ -156,6 +156,10 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
   const providerCatalog = catalog.filter(
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider,
   );
+  const literal = providerCatalog.find((entry) => entry.id === modelId.trim());
+  if (literal) {
+    return literal;
+  }
   // One synchronous lookup uses one policy owner instead of reloading it for every row.
   const surface = resolveProviderModelPolicySurface(normalizedProvider);
   const identityOf = (id: string) =>

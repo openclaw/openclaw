@@ -18,6 +18,7 @@ import type {
   WorkerLocalWorkspaceSyncRequest,
   WorkerWorkspaceReconcileRequest,
   WorkerWorkspaceCommand,
+  WorkerWorkspaceSyncResult,
   WorkerWorkspaceTunnelHandle,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -163,6 +164,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       params.environmentId,
       request.baseManifestRef,
     );
+    let preparedCheckpoint: { discard: () => Promise<void> } | undefined;
     try {
       await transfer(
         {
@@ -230,6 +232,10 @@ export function createNodeWorkerWorkspaceActions(params: {
             workspaceLog.warn(
               `Repository publication capture unavailable: ${boundedWorkerError(error)}`,
             );
+          } finally {
+            if (publicationToken) {
+              await params.workspaceTransfer.discardUpload(params.environmentId, publicationToken);
+            }
           }
           // Publication restrictions never own recovery acceptance. Its remote
           // stability, live owner and final quiescence fences still run below.
@@ -244,6 +250,7 @@ export function createNodeWorkerWorkspaceActions(params: {
             baseManifestRef: uploaded.baseManifestRef,
             currentManifestRef: uploaded.currentManifestRef,
           });
+          preparedCheckpoint = prepared;
           return {
             manifestRef: uploaded.currentManifestRef,
             changed: uploaded.currentManifestRef !== uploaded.baseManifestRef,
@@ -255,9 +262,6 @@ export function createNodeWorkerWorkspaceActions(params: {
             discardPreparedStagedResult: () => prepared.discard(),
           };
         } finally {
-          if (publicationToken) {
-            params.workspaceTransfer.revoke(params.environmentId, publicationToken);
-          }
           if (publication) {
             await fsp.rm(publication.stagingRoot, { recursive: true, force: true });
           }
@@ -265,6 +269,18 @@ export function createNodeWorkerWorkspaceActions(params: {
       } finally {
         await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
       }
+    } catch (error) {
+      // Finalizers can reject before the caller receives the checkpoint's disposer.
+      try {
+        await preparedCheckpoint?.discard();
+      } catch (discardError) {
+        throw new AggregateError(
+          [error, discardError],
+          "Repository checkpoint handoff cleanup failed",
+          { cause: discardError },
+        );
+      }
+      throw error;
     } finally {
       params.workspaceTransfer.revoke(params.environmentId, token);
     }
@@ -353,19 +369,35 @@ export function createNodeWorkerWorkspaceActions(params: {
     }
     const source = request.source;
     const repository = createNodeWorkerRepositoryPreparation(exec);
-    const prepared = await repository.prepareRepository({
+    const identity = {
       origin: source.url,
       ref: source.ref,
       commit: source.baseCommit,
       branch: source.branch,
       gitToken: source.gitToken,
-    });
-    if (prepared.kind === "failed") {
-      throw new Error(`Cloud repository preparation failed: ${prepared.reason}`);
+    };
+    let baseline: WorkerWorkspaceSyncResult & { baseCommit: string };
+    if (source.prepared) {
+      if (!source.baseCommit || source.runSetupScript) {
+        throw new Error("Prepared repository requires its pinned commit and completed setup");
+      }
+      baseline = await repository.bindPreparedRepository(
+        { ...identity, commit: source.baseCommit },
+        source.prepared,
+      );
+    } else {
+      const prepared = await repository.prepareRepository(identity);
+      if (prepared.kind === "failed") {
+        throw new Error(
+          `Cloud repository preparation failed: ${prepared.reason}${prepared.detail ? `: ${prepared.detail}` : ""}`,
+        );
+      }
+      baseline = prepared.result;
     }
-    const baseManifestRef = prepared.result.manifestRef;
-    const baseCommit = prepared.result.baseCommit;
-    const remoteWorkspaceDir = prepared.result.remoteWorkspaceDir;
+    const baseManifestRef =
+      baseline.mode === "repository" ? baseline.baseManifestRef : baseline.manifestRef;
+    const baseCommit = baseline.baseCommit;
+    const remoteWorkspaceDir = baseline.remoteWorkspaceDir;
     if (request.gitAuthor) {
       await repository.configureAuthor(remoteWorkspaceDir, request.gitAuthor);
     }
@@ -379,7 +411,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       isAuthorized: params.isOwnerCurrent,
       signal: params.ownerSignal,
     });
-    let manifestRef = baseManifestRef;
+    let manifestRef = baseline.manifestRef;
     if (source.checkpoint) {
       const checkpoint = source.checkpoint;
       const digest = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;

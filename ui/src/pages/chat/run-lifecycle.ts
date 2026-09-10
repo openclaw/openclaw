@@ -121,6 +121,8 @@ type ChatAbortRunState = SessionScopeHost & {
   chatRunSessionAbortable?: boolean;
   lastError?: string | null;
   chatError?: string | null;
+  /** Reloads history and the authoritative session row. */
+  refreshCurrentChat?: () => Promise<void>;
 };
 
 type ChatAbortIntentBase = {
@@ -262,23 +264,41 @@ function queuedSessionAbortParams(
 
 type ChatAbortOptions = { preserveDraft?: boolean };
 
+type ChatAbortRequestResult = { ok: true; noActiveRun: boolean } | { ok: false; error: unknown };
+
+/**
+ * Only an explicit Gateway "nothing to abort" answer counts: chat.abort
+ * reports `aborted: false`, sessions.abort reports `status: "no-active-run"`.
+ * Any other shape keeps the run owned so live events settle it as before.
+ */
+function readNoActiveRunResponse(response: unknown): boolean {
+  if (!response || typeof response !== "object") {
+    return false;
+  }
+  return (
+    ("aborted" in response && response.aborted === false) ||
+    ("status" in response && response.status === "no-active-run")
+  );
+}
+
 async function requestChatAbort(
   client: GatewayBrowserClient,
   intent: ChatAbortIntent,
-): Promise<{ ok: true } | { ok: false; error: unknown }> {
+): Promise<ChatAbortRequestResult> {
   try {
+    let response: unknown;
     if (intent.runId !== null) {
       if (intent.sessionAbortable) {
         // Recovered embedded runs keep their exact run identity on the
         // session-owned abort path; sessions.abort resolves the embedded owner
         // by run id so a delayed Stop cannot abort replacement work.
-        await client.request("sessions.abort", {
+        response = await client.request("sessions.abort", {
           key: intent.sessionKey,
           ...(intent.agentId ? { agentId: intent.agentId } : {}),
           runId: intent.runId,
         });
       } else {
-        await client.request("chat.abort", {
+        response = await client.request("chat.abort", {
           sessionKey: intent.sessionKey,
           ...(intent.agentId ? { agentId: intent.agentId } : {}),
           runId: intent.runId,
@@ -287,16 +307,31 @@ async function requestChatAbort(
     } else {
       // A channel reply can be active without a browser-local chat run ID.
       // Session abort resolves the selected persisted session's exact run.
-      await client.request("sessions.abort", {
+      response = await client.request("sessions.abort", {
         key: intent.sessionKey,
         ...(intent.agentId ? { agentId: intent.agentId } : {}),
         ...(intent.clearQueued ? { clearQueued: true } : {}),
       });
     }
-    return { ok: true };
+    return { ok: true, noActiveRun: readNoActiveRunResponse(response) };
   } catch (err) {
     return { ok: false, error: err };
   }
+}
+
+// Non-abortable runs can still be finalizing; only the refreshed session owner
+// may retire them. Check the captured UI scope before starting that refresh.
+async function settleNoopAbort(state: ChatAbortRunState, intent: ChatAbortIntent): Promise<void> {
+  if (
+    !state.connected ||
+    state.client !== intent.sourceClient ||
+    state.sessionKey !== intent.sessionKey ||
+    (state.chatRunId ?? null) !== intent.runId ||
+    scopedAgentParamsForSession(state, state.sessionKey).agentId !== intent.agentId
+  ) {
+    return;
+  }
+  await state.refreshCurrentChat?.();
 }
 
 function currentChatAbortIntent(
@@ -319,16 +354,20 @@ function currentChatAbortIntent(
       };
 }
 
-async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
+async function abortChatRun(state: ChatAbortRunState): Promise<void> {
   const client = state.client;
   if (!client || !state.connected) {
-    return false;
+    return;
   }
-  const result = await requestChatAbort(client, currentChatAbortIntent(state, client));
+  const intent = currentChatAbortIntent(state, client);
+  const result = await requestChatAbort(client, intent);
   if (!result.ok) {
     setChatError(state, formatConnectError(result.error));
+    return;
   }
-  return result.ok;
+  if (result.noActiveRun) {
+    await settleNoopAbort(state, intent);
+  }
 }
 
 export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boolean> {
@@ -355,13 +394,16 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
   }
   const result = await requestChatAbort(client, intent);
   if (result.ok) {
+    if (result.noActiveRun) {
+      await settleNoopAbort(host, intent);
+    }
     return true;
   }
   setChatError(host, formatConnectError(result.error));
   return false;
 }
 
-export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions) {
+export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
   const disconnectedClient = host.connected ? null : host.client;
   const disconnectedIntent = disconnectedClient
     ? currentChatAbortIntent(host, disconnectedClient)

@@ -127,7 +127,11 @@ export function controlUiLocaleModulesPlugin(): Plugin {
       const memoryPath = path.join(i18nAssetsDir, `${request.locale}.tm.jsonl`);
       while (true) {
         const activeCache = catalogCache;
-        activeCache.sourceCatalogLoad ??= loadCurrentSourceCatalog();
+        activeCache.sourceCatalogLoad ??= loadCurrentSourceCatalog().catch((error: unknown) => {
+          // A later request can retry a corrected source without a watched-file change.
+          activeCache.sourceCatalogLoad = null;
+          throw error;
+        });
         let sourceCatalogResult: Awaited<ReturnType<typeof loadCurrentSourceCatalog>>;
         try {
           sourceCatalogResult = await activeCache.sourceCatalogLoad;

@@ -198,6 +198,7 @@ async function updateFinalizeCommandInternal(
     doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
       ...new Set([...doctorWarnings, ...warnings]),
     ]);
+    lifecycle.recordWarnings(doctorWarnings);
   };
 
   const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {

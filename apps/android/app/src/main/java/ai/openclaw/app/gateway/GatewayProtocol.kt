@@ -931,6 +931,8 @@ enum class GatewayMethod(
   PluginsCatalogBrowse("plugins.catalog.browse"),
   PluginsCatalogCategories("plugins.catalog.categories"),
   PluginsCatalogGet("plugins.catalog.get"),
+  TasksHistory("tasks.history"),
+  EnvironmentsPrepare("environments.prepare"),
 }
 
 enum class GatewayEvent(

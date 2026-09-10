@@ -3,15 +3,16 @@
  *
  * Builds model-visible tool lists after profile, provider, plugin, policy, and compatibility filters.
  */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  findConfiguredProviderModel,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
@@ -170,18 +171,10 @@ function resolveStaticToolInventoryRuntimeModelContext(params: {
   }
   const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
-  const providerConfig = findNormalizedProviderValue(params.cfg.models?.providers, provider);
-  const configuredModels = Array.isArray(providerConfig?.models) ? providerConfig.models : [];
-  const normalizedModelId = normalizeStaticProviderModelId(provider, modelId);
-  const normalizedModelKey = normalizeLowercaseStringOrEmpty(normalizedModelId);
-  const providerPrefixedModelKey = normalizeLowercaseStringOrEmpty(
-    `${provider}/${normalizedModelId}`,
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
+  const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId, (id) =>
+    normalizeLowercaseStringOrEmpty(normalizeStaticProviderModelId(provider, id)),
   );
-  const configuredModel = configuredModels.find((model) => {
-    const id = normalizeStaticProviderModelId(provider, model.id);
-    const key = normalizeLowercaseStringOrEmpty(id);
-    return key === normalizedModelKey || key === providerPrefixedModelKey;
-  });
   const bundledStaticModel = resolveBundledStaticCatalogModel({
     provider,
     modelId,
@@ -202,7 +195,7 @@ function resolveStaticToolInventoryRuntimeModelContext(params: {
       runtimeModel: {
         ...bundledStaticModel,
         ...configuredModel,
-        id: configuredModel.id,
+        id: modelId,
         name: configuredModel.name ?? bundledStaticModel?.name ?? configuredModel.id,
         provider,
         api: configuredApi,
@@ -319,21 +312,10 @@ export function resolveConfiguredModelCompat(params: {
   if (!provider || !modelId) {
     return undefined;
   }
-  const providerConfig = findNormalizedProviderValue(params.cfg.models?.providers, provider);
-  const models = Array.isArray(providerConfig?.models) ? providerConfig.models : [];
-  if (models.length === 0) {
-    return undefined;
-  }
-  const normalizedModelId = normalizeStaticProviderModelId(provider, modelId);
-  const normalizedModelKey = normalizeLowercaseStringOrEmpty(normalizedModelId);
-  const providerPrefixedModelKey = normalizeLowercaseStringOrEmpty(
-    `${provider}/${normalizedModelId}`,
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
+  const match = findConfiguredProviderModel(providerConfig, provider, modelId, (id) =>
+    normalizeLowercaseStringOrEmpty(normalizeStaticProviderModelId(provider, id)),
   );
-  const match = models.find((model) => {
-    const id = normalizeStaticProviderModelId(provider, model.id);
-    const key = normalizeLowercaseStringOrEmpty(id);
-    return key === normalizedModelKey || key === providerPrefixedModelKey;
-  });
   return extractModelCompat(match);
 }
 

@@ -39,14 +39,17 @@ export function createNpmPackageRootLinkLifecycle(params: {
         };
       }
     },
-    async retire(): Promise<string | null> {
+    async retire(assertCurrent = () => {}): Promise<string | null> {
       try {
+        assertCurrent();
         await assertUnchanged(params.backupRoot);
         // This observation does not exclude concurrent writers. Non-recursive
         // removal protects a substituted directory and the external checkout.
+        assertCurrent();
         await fs.unlink(params.backupRoot);
         return null;
       } catch (error) {
+        assertCurrent();
         return `Could not retire retained npm package link at ${params.backupRoot}: ${formatErrorMessage(error)}`;
       }
     },

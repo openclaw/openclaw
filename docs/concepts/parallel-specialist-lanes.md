@@ -35,7 +35,8 @@ background work.
 
 ### Phase 1: lane contracts + background heavy work
 
-Give every lane a written contract in its workspace and system prompt:
+Give every lane a written contract in its [agent workspace](/concepts/agent-workspace)
+`AGENTS.md`, which is loaded into the system prompt at the start of every session:
 
 - **Purpose**: the work this lane owns.
 - **Non-goals**: work it should hand off instead of attempting.
@@ -73,7 +74,9 @@ Tune queue and model capacity around the business value of each lane:
 
 Use direct/personal chats and production-ops agents for high-priority work. Let
 research, drafting, and batch coding move to background tasks when the system is
-busy.
+busy. `subagents.delegationMode` is prompt guidance only; see
+[sub-agent delegation](/tools/subagents/tool-reference) for what each value does,
+and [command queue](/concepts/queue) for `mode`, `cap`, and `drop`.
 
 ### Phase 3: coordinator / traffic controller
 
@@ -87,6 +90,8 @@ Add a small coordinator pattern once multiple lanes are active:
 Do not start here. A coordinator without lane contracts just coordinates chaos.
 
 ## Minimal lane contract template
+
+Save this in the lane agent's workspace `AGENTS.md`:
 
 ```md
 # Lane contract

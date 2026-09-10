@@ -1,5 +1,5 @@
 ---
-summary: "Configuration overview: common tasks, quick setup, and links to the full reference"
+summary: "Configuration overview: common tasks, quick setup, and links to the Configuration reference"
 read_when:
   - Setting up OpenClaw for the first time
   - Looking for common configuration patterns
@@ -17,7 +17,7 @@ Common reasons to add a config:
 - Set models, tools, sandboxing, or automation (cron, hooks)
 - Tune sessions, media, networking, or UI
 
-See the [full reference](/gateway/configuration-reference) for every available field.
+See the [Configuration reference](/gateway/configuration-reference) for every available field.
 
 Configuration follows a two-bucket rule: root siblings hold infrastructure and cross-agent defaults, while `agents.defaults` holds agent-loop behavior. Entries under `agents.entries` may override either bucket where the schema supports a per-agent override.
 
@@ -64,7 +64,7 @@ field map and defaults.
     UIs and other tooling, the gateway also exposes `config.schema.lookup` to
     fetch one path-scoped schema node plus immediate child summaries.
     Settings show common fields first. Each section keeps its advanced fields
-    in a collapsed **Advanced (N)** group; use **Show advanced** to expand all
+    in a collapsed **Advanced (N)** group. Use **Show advanced** to expand all
     groups. Settings search always includes both tiers and opens the matching
     advanced group when needed. Per-channel settings under **Settings ->
     Channels** use the same split and share the **Show advanced** preference,
@@ -90,8 +90,8 @@ manifest registry is loaded.
 
 Every config leaf has a common or advanced presentation tier in `uiHints`.
 `advanced: false` marks common settings and `advanced: true` marks advanced
-settings. A leaf inherits the nearest ancestor tier when it has no direct hint;
-paths with no declared ancestor default to advanced. This affects presentation
+settings. A leaf inherits the nearest ancestor tier when it has no direct hint.
+Paths with no declared ancestor default to advanced. This affects presentation
 only, not validation, defaults, reload behavior, or whether the key can be set.
 
 Startup migration uses the same deterministic, prompt-free transforms as `openclaw doctor --fix` and writes only when the entire migrated config validates, including plugins. The previous config stays in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer OpenClaw version are not automatically migrated. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale) for the conditions and fallback.
@@ -101,7 +101,7 @@ When validation still fails:
 - The Gateway does not boot
 - Only diagnostic commands work (`openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`)
 - Run `openclaw doctor` to see exact issues
-- Run `openclaw doctor --fix` (`--repair` is the same flag; `--yes` skips prompts) to apply repairs
+- Run `openclaw doctor --fix` (`--repair` is the same flag, and `--yes` skips prompts) to apply repairs
 
 The Gateway keeps a trusted last-known-good copy after each successful startup,
 but startup and hot reload do not restore it automatically - only `openclaw doctor --fix`
@@ -110,7 +110,7 @@ plugin-local validation), Gateway startup fails. An invalid hot reload is skippe
 the current runtime keeps the last accepted config. When a write is blocked as an
 accidental clobber, OpenClaw attempts to save the rejected payload as
 `<path>.rejected.<timestamp>` for inspection. The warning reports whether that save
-succeeded; if it failed, the active config still stays unchanged.
+succeeded. If it failed, the active config still stays unchanged.
 The Gateway blocks writes that look like accidental clobbers - dropping the effective
 `gateway.mode` or shrinking the file by more than half - unless the write explicitly
 allows destructive changes. Mode checks resolve `$include` and environment references
@@ -162,11 +162,11 @@ the page that now holds the content.
 
 ## Full reference
 
-For the complete field-by-field reference, see **[Configuration Reference](/gateway/configuration-reference)**.
+For the complete field-by-field reference, see **[Configuration reference](/gateway/configuration-reference)**.
 
 ---
 
-_Related: [Configuration Examples](/gateway/configuration-examples) · [Configuration Reference](/gateway/configuration-reference) · [Doctor](/gateway/doctor)_
+_Related: [Configuration Examples](/gateway/configuration-examples) · [Configuration reference](/gateway/configuration-reference) · [Doctor](/gateway/doctor)_
 
 ## Related
 
@@ -175,5 +175,6 @@ _Related: [Configuration Examples](/gateway/configuration-examples) · [Configur
 - [Gateway runbook](/gateway)
 - [`openclaw config`](/cli/config) — read and write these settings from the CLI
 - [`openclaw configure`](/cli/configure) — guided editor for these settings
+- [Docker](/install/docker) — container deployment, its environment variables, and the mounted config and state paths
 - [Security audit checks](/gateway/security/audit-checks) — what the audit flags in this configuration
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — configuring the Gateway behind a reverse proxy

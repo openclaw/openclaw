@@ -110,7 +110,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     }
     ```
 
-    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` names remain deprecated compatibility aliases.
+    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The `{{Attachment*}}` names replaced `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` in 2026.8.1. The older names remain deprecated compatibility aliases under the `media-legacy-projection` record: its approved `removeAfter` date is 2026-10-01, with removal additionally gated on a clean published-plugin artifact sweep. Migrate before that date - see [Media legacy projection](/plugins/sdk-migration/compatibility-policy#media-legacy-projection).
 
   </Tab>
 </Tabs>
@@ -436,4 +436,5 @@ openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-mi
 - [Media playback](/nodes/media-playback)
 - [Talk mode](/nodes/talk)
 - [Voice wake](/nodes/voicewake)
+- [Mistral](/providers/mistral) — Voxtral audio transcription, one of the audio-capable providers above
 - [Media overview](/tools/media-overview) — how the media tools fit together

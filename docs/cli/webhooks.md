@@ -35,9 +35,9 @@ openclaw webhooks gmail setup --account you@example.com --project my-gcp-project
 openclaw webhooks gmail setup --account you@example.com --hook-url https://gateway.example.com/hooks/gmail
 ```
 
-Authenticates `gcloud`, enables the required APIs, creates or updates the Pub/Sub topic/subscription and push endpoint, starts the Gmail watch, and writes `hooks.gmail` with `hooks.enabled: true` and the Gmail preset. Missing `gcloud`, `gog`, and Tailscale dependencies can be installed automatically on macOS with Homebrew; other platforms need them installed first. The Gmail account must already be authorized in `gog`.
+Authenticates `gcloud`, enables the required APIs, creates or updates the Pub/Sub topic/subscription and push endpoint, starts the Gmail watch, and writes `hooks.gmail` with `hooks.enabled: true` and the Gmail preset. Missing `gcloud`, `gog`, and Tailscale dependencies can be installed automatically on macOS with Homebrew. Other platforms need them installed first. The Gmail account must already be authorized in `gog`.
 
-Setup changes cloud resources, exposure settings, and local config; it is not a read-only check. Re-running it can apply the CLI defaults over saved Gmail settings. It prints `Next: openclaw webhooks gmail run`; use that only if the Gateway-managed watcher is not already running.
+Setup changes cloud resources, exposure settings, and local config. It is not a read-only check. Re-running it can apply the CLI defaults over saved Gmail settings. It prints `Next: openclaw webhooks gmail run`. Use that only if the Gateway-managed watcher is not already running.
 
 <Warning>
 This command connects Gmail transport but does not create a restricted reader agent or the session-key policy required by the templated preset. Without a custom Gmail mapping that sets `agentId`, inbound email runs as the default agent with that agent's effective workspace, sandbox, and tool policy. Complete [Configure a restricted Gmail reader](/automation/cron-jobs#configure-a-restricted-gmail-reader-recommended) before running setup for an untrusted inbox.
@@ -96,7 +96,7 @@ This command connects Gmail transport but does not create a restricted reader ag
 
 <Warning>Setup output is sensitive: `--json` includes `hookToken` and `pushToken`, and the push endpoint printed in either format can contain its token. Redact output before sharing it.</Warning>
 
-Command failures show bounded tails from both stdout and stderr, with terminal colors and progress redraws removed. Exit codes and recorded termination reasons distinguish timeouts, signals, and output limits; exit code `124` alone does not mean a timeout. An omission marker (`…`) indicates truncated output. These diagnostics can still contain sensitive command output: redact them before sharing.
+Command failures show bounded tails from both stdout and stderr, with terminal colors and progress redraws removed. Exit codes and recorded termination reasons distinguish timeouts, signals, and output limits. Exit code `124` alone does not mean a timeout. An omission marker (`…`) indicates truncated output. These diagnostics can still contain sensitive command output: redact them before sharing.
 
 `--port`, `--max-bytes`, and `--renew-minutes` require positive integers, without unit suffixes. `--include-body` has no negative CLI flag: set `hooks.gmail.includeBody: false` and let `run` inherit it.
 
@@ -106,13 +106,13 @@ Command failures show bounded tails from both stdout and stderr, with terminal c
 openclaw webhooks gmail run --account you@example.com
 ```
 
-Starts the Gmail watch and runs `gog gmail watch serve` plus periodic watch renewal in the foreground. Unexpected serve-process exits continue to restart after 5 seconds. A bind conflict stops restarts; run only one watcher per listener and stop the other watcher before retrying. Ctrl-C or SIGTERM cancels pending restarts and renewal work and shuts down the serve process tree. Investigate repeated exits in the logs.
+Starts the Gmail watch and runs `gog gmail watch serve` plus periodic watch renewal in the foreground. Unexpected serve-process exits continue to restart after 5 seconds. A bind conflict stops restarts. Run only one watcher per listener and stop the other watcher before retrying. Ctrl-C or SIGTERM cancels pending restarts and renewal work and shuts down the serve process tree. Investigate repeated exits in the logs.
 
 `run` accepts the same Pub/Sub, OpenClaw delivery, `gog gmail watch serve`, and Tailscale flags as `setup`, except:
 
-- `--account` is **optional** on `run`; it falls back to `hooks.gmail.account`.
+- `--account` is **optional** on `run`. It falls back to `hooks.gmail.account`.
 - `run` does **not** accept `--project`, `--push-endpoint`, or `--json`.
-- Unspecified flags inherit the matching `hooks.gmail.*` setting; `--hook-token` inherits `hooks.token`.
+- Unspecified flags inherit the matching `hooks.gmail.*` setting. `--hook-token` inherits `hooks.token`.
 - Account, full topic path, hook token, and push token must be supplied or configured. `run` does not generate missing tokens, provision Pub/Sub resources, or rewrite config.
 - Other fields use the setup defaults when no saved setting exists, except `--tailscale`, which defaults to `off` rather than `funnel`.
 

@@ -40,6 +40,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+  // tsgo:test:root checks these compile-only contracts without runtime imports.
+  "test/type-contracts/**/*.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
   "src/infra/exec-host.native.test-support.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.

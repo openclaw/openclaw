@@ -149,6 +149,7 @@ function matchesStoppedService(
         : resolveSystemdServiceName;
   // Explicit default metadata selects the same manager; protected command hashes
   // still pin the effective launcher and its environment through normalization.
+  // Stable 2026.9.2/2026.9.3 handoffs omit the UID; compare it when recorded.
   return Boolean(
     before.serviceEnv &&
     state.command &&
@@ -158,8 +159,8 @@ function matchesStoppedService(
       resolveGatewayProfileSuffix(state.env.OPENCLAW_PROFILE) &&
     resolveName(before.serviceEnv) === resolveName(state.env) &&
     (process.platform !== "linux" ||
-      (before.serviceManagerUid !== undefined &&
-        before.serviceManagerUid === observedSystemdManagerUid(state))) &&
+      before.serviceManagerUid === undefined ||
+      before.serviceManagerUid === observedSystemdManagerUid(state)) &&
     (refreshDefinition ||
       ("fingerprint" in inspection && inspection.fingerprint === verdict.fingerprint)),
   );

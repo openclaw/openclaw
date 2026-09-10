@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { commandError, requireGit, runGit } from "../../agents/worktrees/git.js";
+import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import {
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
@@ -13,7 +15,14 @@ import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.j
 const GIT_TIMEOUT_MS = 10 * 60_000;
 const COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 
-export type WorkerProjectSnapshot = { key: string; root: string; baseCommit: string };
+export type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+export type WorkerLocalProjectSnapshot = {
+  key: string;
+  root: string;
+  baseCommit: string;
+  label?: string;
+};
+export type WorkerProjectSnapshot = WorkerLocalProjectSnapshot | RepositoryWorkerProjectSnapshot;
 
 export function workerProjectSeedKey(project: Pick<WorkerProjectSnapshot, "key" | "baseCommit">) {
   return createHash("sha256").update(`${project.key}\0${project.baseCommit}`).digest("hex");
@@ -24,7 +33,7 @@ export async function prepareWorkerProjectSnapshot(params: {
   namespace: string;
   baseCommit?: string;
   signal?: AbortSignal;
-}): Promise<WorkerProjectSnapshot | undefined> {
+}): Promise<WorkerLocalProjectSnapshot | undefined> {
   params.signal?.throwIfAborted();
   const root = await fsp.realpath(params.localPath);
   const gitAdmin = await fsp.lstat(path.join(root, ".git")).catch((error: unknown) => {
@@ -71,13 +80,16 @@ export async function prepareWorkerProjectSnapshot(params: {
   const commonDir = await fsp.realpath(
     await requireGit(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], options),
   );
+  const origin = await runGit(root, ["remote", "get-url", "origin"], options);
+  const label =
+    (origin.code === 0 ? normalizeCloudRepo(origin.stdout) : undefined) ?? path.basename(root);
   params.signal?.throwIfAborted();
   // Linked session worktrees share the repository cache; their pinned commits and
   // mutable overlays must not create a new project identity.
   const key = createHash("sha256")
     .update(JSON.stringify([params.namespace, commonDir]))
     .digest("hex");
-  return { key, root, baseCommit };
+  return { key, root, baseCommit, label };
 }
 
 export async function prepareWorkerWorkspaceGitPack(params: {

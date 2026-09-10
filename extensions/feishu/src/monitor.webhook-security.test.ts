@@ -9,6 +9,7 @@ import {
 import {
   buildWebhookConfig,
   getFreePort,
+  signFeishuPayload,
   withRunningWebhookMonitor,
 } from "./monitor.webhook.test-helpers.js";
 
@@ -428,5 +429,67 @@ describe("Feishu webhook security hardening", () => {
 
     feishuWebhookRateLimiter.isRateLimited("/feishu-rate-limit-stale:fresh", now + 60_001);
     expect(feishuWebhookRateLimiter.size()).toBe(1);
+  });
+
+  it("rejects correctly signed callbacks with a stale timestamp", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "stale-timestamp",
+        path: "/hook-stale-timestamp",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const headers = signFeishuPayload({
+          encryptKey: "encrypt_key",
+          rawBody: JSON.stringify(payload),
+          timestamp: (Math.floor(Date.now() / 1000) - 7_200).toString(),
+        });
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid signature");
+      },
+    );
+  });
+
+  it("rejects correctly signed callbacks with a far-future timestamp", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "future-timestamp",
+        path: "/hook-future-timestamp",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const headers = signFeishuPayload({
+          encryptKey: "encrypt_key",
+          rawBody: JSON.stringify(payload),
+          timestamp: (Math.floor(Date.now() / 1000) + 7_200).toString(),
+        });
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid signature");
+      },
+    );
   });
 });

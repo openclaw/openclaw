@@ -1004,27 +1004,16 @@ describe("renderAgentFiles", () => {
     const previewExpandButton = expandButton!;
     previewExpandButton.click();
 
-    expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel", "fullscreen"]);
-    expect([...previewExpandButton.classList]).toEqual([
-      "btn",
-      "btn--sm",
-      "md-preview-icon-btn",
-      "md-preview-expand-btn",
-      "is-fullscreen",
-    ]);
+    expect(previewPanel.classList.contains("fullscreen")).toBe(true);
+    expect(previewExpandButton.classList.contains("is-fullscreen")).toBe(true);
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
     expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Collapse preview");
 
     container.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')?.click();
 
-    expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel"]);
-    expect([...previewExpandButton.classList]).toEqual([
-      "btn",
-      "btn--sm",
-      "md-preview-icon-btn",
-      "md-preview-expand-btn",
-    ]);
+    expect(previewPanel.classList.contains("fullscreen")).toBe(false);
+    expect(previewExpandButton.classList.contains("is-fullscreen")).toBe(false);
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("false");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
     expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Expand preview");

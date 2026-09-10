@@ -4,6 +4,11 @@ import { en } from "./en.ts";
 // Register library copy with the lazy Skills and chat surfaces, keeping it out
 // of the Control UI startup catalog.
 const enSkillLibrary = {
+  skillDiscovery: {
+    search: "Search skills",
+    settings: "Skill settings",
+    libraryStatus: "Library skill. Session selections control when it is used.",
+  },
   skillLibrary: {
     library: "Skill library",
     mine: "My skills",
@@ -109,6 +114,7 @@ const enSkillLibrary = {
 export const registerSkillLibraryEnglish = Object.assign(
   () => {
     en.skillLibrary = enSkillLibrary.skillLibrary;
+    en.skillDiscovery = enSkillLibrary.skillDiscovery;
   },
   { catalog: enSkillLibrary },
 );

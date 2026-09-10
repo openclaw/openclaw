@@ -79,7 +79,8 @@ OpenAI-compatible, so OpenClaw talks to it over the same
 
 <Note>
 Model refs follow the pattern `openrouter/<provider>/<model>`. For the full list of
-available providers and models, see [/concepts/model-providers](/concepts/model-providers).
+providers and models OpenRouter routes to, see [OpenRouter's model catalog](https://openrouter.ai/models).
+For how OpenClaw resolves model refs and failover, see [Model selection](/concepts/model-providers).
 </Note>
 
 Bundled starter models enrich a nonempty public catalog. A failed live request

@@ -24,6 +24,33 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "warmImages": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "refreshAfter": {
+            "type": "string",
+            "default": "24h",
+            "maxLength": 9,
+            "pattern": "^(?:[1-9][0-9]*[hd]|(?:[6-9][0-9]|[1-9][0-9]{2,})m)(?![\\s\\S])",
+            "description": "Refresh age, at least 1h. Use 1–8 whole digits followed by m, h, or d. Pinned checkpoints are exempt. Requires Gateway restart."
+          },
+          "retainUnused": {
+            "type": "string",
+            "default": "14d",
+            "maxLength": 9,
+            "pattern": "^(?:[1-9][0-9]*d|(?:2[4-9]|[3-9][0-9]|[1-9][0-9]{2,})h|(?:14[4-9][0-9]|1[5-9][0-9]{2}|[2-9][0-9]{3}|[1-9][0-9]{4,})m)(?![\\s\\S])",
+            "description": "Unused retention, at least 1d (24h or 1440m). Use 1–8 whole digits followed by m, h, or d. Pinned checkpoints are exempt. Requires Gateway restart."
+          },
+          "keepPrevious": {
+            "type": "integer",
+            "enum": [0, 1],
+            "default": 0,
+            "description": "Retain one previous checkpoint generation for rollback. Pinned predecessors are always retained. Requires Gateway restart."
+          }
+        }
+      }
+    }
   }
 }

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -9,8 +8,7 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 export {
@@ -24,7 +22,11 @@ export {
 
 type SummarizeTextDeps = {
   completeWithPreparedSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
-  prepareSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel;
+  prepareSimpleCompletionModel: (
+    params: import("../agents/simple-completion-runtime.js").PrepareSimpleCompletionModelParams,
+  ) => ReturnType<
+    typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel
+  >;
   requireApiKey: typeof import("../agents/model-auth.js").requireApiKey;
 };
 
@@ -189,40 +191,16 @@ export async function summarizeText(
 
   const resolvedDeps = await loadDefaultSummarizeTextDeps();
   const { ref } = resolveSummaryModelRef(cfg, config);
-  const reported = createDeferredCore<SummarizeResult>();
-  const parentSignal = getAsyncWorkSignal();
-  void trackAsyncWork(async () => {
-    const work = new AsyncWorkScope();
-    const runInContext = work.run(() => AsyncLocalStorage.snapshot());
-    const closeFromParent = () => runInContext(() => work.beginClose(parentSignal?.reason));
-    parentSignal?.addEventListener("abort", closeFromParent, { once: true });
-    if (parentSignal?.aborted) {
-      closeFromParent();
+  return await runWithAsyncWorkResources(async (onAcquired) => {
+    // Preparation precedes the request timer; the completion and its cleanup own the model.
+    const prepared = await resolvedDeps.acquireSimpleCompletionModel({
+      cfg,
+      provider: ref.provider,
+      modelId: ref.model,
+    });
+    if (!("error" in prepared)) {
+      onAcquired(prepared);
     }
-    let releaseModel: (() => void) | undefined;
-    try {
-      reported.resolve(
-        await work.track(async () => {
-          // Preparation precedes the request timer; the completion and its cleanup own the model.
-          const prepared = await resolvedDeps.acquireSimpleCompletionModel({
-            cfg,
-            provider: ref.provider,
-            modelId: ref.model,
-          });
-          if (!("error" in prepared)) {
-            releaseModel = prepared.release;
-          }
-          return await completeSummary(prepared, ref.provider, resolvedDeps);
-        }),
-      );
-    } catch (error) {
-      reported.reject(error);
-    } finally {
-      await work.runWhenIdle(() => undefined);
-      await runInContext(() => work.drain());
-      parentSignal?.removeEventListener("abort", closeFromParent);
-      releaseModel?.();
-    }
-  }).catch(reported.reject);
-  return await reported.promise;
+    return await completeSummary(prepared, ref.provider, resolvedDeps);
+  });
 }

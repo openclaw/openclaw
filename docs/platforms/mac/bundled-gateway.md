@@ -54,6 +54,10 @@ of being treated as a missing service; check the LaunchAgent and retry.
 
 ## Manual recovery
 
+Read the version to install from the app: choose **About OpenClaw** in the
+menu bar, or run `openclaw-mac status --json`, which reports the app version
+and build.
+
 For a manual install, use Node 26 (recommended) or another supported release:
 Node 24.16+ or Node 26.1+. Install `openclaw` globally:
 
@@ -163,7 +167,8 @@ Logging:
 
 - launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use
   `gateway-<profile>.log`)
-- launchd stderr: suppressed
+- launchd stderr: merged into the same `gateway.log` file, so startup failures
+  that happen before the logger starts are still recorded
 - If the host loops with repeated `EADDRINUSE` or fast restarts, check for
   duplicate `ai.openclaw.gateway` / `ai.openclaw.node` LaunchAgents and the
   launchd-marker workaround in

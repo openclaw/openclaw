@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApiRegistry } from "../api-registry.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamSimpleGoogle } from "../providers/google.js";
+import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import type { Model } from "../types.js";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
@@ -131,6 +132,157 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
       expect(requests[0]?.headers.get("x-opencode-session")).toBe(testCase.expected);
     }
   });
+
+  it.each(["openai-completions", "openai-responses"] as const)(
+    "applies provider turn fallback through sessionless %s requests",
+    async (api) => {
+      const requests: Request[] = [];
+      const captureFetch: typeof fetch = async (input, init) => {
+        requests.push(new Request(input, init));
+        return new Response(JSON.stringify({ error: { message: "request captured" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      };
+      configureAiTransportHost({
+        ...initialHost,
+        buildModelFetch: () => captureFetch,
+        plugin: {
+          ...initialHost.plugin,
+          resolveTransportTurnState: ({ context }) => ({
+            headers: {
+              "x-opencode-session": context.turnId,
+              "x-provider-route": "route-a",
+            },
+          }),
+        },
+      });
+      const baseModel = {
+        id: "test-model",
+        name: "Test model",
+        api,
+        provider: "opencode-go",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 128,
+      } satisfies Model;
+
+      for (const testCase of [
+        { expected: "generated" },
+        { modelHeaders: { "X-OpenCode-Session": "model-session" }, expected: "model-session" },
+        { headers: { "x-opencode-session": "stream-session" }, expected: "stream-session" },
+      ] as const) {
+        const model = {
+          ...baseModel,
+          headers: "modelHeaders" in testCase ? testCase.modelHeaders : undefined,
+        };
+        const streamFn = createBoundaryAwareStreamFnForModel(model);
+        if (!streamFn) {
+          throw new Error(`No managed transport for ${api}`);
+        }
+        requests.length = 0;
+        const stream = await streamFn(
+          model,
+          { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+          {
+            apiKey: "test-key",
+            headers: "headers" in testCase ? testCase.headers : undefined,
+          },
+        );
+        await stream.result();
+        expect(requests).toHaveLength(1);
+        const sessionHeader = requests[0]?.headers.get("x-opencode-session");
+        if (testCase.expected === "generated") {
+          expect(sessionHeader).toBeTruthy();
+        } else {
+          expect(sessionHeader).toBe(testCase.expected);
+        }
+        expect(requests[0]?.headers.get("x-provider-route")).toBe("route-a");
+      }
+    },
+  );
+
+  it.each(["openai-completions", "openai-responses"] as const)(
+    "applies provider turn fallback through the sessionless simple-completion %s adapter",
+    async (api) => {
+      const requests: Request[] = [];
+      const captureFetch: typeof fetch = async (input, init) => {
+        requests.push(new Request(input, init));
+        return new Response(JSON.stringify({ error: { message: "request captured" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      };
+      configureAiTransportHost({
+        ...initialHost,
+        buildModelFetch: () => captureFetch,
+        requiresManagedTransport: () => false,
+        plugin: {
+          ...initialHost.plugin,
+          resolveProviderStream: () => undefined,
+          resolveTransportTurnState: ({ context }) => ({
+            headers: {
+              "x-opencode-session": context.turnId,
+              "x-provider-route": "route-a",
+            },
+          }),
+        },
+      });
+      const apiRegistry = createApiRegistry();
+      registerBuiltInApiProviders(apiRegistry);
+      const baseModel = {
+        id: "test-model",
+        name: "Test model",
+        api,
+        provider: "opencode-go",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 128,
+      } satisfies Model;
+
+      for (const testCase of [
+        { expected: "generated" },
+        { modelHeaders: { "X-OpenCode-Session": "model-session" }, expected: "model-session" },
+        { headers: { "x-opencode-session": "stream-session" }, expected: "stream-session" },
+      ] as const) {
+        const sourceModel = {
+          ...baseModel,
+          headers: "modelHeaders" in testCase ? testCase.modelHeaders : undefined,
+        };
+        const model = prepareModelForSimpleCompletion({ apiRegistry, model: sourceModel });
+        expect(model.api).toBe(api);
+        const provider = apiRegistry.getApiProvider(model.api);
+        if (!provider) {
+          throw new Error(`No provider registered for ${api}`);
+        }
+        requests.length = 0;
+        const stream = provider.streamSimple(
+          model,
+          { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+          {
+            apiKey: "test-key",
+            headers: "headers" in testCase ? testCase.headers : undefined,
+          },
+        );
+        await stream.result();
+
+        expect(requests).toHaveLength(1);
+        const sessionHeader = requests[0]?.headers.get("x-opencode-session");
+        if (testCase.expected === "generated") {
+          expect(sessionHeader).toBeTruthy();
+        } else {
+          expect(sessionHeader).toBe(testCase.expected);
+        }
+        expect(requests[0]?.headers.get("x-provider-route")).toBe("route-a");
+      }
+    },
+  );
 });
 
 describe("managed OpenAI Responses session headers at fetch egress", () => {

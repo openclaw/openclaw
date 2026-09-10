@@ -1,8 +1,9 @@
 ---
 summary: "Doctor command: health checks, config migrations, and repair steps"
 read_when:
-  - Adding or modifying doctor migrations
-  - Introducing breaking config changes
+  - You need to repair stale config, state, or a gateway service
+  - You want to find the doctor page that covers your problem
+  - You are adding or modifying doctor migrations or breaking config changes
 title: "Doctor"
 sidebarTitle: "Doctor"
 ---

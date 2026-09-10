@@ -13,11 +13,11 @@ import {
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
 import {
   collectSqliteSchemaIssues,
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import {
   describeRunningOpenClawBuild,
   readSqliteUserVersion,

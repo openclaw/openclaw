@@ -11,10 +11,14 @@ const sharedClientMocks = vi.hoisted(() => ({
   createIsolatedCodexAppServerClient: vi.fn(),
 }));
 
-vi.mock("./src/app-server/shared-client.js", () => ({
-  createIsolatedCodexAppServerClient: sharedClientMocks.createIsolatedCodexAppServerClient,
-  retireSharedCodexAppServerClientIfCurrent: () => undefined,
-}));
+vi.mock("./src/app-server/shared-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./src/app-server/shared-client.js")>();
+  return {
+    ...actual,
+    createIsolatedCodexAppServerClient: sharedClientMocks.createIsolatedCodexAppServerClient,
+    retireSharedCodexAppServerClientIfCurrent: () => undefined,
+  };
+});
 
 function codexModel(inputModalities: string[] = ["text", "image"]) {
   return {
@@ -93,6 +97,7 @@ function createFakeClient(options?: {
   approvalRequestMethod?: string;
   responseText?: string;
   onTurnStart?: () => void;
+  beforeRequest?: (method: string) => Promise<void>;
 }) {
   const notifications = new Set<(notification: CodexServerNotification) => void>();
   type RequestHandler = Parameters<CodexAppServerClient["addRequestHandler"]>[0];
@@ -101,6 +106,9 @@ function createFakeClient(options?: {
   const approvalResponses: JsonValue[] = [];
   const request = vi.fn(async (method: string, params?: JsonValue) => {
     requests.push({ method, params });
+    if (options?.beforeRequest) {
+      await options.beforeRequest(method);
+    }
     if (method === "model/list") {
       return {
         data: [codexModel(options?.inputModalities)],
@@ -521,10 +529,132 @@ describe("codex media understanding provider", () => {
     expect(closeAndWait).toHaveBeenCalledOnce();
   });
 
+  it.each([0, 200, -200])(
+    "keeps one media-turn budget through selection retry after a %s ms clock step",
+    async (clockStepMs) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      let wallOffsetMs = 0;
+      vi.spyOn(Date, "now").mockImplementation(
+        () => 1_700_000_000_000 + performance.now() + wallOffsetMs,
+      );
+
+      const firstStartup = createDeferred<void>();
+      const releaseFirstStartup = createDeferred<void>();
+      const selectionCheck = createDeferred<void>();
+      const releaseSelectionCheck = createDeferred<void>();
+      const retryStartup = createDeferred<void>();
+      const releaseRetryStartup = createDeferred<void>();
+      const turnStarted = createDeferred<void>();
+      const caller = new AbortController();
+      const selectionChanged = Object.assign(new Error("managed executable selection changed"), {
+        code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+      });
+      const first = createFakeClient({
+        beforeRequest: async (method) => {
+          if (method === "thread/start") {
+            selectionCheck.resolve();
+            await releaseSelectionCheck.promise;
+            throw selectionChanged;
+          }
+        },
+      });
+      const second = createFakeClient({
+        deferTurnCompletion: true,
+        onTurnStart: () => turnStarted.resolve(),
+      });
+      sharedClientMocks.createIsolatedCodexAppServerClient
+        .mockImplementationOnce(async () => {
+          firstStartup.resolve();
+          await releaseFirstStartup.promise;
+          return first.client;
+        })
+        .mockImplementationOnce(async () => {
+          retryStartup.resolve();
+          await releaseRetryStartup.promise;
+          return second.client;
+        });
+
+      const provider = buildCodexMediaUnderstandingProvider();
+      if (!provider.describeImage) {
+        throw new Error("media provider must expose image understanding");
+      }
+      let settled = false;
+      const observed = provider
+        .describeImage({
+          buffer: Buffer.from("image-bytes"),
+          fileName: "image.png",
+          mime: "image/png",
+          provider: "codex",
+          model: "gpt-5.4",
+          timeoutMs: 1_000,
+          signal: caller.signal,
+          cfg: {},
+          agentDir: "/tmp/openclaw-agent",
+        })
+        .then(
+          (value) => {
+            settled = true;
+            return value;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+      const reach = async (boundary: Promise<void>) => {
+        const reached = await Promise.race([boundary.then(() => true), observed.then(() => false)]);
+        expect(reached, "operation settled before the required scenario boundary").toBe(true);
+      };
+
+      try {
+        await reach(firstStartup.promise);
+        await vi.advanceTimersByTimeAsync(100);
+        releaseFirstStartup.resolve();
+        await reach(selectionCheck.promise);
+        await vi.advanceTimersByTimeAsync(200);
+        wallOffsetMs = clockStepMs;
+        releaseSelectionCheck.resolve();
+
+        await reach(retryStartup.promise);
+        expect(first.closeAndWait).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(100);
+        releaseRetryStartup.resolve();
+        await reach(turnStarted.promise);
+
+        await vi.advanceTimersByTimeAsync(599);
+        expect(settled).toBe(false);
+        expect(second.requests.filter(({ method }) => method === "turn/interrupt")).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        expect(await observed).toMatchObject({
+          name: "TimeoutError",
+          message: "codex app-server image understanding turn timed out after 1s",
+        });
+        expect(second.requests.filter(({ method }) => method === "turn/interrupt")).toEqual([
+          { method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } },
+        ]);
+        expect(first.requests.some(({ method }) => method === "turn/start")).toBe(false);
+        expect(first.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
+        expect(second.closeAndWait).toHaveBeenCalledOnce();
+        expect(caller.signal.aborted).toBe(false);
+        expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        releaseFirstStartup.resolve();
+        releaseSelectionCheck.resolve();
+        releaseRetryStartup.resolve();
+        caller.abort("retry proof cleanup");
+        await observed;
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("clamps oversized image understanding turn timeouts", async () => {
     // The bounded timer subtracts startup time from its clamped deadline.
     // Freeze the clock so the clamp assertion cannot lose a real millisecond.
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const clockSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const { client } = createFakeClient();
@@ -546,7 +676,7 @@ describe("codex media understanding provider", () => {
       expect(result?.text).toBe("A red square.");
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
-      dateNowSpy.mockRestore();
+      clockSpy.mockRestore();
       vi.restoreAllMocks();
       vi.clearAllTimers();
       vi.useRealTimers();

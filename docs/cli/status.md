@@ -75,9 +75,10 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
   backend, or an ACP backend such as `codex (acp/acpx)`. See
   [Agent runtimes](/concepts/agent-runtimes) for the provider/model/runtime
   distinction.
-- When the current session snapshot is sparse, `/status` can backfill token
-  and cache counters from the most recent transcript usage log. Existing
-  nonzero live values still win over transcript fallback values.
+- When the current session snapshot is sparse, the `/status` chat command (see
+  [Slash commands](/tools/slash-commands)) can backfill token and cache counters
+  from the most recent transcript usage log. Existing nonzero live values still
+  win over transcript fallback values.
 - Transcript fallback can also recover the active runtime model label when
   the live session entry is missing it. If that transcript model differs
   from the selected model, status resolves the context window against the
