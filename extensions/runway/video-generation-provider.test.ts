@@ -135,61 +135,66 @@ describe("runway video generation provider", () => {
   });
 
   it("submits a text-to-video task, polls it, and downloads the output", async () => {
-    postJsonRequestMock.mockImplementation(async () => ({
-      response: streamedJsonResponse({
-        id: "task-1",
-      }),
-      release: vi.fn(async () => {}),
-    }));
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce(
-        streamedJsonResponse({
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      postJsonRequestMock.mockImplementation(async () => ({
+        response: streamedJsonResponse({
           id: "task-1",
-          status: "SUCCEEDED",
-          output: ["https://example.com/out.mp4"],
         }),
-      )
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("mp4-bytes"), {
-          headers: new Headers({ "content-type": "video/webm" }),
-        }),
-      );
+        release: vi.fn(async () => {}),
+      }));
+      fetchWithTimeoutMock
+        .mockResolvedValueOnce(
+          streamedJsonResponse({
+            id: "task-1",
+            status: "SUCCEEDED",
+            output: ["https://example.com/out.mp4"],
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(Buffer.from("mp4-bytes"), {
+            headers: new Headers({ "content-type": "video/webm" }),
+          }),
+        );
 
-    const provider = buildRunwayVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "runway",
-      model: "gen4.5",
-      prompt: "a tiny lobster DJ under neon lights",
-      cfg: {},
-      durationSeconds: 4,
-      aspectRatio: "16:9",
-    });
+      const provider = buildRunwayVideoGenerationProvider();
+      const result = await provider.generateVideo({
+        provider: "runway",
+        model: "gen4.5",
+        prompt: "a tiny lobster DJ under neon lights",
+        cfg: {},
+        durationSeconds: 4,
+        aspectRatio: "16:9",
+      });
 
-    expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-    const createRequest = firstPostJsonRequest();
-    expect(createRequest.url).toBe("https://api.dev.runwayml.com/v1/text_to_video");
-    expect(createRequest.body).toEqual({
-      model: "gen4.5",
-      promptText: "a tiny lobster DJ under neon lights",
-      ratio: "1280:720",
-      duration: 4,
-    });
-    const pollCall = firstFetchWithTimeoutCall();
-    expect(pollCall.url).toBe("https://api.dev.runwayml.com/v1/tasks/task-1");
-    expect(pollCall.init.method).toBe("GET");
-    expect(pollCall.init.headers).toBeInstanceOf(Headers);
-    expect(pollCall.timeoutMs).toBe(120000);
-    expect(pollCall.requestFetch).toBe(fetch);
-    expect(result.videos).toHaveLength(1);
-    const video = result.videos[0];
-    if (!video) {
-      throw new Error("expected Runway generated video");
+      expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+      const createRequest = firstPostJsonRequest();
+      expect(createRequest.url).toBe("https://api.dev.runwayml.com/v1/text_to_video");
+      expect(createRequest.body).toEqual({
+        model: "gen4.5",
+        promptText: "a tiny lobster DJ under neon lights",
+        ratio: "1280:720",
+        duration: 4,
+      });
+      const pollCall = firstFetchWithTimeoutCall();
+      expect(pollCall.url).toBe("https://api.dev.runwayml.com/v1/tasks/task-1");
+      expect(pollCall.init.method).toBe("GET");
+      expect(pollCall.init.headers).toBeInstanceOf(Headers);
+      expect(pollCall.timeoutMs).toBe(120000);
+      expect(pollCall.requestFetch).toBe(fetch);
+      expect(result.videos).toHaveLength(1);
+      const video = result.videos[0];
+      if (!video) {
+        throw new Error("expected Runway generated video");
+      }
+      expect(video.fileName).toBe("video-1.webm");
+      const metadata = result.metadata as Record<string, unknown>;
+      expect(metadata.taskId).toBe("task-1");
+      expect(metadata.status).toBe("SUCCEEDED");
+      expect(metadata.endpoint).toBe("/v1/text_to_video");
+    } finally {
+      clock.mockRestore();
     }
-    expect(video.fileName).toBe("video-1.webm");
-    const metadata = result.metadata as Record<string, unknown>;
-    expect(metadata.taskId).toBe("task-1");
-    expect(metadata.status).toBe("SUCCEEDED");
-    expect(metadata.endpoint).toBe("/v1/text_to_video");
   });
 
   it.each([
