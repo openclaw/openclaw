@@ -265,6 +265,11 @@ describe("Crabbox warm-image doctor", () => {
       const now = Date.now();
       const record: WarmProfileRecord = {
         version: 3,
+        profileId: "linux-development",
+        backend: "aws",
+        machineClass: "standard",
+        os: "linux",
+        projectLabel: "github.com/example/project",
         allocations: {},
         image: {
           checkpointId: "chk_last_good",
@@ -321,6 +326,9 @@ describe("Crabbox warm-image doctor", () => {
                 checkId: CRABBOX_WARM_IMAGES_CHECK_ID,
                 target: "profile",
                 severity,
+                message: expect.stringContaining(
+                  "linux-development · aws · standard · linux · github.com/example/project",
+                ),
                 fixHint: expect.stringContaining("openclaw crabbox warm-images"),
               }),
             ]

@@ -5,7 +5,10 @@ import {
   resolveCrabboxProvisionProfile,
   resolveCrabboxWarmImageProfileKey,
 } from "./crabbox-worker-profile.js";
-import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
+import {
+  listCrabboxWarmImages,
+  type WarmProfileRecord,
+} from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 import {
   CHECKPOINT_ID,
@@ -13,6 +16,8 @@ import {
   NODE_RUNTIME_IDENTITY,
   checkpointResult,
   commandResult,
+  createProjectOptions,
+  createWarmProvider,
   openWarmImageStore,
   tempDirs,
 } from "./crabbox-worker-warm-image.test-support.js";
@@ -76,6 +81,54 @@ function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
 }
 
 describe("Crabbox durable allocation admission", () => {
+  it("carries configured profile and project labels through provisioning to inspection", async () => {
+    const { options, observe } = createProjectOptions([]);
+    const { provider } = createWarmProvider(observe);
+    await provider.provision(PROFILE, "display-facts", {
+      ...options,
+      profileId: "linux-development",
+      project: { ...options.project, label: "github.com/example/project" },
+    });
+    expect(listCrabboxWarmImages()).toEqual([
+      expect.objectContaining({
+        profileId: "linux-development",
+        backend: "aws",
+        machineClass: "standard",
+        os: "linux",
+        projectLabel: "github.com/example/project",
+        checkpointId: CHECKPOINT_ID,
+      }),
+    ]);
+  });
+
+  it("updates last-allocator display facts without changing shared keys or replay choices", async () => {
+    const { manager, context } = fixture();
+    const owner = manager();
+    const source = { ...context("cbx_first", "project-a"), profileId: "first" };
+    await owner.allocate(source);
+    const original = structuredClone(openWarmImageStore().entries()[0]!);
+    const next = {
+      ...source,
+      id: "cbx_second",
+      profileId: "second",
+      projectLabel: "github.com/example/renamed",
+    };
+    await owner.allocate(next);
+    expect(openWarmImageStore().entries()).toHaveLength(1);
+    expect(listCrabboxWarmImages()[0]).toMatchObject({
+      profileKey: original.key,
+      profileId: "second",
+      projectLabel: next.projectLabel,
+    });
+    await owner.allocate(source);
+    const replayed = listCrabboxWarmImages()[0]!;
+    expect(replayed.profileId).toBe("first");
+    expect(replayed.projectLabel).toBeUndefined();
+    expect(replayed.allocations[source.id]).toEqual(original.value.allocations[source.id]);
+    await owner.allocate({ ...source, profileId: undefined });
+    expect(listCrabboxWarmImages()[0]?.profileId).toBeUndefined();
+  });
+
   it("preserves exact preparation replay and cache compatibility across reopen", async () => {
     const { manager, context, calls } = fixture();
     const owner = manager();

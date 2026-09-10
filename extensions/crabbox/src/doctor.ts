@@ -149,6 +149,14 @@ export function registerCrabboxWorkerProviderDoctorChecks(
       async detect(ctx) {
         const findings: HealthFinding[] = [];
         for (const image of listCrabboxWarmImages(ctx.env)) {
+          const facts = [
+            image.profileId,
+            image.backend,
+            image.machineClass,
+            image.os,
+            image.projectLabel,
+          ].filter(Boolean);
+          const display = facts.length ? ` (${facts.join(" · ")})` : "";
           const details = {
             checkId: CRABBOX_WARM_IMAGES_CHECK_ID,
             severity: "warning",
@@ -161,10 +169,10 @@ export function registerCrabboxWorkerProviderDoctorChecks(
               ...details,
               severity: uncertain || image.capture.stale ? "warning" : "info",
               message: uncertain
-                ? `Warm-image capture ${image.capture.selector} is paused; its provider outcome requires manual reconciliation.`
+                ? `Warm-image capture ${image.capture.selector}${display} is paused; its provider outcome requires manual reconciliation.`
                 : image.capture.stale
-                  ? `Warm-image capture ${image.capture.selector} is taking longer than usual.`
-                  : `Warm-image capture ${image.capture.selector} is in progress.`,
+                  ? `Warm-image capture ${image.capture.selector}${display} is taking longer than usual.`
+                  : `Warm-image capture ${image.capture.selector}${display} is in progress.`,
               fixHint: uncertain
                 ? crabboxWarmImageRecoveryHint(image.capture.selector)
                 : CRABBOX_WARM_IMAGE_WAIT_HINT,
@@ -173,7 +181,7 @@ export function registerCrabboxWorkerProviderDoctorChecks(
           if (image.retirement) {
             findings.push({
               ...details,
-              message: `Warm-image checkpoint ${image.retirement.checkpointId} is still awaiting deletion.`,
+              message: `Warm-image checkpoint ${image.retirement.checkpointId}${display} is still awaiting deletion.`,
               fixHint:
                 "Cleanup retries during the next warm-image capture or worker teardown. Inspect `openclaw crabbox warm-images --json` and resolve provider deletion errors if it remains pending.",
             });

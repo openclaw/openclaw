@@ -40,6 +40,12 @@ export type WarmAllocationRecord = {
 
 export type WarmProfileRecord = {
   version: 3;
+  /** Configured profile that most recently allocated from this key; display only. */
+  profileId?: string;
+  backend?: string;
+  machineClass?: string;
+  os?: CrabboxOperatingSystem;
+  projectLabel?: string;
   projectKey?: string;
   image?: WarmImageRecord;
   allocations: Record<string, WarmAllocationRecord>;
@@ -144,6 +150,35 @@ export const sameCrabboxWarmImageGeneration = (
   right: WarmAllocationRecord["imageGeneration"] | undefined,
 ) => left?.checkpointId === right?.checkpointId && left?.createdAtMs === right?.createdAtMs;
 
+export const isCrabboxWarmImageHeld = (
+  record: Pick<WarmProfileRecord, "allocations">,
+  checkpointId: string,
+) =>
+  Object.values(record.allocations).some(
+    ({ choice, imageGeneration }) =>
+      (choice.kind === "checkpoint" && choice.checkpointId === checkpointId) ||
+      imageGeneration?.checkpointId === checkpointId,
+  );
+
+type WarmProfileDisplayFacts = Pick<
+  WarmProfileRecord,
+  "profileId" | "backend" | "machineClass" | "os" | "projectLabel"
+>;
+
+export function withCrabboxWarmImageDisplayFacts(
+  record: WarmProfileRecord,
+  facts: WarmProfileDisplayFacts = {},
+): WarmProfileRecord {
+  const next = { ...record, ...facts };
+  // Unavailable facts clear stale labels; plugin state cannot persist undefined values.
+  for (const field of ["profileId", "backend", "machineClass", "os", "projectLabel"] as const) {
+    if (next[field] === undefined) {
+      delete next[field];
+    }
+  }
+  return next;
+}
+
 export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
   const store = createPluginStateSyncKeyedStore<WarmProfileRecord>("crabbox", {
     namespace: "warm-images",
@@ -238,17 +273,21 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
       id: string;
       projectKey?: string;
       availableImage?: WarmImageRecord;
+      displayFacts?: WarmProfileDisplayFacts;
       allocation: Omit<WarmAllocationRecord, "choice" | "imageGeneration">;
     }) {
       let rejection: string | undefined;
       canonical.update(params.key, (current) => {
-        const record: WarmProfileRecord = current ?? {
-          version: 3,
-          allocations: {},
-          ...(params.projectKey ? { projectKey: params.projectKey } : {}),
-        };
+        const record = withCrabboxWarmImageDisplayFacts(
+          current ?? {
+            version: 3,
+            allocations: {},
+            ...(params.projectKey ? { projectKey: params.projectKey } : {}),
+          },
+          params.displayFacts,
+        );
         if (Object.hasOwn(record.allocations, params.id)) {
-          return undefined;
+          return params.displayFacts ? record : undefined;
         }
         if (Object.keys(record.allocations).length >= WARM_IMAGE_MAX_ALLOCATIONS) {
           rejection =
@@ -366,6 +405,11 @@ export function listCrabboxWarmImages(env?: NodeJS.ProcessEnv) {
     .entries()
     .map(({ key, value }) => ({
       profileKey: key,
+      profileId: value.profileId,
+      backend: value.backend,
+      machineClass: value.machineClass,
+      os: value.os,
+      projectLabel: value.projectLabel,
       projectKey: value.projectKey,
       checkpointId: value.image?.checkpointId,
       state: value.image?.state ?? "no-image",

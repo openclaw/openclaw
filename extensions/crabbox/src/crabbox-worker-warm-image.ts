@@ -23,9 +23,11 @@ import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   isCrabboxWarmImageCaptureUncertain,
+  isCrabboxWarmImageHeld as held,
   openCrabboxWarmImageStore,
-  sameCrabboxWarmImageGeneration,
+  sameCrabboxWarmImageGeneration as sameImage,
   WARM_IMAGE_MAX_ENTRIES,
+  withCrabboxWarmImageDisplayFacts,
   withoutCrabboxWarmImageOperation,
   type WarmImageRecord,
   type WarmProfileRecord,
@@ -42,6 +44,8 @@ type AllocationContext = LeaseContext & {
   profile: ReturnType<typeof resolveCrabboxProvisionProfile>["profile"];
   slug: string;
   projectKey?: string;
+  profileId?: string;
+  projectLabel?: string;
   nodeRuntimeIdentity?: WarmAllocationRecord["runtimeIdentity"];
   preparation?: {
     key: string;
@@ -79,15 +83,8 @@ export function createCrabboxWarmImageManager(dependencies: {
     }
   };
   const { checkpointCommand, deleteCheckpoint } = createCheckpointCommands(dependencies.runCommand);
-  const sameImage = sameCrabboxWarmImageGeneration;
   const imageExpired = (image: WarmImageRecord) =>
     image.lastDemandAtMs === null || Date.now() - image.lastDemandAtMs >= WARM_IMAGE_RETENTION_MS;
-  const pinned = (record: WarmProfileRecord, checkpointId: string) =>
-    Object.values(record.allocations).some(
-      ({ choice, imageGeneration }) =>
-        (choice.kind === "checkpoint" && choice.checkpointId === checkpointId) ||
-        imageGeneration?.checkpointId === checkpointId,
-    );
   const retiringCurrent = (record: WarmProfileRecord) =>
     record.operation?.type === "retire" &&
     record.operation.checkpointId === record.image?.checkpointId;
@@ -107,14 +104,14 @@ export function createCrabboxWarmImageManager(dependencies: {
     remainingMs: () => number = () => WARM_IMAGE_COMMAND_TIMEOUT_MS,
   ): Promise<void> => {
     const operation = record.operation;
-    if (operation?.type !== "retire" || pinned(record, operation.checkpointId)) {
+    if (operation?.type !== "retire" || held(record, operation.checkpointId)) {
       return;
     }
     const matches = (current: WarmProfileRecord | undefined) =>
       current?.operation?.type === "retire" &&
       current.operation.checkpointId === operation.checkpointId &&
       sameImage(current.image, record.image) &&
-      !pinned(current, operation.checkpointId);
+      !held(current, operation.checkpointId);
     if (!matches(openStore().lookup(key))) {
       return;
     }
@@ -152,7 +149,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     record: WarmProfileRecord,
     remainingMs: () => number = () => WARM_IMAGE_COMMAND_TIMEOUT_MS,
   ) => {
-    if (!record.image || record.operation || pinned(record, record.image.checkpointId)) {
+    if (!record.image || record.operation || held(record, record.image.checkpointId)) {
       return;
     }
     assertCurrent(context);
@@ -265,6 +262,13 @@ export function createCrabboxWarmImageManager(dependencies: {
       throw new Error("Crabbox project preparation identity is invalid.");
     }
     const key = resolveCrabboxWarmImageProfileKey(profile, context.projectKey);
+    const displayFacts = {
+      profileId: context.profileId,
+      backend: profile.provider,
+      machineClass: profile.class,
+      os: profile.target,
+      projectLabel: context.projectLabel,
+    };
     const replay = lookupLease(context.id);
     if (replay) {
       if (
@@ -285,6 +289,10 @@ export function createCrabboxWarmImageManager(dependencies: {
           "Crabbox provision retry changed or lacks its recorded node runtime identity; stop the worker before reprovisioning",
         );
       }
+      assertCurrent(context);
+      openStore().update(key, (record) =>
+        record ? withCrabboxWarmImageDisplayFacts(record, displayFacts) : undefined,
+      );
       return replay;
     }
     await collectImages(context, "allocation");
@@ -320,6 +328,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       key,
       id: context.id,
       projectKey: context.projectKey,
+      displayFacts,
       availableImage: available ? observed?.image : undefined,
       allocation: {
         machineClass: profile.class,
@@ -386,7 +395,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       warnOnce,
       collectImages,
       verifyImage,
-      held: pinned,
+      held,
       deleteImage,
       retireImage,
       checkpointCommand,

@@ -13,6 +13,7 @@ import {
   renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
+  renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsToggleRow,
   renderSettingsValue,
@@ -38,6 +39,7 @@ import {
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
 import { renderCloudWorkerRepositories } from "./cloud-worker-repositories.ts";
+import "./cloud-worker-snapshots.ts";
 
 registerSettingsEnglish();
 
@@ -58,6 +60,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
+  @state() private view: "profiles" | "snapshots" = "profiles";
   @state() private advertisedProfiles = new Map<string, ProfileSummary>();
   @state() private catalogLoaded = false;
   @state() private catalogLoading = false;
@@ -680,7 +683,23 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         title: titleForRoute("cloud-workers"),
         subtitle: html`${t("cloudWorkersPage.intro")} ${renderLearnMoreLink(CLOUD_WORKERS_DOCS_URL)}`,
       })}
-      ${renderSettingsWorkspace(body)}
+      ${renderSettingsWorkspace(html`
+        ${renderSettingsPage(
+          renderSettingsSegmented({
+            mode: "buttons",
+            value: this.view,
+            ariaLabel: t("cloudWorkersPage.snapshots.viewLabel"),
+            options: [
+              { value: "profiles", label: t("cloudWorkersPage.sectionTitle") },
+              { value: "snapshots", label: t("cloudWorkersPage.snapshots.title") },
+            ],
+            onChange: (value) => {
+              this.view = value;
+            },
+          }),
+        )}
+        ${this.view === "profiles" ? body : html`<openclaw-cloud-worker-snapshots></openclaw-cloud-worker-snapshots>`}
+      `)}
     `;
   }
 }

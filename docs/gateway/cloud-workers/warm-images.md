@@ -88,6 +88,35 @@ replace an unrelated image generation. This can reduce snapshot reuse until an
 eligible generation can publish; it does not permit incomplete setup or extend
 an older image's demand window.
 
+### Inspect snapshots in the Control UI
+
+Open **Settings → Connections → Cloud workers → Snapshots** to inspect local
+warm-image ownership, grouped by configured profile. Refresh reloads the list.
+The view shows available images, captures in progress, images held by outstanding
+allocations, and captures that need attention. Older records without display
+facts remain visible as unlabeled records. Legacy allocations appear under
+**Needs migration** with Doctor recovery guidance.
+
+The Crabbox plugin advertises `crabbox.images.list` and `crabbox.images.recover`;
+both require `operator.admin`. If the listing method is not advertised, the view
+explains that the Crabbox worker provider must be enabled. Listing reads local
+state without contacting the provider and returns an allocation count plus at
+most 20 allocation entries per image.
+
+**Recover** is available only for uncertain captures. Its required checkbox
+acknowledges that the owning capture and worker have stopped and provider
+artifacts have been reconciled, with the same meaning as the CLI's
+`--acknowledge-provider-cleanup`. Follow the cleanup steps below before confirming.
+Recovery clears only the selected reservation; it does not stop a worker or
+delete provider artifacts. A stale capture alone does not permit recovery.
+
+New allocations record optional `profileId`, `backend`, `machineClass`, `os`, and
+`projectLabel` display facts, also included in `openclaw crabbox warm-images --json`.
+`profileId` means the configured profile that most recently allocated from the
+image key; it is overwritten on each allocation and does not change image keys
+or reuse policy. Project labels use the normalized origin repository identity
+`host/owner/repo`, or the project root's basename when origin cannot be resolved.
+
 ### Recover a paused capture
 
 Inspect local ownership without contacting the cloud:
