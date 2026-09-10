@@ -37,6 +37,7 @@ import {
   type CloudWorkerProfileDraft,
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
+import { renderCloudWorkerRepositories } from "./cloud-worker-repositories.ts";
 
 registerSettingsEnglish();
 
@@ -189,7 +190,11 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   }
 
   private patchDraft(patch: Partial<CloudWorkerProfileDraft>) {
-    this.draft = { ...this.draft, ...patch };
+    this.draft = {
+      ...this.draft,
+      ...patch,
+      ...(patch.setup !== undefined && !patch.setup.trim() ? { setupEnv: "" } : {}),
+    };
     this.formError = null;
   }
 
@@ -545,6 +550,50 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             @input=${(event: Event) => this.patchDraft({ binary: formControlValue(event) })}
           />`,
         }),
+        renderSettingsSection({ title: t("cloudWorkersPage.advanced") }, [
+          renderSettingsRow({
+            title: t("cloudWorkersPage.fields.warmImage"),
+            description: t("cloudWorkersPage.fields.warmImageHelp"),
+            control: html`<select
+              class="settings-select"
+              aria-label=${t("cloudWorkersPage.fields.warmImage")}
+              .value=${this.draft.warmImage}
+              ?disabled=${busy}
+              @change=${(event: Event) => {
+                const value = formControlValue(event);
+                if (value === "auto" || value === "on" || value === "off") {
+                  this.patchDraft({ warmImage: value });
+                }
+              }}
+            >
+              ${(["auto", "on", "off"] as const).map(
+                (value) => html`
+                  <option value=${value} ?selected=${this.draft.warmImage === value}>
+                    ${t(`cloudWorkersPage.warmImage.${value}`)}
+                  </option>
+                `,
+              )}
+            </select>`,
+          }),
+          ...(["setupEnv", "readyWorkers", "suspendAfter"] as const).map((field) =>
+            renderSettingsRow({
+              title: t(`cloudWorkersPage.fields.${field}`),
+              description: t(`cloudWorkersPage.fields.${field}Help`),
+              control: html`<input
+                class="settings-input mono"
+                aria-label=${t(`cloudWorkersPage.fields.${field}`)}
+                type=${field === "readyWorkers" ? "number" : "text"}
+                min=${field === "readyWorkers" ? "0" : nothing}
+                step=${field === "readyWorkers" ? "1" : nothing}
+                autocomplete="off"
+                spellcheck="false"
+                .value=${this.draft[field]}
+                ?disabled=${busy}
+                @input=${(event: Event) => this.patchDraft({ [field]: formControlValue(event) })}
+              />`,
+            }),
+          ),
+        ]),
         ...(this.formError
           ? [
               renderSettingsRow({
@@ -619,7 +668,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         },
         rows,
       )}
-      ${this.renderEditor()}
+      ${this.renderEditor()} ${renderCloudWorkerRepositories(canManage)}
     `);
     return html`
       ${renderSettingsPageHeader({

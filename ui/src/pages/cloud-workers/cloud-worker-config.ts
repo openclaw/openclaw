@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
 import { collectBaseArrayPaths } from "../../../../src/config/patch-replace-paths.js";
 
 type CloudWorkerConfigPatch = { patch: Record<string, unknown>; replacePaths: string[] };
@@ -12,22 +13,17 @@ export type CloudWorkerProfileDraft = {
   ttl: string;
   idleTimeout: string;
   setup: string;
+  setupEnv: string;
+  warmImage: "auto" | "on" | "off";
+  readyWorkers: string;
+  suspendAfter: string;
   desktop: boolean;
   binary: string;
 };
 
-export type ConfiguredCloudWorkerProfile = {
-  id: string;
+export type ConfiguredCloudWorkerProfile = CloudWorkerProfileDraft & {
   providerId: string;
   install: "bundle" | "npm";
-  backend: string;
-  target: string;
-  machineClass: string;
-  ttl: string;
-  idleTimeout: string;
-  setup: string;
-  desktop: boolean;
-  binary: string;
 };
 
 export type CloudWorkerDraftError =
@@ -39,7 +35,11 @@ export type CloudWorkerDraftError =
   | "machineClass"
   | "ttl"
   | "idleTimeout"
-  | "binary";
+  | "binary"
+  | "setupEnv"
+  | "setupEnvRequiresSetup"
+  | "readyWorkers"
+  | "suspendAfter";
 
 type CloudWorkerProfileStatus = "advertised" | "restart-required" | "loading";
 
@@ -84,6 +84,11 @@ export function readCloudWorkerProfiles(
           ttl: stringSetting(settings, "ttl"),
           idleTimeout: stringSetting(settings, "idleTimeout"),
           setup: stringSetting(settings, "setup"),
+          setupEnv: Array.isArray(settings.setupEnv) ? settings.setupEnv.join(", ") : "",
+          warmImage:
+            settings.warmImage === true ? "on" : settings.warmImage === false ? "off" : "auto",
+          readyWorkers: typeof raw.readyWorkers === "number" ? String(raw.readyWorkers) : "",
+          suspendAfter: stringSetting(raw, "suspendAfter"),
           desktop: settings.desktop === true,
           binary: stringSetting(settings, "binary"),
         },
@@ -103,9 +108,17 @@ export function createCloudWorkerDraft(
     ttl: profile?.ttl || "8h",
     idleTimeout: profile?.idleTimeout || "45m",
     setup: profile?.setup ?? "",
+    setupEnv: profile?.setupEnv ?? "",
+    warmImage: profile?.warmImage ?? "auto",
+    readyWorkers: profile?.readyWorkers ?? "",
+    suspendAfter: profile?.suspendAfter ?? "",
     desktop: profile?.desktop ?? false,
     binary: profile?.binary ?? "",
   };
+}
+
+function parseSetupEnv(value: string): string[] {
+  return value.split(/[,\s]+/u).filter(Boolean);
 }
 
 export function validateCloudWorkerDraft(
@@ -139,6 +152,35 @@ export function validateCloudWorkerDraft(
   if (!GO_DURATION_PATTERN.test(draft.idleTimeout.trim())) {
     return "idleTimeout";
   }
+  const setupEnv = parseSetupEnv(draft.setupEnv);
+  if (
+    setupEnv.length > 16 ||
+    new Set(setupEnv).size !== setupEnv.length ||
+    setupEnv.some((name) => !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) || name === "CRABBOX_ENV_ALLOW")
+  ) {
+    return "setupEnv";
+  }
+  if (setupEnv.length && !draft.setup.trim()) {
+    return "setupEnvRequiresSetup";
+  }
+  const readyWorkers = draft.readyWorkers.trim();
+  if (
+    readyWorkers &&
+    (!/^\d+$/u.test(readyWorkers) || !Number.isSafeInteger(Number(readyWorkers)))
+  ) {
+    return "readyWorkers";
+  }
+  const suspendAfter = draft.suspendAfter.trim();
+  if (suspendAfter) {
+    // Keep the config schema's parser and minimum; TTL uses a different provider grammar.
+    try {
+      if (!/(?:ms|s|m|h|d)$/i.test(suspendAfter) || parseDurationMs(suspendAfter) < 60_000) {
+        return "suspendAfter";
+      }
+    } catch {
+      return "suspendAfter";
+    }
+  }
   const binary = draft.binary.trim();
   if (binary && !binary.startsWith("/") && !WINDOWS_ABSOLUTE_PATH_PATTERN.test(binary)) {
     return "binary";
@@ -168,8 +210,7 @@ export function buildCloudWorkerUpsertPatch(
     return { error: "profileMissing" };
   }
   const setup = draft.setup.trim();
-  const clearSetupEnv =
-    !setup && Array.isArray(existingSettings.setupEnv) && existingSettings.setupEnv.length > 0;
+  const setupEnv = parseSetupEnv(draft.setupEnv);
   // Omitted settings merge in place; resending opaque nulls would delete them.
   const settings = {
     provider: draft.backend.trim(),
@@ -178,23 +219,24 @@ export function buildCloudWorkerUpsertPatch(
     ttl: draft.ttl.trim(),
     idleTimeout: draft.idleTimeout.trim(),
     setup: setup || null,
-    ...(clearSetupEnv ? { setupEnv: null } : {}),
+    setupEnv: setupEnv.length ? setupEnv : null,
+    warmImage: draft.warmImage === "auto" ? null : draft.warmImage === "on",
     desktop: draft.desktop ? true : null,
     binary: draft.binary.trim() || null,
   };
   const profile = {
     provider: normalizeOptionalString(existing.provider) ?? "crabbox",
     install: existing.install === "npm" ? "npm" : "bundle",
+    readyWorkers: draft.readyWorkers.trim() ? Number(draft.readyWorkers) : null,
+    suspendAfter: draft.suspendAfter.trim() || null,
     settings,
   };
   return {
     patch: { cloudWorkers: { profiles: { [id]: profile } } },
-    replacePaths: clearSetupEnv
-      ? collectBaseArrayPaths(
-          existingSettings.setupEnv,
-          `cloudWorkers.profiles.${id}.settings.setupEnv`,
-        )
-      : [],
+    replacePaths: collectBaseArrayPaths(
+      existingSettings.setupEnv,
+      `cloudWorkers.profiles.${id}.settings.setupEnv`,
+    ),
   };
 }
 

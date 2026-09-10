@@ -147,9 +147,12 @@ describe("Cloud Workers mutation requests", () => {
       provider.append(page);
       document.body.append(provider);
       try {
-        await waitForFast(() =>
-          expect(page.querySelectorAll(".settings-row code")).toHaveLength(2),
-        );
+        await waitForFast(() => {
+          const profiles = [...page.querySelectorAll(".settings-section")].find((section) =>
+            section.querySelector("h2")?.textContent?.trim().startsWith("Profiles"),
+          );
+          expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
+        });
         const row = expectDefined(
           [...page.querySelectorAll(".settings-row")].find(
             (entry) => entry.querySelector("code")?.textContent === "pending",
