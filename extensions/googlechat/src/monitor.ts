@@ -12,13 +12,15 @@ import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gate
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveWebhookPath } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import { deleteGoogleChatMessage, downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
 import type { GoogleChatAudienceType } from "./auth.js";
+import { createGoogleChatDraftStream, type GoogleChatDraftStream } from "./draft-stream.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import {
@@ -399,14 +401,17 @@ async function processMessageWithPipeline(params: {
       ? replyThreadName
       : undefined;
 
-  // Start typing indicator (message mode only, reaction mode not supported with app auth)
-  if (typingIndicator === "message") {
+  // Both "message" and "live" post the same placeholder; "live" then edits it in
+  // place with progress before the final collapse.
+  const usesPlaceholder = typingIndicator === "message" || typingIndicator === "live";
+  const botName = resolveBotDisplayName({
+    accountName: account.config.name,
+    agentId: route.agentId,
+    config,
+  });
+  let draftStream: GoogleChatDraftStream | undefined;
+  const sendTypingPlaceholder = async (): Promise<void> => {
     try {
-      const botName = resolveBotDisplayName({
-        accountName: account.config.name,
-        agentId: route.agentId,
-        config,
-      });
       const result = await sendGoogleChatMessage({
         account,
         space: spaceId,
@@ -423,9 +428,93 @@ async function processMessageWithPipeline(params: {
     } catch (err) {
       runtime.error?.(`Failed sending typing message: ${String(err)}`);
     }
+  };
+  // A top-level placeholder keeps any 404 re-send top-level, where the answer posts.
+  const startLiveStream = (placeholder: GoogleChatTypingMessage): void => {
+    draftStream = createGoogleChatDraftStream({
+      account,
+      spaceId,
+      messageName: placeholder.name,
+      threadName: placeholder.placement === "thread" ? placeholder.deliveredThreadName : undefined,
+      runtime,
+    });
+  };
+  if (usesPlaceholder) {
+    await sendTypingPlaceholder();
+    if (typingMessage && typingIndicator === "live") {
+      startLiveStream(typingMessage);
+    }
   }
 
-  await core.channel.inbound.run({
+  // Stop live progress edits and drain the in-flight one so a late edit cannot
+  // clobber a later write to the placeholder. A 404 re-send may have replaced the
+  // placeholder and its thread, so adopt what the stream last wrote to.
+  const retireDraftStream = async (): Promise<void> => {
+    const stream = draftStream;
+    if (!stream) {
+      return;
+    }
+    draftStream = undefined;
+    try {
+      await stream.stop();
+    } catch (err) {
+      runtime.error?.(`googlechat: failed stopping live status stream: ${String(err)}`);
+    }
+    const liveName = stream.messageName();
+    const liveThread = stream.deliveredThreadName();
+    if (typingMessage && liveName && liveName !== typingMessage.name) {
+      typingMessage = { ...typingMessage, name: liveName };
+    }
+    if (
+      typingMessage?.placement === "thread" &&
+      liveThread &&
+      liveThread !== typingMessage.deliveredThreadName
+    ) {
+      typingMessage = { ...typingMessage, deliveredThreadName: liveThread };
+    }
+  };
+
+  // A queued followup drains this invocation's retained callbacks after its
+  // immediate run returned and retired the stream. Resume progress on the
+  // placeholder the queued message already posted, so it is not orphaned beside a
+  // second one; post a fresh placeholder only if an earlier answer consumed it.
+  let queuedPlaceholderOwned = false;
+  const startQueuedLiveStream = async (): Promise<void> => {
+    if (typingIndicator !== "live" || draftStream) {
+      return;
+    }
+    if (!typingMessage) {
+      await sendTypingPlaceholder();
+    }
+    if (typingMessage) {
+      queuedPlaceholderOwned = true;
+      startLiveStream(typingMessage);
+    }
+  };
+
+  // Only this monitor's final delivery marks the placeholder done. A queued answer
+  // routed through core's outbound path never reaches it, and settlement cannot
+  // tell that apart from a silent or failed turn, so remove an unused placeholder
+  // instead of leaving a frozen status or claiming a reply below it.
+  const settleQueuedLiveStream = async (): Promise<void> => {
+    if (!queuedPlaceholderOwned) {
+      return;
+    }
+    queuedPlaceholderOwned = false;
+    await retireDraftStream();
+    const unused = typingMessage;
+    if (!unused) {
+      return;
+    }
+    typingMessage = undefined;
+    try {
+      await deleteGoogleChatMessage({ account, messageName: unused.name });
+    } catch (err) {
+      runtime.error?.(`googlechat: failed removing queued live status message: ${String(err)}`);
+    }
+  };
+
+  const runParams = {
     channel: "googlechat",
     accountId: route.accountId,
     raw: message,
@@ -446,14 +535,33 @@ async function processMessageWithPipeline(params: {
         route: { agentId: route.agentId, sessionKey: route.sessionKey },
         ctxPayload,
         delivery: {
-          durable: (payload, info) =>
+          durable: (payload: ReplyPayload, info: { kind: string }) =>
             resolveGoogleChatDurableReplyOptions({
               payload,
               infoKind: info.kind,
               spaceId,
               hasTypingMessage: Boolean(typingMessage),
             }),
-          deliver: async (payload) => {
+          deliver: async (payload: ReplyPayload, info: { kind: string } | undefined) => {
+            // In live mode, intermediate deliveries (tool/block payloads) must
+            // not consume the placeholder or draft stream — those belong to the
+            // final collapse. Deliver them and leave live progress running. Only
+            // live mode runs a draft stream, so gate on it to leave "message"
+            // mode's first-delivery placeholder handling untouched. A missing
+            // info means the caller only distinguishes the final delivery.
+            if (draftStream && info && info.kind !== "final") {
+              await deliverGoogleChatReply({
+                payload,
+                account,
+                spaceId,
+                runtime,
+                core,
+                config,
+                statusSink,
+              });
+              return;
+            }
+            await retireDraftStream();
             await deliverGoogleChatReply({
               payload,
               account,
@@ -463,28 +571,86 @@ async function processMessageWithPipeline(params: {
               config,
               statusSink,
               typingMessage,
+              liveMode: typingIndicator === "live",
+              doneStatusText: `_${botName} is done — reply below._`,
             });
-            // Only use typing message for first delivery
+            // Only use typing message for the final delivery
             typingMessage = undefined;
           },
           onDelivered: () => {
             statusSink?.({ lastOutboundAt: Date.now() });
           },
-          onError: (err, info) => {
+          onError: (err: unknown, info: { kind: string }) => {
             runtime.error?.(
               `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
             );
           },
         },
         replyPipeline: {},
+        ...(typingIndicator === "live"
+          ? {
+              replyOptions: {
+                // Keep core's own standalone tool-progress text messages off (we
+                // render progress into the live placeholder), but still let the
+                // tool lifecycle fire on non-verbose turns so onToolStart/
+                // onItemEvent reach the draft stream instead of freezing.
+                suppressDefaultToolProgressMessages: true,
+                allowToolLifecycleWhenProgressHidden: true,
+                // A queued followup reuses these retained callbacks after the
+                // immediate turn's stream is gone; resume a stream on admission
+                // and retire its placeholder on settlement.
+                onQueuedFollowupAdmitted: startQueuedLiveStream,
+                onQueuedFollowupSettled: settleQueuedLiveStream,
+                onToolStart: (payload: {
+                  itemId?: string;
+                  toolCallId?: string;
+                  name?: string;
+                  phase?: string;
+                  args?: Record<string, unknown>;
+                  detailMode?: "explain" | "raw";
+                }) => draftStream?.pushToolEvent(payload) ?? false,
+                onItemEvent: (payload: {
+                  itemId?: string;
+                  toolCallId?: string;
+                  kind?: string;
+                  title?: string;
+                  name?: string;
+                  phase?: string;
+                  status?: string;
+                  summary?: string;
+                  progressText?: string;
+                  meta?: string;
+                  commandBearing?: boolean;
+                  approvalId?: string;
+                  approvalSlug?: string;
+                  suppressDurableProgress?: true;
+                }) => draftStream?.pushItemEvent(payload) ?? false,
+                onReasoningStream: (payload: { text?: string; isReasoningSnapshot?: boolean }) =>
+                  draftStream?.pushReasoningProgress(payload.text || "Thinking…", {
+                    snapshot: payload.isReasoningSnapshot === true,
+                  }) ?? false,
+              },
+            }
+          : {}),
         record: {
-          onRecordError: (err) => {
+          onRecordError: (err: unknown) => {
             runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
           },
         },
       }),
     },
-  });
+  };
+  try {
+    await core.channel.inbound.run(runParams);
+  } finally {
+    // A turn can settle without deliver ever running (silent finish, failure, or
+    // a reply sent only via a message tool). Stop any still-live draft stream so
+    // its delayed-start timer / pending flush cannot PATCH a stale status after
+    // the turn is done. The final delivery clears draftStream itself, so a
+    // promoted visible answer is never clobbered here. Keep the placeholder: a
+    // queued followup resumes on it.
+    await retireDraftStream();
+  }
 }
 
 async function downloadAttachment(

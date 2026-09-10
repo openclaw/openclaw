@@ -317,6 +317,54 @@ describe("Google Chat reply delivery", () => {
     );
   });
 
+  it.each([
+    { name: "succeeds", updateError: undefined },
+    {
+      name: "finds the message gone",
+      updateError: new GoogleChatApiError(404, "Google Chat API 404: message not found"),
+    },
+    {
+      name: "is throttled",
+      updateError: new GoogleChatApiError(429, "Google Chat API 429: quota exceeded"),
+    },
+  ])(
+    "posts the live answer as a new message when the done-status edit $name",
+    async ({ updateError }) => {
+      if (updateError) {
+        mocks.updateGoogleChatMessage.mockRejectedValueOnce(updateError);
+      }
+
+      await deliverGoogleChatReply({
+        payload: { text: "the answer", replyToId: "spaces/AAA/threads/root" },
+        account,
+        spaceId: "spaces/AAA",
+        runtime: createRuntime(),
+        core: createCore(),
+        config,
+        typingMessage: createGoogleChatTypingMessage({
+          messageName: "spaces/AAA/messages/typing",
+          requestedThreadName: "spaces/AAA/threads/root",
+          deliveredThreadName: "spaces/AAA/threads/root",
+        }),
+        liveMode: true,
+        doneStatusText: "_Bot is done — reply below._",
+      });
+
+      // A new message notifies the user; an in-place edit of the placeholder would not.
+      expect(mocks.updateGoogleChatMessage).toHaveBeenCalledExactlyOnceWith({
+        account,
+        messageName: "spaces/AAA/messages/typing",
+        text: "_Bot is done — reply below._",
+      });
+      expect(mocks.sendGoogleChatMessage).toHaveBeenCalledExactlyOnceWith({
+        account,
+        space: "spaces/AAA",
+        text: "the answer",
+        thread: "spaces/AAA/threads/root",
+      });
+    },
+  );
+
   it("cleans up typing and rejects media-only replies without provider upload access", async () => {
     const core = createCore();
     const runtime = createRuntime();

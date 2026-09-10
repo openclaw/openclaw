@@ -55,7 +55,7 @@ const GoogleChatAccountSchemaBase = z
     webhookUrl: z.string().optional(),
     botUser: z.string().optional(),
     dm: GoogleChatDmSchema.optional(),
-    typingIndicator: z.enum(["none", "message", "reaction"]).optional(),
+    typingIndicator: z.enum(["none", "message", "live", "reaction"]).optional(),
   })
   .strict();
 

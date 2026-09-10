@@ -56,8 +56,14 @@ export async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessage?: GoogleChatTypingMessage;
+  // "live" mode posts the answer as a NEW message so Google Chat fires a
+  // notification, and edits the placeholder to a terminal "done" state instead
+  // of collapsing it into the reply.
+  liveMode?: boolean;
+  doneStatusText?: string;
 }): Promise<void> {
-  const { payload, account, spaceId, runtime, core, config, statusSink } = params;
+  const { payload, account, spaceId, runtime, core, config, statusSink, liveMode, doneStatusText } =
+    params;
   // Clear this whenever the typing message is deleted or unavailable; otherwise
   // text delivery can keep retrying a dead message and drop content.
   let typingMessage = params.typingMessage;
@@ -145,6 +151,24 @@ export async function deliverGoogleChatReply(params: {
       deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
     }
   };
+  // Live mode: leave the placeholder as a terminal "done" status and post the
+  // answer as new messages, so Google Chat notifies the user the reply is ready.
+  // An in-place edit would not fire a notification.
+  if (liveMode && typingMessage && doneStatusText?.trim()) {
+    // The done-status edit is cosmetic. Never let it block the answer: on any
+    // failure (throttling, transient, or a 404 gone message) log and continue
+    // so the final reply still posts as a new, notifying message.
+    try {
+      await updateGoogleChatMessage({
+        account,
+        messageName: typingMessage.name,
+        text: doneStatusText.trim(),
+      });
+    } catch (error) {
+      runtime.error?.(`Google Chat done-status update failed: ${String(error)}`);
+    }
+    typingMessage = undefined;
+  }
   const chunks = core.channel.text.chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode);
   for (const chunk of chunks) {
     if (!chunk) {
