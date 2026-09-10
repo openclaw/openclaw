@@ -37,7 +37,7 @@ Setup commands by intent:
 | Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`devices`](/cli/devices) · [`channels`](/cli/channels)                                                                                                                                 |
 | Security and plugins         | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                 |
 | Legacy aliases               | [`daemon`](/cli/daemon) (gateway service) · [`clawbot`](/cli/clawbot) (namespace)                                                                                                                                                     |
-| Plugins (optional)           | [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) · [`workboard`](/cli/workboard) (if installed)                                                                                                          |
+| Plugins (optional)           | [`file-transfer`](/cli/file-transfer) · [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) · [`workboard`](/cli/workboard) (if installed)                                                                  |
 
 ## Global flags
 

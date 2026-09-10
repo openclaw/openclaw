@@ -2883,6 +2883,7 @@
                           "cli/plugins/marketplace"
                         ]
                       },
+                      "cli/file-transfer",
                       "cli/path",
                       "cli/policy",
                       {

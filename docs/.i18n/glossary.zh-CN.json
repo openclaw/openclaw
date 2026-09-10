@@ -4104,6 +4104,14 @@
     "target": "节点文件传输"
   },
   {
+    "source": "File transfers",
+    "target": "文件传输"
+  },
+  {
+    "source": "File Transfer plugin reference",
+    "target": "文件传输插件参考"
+  },
+  {
     "source": "Node command policy",
     "target": "节点命令策略"
   },
