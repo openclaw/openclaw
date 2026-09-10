@@ -521,6 +521,13 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Mode"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/profile/profile-hero.ts",
