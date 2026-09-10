@@ -58,6 +58,10 @@ const enSettings = {
       warmOn: "Warm images on",
       warmOff: "Warm images off",
       available: "Available",
+      retiring: "Retiring",
+      retirementPending: "Checkpoint deletion pending",
+      retirementHint:
+        "Checkpoint {checkpoint} is awaiting deletion. Cleanup retries during the next warm-image capture or worker teardown. Inspect openclaw crabbox warm-images --json and resolve provider deletion errors if it remains pending.",
       scrubbing: "Building: scrubbing",
       creating: "Building: creating",
       uncertain: "Paused: uncertain",

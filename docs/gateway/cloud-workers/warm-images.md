@@ -93,7 +93,10 @@ an older image's demand window.
 Open **Settings → Connections → Cloud workers → Snapshots** to inspect local
 warm-image ownership, grouped by configured profile. Refresh reloads the list.
 The view shows available images, captures in progress, images held by outstanding
-allocations, and captures that need attention. Group headers prefer recorded
+allocations, and captures or checkpoint deletions that need attention. Pending
+deletions show the checkpoint and retry guidance; a retiring current image is
+labeled **Retiring**, while an available successor keeps its status when only
+an older image awaits cleanup. Group headers prefer recorded
 machine facts and fall back to the configured profile's backend, class, and
 operating system. Missing row details are omitted; unknown profile IDs appear
 under **Unlabeled profile**. Legacy allocations appear under

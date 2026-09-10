@@ -112,7 +112,30 @@ describe("Cloud worker snapshots", () => {
       );
       expect(build.textContent).toContain("aws · standard, burst · linux · Warm images on");
       expect(build.querySelectorAll(".settings-row")).toHaveLength(2);
-      expect(build.textContent).toContain("Available");
+      const projectRow = expectDefined(
+        [...build.querySelectorAll(".settings-row")].find((row) =>
+          row.textContent?.includes("github.com/acme/app"),
+        ),
+        "Project snapshot with pending predecessor deletion",
+      );
+      expect(projectRow.textContent).toContain("Available");
+      expect(projectRow.textContent).toContain("Checkpoint deletion pending");
+      expect(projectRow.textContent).toContain("image-app-predecessor");
+      expect(projectRow.textContent).toContain(
+        "Cleanup retries during the next warm-image capture or worker teardown.",
+      );
+      expect(projectRow.querySelector("button")).toBeNull();
+      const retiringRow = expectDefined(
+        [...snapshots.querySelectorAll(".settings-row")].find((row) =>
+          row.textContent?.includes("github.com/acme/retiring"),
+        ),
+        "Snapshot awaiting deletion",
+      );
+      expect(retiringRow.textContent).toContain("Retiring");
+      expect(retiringRow.textContent).toContain("Checkpoint deletion pending");
+      expect(retiringRow.textContent).toContain("image-retiring");
+      expect(retiringRow.textContent).not.toContain("Available");
+      expect(retiringRow.querySelector("button")).toBeNull();
       expect(build.textContent).toContain("Building: creating");
       expect(build.textContent).toContain("Machine image");
       const machineRow = expectDefined(
@@ -149,7 +172,7 @@ describe("Cloud worker snapshots", () => {
       expect(snapshots.textContent).toContain("openclaw doctor --fix");
       expect(
         [...snapshots.querySelectorAll(".settings-summary dd")].map((entry) => entry.textContent),
-      ).toEqual(["1", "1", "1", "2"]);
+      ).toEqual(["2", "1", "1", "4"]);
       expect(
         [...snapshots.querySelectorAll("button")].filter(
           (entry) => entry.textContent?.trim() === "Recover",

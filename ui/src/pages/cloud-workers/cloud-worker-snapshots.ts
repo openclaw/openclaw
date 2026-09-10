@@ -37,6 +37,7 @@ type SnapshotImage = {
   runtimeIdentity?: { nodeBootstrapSha256: string };
   held: boolean;
   allocationCount: number;
+  retirement?: { checkpointId: string };
   capture?: {
     selector: string;
     phase: "scrubbing" | "creating" | "uncertain";
@@ -165,7 +166,12 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
 
   private renderImage(image: SnapshotImage, showMachineFacts: boolean) {
     const phase = image.capture?.phase;
-    const imageState = phase ?? (image.state === "no-image" ? "noImage" : image.state);
+    const retiringCurrentImage = Boolean(
+      image.retirement && image.retirement.checkpointId === image.checkpointId,
+    );
+    const imageState =
+      phase ??
+      (retiringCurrentImage ? "retiring" : image.state === "no-image" ? "noImage" : image.state);
     const runtimeDigest = image.runtimeIdentity?.nodeBootstrapSha256.slice(0, 12);
     const facts = [
       ...(showMachineFacts ? [image.backend, image.machineClass, image.os] : []),
@@ -195,12 +201,21 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       title: image.projectKey
         ? (image.projectLabel ?? t("cloudWorkersPage.snapshots.projectImage"))
         : t("cloudWorkersPage.snapshots.machineImage"),
-      description: facts.filter(Boolean).join(" · "),
+      description: html`
+        ${facts.filter(Boolean).join(" · ")}
+        ${
+          image.retirement
+            ? html`<br />${t("cloudWorkersPage.snapshots.retirementHint", {
+                  checkpoint: image.retirement.checkpointId,
+                })}`
+            : nothing
+        }
+      `,
       stackedOnNarrow: true,
       control: html`
         ${renderSettingsStatus({
           kind:
-            phase === "uncertain"
+            phase === "uncertain" || retiringCurrentImage
               ? "warn"
               : phase
                 ? "accent"
@@ -209,6 +224,14 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
                   : "muted",
           label: t(`cloudWorkersPage.snapshots.${imageState}`),
         })}
+        ${
+          image.retirement
+            ? renderSettingsStatus({
+                kind: "warn",
+                label: t("cloudWorkersPage.snapshots.retirementPending"),
+              })
+            : nothing
+        }
         ${
           phase === "uncertain" && this.canCall("crabbox.images.recover")
             ? html`
@@ -256,7 +279,8 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
         {
           label: t("cloudWorkersPage.snapshots.attention"),
           value: result.images.filter(
-            (image) => image.capture?.phase === "uncertain" || image.capture?.stale,
+            (image) =>
+              image.retirement || image.capture?.phase === "uncertain" || image.capture?.stale,
           ).length,
         },
       ])}
