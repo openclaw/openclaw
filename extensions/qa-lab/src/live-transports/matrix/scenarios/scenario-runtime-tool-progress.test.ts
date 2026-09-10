@@ -43,7 +43,7 @@ describe.skipIf(process.platform === "win32")("Matrix mention progress gate", ()
     await rm(gatePath, { recursive: true });
   }
 
-  it("keeps the compatibility boundary payload-free", async () => {
+  it("verifies existing-state and upgrade compatibility without migration", async () => {
     const gatewayWorkspaceDir = tempDirs.make("matrix-progress-gate-");
     const gatePath = path.join(gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY);
     const gate = await prepareMatrixMentionProgressGate({ gatewayWorkspaceDir });
