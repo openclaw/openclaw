@@ -19,7 +19,9 @@ import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-pro
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveProviderConfigSecretInput } from "../agents/model-auth-provider-config.js";
 import { parseModelCatalogJson } from "../agents/model-catalog-json.js";
+import { withPluginModelCatalogWriteLocks } from "../agents/plugin-model-catalog-lock.js";
 import {
+  readPersistedPluginModelCatalogGeneration,
   isGeneratedPluginModelCatalog,
   loadPersistedPluginModelCatalogsReadOnly,
 } from "../agents/plugin-model-catalog.js";
@@ -35,6 +37,8 @@ type AgentCatalogs = {
   agentDir: string;
   localStore: AuthProfileStore;
   providers: Record<string, unknown>[];
+  generatedProviders: Record<string, unknown>[];
+  rootContents?: string;
 };
 
 function emptyStore(): AuthProfileStore {
@@ -245,11 +249,14 @@ async function persistCredentials(params: {
 function collectAgentCatalogs(agentDir: string, warnings: string[]): AgentCatalogs {
   const localStore = loadPersistedAuthProfileStore(agentDir) ?? emptyStore();
   const providers: Record<string, unknown>[] = [];
+  const generatedProviders: Record<string, unknown>[] = [];
   const rootPath = path.join(agentDir, "models.json");
+  let rootContents: string | undefined;
   try {
-    const root = parseModelCatalogJson(fs.readFileSync(rootPath, "utf8"));
+    rootContents = fs.readFileSync(rootPath, "utf8");
+    const root = parseModelCatalogJson(rootContents);
     if (isRecord(root) && isRecord(root.providers)) {
-      providers.push(root.providers);
+      (isGeneratedPluginModelCatalog(root) ? generatedProviders : providers).push(root.providers);
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -267,7 +274,7 @@ function collectAgentCatalogs(agentDir: string, warnings: string[]): AgentCatalo
           isRecord(parsed) &&
           isRecord(parsed.providers)
         ) {
-          providers.push(parsed.providers);
+          generatedProviders.push(parsed.providers);
         }
       } catch {
         warnings.push(`Could not parse generated model catalog for plugin ${catalog.pluginId}.`);
@@ -278,7 +285,7 @@ function collectAgentCatalogs(agentDir: string, warnings: string[]): AgentCatalo
       `Could not read generated model catalogs for ${shortenHomePath(agentDir)}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  return { agentDir, localStore, providers };
+  return { agentDir, localStore, providers, generatedProviders, rootContents };
 }
 
 /** Copies and verifies catalog credentials before the runtime retires plaintext catalog auth. */
@@ -322,6 +329,44 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       ),
     ),
   );
+  // Generated caches are projections, never recovery authority. In particular,
+  // an older restored cache cannot resurrect a deliberately removed credential.
+  for (const [index, catalog] of catalogs.entries()) {
+    if (
+      catalog.generatedProviders.some(
+        (providers) =>
+          collectCredentials(providers, effectiveStores[index] ?? mainStore, [], params.cfg)
+            .length > 0,
+      )
+    ) {
+      warnings.push(
+        `Generated model credentials for ${shortenHomePath(catalog.agentDir)} have no canonical owner. Sign in or explicitly import the credential; Doctor does not recover authentication from generated caches.`,
+      );
+    }
+  }
+  const generations = new Map(
+    agentDirs.map((dir) => [dir, readPersistedPluginModelCatalogGeneration(dir)]),
+  );
+  const withCurrentCatalogs = async <T>(run: () => Promise<T>): Promise<T> =>
+    await withPluginModelCatalogWriteLocks(agentDirs, async () => {
+      for (const [dir, generation] of generations) {
+        if (readPersistedPluginModelCatalogGeneration(dir) !== generation) {
+          throw new Error(
+            "Model authentication changed during Doctor confirmation. Review the current state and retry.",
+          );
+        }
+      }
+      for (const catalog of catalogs) {
+        if (
+          catalog.rootContents !== undefined &&
+          fs.readFileSync(path.join(catalog.agentDir, "models.json"), "utf8") !==
+            catalog.rootContents
+        ) {
+          throw new Error("Model catalog changed during Doctor confirmation. Review it and retry.");
+        }
+      }
+      return await run();
+    });
   const invalidMainProfiles = findProviderSecretRefProfiles(mainStore, params.cfg);
   const invalidCatalogProfiles = catalogs.map((catalog) =>
     catalog.agentDir === mainAgentDir
@@ -366,12 +411,14 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   let migrated = 0;
   let removed = 0;
   try {
-    const result = await persistCredentials({
-      blockedStores: childStores,
-      credentials: configCredentials,
-      invalidProfiles: invalidMainProfiles,
-      stateDir,
-    });
+    const result = await withCurrentCatalogs(() =>
+      persistCredentials({
+        blockedStores: childStores,
+        credentials: configCredentials,
+        invalidProfiles: invalidMainProfiles,
+        stateDir,
+      }),
+    );
     migrated += result.migrated;
     removed += result.removed;
   } catch (error) {
@@ -383,13 +430,15 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   const migratedMainStore = loadPersistedSharedAuthProfileStore(env) ?? mainStore;
   for (const [index, catalog] of catalogs.entries()) {
     try {
-      const result = await persistCredentials({
-        ...(catalog.agentDir === mainAgentDir ? {} : { agentDir: catalog.agentDir }),
-        credentials: catalogCredentials[index] ?? [],
-        invalidProfiles: invalidCatalogProfiles[index] ?? [],
-        ...(catalog.agentDir === mainAgentDir ? {} : { inheritedStore: migratedMainStore }),
-        stateDir,
-      });
+      const result = await withCurrentCatalogs(() =>
+        persistCredentials({
+          ...(catalog.agentDir === mainAgentDir ? {} : { agentDir: catalog.agentDir }),
+          credentials: catalogCredentials[index] ?? [],
+          invalidProfiles: invalidCatalogProfiles[index] ?? [],
+          ...(catalog.agentDir === mainAgentDir ? {} : { inheritedStore: migratedMainStore }),
+          stateDir,
+        }),
+      );
       migrated += result.migrated;
       removed += result.removed;
     } catch (error) {

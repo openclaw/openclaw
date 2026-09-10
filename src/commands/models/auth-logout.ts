@@ -1,11 +1,16 @@
 /** Command for removing one saved model auth profile. */
+import { isDeepStrictEqual } from "node:util";
 import {
   type AuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   listProfilesForProvider,
   removeAuthProfilesAcrossOwnerStores,
 } from "../../agents/auth-profiles.js";
+import { listCandidateAuthProfileStores } from "../../agents/auth-profiles/candidate-stores.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "../../agents/auth-profiles/store.js";
 import { resolveProviderEntryApiKeyProfileReference } from "../../agents/model-auth-provider-config.js";
+import { withPluginModelCatalogWriteLocks } from "../../agents/plugin-model-catalog-lock.js";
+import { removePersistedPluginModelCatalogCredentials } from "../../agents/plugin-model-catalog.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -60,7 +65,9 @@ export async function modelsAuthLogoutCommand(
   // External CLI overlays (Claude/Codex CLI) are not ours to delete, so the
   // removable set is exactly the persisted store.
   const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
-  const credential = store.profiles[profileId];
+  const credential = store.profiles[profileId]
+    ? structuredClone(store.profiles[profileId])
+    : undefined;
   if (!credential) {
     throw new Error(
       `Auth profile "${profileId}" not found for agent "${agentId}". Run ${formatCliCommand(`openclaw models auth list --agent ${agentId}`)} to see saved profile ids.`,
@@ -74,6 +81,28 @@ export async function modelsAuthLogoutCommand(
     );
   }
 
+  const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
+  const ownerCredential = structuredClone(
+    ensureAuthProfileStoreWithoutExternalProfiles(ownerAgentDir).profiles[profileId],
+  );
+  if (!ownerCredential) {
+    throw new Error("The selected auth profile changed during logout. Review it and retry.");
+  }
+  const assertSelection = () => {
+    if (
+      !isDeepStrictEqual(
+        ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
+        credential,
+      ) ||
+      resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId }) !== ownerAgentDir ||
+      !isDeepStrictEqual(
+        ensureAuthProfileStoreWithoutExternalProfiles(ownerAgentDir).profiles[profileId],
+        ownerCredential,
+      )
+    ) {
+      throw new Error("The selected auth profile changed during logout. Review it and retry.");
+    }
+  };
   const description = `${profileId} (${credential.provider}/${credential.type})`;
   if (!opts.yes) {
     if (!process.stdin.isTTY) {
@@ -91,30 +120,76 @@ export async function modelsAuthLogoutCommand(
     }
   }
 
-  // Config first: `auth.profiles`/`auth.order` are a separate surface from the
-  // store, and a failed config write after the credential is gone would leave a
-  // dangling reference that logout can no longer repair (the profile lookup
-  // above would then fail). This order makes a partial failure retryable.
-  if (configReferencesAuthProfile(cfg, profileId)) {
-    await updateConfig((current) => removeAuthProfileConfig(current, profileId));
-    logConfigUpdated(runtime);
-  }
+  const catalogAgentDirs = new Set(
+    (await listCandidateAuthProfileStores({ cfg })).map((candidate) => candidate.agentDir),
+  );
+  catalogAgentDirs.add(agentDir);
 
-  const removed = await removeAuthProfilesAcrossOwnerStores({
-    cfg,
-    agentDir,
-    profileIds: [profileId],
-  });
-  if (!removed) {
-    throw new Error(
-      `Failed to remove auth profile "${profileId}"; the auth store lock may be busy. Wait a moment and retry.`,
-    );
-  }
+  const invalidatedCatalogEntries = await withPluginModelCatalogWriteLocks(
+    [...catalogAgentDirs],
+    async () => {
+      assertSelection();
+      // Keep config-before-deletion retryability without changing a replacement
+      // profile's routing while confirmation or catalog admission was pending.
+      if (configReferencesAuthProfile(cfg, profileId)) {
+        await updateConfig((current) => {
+          assertSelection();
+          return removeAuthProfileConfig(current, profileId);
+        });
+        logConfigUpdated(runtime);
+      }
+      assertSelection();
+      const profileReferenceAgentDirs = [...catalogAgentDirs].filter(
+        (candidateDir) =>
+          resolvePersistedAuthProfileOwnerAgentDir({ agentDir: candidateDir, profileId }) ===
+          ownerAgentDir,
+      );
+      const retiredCredentials = [credential, ownerCredential];
+      for (const candidateDir of profileReferenceAgentDirs) {
+        const copy =
+          ensureAuthProfileStoreWithoutExternalProfiles(candidateDir).profiles[profileId];
+        if (copy && !retiredCredentials.some((retired) => isDeepStrictEqual(retired, copy))) {
+          retiredCredentials.push(structuredClone(copy));
+        }
+      }
+      // Remove only the selected credential's generated copies. Survivor inventory
+      // and credentials owned by other agents do not become a provider-wide ban.
+      let changed = 0;
+      for (const retired of retiredCredentials.filter(
+        (value, index) =>
+          retiredCredentials.findIndex((other) => isDeepStrictEqual(other, value)) === index,
+      )) {
+        changed += removePersistedPluginModelCatalogCredentials({
+          agentDirs: [...catalogAgentDirs],
+          credential: retired,
+          profileId,
+          profileReferenceAgentDirs,
+          lockAlreadyHeld: true,
+        });
+      }
+      const removed = await removeAuthProfilesAcrossOwnerStores({
+        cfg,
+        agentDir,
+        profileIds: [profileId],
+        expectedSelection: { profileId, credential, ownerCredential, ownerAgentDir },
+      });
+      if (!removed) {
+        throw new Error(
+          `Failed to remove auth profile "${profileId}"; the auth store lock may be busy. Wait a moment and retry.`,
+        );
+      }
+      return changed;
+    },
+  );
 
   await refreshRunningGatewayAuthState(agentId, "logout", runtime);
-
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Removed auth profile: ${description}`);
+  if (invalidatedCatalogEntries > 0) {
+    runtime.log(
+      `Removed retired authentication from ${invalidatedCatalogEntries} cached model catalog entr${invalidatedCatalogEntries === 1 ? "y" : "ies"}.`,
+    );
+  }
   const remaining = listProfilesForProvider(store, credential.provider).filter(
     (id) => id !== profileId,
   );

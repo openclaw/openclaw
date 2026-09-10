@@ -31,5 +31,6 @@ export const STATE_SECRET_CONFIG_STATE_KEY_PREFIXES = [
 export const AGENT_SECRET_TABLE_NAMES = [
   "auth_profile_state",
   "auth_profile_store",
+  "cache_entries",
   "session_suggestions",
 ] as const;

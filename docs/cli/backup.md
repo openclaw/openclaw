@@ -228,6 +228,7 @@ It omits these per-agent tables:
 
 - `auth_profile_state`
 - `auth_profile_store`
+- `cache_entries`
 - `session_suggestions`
 
 The backup manifest records omitted tables in `excludedTables` and omitted

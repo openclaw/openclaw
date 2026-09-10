@@ -22,6 +22,9 @@ export async function tryImportProviderCredential(params: {
   runtime: RuntimeEnv;
   signal?: AbortSignal;
   beforePersistentEffect?: () => void | Promise<void>;
+  withPersistentEffect?: (
+    apply: () => Promise<ImportedProviderCredential>,
+  ) => Promise<ImportedProviderCredential>;
 }): Promise<ImportedProviderCredential | { unavailableReason: string } | undefined> {
   const spec = params.method.credentialImport;
   if (!spec) {
@@ -79,28 +82,33 @@ export async function tryImportProviderCredential(params: {
       params.signal?.throwIfAborted();
       await params.beforePersistentEffect?.();
       params.signal?.throwIfAborted();
-      const result = await owner.apply(context, applyMigrationItemSelection(plan, [spec.itemId]));
-      const imported = result.items.find(
-        (item) => item.id === spec.itemId && item.kind === "auth" && item.status === "migrated",
-      );
-      const profileId = imported?.details?.profileId;
-      if (
-        typeof profileId !== "string" ||
-        !profileId.trim() ||
-        typeof imported?.details?.provider !== "string" ||
-        normalizeProviderId(imported.details.provider) !== provider ||
-        imported.details.credentialKind !== spec.credentialKind
-      ) {
-        throw new Error(
-          "The existing provider credential changed during import. Start the sign-in again.",
+      const apply = async (): Promise<ImportedProviderCredential> => {
+        params.signal?.throwIfAborted();
+        const result = await owner.apply(context, applyMigrationItemSelection(plan, [spec.itemId]));
+        params.signal?.throwIfAborted();
+        const imported = result.items.find(
+          (item) => item.id === spec.itemId && item.kind === "auth" && item.status === "migrated",
         );
-      }
-      return {
-        profileId: profileId.trim(),
-        provider,
-        mode: spec.credentialKind,
-        configUpdated: imported.details.configUpdated === true,
+        const profileId = imported?.details?.profileId;
+        if (
+          typeof profileId !== "string" ||
+          !profileId.trim() ||
+          typeof imported?.details?.provider !== "string" ||
+          normalizeProviderId(imported.details.provider) !== provider ||
+          imported.details.credentialKind !== spec.credentialKind
+        ) {
+          throw new Error(
+            "The existing provider credential changed during import. Start the sign-in again.",
+          );
+        }
+        return {
+          profileId: profileId.trim(),
+          provider,
+          mode: spec.credentialKind,
+          configUpdated: imported.details.configUpdated === true,
+        };
       };
+      return params.withPersistentEffect ? await params.withPersistentEffect(apply) : await apply();
     },
   );
 }

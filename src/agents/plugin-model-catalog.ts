@@ -2,17 +2,15 @@
  * Generated plugin model catalog discovery.
  *
  * The existing agent SQLite cache lets provider discovery reuse plugin-owned
- * catalogs without loading runtimes or creating parallel state files.
+ * catalogs without loading runtimes or creating parallel state files. Legacy
+ * sidecars remain supported for migration and logout cleanup.
  */
 import { randomUUID } from "node:crypto";
 import { linkSync, readFileSync, readdirSync, renameSync, unlinkSync, type Dirent } from "node:fs";
 import path from "node:path";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
@@ -21,15 +19,33 @@ import {
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
 import {
+  tryWithPluginModelCatalogWriteLockSync,
+  withPluginModelCatalogWriteLockSync,
+} from "./plugin-model-catalog-lock.js";
+import {
+  PLUGIN_MODEL_CATALOG_GENERATION_SCOPE,
+  retireCommittedPluginModelCatalogMigration,
+} from "./plugin-model-catalog-logout.js";
+import { decodePluginModelCatalogRelativePathPluginId } from "./plugin-model-catalog-ownership.js";
+import {
   isGeneratedPluginModelCatalog,
   repairPluginModelCatalogTransportMetadata,
 } from "./plugin-model-catalog-repair.js";
 
 export { isGeneratedPluginModelCatalog };
 export { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog-repair.js";
+export {
+  readPersistedPluginModelCatalogGeneration,
+  removePersistedPluginModelCatalogCredentials,
+} from "./plugin-model-catalog-logout.js";
+export {
+  decodePluginModelCatalogRelativePathPluginId,
+  encodePluginModelCatalogRelativePath,
+  filterGeneratedPluginModelCatalogProviders,
+  resolvePluginModelCatalogOwnerPluginId,
+} from "./plugin-model-catalog-ownership.js";
+export type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog-ownership.js";
 
-// The in-memory planning key retains the established owner encoding; generated
-// payloads themselves are persisted only in the agent SQLite cache.
 const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 const PLUGIN_MODEL_CATALOG_CACHE_SCOPE = "plugin-model-catalog-v1";
 const PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE = "plugin-model-catalog-migration-v1";
@@ -153,11 +169,9 @@ function repairPersistedPluginModelCatalogs(params: {
       `Repaired generated model catalog for plugin ${repair.pluginId}: removed ${repair.removedModelCount} model row(s) without provider or model api metadata.`,
     );
   }
-  // A concurrent refresh can win the compare-and-set. The caller still needs
-  // to reread so this stale pre-transaction snapshot never reaches consumers.
+  // A concurrent refresh can win the compare-and-set; reread so this stale pre-transaction snapshot never reaches consumers.
   return true;
 }
-
 function readPersistedPluginModelCatalogMigrationPayloads(
   agentDir: string,
 ): ReadonlyMap<string, string> {
@@ -173,6 +187,8 @@ function replacePersistedPluginModelCatalogEntries(params: {
   planned: ReadonlyMap<string, string>;
   migrationPayloads?: ReadonlyMap<string, string>;
   deleteMissing?: boolean;
+  lockAlreadyHeld?: boolean;
+  catalogGeneration?: string;
 }): boolean {
   if (
     params.planned.size === 0 &&
@@ -182,93 +198,119 @@ function replacePersistedPluginModelCatalogEntries(params: {
     return false;
   }
   const updatedAt = Date.now();
-  return runOpenClawAgentWriteTransaction(
-    (database) => {
-      const kysely = getNodeSqliteKysely<PluginModelCatalogDatabase>(database.db);
-      const existing = executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("cache_entries")
-          .select(["key", "value_json"])
-          .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE),
-      ).rows;
-      const existingByPluginId = new Map(existing.map((row) => [row.key, row.value_json]));
-      const existingMigrationPayloads = params.migrationPayloads
-        ? new Map(
-            executeSqliteQuerySync(
-              database.db,
-              kysely
-                .selectFrom("cache_entries")
-                .select(["key", "value_json"])
-                .where("scope", "=", PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE),
-            ).rows.map((row) => [row.key, row.value_json]),
-          )
-        : undefined;
-      const upsertCacheEntry = (scope: string, pluginId: string, contents: string): void => {
-        executeSqliteQuerySync(
+  const write = () =>
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        const kysely = getNodeSqliteKysely<PluginModelCatalogDatabase>(database.db);
+        if (params.catalogGeneration) {
+          const currentGeneration = executeSqliteQuerySync(
+            database.db,
+            kysely
+              .selectFrom("cache_entries")
+              .select("value_json")
+              .where("scope", "=", PLUGIN_MODEL_CATALOG_GENERATION_SCOPE)
+              .where("key", "=", "catalog"),
+          ).rows[0]?.value_json;
+          let parsedGeneration: string | undefined;
+          try {
+            const parsed = currentGeneration ? JSON.parse(currentGeneration) : undefined;
+            parsedGeneration =
+              isRecord(parsed) && typeof parsed.generation === "string"
+                ? parsed.generation
+                : undefined;
+          } catch {
+            parsedGeneration = undefined;
+          }
+          if ((parsedGeneration ?? "initial") !== params.catalogGeneration) {
+            return false;
+          }
+        }
+        const existing = executeSqliteQuerySync(
           database.db,
           kysely
-            .insertInto("cache_entries")
-            .values({
-              scope,
-              key: pluginId,
-              value_json: contents,
-              blob: null,
-              expires_at: null,
-              updated_at: updatedAt,
-            })
-            .onConflict((conflict) =>
-              conflict.columns(["scope", "key"]).doUpdateSet({
+            .selectFrom("cache_entries")
+            .select(["key", "value_json"])
+            .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE),
+        ).rows;
+        const existingByPluginId = new Map(existing.map((row) => [row.key, row.value_json]));
+        const existingMigrationPayloads = params.migrationPayloads
+          ? new Map(
+              executeSqliteQuerySync(
+                database.db,
+                kysely
+                  .selectFrom("cache_entries")
+                  .select(["key", "value_json"])
+                  .where("scope", "=", PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE),
+              ).rows.map((row) => [row.key, row.value_json]),
+            )
+          : undefined;
+        const upsertCacheEntry = (scope: string, pluginId: string, contents: string): void => {
+          executeSqliteQuerySync(
+            database.db,
+            kysely
+              .insertInto("cache_entries")
+              .values({
+                scope,
+                key: pluginId,
                 value_json: contents,
                 blob: null,
                 expires_at: null,
                 updated_at: updatedAt,
-              }),
-            ),
-        );
-      };
-      let changed = false;
-      for (const [pluginId, contents] of params.planned) {
-        const migrationPayload = params.migrationPayloads?.get(pluginId);
-        if (migrationPayload && existingMigrationPayloads?.get(pluginId) === migrationPayload) {
-          continue;
-        }
-        if (existingByPluginId.get(pluginId) !== contents) {
-          upsertCacheEntry(PLUGIN_MODEL_CATALOG_CACHE_SCOPE, pluginId, contents);
-          changed = true;
-        }
-        if (migrationPayload) {
-          upsertCacheEntry(PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE, pluginId, migrationPayload);
-          changed = true;
-        }
-      }
-      if (params.deleteMissing !== false) {
-        for (const pluginId of existingByPluginId.keys()) {
-          if (params.planned.has(pluginId)) {
+              })
+              .onConflict((conflict) =>
+                conflict.columns(["scope", "key"]).doUpdateSet({
+                  value_json: contents,
+                  blob: null,
+                  expires_at: null,
+                  updated_at: updatedAt,
+                }),
+              ),
+          );
+        };
+        let changed = false;
+        for (const [pluginId, contents] of params.planned) {
+          const migrationPayload = params.migrationPayloads?.get(pluginId);
+          if (migrationPayload && existingMigrationPayloads?.get(pluginId) === migrationPayload) {
             continue;
           }
-          executeSqliteQuerySync(
-            database.db,
-            kysely
-              .deleteFrom("cache_entries")
-              .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE)
-              .where("key", "=", pluginId),
-          );
-          changed = true;
+          if (existingByPluginId.get(pluginId) !== contents) {
+            upsertCacheEntry(PLUGIN_MODEL_CATALOG_CACHE_SCOPE, pluginId, contents);
+            changed = true;
+          }
+          if (migrationPayload) {
+            upsertCacheEntry(PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE, pluginId, migrationPayload);
+            changed = true;
+          }
         }
-      }
-      return changed;
-    },
-    pluginModelCatalogDatabaseOptions(params.agentDir),
-    {
-      operationLabel:
-        params.deleteMissing === false
-          ? "plugin-model-catalog.migrate"
-          : "plugin-model-catalog.replace",
-    },
-  );
+        if (params.deleteMissing !== false) {
+          for (const pluginId of existingByPluginId.keys()) {
+            if (params.planned.has(pluginId)) {
+              continue;
+            }
+            executeSqliteQuerySync(
+              database.db,
+              kysely
+                .deleteFrom("cache_entries")
+                .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE)
+                .where("key", "=", pluginId),
+            );
+            changed = true;
+          }
+        }
+        return changed;
+      },
+      pluginModelCatalogDatabaseOptions(params.agentDir),
+      {
+        operationLabel:
+          params.deleteMissing === false
+            ? "plugin-model-catalog.migrate"
+            : "plugin-model-catalog.replace",
+      },
+    );
+  return params.lockAlreadyHeld
+    ? write()
+    : withPluginModelCatalogWriteLockSync(params.agentDir, write);
 }
-
 type PluginModelCatalogMigrationResult = {
   detected: number;
   migrated: number;
@@ -319,46 +361,6 @@ function hasCommittedMigratedPluginModelCatalog(
   );
 }
 
-function retireCommittedPluginModelCatalogMigration(params: {
-  agentDir: string;
-  pluginId: string;
-  contents: string;
-}): boolean {
-  return runOpenClawAgentWriteTransaction(
-    (database) => {
-      const kysely = getNodeSqliteKysely<PluginModelCatalogDatabase>(database.db);
-      const committed = executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("cache_entries")
-          .select(["scope", "value_json"])
-          .where("key", "=", params.pluginId)
-          .where("scope", "in", [
-            PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
-            PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
-          ]),
-      ).rows;
-      const contentsByScope = new Map(committed.map((row) => [row.scope, row.value_json]));
-      if (
-        contentsByScope.get(PLUGIN_MODEL_CATALOG_CACHE_SCOPE) !== params.contents ||
-        contentsByScope.get(PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE) !== params.contents
-      ) {
-        return false;
-      }
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .deleteFrom("cache_entries")
-          .where("scope", "=", PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE)
-          .where("key", "=", params.pluginId),
-      );
-      return true;
-    },
-    pluginModelCatalogDatabaseOptions(params.agentDir),
-    { operationLabel: "plugin-model-catalog.retire-migration" },
-  );
-}
-
 function retireOrphanedPluginModelCatalogMigrations(params: {
   agentDir: string;
   protectedPluginIds?: ReadonlySet<string>;
@@ -384,8 +386,14 @@ export function migrateLegacyPluginModelCatalogs(params: {
   agentDir: string;
   expectedContents?: ReadonlyMap<string, string>;
   beforeLegacyCatalogClaim?: (pathname: string) => void;
+  lockAlreadyHeld?: boolean;
 }): PluginModelCatalogMigrationResult {
   const agentDir = path.resolve(params.agentDir);
+  if (!params.lockAlreadyHeld) {
+    return withPluginModelCatalogWriteLockSync(agentDir, () =>
+      migrateLegacyPluginModelCatalogs({ ...params, agentDir, lockAlreadyHeld: true }),
+    );
+  }
   const pluginsDir = path.join(agentDir, "plugins");
   const warnings: string[] = [];
   let pluginDirs: Dirent[];
@@ -570,6 +578,7 @@ export function migrateLegacyPluginModelCatalogs(params: {
               planned: migrationPayloads,
               migrationPayloads,
               deleteMissing: false,
+              lockAlreadyHeld: true,
             });
           }
         } catch {
@@ -592,6 +601,7 @@ export function migrateLegacyPluginModelCatalogs(params: {
         planned: migrationPayloads,
         migrationPayloads,
         deleteMissing: false,
+        lockAlreadyHeld: true,
       });
       if (!hasCommittedMigratedPluginModelCatalog(agentDir, catalog.pluginId, catalog.contents)) {
         throw new Error("committed provider catalog changed before migration could remove it");
@@ -626,8 +636,24 @@ export function migrateLegacyPluginModelCatalogs(params: {
 /** Reads available provider catalogs without discarding legacy migration diagnostics. */
 export function loadPersistedPluginModelCatalogs(
   agentDir: string,
+  options: { lockAlreadyHeld?: boolean } = {},
 ): PersistedPluginModelCatalogLoadResult {
-  const migration = migrateLegacyPluginModelCatalogs({ agentDir });
+  if (!options.lockAlreadyHeld) {
+    const loaded = tryWithPluginModelCatalogWriteLockSync(agentDir, () =>
+      loadPersistedPluginModelCatalogs(agentDir, { lockAlreadyHeld: true }),
+    );
+    if (loaded.acquired) {
+      return loaded.value;
+    }
+    // A synchronous registry cannot wait for an async holder on its own event
+    // loop. SQLite supplies the last committed inventory; defer every migration
+    // and repair write until the next admitted preparation/read.
+    return { catalogs: readPersistedPluginModelCatalogs(agentDir), warnings: [] };
+  }
+  const migration = migrateLegacyPluginModelCatalogs({
+    agentDir,
+    lockAlreadyHeld: options.lockAlreadyHeld,
+  });
   let catalogs = readPersistedPluginModelCatalogs(agentDir);
   if (
     migration.warnings.length === 0 &&
@@ -645,6 +671,8 @@ export function loadPersistedPluginModelCatalogs(
 export function replacePersistedPluginModelCatalogs(params: {
   agentDir: string;
   pluginCatalogWrites: Readonly<Record<string, string>>;
+  lockAlreadyHeld?: boolean;
+  catalogGeneration?: string;
 }): boolean {
   const planned = new Map<string, string>();
   for (const [relativePath, contents] of Object.entries(params.pluginCatalogWrites)) {
@@ -654,128 +682,10 @@ export function replacePersistedPluginModelCatalogs(params: {
     }
     planned.set(pluginId, repairPluginModelCatalogTransportMetadata(contents).contents);
   }
-  return replacePersistedPluginModelCatalogEntries({ agentDir: params.agentDir, planned });
-}
-
-export type PluginModelCatalogMetadataSnapshot = Pick<PluginMetadataSnapshot, "owners"> & {
-  manifestRegistry?: Pick<PluginMetadataSnapshot["manifestRegistry"], "plugins">;
-  index?: {
-    plugins: ReadonlyArray<{
-      enabled: boolean;
-      pluginId: string;
-    }>;
-  };
-  normalizePluginId?: (pluginId: string) => string;
-};
-
-/** Encodes the profile-relative path for a plugin-owned generated model catalog. */
-export function encodePluginModelCatalogRelativePath(pluginId: string): string {
-  return `plugins/${encodeURIComponent(pluginId)}/${PLUGIN_MODEL_CATALOG_FILE}`;
-}
-
-/** Returns true only for canonical profile-relative generated catalog paths. */
-function isPluginModelCatalogRelativePath(relativePath: string): boolean {
-  const parts = relativePath.split(/[\\/]/);
-  return (
-    !path.isAbsolute(relativePath) &&
-    parts.length === 3 &&
-    parts[0] === "plugins" &&
-    parts[1] !== "" &&
-    parts[1] !== "." &&
-    parts[1] !== ".." &&
-    parts[2] === PLUGIN_MODEL_CATALOG_FILE
-  );
-}
-
-/** Decodes the plugin id from a canonical generated catalog path. */
-export function decodePluginModelCatalogRelativePathPluginId(
-  relativePath: string,
-): string | undefined {
-  if (!isPluginModelCatalogRelativePath(relativePath)) {
-    return undefined;
-  }
-  const encodedPluginId = relativePath.split(/[\\/]/)[1];
-  if (!encodedPluginId) {
-    return undefined;
-  }
-  try {
-    return decodeURIComponent(encodedPluginId);
-  } catch {
-    return undefined;
-  }
-}
-
-/** Resolves the sole enabled plugin that owns a provider's model catalog. */
-export function resolvePluginModelCatalogOwnerPluginId(params: {
-  providerId: string;
-  pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
-}): string | undefined {
-  const snapshot = params.pluginMetadataSnapshot;
-  const owners = snapshot?.owners;
-  if (!owners) {
-    return undefined;
-  }
-  const providerId = normalizeProviderId(params.providerId);
-  const candidates = [
-    owners.modelCatalogProviders.get(providerId),
-    owners.providers.get(providerId),
-    owners.setupProviders.get(providerId),
-  ].find((entry): entry is readonly string[] => Array.isArray(entry) && entry.length > 0);
-  const pluginId = candidates?.length === 1 ? candidates[0] : undefined;
-  if (!pluginId) {
-    return undefined;
-  }
-  if (!snapshot?.index) {
-    return pluginId;
-  }
-  const normalizedPluginId = snapshot.normalizePluginId?.(pluginId) ?? pluginId;
-  return snapshot.index.plugins.some(
-    (plugin) => plugin.pluginId === normalizedPluginId && plugin.enabled,
-  )
-    ? normalizedPluginId
-    : undefined;
-}
-
-/** Keeps generated catalog providers only when the catalog plugin still owns them. */
-export function filterGeneratedPluginModelCatalogProviders<T>(params: {
-  catalogPluginId?: string;
-  isProviderAvailable?: (providerId: string) => boolean;
-  config?: OpenClawConfig;
-  parsedCatalog?: unknown;
-  pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
-  providers: Record<string, T>;
-}): Record<string, T> {
-  if (
-    !params.catalogPluginId ||
-    !params.pluginMetadataSnapshot ||
-    (params.parsedCatalog !== undefined && !isGeneratedPluginModelCatalog(params.parsedCatalog))
-  ) {
-    return {};
-  }
-  const plugin = params.pluginMetadataSnapshot.manifestRegistry?.plugins.find(
-    (candidate) => candidate.id === params.catalogPluginId,
-  );
-  const providers = Object.fromEntries(
-    Object.entries(params.providers).filter(
-      ([providerId]) =>
-        resolvePluginModelCatalogOwnerPluginId({
-          providerId,
-          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-        }) === params.catalogPluginId &&
-        isProviderCatalogSourceAllowed({
-          provider: providerId,
-          config: params.config,
-          plugin,
-        }),
-    ),
-  );
-  // Captured auth, not the retained catalog's credentials, admits deferred inventory.
-  if (
-    plugin?.activation?.onStartup === false &&
-    params.isProviderAvailable &&
-    !Object.keys(providers).some(params.isProviderAvailable)
-  ) {
-    return {};
-  }
-  return providers;
+  return replacePersistedPluginModelCatalogEntries({
+    agentDir: params.agentDir,
+    planned,
+    lockAlreadyHeld: params.lockAlreadyHeld,
+    catalogGeneration: params.catalogGeneration,
+  });
 }

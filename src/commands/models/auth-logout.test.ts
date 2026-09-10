@@ -5,9 +5,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
+  listCandidateAuthProfileStores: vi.fn(async () => [] as Array<{ agentDir: string }>),
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   listProfilesForProvider: vi.fn(() => [] as string[]),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
+  removePersistedPluginModelCatalogCredentials: vi.fn(() => 0),
+  withPluginModelCatalogWriteLocks: vi.fn(
+    async (_agentDirs: string[], run: () => Promise<unknown>) => await run(),
+  ),
   loadModelsConfig: vi.fn(),
   updateConfig: vi.fn(),
   logConfigUpdated: vi.fn(),
@@ -20,6 +25,18 @@ vi.mock("../../agents/auth-profiles.js", () => ({
     mocks.ensureAuthProfileStoreWithoutExternalProfiles,
   listProfilesForProvider: mocks.listProfilesForProvider,
   removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
+}));
+
+vi.mock("../../agents/auth-profiles/candidate-stores.js", () => ({
+  listCandidateAuthProfileStores: mocks.listCandidateAuthProfileStores,
+}));
+
+vi.mock("../../agents/plugin-model-catalog.js", () => ({
+  removePersistedPluginModelCatalogCredentials: mocks.removePersistedPluginModelCatalogCredentials,
+}));
+
+vi.mock("../../agents/plugin-model-catalog-lock.js", () => ({
+  withPluginModelCatalogWriteLocks: mocks.withPluginModelCatalogWriteLocks,
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -108,7 +125,9 @@ async function withStdinIsTty<T>(isTTY: boolean, run: () => Promise<T>): Promise
 describe("models auth logout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.listCandidateAuthProfileStores.mockResolvedValue([]);
     mocks.removeAuthProfilesAcrossOwnerStores.mockResolvedValue(true);
+    mocks.removePersistedPluginModelCatalogCredentials.mockReturnValue(0);
     mocks.confirm.mockResolvedValue(true);
     mocks.listProfilesForProvider.mockReturnValue([]);
     mocks.updateConfig.mockResolvedValue({} as OpenClawConfig);
@@ -126,7 +145,16 @@ describe("models auth logout", () => {
       agentDir: "/tmp/agent-poe",
       cfg: {},
       profileIds: ["openai:manual"],
+      expectedSelection: expect.objectContaining({ profileId: "openai:manual" }),
     });
+    expect(mocks.removePersistedPluginModelCatalogCredentials).toHaveBeenCalledWith({
+      agentDirs: ["/tmp/agent-poe"],
+      credential: expect.objectContaining({ provider: "openai" }),
+      profileId: "openai:manual",
+      profileReferenceAgentDirs: expect.any(Array),
+      lockAlreadyHeld: true,
+    });
+    expect(mocks.removePersistedPluginModelCatalogCredentials).toHaveBeenCalledTimes(1);
     expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("poe", "logout", runtime);
     expect(runtime.logs).toContain("Removed auth profile: openai:manual (openai/oauth)");
     expect(runtime.logs.some((line) => line.includes("No auth profiles remain for openai"))).toBe(
@@ -201,10 +229,74 @@ describe("models auth logout", () => {
       calls.push("store");
       return true;
     });
+    mocks.removePersistedPluginModelCatalogCredentials.mockImplementation(() => {
+      calls.push("catalog");
+      return 0;
+    });
 
     await modelsAuthLogoutCommand({ profileId: "openai:manual", yes: true }, createRuntime());
 
-    expect(calls).toEqual(["config", "store"]);
+    expect(calls).toEqual(["config", "catalog", "store"]);
+  });
+
+  it("does not change replacement-profile config after stale confirmation", async () => {
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: { "openai:manual": { provider: "openai", mode: "oauth" } },
+        order: { openai: ["openai:manual"] },
+      },
+    };
+    const originalConfig = structuredClone(cfg);
+    mocks.loadModelsConfig.mockResolvedValue(cfg);
+    mocks.confirm.mockImplementationOnce(async () => {
+      const replacement = storeWith(["openai:manual"]);
+      replacement.profiles["openai:manual"] = {
+        type: "oauth",
+        provider: "openai",
+        access: "synthetic-replacement",
+        refresh: "synthetic-new-generation",
+        expires: Date.now() + 60_000,
+      };
+      mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue(replacement);
+      return true;
+    });
+    await withStdinIsTty(true, async () => {
+      await expect(
+        modelsAuthLogoutCommand({ profileId: "openai:manual" }, createRuntime()),
+      ).rejects.toThrow("changed during logout");
+    });
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
+    expect(mocks.removePersistedPluginModelCatalogCredentials).not.toHaveBeenCalled();
+    expect(cfg).toEqual(originalConfig);
+  });
+
+  it("invalidates generated catalogs in every candidate agent store", async () => {
+    mocks.listCandidateAuthProfileStores.mockResolvedValue([
+      { agentDir: "/tmp/agent-main" },
+      { agentDir: "/tmp/agent-other" },
+    ]);
+
+    await modelsAuthLogoutCommand({ profileId: "openai:manual", yes: true }, createRuntime());
+
+    expect(mocks.removePersistedPluginModelCatalogCredentials).toHaveBeenLastCalledWith({
+      agentDirs: ["/tmp/agent-main", "/tmp/agent-other"],
+      credential: expect.objectContaining({ provider: "openai" }),
+      profileId: "openai:manual",
+      profileReferenceAgentDirs: expect.any(Array),
+      lockAlreadyHeld: true,
+    });
+  });
+
+  it("keeps the profile when catalog invalidation fails", async () => {
+    mocks.removePersistedPluginModelCatalogCredentials.mockImplementation(() => {
+      throw new Error("catalog cache is locked");
+    });
+
+    await expect(
+      modelsAuthLogoutCommand({ profileId: "openai:manual", yes: true }, createRuntime()),
+    ).rejects.toThrow("catalog cache is locked");
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
   });
 
   it.each([

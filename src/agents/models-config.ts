@@ -30,17 +30,15 @@ import {
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import {
-  MODELS_JSON_STATE,
-  type ModelsJsonReadyResult,
-  type ModelsJsonReadyState,
-} from "./models-config-state.js";
+import { MODELS_JSON_STATE, type ModelsJsonReadyResult } from "./models-config-state.js";
 import { planOpenClawModelsJson, type PreparedModelsConfigContext } from "./models-config.plan.js";
+import { withPluginModelCatalogWriteLock } from "./plugin-model-catalog-lock.js";
 import { repairPluginModelCatalogTransportMetadata } from "./plugin-model-catalog-repair.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
   loadPersistedPluginModelCatalogs,
   loadPersistedPluginModelCatalogsReadOnly,
+  readPersistedPluginModelCatalogGeneration,
   replacePersistedPluginModelCatalogs,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
@@ -76,8 +74,8 @@ type PlannedOpenClawModelsJsonSource = Readonly<{
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
 }>;
 
-function listPreparedPluginModelCatalogs(agentDir: string) {
-  const { catalogs, warnings } = loadPersistedPluginModelCatalogs(agentDir);
+function listPreparedPluginModelCatalogs(agentDir: string, lockAlreadyHeld = false) {
+  const { catalogs, warnings } = loadPersistedPluginModelCatalogs(agentDir, { lockAlreadyHeld });
   if (warnings.length > 0) {
     throw new Error(
       `Cannot safely prepare provider models until legacy catalog migration succeeds: ${warnings.join("; ")}. Run openclaw doctor --fix.`,
@@ -101,7 +99,7 @@ async function buildModelsJsonFingerprint(context: PreparedModelsConfigContext):
   const authProfilesWalMtimeMs = await readFileMtimeMs(`${authProfilesSqlitePath}-wal`);
   const modelsFileMtimeMs = await readFileMtimeMs(path.join(context.agentDir, "models.json"));
   const pluginCatalogFingerprint = createHash("sha256")
-    .update(stableStringify(listPreparedPluginModelCatalogs(context.agentDir)))
+    .update(stableStringify(listPreparedPluginModelCatalogs(context.agentDir, true)))
     .digest("base64url");
   const pluginMetadataSnapshotIndexFingerprint = context.pluginMetadataSnapshot
     ? resolveInstalledManifestRegistryIndexFingerprint(context.pluginMetadataSnapshot.index)
@@ -184,6 +182,8 @@ function materializePlannedPluginCatalogs(
 function writePluginCatalogsForModelsJson(params: {
   agentDir: string;
   pluginCatalogWrites?: Record<string, string>;
+  lockAlreadyHeld?: boolean;
+  catalogGeneration?: string;
 }): boolean {
   if (!params.pluginCatalogWrites) {
     return false;
@@ -191,6 +191,8 @@ function writePluginCatalogsForModelsJson(params: {
   return replacePersistedPluginModelCatalogs({
     agentDir: params.agentDir,
     pluginCatalogWrites: params.pluginCatalogWrites,
+    lockAlreadyHeld: params.lockAlreadyHeld,
+    catalogGeneration: params.catalogGeneration,
   });
 }
 
@@ -293,83 +295,71 @@ async function prepareOpenClawModelsJsonSource(
   const context = prepareModelsConfigContext(config, agentDirOverride, options);
   const { agentDir, workspaceDir } = context;
   const targetPath = path.join(agentDir, "models.json");
-  const fingerprint = await buildModelsJsonFingerprint(context);
-  const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
-  const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
-  if (cached && !options.onProviderCatalogOutcome) {
-    const settled = await cached;
-    await ensureModelsFileModeForModelsJson(targetPath);
-    return {
-      ...settled.result,
-      fingerprint: settled.fingerprint,
-      ...(workspaceDir ? { workspaceDir } : {}),
-    };
-  }
+  // Fingerprinting can migrate legacy catalogs. Queue it with planning and
+  // hold the async catalog lock so no synchronous reader waits on a writer
+  // whose continuation needs this same event loop.
+  return await withModelsJsonWriteLock(targetPath, () =>
+    withPluginModelCatalogWriteLock(agentDir, async () => {
+      const fingerprint = await buildModelsJsonFingerprint(context);
+      const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
+      const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
+      if (cached && !options.onProviderCatalogOutcome) {
+        const settled = await cached;
+        await ensureModelsFileModeForModelsJson(targetPath);
+        return {
+          ...settled.result,
+          fingerprint: settled.fingerprint,
+          ...(workspaceDir ? { workspaceDir } : {}),
+        };
+      }
 
-  const pending: Promise<ModelsJsonReadyState> = withModelsJsonWriteLock(targetPath, async () => {
-    // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
-    // are available to provider discovery without mutating process.env.
-    const existingModelsFile = await readExistingModelsFile(targetPath);
-    const plan = await planOpenClawModelsJson({
-      context,
-      existingRaw: existingModelsFile.raw,
-      existingParsed: existingModelsFile.parsed,
-      pluginCatalogs: listPreparedPluginModelCatalogs(agentDir),
-    });
+      // Ensure config env vars are available to provider discovery without
+      // mutating process.env.
+      const existingModelsFile = await readExistingModelsFile(targetPath);
+      const catalogGeneration = readPersistedPluginModelCatalogGeneration(agentDir);
+      const plan = await planOpenClawModelsJson({
+        context,
+        existingRaw: existingModelsFile.raw,
+        existingParsed: existingModelsFile.parsed,
+        pluginCatalogs: listPreparedPluginModelCatalogs(agentDir, true),
+      });
 
-    if (plan.action === "skip") {
+      let wroteRoot = false;
+      if (plan.action === "write") {
+        await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+        wroteRoot = existingModelsFile.raw !== plan.contents;
+        if (wroteRoot) {
+          await privateFileStore(path.dirname(targetPath)).writeText("models.json", plan.contents);
+        }
+      }
+      if (plan.action !== "skip") {
+        await ensureModelsFileModeForModelsJson(targetPath);
+      }
       const wrotePluginCatalog = writePluginCatalogsForModelsJson({
         agentDir,
         pluginCatalogWrites: plan.pluginCatalogWrites,
+        lockAlreadyHeld: true,
+        catalogGeneration,
       });
-      return { fingerprint, result: { agentDir, wrote: wrotePluginCatalog } };
-    }
-
-    if (plan.action === "noop") {
-      const wrotePluginCatalog = writePluginCatalogsForModelsJson({
-        agentDir,
-        pluginCatalogWrites: plan.pluginCatalogWrites,
-      });
-      await ensureModelsFileModeForModelsJson(targetPath);
-      return { fingerprint, result: { agentDir, wrote: wrotePluginCatalog } };
-    }
-
-    await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-    const existingRoot = existingModelsFile.raw;
-    const wroteRoot = existingRoot !== plan.contents;
-    if (wroteRoot) {
-      await privateFileStore(path.dirname(targetPath)).writeText("models.json", plan.contents);
-    }
-    await ensureModelsFileModeForModelsJson(targetPath);
-    const wrotePluginCatalog = writePluginCatalogsForModelsJson({
-      agentDir,
-      pluginCatalogWrites: plan.pluginCatalogWrites,
-    });
-    return { fingerprint, result: { agentDir, wrote: wroteRoot || wrotePluginCatalog } };
-  });
-  MODELS_JSON_STATE.readyCache.set(cacheKey, pending);
-  try {
-    const settled = await pending;
-    const refreshedFingerprint = await buildModelsJsonFingerprint(context);
-    const refreshedCacheKey = modelsJsonReadyCacheKey(targetPath, refreshedFingerprint);
-    if (refreshedCacheKey !== cacheKey) {
-      MODELS_JSON_STATE.readyCache.delete(cacheKey);
+      const result = { agentDir, wrote: wroteRoot || wrotePluginCatalog };
+      const refreshedFingerprint = await buildModelsJsonFingerprint(context);
+      const refreshedCacheKey = modelsJsonReadyCacheKey(targetPath, refreshedFingerprint);
+      if (refreshedCacheKey !== cacheKey) {
+        MODELS_JSON_STATE.readyCache.delete(cacheKey);
+      }
+      // Only publish settled readiness; queued callers observe the completed
+      // generation rather than waiting on a task behind their own lock.
       MODELS_JSON_STATE.readyCache.set(
         refreshedCacheKey,
-        Promise.resolve({ fingerprint: refreshedFingerprint, result: settled.result }),
+        Promise.resolve({ fingerprint: refreshedFingerprint, result }),
       );
-    }
-    return {
-      ...settled.result,
-      fingerprint: refreshedFingerprint,
-      ...(workspaceDir ? { workspaceDir } : {}),
-    };
-  } catch (error) {
-    if (MODELS_JSON_STATE.readyCache.get(cacheKey) === pending) {
-      MODELS_JSON_STATE.readyCache.delete(cacheKey);
-    }
-    throw error;
-  }
+      return {
+        ...result,
+        fingerprint: refreshedFingerprint,
+        ...(workspaceDir ? { workspaceDir } : {}),
+      };
+    }),
+  );
 }
 
 /**

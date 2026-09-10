@@ -6,6 +6,8 @@
   "include": [
     "../../src/agents/tools/**/*.test.ts",
     "../../src/agents/tools/**/*.test.tsx",
+    "../../src/agents/bash-tools.exec-approval*.test.ts",
+    "../../src/agents/bash-tools.exec-approval*.test.tsx",
     "../../src/agents/bash-tools.exec-runtime*.test.ts",
     "../../src/agents/bash-tools.exec-runtime*.test.tsx",
     "../../src/agents/code-mode*.test.ts",

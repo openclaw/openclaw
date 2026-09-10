@@ -14,9 +14,11 @@ import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLocks, type OAuthProfileLockKey } from "./oauth-profile-lock.js";
 import { removeOAuthRefreshGenerationPeers } from "./oauth-refresh-peers.js";
-import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
+import { loadPersistedAuthProfileStoreAtDatabasePath } from "./persisted.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
+import { createEmptyAuthProfileStore } from "./runtime-snapshot-owner.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
@@ -266,14 +268,36 @@ type AuthProfileRemovalTarget = {
   expectedProfiles: ReadonlyMap<string, AuthProfileCredential | undefined>;
 };
 
+function loadAuthProfileRemovalStore(agentDir?: string): AuthProfileStore {
+  // Preserve scoped/env-only admission and legacy migration refusals before
+  // reading the exact row that the physical-store updater will receive.
+  const admitted = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+    allowKeychainPrompt: false,
+  });
+  if (Object.keys(admitted.profiles).length === 0) {
+    return admitted;
+  }
+  const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
+  // The locked updater receives this physical store, not its inherited view.
+  // Inherited credentials are removed through their separate owner target.
+  return (
+    loadPersistedAuthProfileStoreAtDatabasePath(
+      effectiveAgentDir
+        ? resolveAuthProfileDatabasePath(effectiveAgentDir)
+        : resolveSharedAuthStorePath(),
+      !effectiveAgentDir && resolveSharedAuthStoreOwnership().location === "state-db"
+        ? "shared-state"
+        : "agent",
+    ) ?? createEmptyAuthProfileStore()
+  );
+}
+
 function createAuthProfileRemovalTarget(params: {
   agentDir?: string;
   profileIds?: ReadonlySet<string>;
   provider?: string;
 }): AuthProfileRemovalTarget {
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
+  const store = loadAuthProfileRemovalStore(params.agentDir);
   const profileIds =
     params.profileIds ?? new Set(listProfilesForProvider(store, params.provider ?? ""));
   return {
@@ -320,9 +344,7 @@ async function removeAuthProfileTargetsWithLocks(
   );
   return await withOAuthProfileLocks(lockKeys, async () => {
     for (const target of targets) {
-      const current = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
-        allowKeychainPrompt: false,
-      });
+      const current = loadAuthProfileRemovalStore(target.agentDir);
       if (!authProfileRemovalTargetMatches(target, current)) {
         return { kind: "retry" };
       }
@@ -340,6 +362,13 @@ async function removeAuthProfileTargetsWithLocks(
             : resolveSharedAuthStorePath(),
           profileId,
           generation: credential,
+          // A target must remain intact until its own CAS removes it. Treating
+          // another target as a historical peer would invalidate our snapshots.
+          removalTargetDatabasePaths: targets.map((removalTarget) =>
+            removalTarget.agentDir
+              ? resolveAuthProfileDatabasePath(removalTarget.agentDir)
+              : resolveSharedAuthStorePath(),
+          ),
         });
       }
     }
@@ -378,6 +407,12 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   profileIds: readonly string[];
+  expectedSelection?: {
+    profileId: string;
+    credential: AuthProfileCredential;
+    ownerCredential: AuthProfileCredential;
+    ownerAgentDir?: string;
+  };
 }): Promise<boolean> {
   const profileIds = new Set(params.profileIds);
   if ([...profileIds].some(isUserModelAuthProfileId)) {
@@ -386,6 +421,22 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
     );
   }
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
+    if (params.expectedSelection) {
+      const expected = params.expectedSelection;
+      const owner = resolvePersistedAuthProfileOwnerAgentDir({
+        agentDir: params.agentDir,
+        profileId: expected.profileId,
+      });
+      const current = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+        allowKeychainPrompt: false,
+      });
+      if (
+        owner !== expected.ownerAgentDir ||
+        !isDeepStrictEqual(current.profiles[expected.profileId], expected.credential)
+      ) {
+        throw new Error("The selected auth profile changed during logout. Review it and retry.");
+      }
+    }
     const profilesByOwner = new Map<string | undefined, Set<string>>([
       [params.agentDir, profileIds],
     ]);
@@ -398,12 +449,22 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       ownerProfiles.add(profileId);
       profilesByOwner.set(ownerAgentDir, ownerProfiles);
     }
-    const result = await removeAuthProfileTargetsWithLocks(
-      [...profilesByOwner].map(([agentDir, ownerProfileIds]) =>
-        createAuthProfileRemovalTarget({ agentDir, profileIds: ownerProfileIds }),
-      ),
-      params.cfg ?? {},
+    const targets = [...profilesByOwner].map(([agentDir, ownerProfileIds]) =>
+      createAuthProfileRemovalTarget({ agentDir, profileIds: ownerProfileIds }),
     );
+    if (params.expectedSelection) {
+      const expected = params.expectedSelection;
+      const ownerTarget = targets.find((target) => target.agentDir === expected.ownerAgentDir);
+      if (
+        !isDeepStrictEqual(
+          ownerTarget?.expectedProfiles.get(expected.profileId),
+          expected.ownerCredential,
+        )
+      ) {
+        throw new Error("The selected auth profile changed during logout. Review it and retry.");
+      }
+    }
+    const result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
     if (result.kind === "updated") {
       return true;
     }

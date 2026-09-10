@@ -403,8 +403,14 @@ export async function removeOAuthRefreshGenerationPeers(params: {
   ownerDatabasePath: string;
   profileId: string;
   generation: OAuthCredential;
+  /** These stores are removed by the caller under their own exact-row checks. */
+  removalTargetDatabasePaths?: readonly string[];
 }): Promise<void> {
+  const removalTargets = new Set(params.removalTargetDatabasePaths?.map(canonicalDatabasePath));
   for (const candidate of await listPeerCandidates(params)) {
+    if (removalTargets.has(candidate.databasePath)) {
+      continue;
+    }
     const store = loadCandidateAuthProfileStore(candidate);
     if (!store) {
       continue;

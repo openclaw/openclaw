@@ -343,10 +343,12 @@ describe("models-config write serialization", () => {
       })}\n`;
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
       await fs.writeFile(sourcePath, contents, "utf8");
-      planOpenClawModelsJsonMock.mockImplementation(async () => {
-        expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
-        return { action: "skip" };
-      });
+      planOpenClawModelsJsonMock.mockImplementation(
+        async (params: { pluginCatalogs: { pluginId: string; contents: string }[] }) => {
+          expect(params.pluginCatalogs).toEqual([{ pluginId: "zai", contents }]);
+          return { action: "skip" };
+        },
+      );
 
       await ensureOpenClawModelsJson({}, agentDir);
 
@@ -714,76 +716,88 @@ describe("models-config write serialization", () => {
     });
   });
 
-  it("serializes concurrent models.json writes to avoid overlap", async () => {
-    await withModelsTempHome(async () => {
-      const first = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
-      const second = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
-      const firstModel = first.models?.providers?.["custom-proxy"]?.models?.[0];
-      const secondModel = second.models?.providers?.["custom-proxy"]?.models?.[0];
-      if (!firstModel || !secondModel) {
-        throw new Error("custom-proxy fixture missing expected model entries");
-      }
-      firstModel.name = "Proxy A";
-      secondModel.name = "Proxy B with longer name";
+  it.each(["same-tick", "during-write"])(
+    "serializes concurrent models.json writes to avoid overlap (%s)",
+    async (arrival) => {
+      await withModelsTempHome(async () => {
+        const first = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
+        const second = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
+        const firstModel = first.models?.providers?.["custom-proxy"]?.models?.[0];
+        const secondModel = second.models?.providers?.["custom-proxy"]?.models?.[0];
+        if (!firstModel || !secondModel) {
+          throw new Error("custom-proxy fixture missing expected model entries");
+        }
+        firstModel.name = "Proxy A";
+        secondModel.name = "Proxy B with longer name";
 
-      let inFlightWrites = 0;
-      let maxInFlightWrites = 0;
-      let markFirstModelsWriteStarted: () => void = () => {};
-      const firstModelsWriteStarted = new Promise<void>((resolve) => {
-        markFirstModelsWriteStarted = resolve;
-      });
-      let releaseModelsWrites: () => void = () => {};
-      const modelsWritesCanContinue = new Promise<void>((resolve) => {
-        releaseModelsWrites = resolve;
-      });
-      let modelsWriteCount = 0;
-      writePrivateStoreTextWriteMock.mockImplementation(
-        async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
-          // Hold both writes at the store boundary to prove the outer serializer works.
-          const isModelsWrite = path.basename(params.filePath) === "models.json";
-          if (isModelsWrite) {
-            modelsWriteCount += 1;
-            inFlightWrites += 1;
-            if (inFlightWrites > maxInFlightWrites) {
-              maxInFlightWrites = inFlightWrites;
-            }
-            if (modelsWriteCount === 1) {
-              markFirstModelsWriteStarted();
-            }
-            await modelsWritesCanContinue;
-          }
-          try {
-            if (!actualPrivateFileStore) {
-              throw new Error("private file store mock not initialized");
-            }
-            return await actualPrivateFileStore(params.rootDir).writeText(
-              path.basename(params.filePath),
-              params.content,
-            );
-          } finally {
+        let inFlightWrites = 0;
+        let maxInFlightWrites = 0;
+        let markFirstModelsWriteStarted: () => void = () => {};
+        const firstModelsWriteStarted = new Promise<void>((resolve) => {
+          markFirstModelsWriteStarted = resolve;
+        });
+        let releaseModelsWrites: () => void = () => {};
+        const modelsWritesCanContinue = new Promise<void>((resolve) => {
+          releaseModelsWrites = resolve;
+        });
+        let modelsWriteCount = 0;
+        writePrivateStoreTextWriteMock.mockImplementation(
+          async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
+            // Hold both writes at the store boundary to prove the outer serializer works.
+            const isModelsWrite = path.basename(params.filePath) === "models.json";
             if (isModelsWrite) {
-              inFlightWrites -= 1;
+              modelsWriteCount += 1;
+              inFlightWrites += 1;
+              if (inFlightWrites > maxInFlightWrites) {
+                maxInFlightWrites = inFlightWrites;
+              }
+              if (modelsWriteCount === 1) {
+                markFirstModelsWriteStarted();
+              }
+              await modelsWritesCanContinue;
             }
-          }
-        },
-      );
+            try {
+              if (!actualPrivateFileStore) {
+                throw new Error("private file store mock not initialized");
+              }
+              return await actualPrivateFileStore(params.rootDir).writeText(
+                path.basename(params.filePath),
+                params.content,
+              );
+            } finally {
+              if (isModelsWrite) {
+                inFlightWrites -= 1;
+              }
+            }
+          },
+        );
 
-      const writes = Promise.all([
-        ensureOpenClawModelsJson(first),
-        ensureOpenClawModelsJson(second),
-      ]);
-      await firstModelsWriteStarted;
-      await Promise.resolve();
-      releaseModelsWrites();
-      await writes;
+        const firstWrite = ensureOpenClawModelsJson(first);
+        if (arrival === "during-write") {
+          await firstModelsWriteStarted;
+        }
+        const writes = Promise.all([firstWrite, ensureOpenClawModelsJson(second)]);
+        await firstModelsWriteStarted;
+        // A later caller must queue without blocking the event loop that releases
+        // the in-flight writer's catalog lock.
+        const releaseTimer = setTimeout(releaseModelsWrites, 25);
+        try {
+          await writes;
+        } finally {
+          clearTimeout(releaseTimer);
+          releaseModelsWrites();
+          await firstWrite;
+        }
 
-      expect(maxInFlightWrites).toBe(1);
-      const parsed = await readGeneratedModelsJson<{
-        providers: { "custom-proxy"?: { models?: Array<{ name?: string }> } };
-      }>();
-      expect(["Proxy A", "Proxy B with longer name"]).toContain(
-        parsed.providers["custom-proxy"]?.models?.[0]?.name,
-      );
-    });
-  }, 60_000);
+        expect(maxInFlightWrites).toBe(1);
+        const parsed = await readGeneratedModelsJson<{
+          providers: { "custom-proxy"?: { models?: Array<{ name?: string }> } };
+        }>();
+        expect(["Proxy A", "Proxy B with longer name"]).toContain(
+          parsed.providers["custom-proxy"]?.models?.[0]?.name,
+        );
+      });
+    },
+    60_000,
+  );
 });

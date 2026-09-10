@@ -67,7 +67,8 @@ const mocks = vi.hoisted(() => ({
   isRemoteEnvironment: vi.fn(() => false),
   validateAnthropicSetupToken: vi.fn<() => string | undefined>(() => undefined),
   promoteAuthProfileInOrder: vi.fn(),
-  tryImportProviderCredential: vi.fn(),
+  tryImportProviderCredential:
+    vi.fn<typeof import("./auth-credential-import.js").tryImportProviderCredential>(),
   callGateway: vi.fn(),
   isImplicitLocalGatewayTarget: vi.fn(() => Promise.resolve(true)),
   resolvePluginSetupProviderCore: vi.fn(),
@@ -96,6 +97,15 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
 
 vi.mock("../../plugins/provider-auth-persistence.js", () => ({
   persistProviderAuthProfilesAfterLogin: mocks.persistProviderAuthProfilesAfterLogin,
+}));
+
+// This suite stubs credential persistence; real owner checks live in the catalog completion suite.
+vi.mock("./auth-catalog-admission.js", () => ({
+  prepareModelsAuthCatalogAdmission: async () => ({
+    assertCurrent: () => {},
+    withPersistence: async <T>(persist: () => Promise<T>) => await persist(),
+    captureProfile: () => () => {},
+  }),
 }));
 
 vi.mock("./auth-credential-import.js", () => ({
@@ -658,11 +668,16 @@ describe("modelsAuthLoginCommand", () => {
   );
 
   it("returns the refresh outcome after importing a provider credential", async () => {
-    mocks.tryImportProviderCredential.mockResolvedValueOnce({
-      profileId: "openai:imported",
-      provider: "openai",
-      mode: "oauth",
-      configUpdated: false,
+    mocks.tryImportProviderCredential.mockImplementationOnce(async (params) => {
+      if (!params.withPersistentEffect) {
+        throw new Error("Expected import persistence admission");
+      }
+      return await params.withPersistentEffect(async () => ({
+        profileId: "openai:imported",
+        provider: "openai",
+        mode: "oauth",
+        configUpdated: false,
+      }));
     });
     mocks.callGateway.mockImplementationOnce(async (options: { onHelloOk?: () => void }) => {
       options.onHelloOk?.();
