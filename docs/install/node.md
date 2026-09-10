@@ -31,6 +31,16 @@ Arguments, working directory, environment, standard streams, and exit status are
 preserved. Commands with an exact process-identity requirement cannot use this
 recovery.
 
+Recovery ignores relative PATH entries and runtimes that resolve inside the
+current working directory, unless an absolute PATH entry explicitly names their
+directory. On Windows, the service reader honors recorded code pages and Unicode
+byte-order marks. If the current Node build cannot decode a service script safely,
+OpenClaw prints the code page and continues searching other sources. Unsupported
+OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
+Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither
+case probes the service executable; recovery continues with PATH and the other
+available runtime sources.
+
 If none is available and you are in an interactive terminal, the CLI offers:
 
 ```text

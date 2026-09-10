@@ -179,13 +179,124 @@ export const runRespawnedChild = (command, args, env) => {
   return true;
 };
 
-function readSmallFile(filename) {
+function readSmallFile(filename, encoding = "utf8") {
   try {
     const info = statSync(filename);
-    return info.isFile() && info.size <= 65_536 ? readFileSync(filename, "utf8") : null;
+    return info.isFile() && info.size <= 65_536 ? readFileSync(filename, encoding) : null;
   } catch {
     return null;
   }
+}
+
+// Numeric mappings are owned by src/infra/windows-encoding.ts; use WHATWG
+// labels here, plus the Windows UTF/ISO page IDs, without loading that graph.
+// Skip CP850 (no ICU decoder) and CP949 (ICU silently corrupts UHC); never guess.
+const WINDOWS_SERVICE_CODEPAGE_LABELS = {
+  437: "cp437",
+  720: "cp720",
+  737: "cp737",
+  775: "cp775",
+  850: "cp850",
+  852: "cp852",
+  855: "cp855",
+  857: "cp857",
+  858: "cp858",
+  860: "cp860",
+  861: "cp861",
+  862: "cp862",
+  863: "cp863",
+  865: "cp865",
+  866: "ibm866",
+  869: "cp869",
+  874: "windows-874",
+  932: "shift_jis",
+  936: "gbk",
+  949: "euc-kr",
+  950: "big5",
+  1200: "utf-16le",
+  1201: "utf-16be",
+  1250: "windows-1250",
+  1251: "windows-1251",
+  1252: "windows-1252",
+  1253: "windows-1253",
+  1254: "windows-1254",
+  1255: "windows-1255",
+  1256: "windows-1256",
+  1257: "windows-1257",
+  1258: "windows-1258",
+  28591: "iso-8859-1",
+  28592: "iso-8859-2",
+  28593: "iso-8859-3",
+  28594: "iso-8859-4",
+  28595: "iso-8859-5",
+  28596: "iso-8859-6",
+  28597: "iso-8859-7",
+  28598: "iso-8859-8",
+  28599: "iso-8859-9",
+  28600: "iso-8859-10",
+  28603: "iso-8859-13",
+  28604: "iso-8859-14",
+  28605: "iso-8859-15",
+  28606: "iso-8859-16",
+  38598: "iso-8859-8-i",
+  54936: "gb18030",
+  65001: "utf-8",
+};
+
+function readWindowsServiceScript(filename) {
+  let buffer = readSmallFile(filename, null);
+  if (!buffer) {
+    return null;
+  }
+  let codePage = 65001;
+  if (buffer[0] === 0xff && buffer[1] === 0xfe) {
+    codePage = 1200;
+  } else if (buffer[0] === 0xfe && buffer[1] === 0xff) {
+    codePage = 1201;
+  } else {
+    if (buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+      buffer = buffer.subarray(3);
+    }
+    let end = buffer.indexOf(0x0a);
+    const preamble = /^@chcp (\d+) >nul\s*$/.exec(
+      buffer.subarray(0, end < 0 ? buffer.length : end).toString("latin1"),
+    );
+    if (preamble) {
+      codePage = Number(preamble[1]);
+      buffer = buffer.subarray(end < 0 ? buffer.length : end + 1);
+      end = buffer.indexOf(0x0a);
+    }
+    const marker = /^@rem openclaw-launcher-encoding=(\S+)\s*$/.exec(
+      buffer.subarray(0, end < 0 ? buffer.length : end).toString("latin1"),
+    );
+    if (marker) {
+      if (!preamble) {
+        const label = marker[1].toLowerCase();
+        const numeric = /^cp(\d+)$/.exec(label);
+        codePage = numeric
+          ? Number(numeric[1])
+          : Number(
+              Object.entries(WINDOWS_SERVICE_CODEPAGE_LABELS).find(
+                ([, value]) => value === label,
+              )?.[0],
+            );
+      }
+      buffer = buffer.subarray(end < 0 ? buffer.length : end + 1);
+    }
+  }
+  const label = WINDOWS_SERVICE_CODEPAGE_LABELS[codePage];
+  try {
+    if (label && codePage !== 850 && codePage !== 949) {
+      const decoder = new TextDecoder(label, { fatal: true });
+      return decoder.decode(buffer);
+    }
+  } catch {
+    // A missing decoder or invalid byte sequence must not select a guessed path.
+  }
+  process.stderr.write(
+    `openclaw: service script uses code page ${Number.isFinite(codePage) ? codePage : "unknown"}; not decodable here\n`,
+  );
+  return null;
 }
 
 function realNodePath(filename) {
@@ -196,9 +307,26 @@ function realNodePath(filename) {
   }
 }
 
+function isCwdNode(nodePath) {
+  const cwd = realNodePath(process.cwd()) ?? process.cwd();
+  const relative = path.relative(cwd, nodePath);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
 // Do not pass preload hooks, native-library overrides, or application secrets to probes.
-export function isUsableNode(nodePath) {
-  if (!realNodePath(nodePath)) {
+export function isUsableNode(nodePath, { allowCwd = false } = {}) {
+  if (!path.isAbsolute(nodePath)) {
+    return false;
+  }
+  const resolved = realNodePath(nodePath);
+  if (
+    !resolved ||
+    !path.isAbsolute(resolved) ||
+    !/^node(?:\.exe)?$/i.test(path.basename(resolved))
+  ) {
+    return false;
+  }
+  if (!allowCwd && isCwdNode(resolved)) {
     return false;
   }
   const env = { NODE_NO_WARNINGS: "1" };
@@ -208,7 +336,7 @@ export function isUsableNode(nodePath) {
     }
   }
   const result = spawnSync(
-    nodePath,
+    resolved,
     [
       "-e",
       `const probe = ${SQLITE_CAPABILITY_PROBE}; process.stdout.write(JSON.stringify({ version: process.versions.node, probe }));`,
@@ -229,6 +357,37 @@ export function isUsableNode(nodePath) {
   } catch {
     return false;
   }
+}
+
+function windowsServiceNode(text) {
+  for (const line of text.split(/\r?\n/)) {
+    const command = line.trimStart().replace(/^@/, "");
+    let executable = "";
+    let quoted = false;
+    // Mirror quoteCmdScriptArg: other Windows path backslashes stay literal.
+    for (let index = 0; index < command.length; index += 1) {
+      const char = command[index];
+      if (char === "\\" && command[index + 1] === '"') {
+        executable += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = !quoted;
+      } else if (/\s/.test(char) && !quoted) {
+        break;
+      } else {
+        executable += char;
+      }
+    }
+    executable = executable.replace(/\^!/g, "!").replace(/%%/g, "%");
+    if (
+      !quoted &&
+      path.win32.isAbsolute(executable) &&
+      /^node\.exe$/i.test(path.win32.basename(executable))
+    ) {
+      return executable;
+    }
+  }
+  return null;
 }
 
 function managedServiceNode(homeDir) {
@@ -291,8 +450,8 @@ function managedServiceNode(homeDir) {
       env.OPENCLAW_STATE_DIR?.trim() ||
       path.join(serviceHome, `.openclaw${suffix ? `-${suffix}` : ""}`);
     const filename = env.OPENCLAW_TASK_SCRIPT?.trim() || path.join(stateDir, scriptName);
-    const text = readSmallFile(filename);
-    command = text?.match(/^\s*@?"([^"]*\\node\.exe)"(?:\s|$)/im)?.[1];
+    const text = readWindowsServiceScript(filename);
+    command = text && windowsServiceNode(text);
   }
   // Service definitions are data. Never execute a shell, service wrapper, or manager shim.
   return command && path.isAbsolute(command) && /^node(?:\.exe)?$/i.test(path.basename(command))
@@ -347,8 +506,8 @@ function* availableNodeCandidates(homeDir) {
       : "PATH";
   const binary = process.platform === "win32" ? "node.exe" : "node";
   for (const directory of (process.env[pathKey] || "").split(path.delimiter)) {
-    if (directory) {
-      yield [path.resolve(directory, binary), "PATH"];
+    if (path.isAbsolute(directory)) {
+      yield [path.join(directory, binary), "PATH"];
     }
   }
   const managerHome = process.env.HOME?.trim() || process.env.USERPROFILE?.trim() || homeDir;
@@ -435,12 +594,21 @@ export async function recoverNodeRuntime({ homeDir, allowInstall = false } = {})
   if (!nodePath) {
     const seen = new Set([currentNode]);
     for (const [candidate, source] of availableNodeCandidates(recoveryHome)) {
-      const realPath = candidate && realNodePath(candidate);
-      if (!realPath || seen.has(realPath)) {
+      if (!candidate || !path.isAbsolute(candidate)) {
+        continue;
+      }
+      const realPath = realNodePath(candidate);
+      if (!realPath || !path.isAbsolute(realPath) || seen.has(realPath)) {
+        continue;
+      }
+      // Only an explicitly named PATH directory may opt into cwd executables.
+      const allowCwd =
+        source === "PATH" && realNodePath(path.dirname(candidate)) === path.dirname(realPath);
+      if (!allowCwd && isCwdNode(realPath)) {
         continue;
       }
       seen.add(realPath);
-      if (isUsableNode(realPath)) {
+      if (isUsableNode(realPath, { allowCwd })) {
         nodePath = realPath;
         reason = source;
         break;
