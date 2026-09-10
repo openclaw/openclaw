@@ -105,13 +105,6 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     invocationCwd,
     timeoutMs: prepared.timeoutMs,
   };
-  const resumed = await withUpdateAdmissionReporting(inputOpts, async () => {
-    const { resumePendingUpdateCommand } = await import("./update-command-pending-replay.js");
-    return await resumePendingUpdateCommand(admission);
-  });
-  if (resumed) {
-    return;
-  }
   const run = await withUpdateAdmissionReporting(inputOpts, () => admitUpdateCommandRun(admission));
   const opts = { ...inputOpts, run };
   prepared.controlPlaneUpdateSentinelMeta = {
