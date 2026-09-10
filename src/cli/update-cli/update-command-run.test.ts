@@ -14,16 +14,20 @@ import {
 } from "../../daemon/systemd-service-files.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
+import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createUpdateProgress } from "./progress.js";
 import {
   admitUpdateCommandRun,
   completeUpdateCommandRun,
+  createUpdateRunProgress,
   failUpdateCommandRun,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
@@ -79,6 +83,89 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+it("presents committed steps without reopening the ledger for display", () => {
+  const env = { OPENCLAW_STATE_DIR: dirs.make("update-progress-committed-") };
+  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  let presentation: ReturnType<typeof createUpdateProgress> | undefined;
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+  try {
+    presentation = createUpdateProgress(true, run);
+    const progress = createUpdateRunProgress(run, presentation.progress);
+    updateRunLedger.recordUpdateRunPhase(run.runId, "validating", {}, { env });
+    const reread = vi.spyOn(updateRunLedger, "getUpdateRun").mockImplementation(() => {
+      throw new Error("step presentation must use its committed row");
+    });
+    try {
+      for (const [index, name] of ["fetch", "build", "doctor"].entries()) {
+        const step = { name, command: `run ${name}`, index, total: 3 };
+        progress.onStepStart?.(step);
+        progress.onStepComplete?.({
+          ...step,
+          durationMs: 1,
+          exitCode: name === "fetch" ? 0 : 1,
+          ...(name === "build" ? { stdoutTail: "Build type error" } : {}),
+          ...(name === "doctor"
+            ? {
+                advisory: {
+                  kind: "package-post-install-doctor" as const,
+                  message: "Skipped optional cache cleanup",
+                },
+                warnings: ["Skipped optional cache cleanup", "Skipped legacy cache cleanup"],
+              }
+            : {}),
+        });
+      }
+      expect(log).toHaveBeenCalledWith("validating — fetch...");
+      expect(log).toHaveBeenCalledWith("validating — build...");
+      expect(log.mock.calls.flat().join("\n")).toContain("Build type error");
+      expect(log.mock.calls.flat().join("\n")).toContain("Skipped optional cache cleanup");
+      expect(
+        log.mock.calls
+          .flat()
+          .filter((line) => typeof line === "string" && line.startsWith("Phase:")),
+      ).toEqual(["Phase: requested", "Phase: validating"]);
+    } finally {
+      reread.mockRestore();
+    }
+    const recorded = getUpdateRun(run.runId, { env });
+    expect(
+      recorded?.steps
+        .filter((step) => step.step === "fetch" || step.step === "build")
+        .map(({ step, status, detail }) => ({ step, status, detail })),
+    ).toEqual([
+      { step: "fetch", status: "completed", detail: undefined },
+      { step: "build", status: "failed", detail: "Exit code: 1; Build type error" },
+    ]);
+    expect(recorded?.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ step: "doctor", status: "completed" }),
+        expect.objectContaining({
+          step: "warning:doctor",
+          status: "completed",
+          detail: "Skipped optional cache cleanup",
+        }),
+        expect.objectContaining({
+          step: "warning:doctor:2",
+          status: "completed",
+          detail: "Skipped legacy cache cleanup",
+        }),
+      ]),
+    );
+  } finally {
+    try {
+      presentation?.dispose();
+    } finally {
+      if (tty) {
+        Object.defineProperty(process.stdout, "isTTY", tty);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
+  }
 });
 
 it.each([false, true])(

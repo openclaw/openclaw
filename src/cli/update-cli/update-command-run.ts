@@ -54,6 +54,7 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-stat
 import { VERSION } from "../../version.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
+import type { UpdateDisplayProgress } from "./progress.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import {
@@ -250,7 +251,7 @@ export function failUpdateCommandRun(
 
 export function createUpdateRunProgress(
   run: NonNullable<UpdateCommandOptions["run"]>,
-  progress: UpdateStepProgress,
+  progress: UpdateDisplayProgress,
 ): UpdateStepProgress & {
   deferLedgerWrites: () => void;
   flushLedgerWrites: () => void;
@@ -262,9 +263,9 @@ export function createUpdateRunProgress(
   const record = (step: UpdateRunStep) => {
     if (deferred) {
       pendingSteps.push(step);
-    } else {
-      recordUpdateRunStep(run.runId, step, { env: run.env });
+      return undefined;
     }
+    return recordUpdateRunStep(run.runId, step, { env: run.env });
   };
   return {
     pendingSteps,
@@ -285,15 +286,21 @@ export function createUpdateRunProgress(
       }
     },
     onStepStart(step) {
-      record({ step: step.name, status: "in_progress", startedAtMs: Date.now() });
-      progress.onStepStart?.(step);
+      const committed = record({ step: step.name, status: "in_progress", startedAtMs: Date.now() });
+      progress.onStepStart?.(step, committed);
     },
     onStepComplete(step) {
       const endedAtMs = Date.now();
+      // A completed step may persist warnings; display its final committed row.
+      let committed: UpdateRunRecord | undefined;
       for (const entry of updateRunStepsFromResultStep(step)) {
-        record({ ...entry, startedAtMs: Math.max(0, endedAtMs - step.durationMs), endedAtMs });
+        committed = record({
+          ...entry,
+          startedAtMs: Math.max(0, endedAtMs - step.durationMs),
+          endedAtMs,
+        });
       }
-      progress.onStepComplete?.(step);
+      progress.onStepComplete?.(step, committed);
     },
   };
 }

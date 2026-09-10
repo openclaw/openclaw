@@ -71,8 +71,11 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         allowGatewayActivation: false,
       }),
     );
-    expect(progress.onStepStart).toHaveBeenCalledWith(step);
-    expect(progress.onStepComplete).toHaveBeenCalledWith({ ...step, durationMs: 1, exitCode: 0 });
+    expect(progress.onStepStart).toHaveBeenCalledWith(step, undefined);
+    expect(progress.onStepComplete).toHaveBeenCalledWith(
+      { ...step, durationMs: 1, exitCode: 0 },
+      undefined,
+    );
     expect(mocks.createUpdateProgress).toHaveBeenCalledWith(true);
     expect(stop).toHaveBeenCalledTimes(1);
     expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).not.toHaveBeenCalled();
