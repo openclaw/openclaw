@@ -162,6 +162,7 @@ export const WorkerOperatingSystemSchema = closedObject({
   id: Type.String({ minLength: 1, maxLength: 64 }),
   label: Type.String({ minLength: 1, maxLength: 64 }),
   default: Type.Optional(Type.Boolean()),
+  disabledReason: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 });
 
 /** Placement execution modes shared by runtime requirements and worker providers. */

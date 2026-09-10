@@ -340,11 +340,20 @@ describe("Crabbox worker provider", () => {
       );
       const provider = providerWithRunner(runCommand);
       const profile = { ...PROFILE, class: "tiny", target: "linux" };
+      const disabledReason = nonLinux
+        ? undefined
+        : version === "dev"
+          ? "Could not verify Crabbox version. Install Crabbox 0.53.1 or newer, then restart the Gateway."
+          : "Upgrade Crabbox to 0.53.1 or newer, then restart the Gateway.";
       const operatingSystems = [
         { id: "linux", label: "Linux", default: true },
-        ...(nonLinux ? [{ id: "windows/wsl2", label: "Windows (WSL2)" }] : []),
-        ...(nonLinux ? [{ id: "windows/normal", label: "Windows" }] : []),
-        ...(nonLinux ? [{ id: "macos", label: "macOS" }] : []),
+        {
+          id: "windows/wsl2",
+          label: "Windows (WSL2)",
+          ...(disabledReason ? { disabledReason } : {}),
+        },
+        { id: "windows/normal", label: "Windows", ...(disabledReason ? { disabledReason } : {}) },
+        { id: "macos", label: "macOS", ...(disabledReason ? { disabledReason } : {}) },
       ];
       expect(await provider.listOperatingSystems?.(profile)).toEqual(operatingSystems);
       expect(await provider.listOperatingSystems?.(PROFILE)).toEqual(operatingSystems);

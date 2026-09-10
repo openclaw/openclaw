@@ -437,7 +437,7 @@ describe("worker environment service", () => {
     ];
     const systems = [
       { id: "os-a", label: "OS A", default: true },
-      { id: "os-b", label: "OS B" },
+      { id: "os-b", label: "OS B", disabledReason: "Upgrade the worker provider." },
     ];
     const listMachineOptions = vi.fn(async () => machines);
     const listOperatingSystems = vi.fn(async () => systems);
@@ -511,6 +511,9 @@ describe("worker environment service", () => {
       ],
       [{ id: " os-a", label: "OS A" }],
       [{ id: "os-a", label: " OS A" }],
+      [{ id: "os-a", label: "OS A", disabledReason: "" }],
+      [{ id: "os-a", label: "OS A", disabledReason: " " }],
+      [{ id: "os-a", label: "OS A", disabledReason: "x".repeat(257) }],
       [{ id: "os-a", label: "OS A", settings: {} }],
       Array.from({ length: 9 }, (_, index) => ({ id: `os-${index}`, label: "OS" })),
     ].map((systems) => ({ systems })),

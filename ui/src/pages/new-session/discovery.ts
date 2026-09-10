@@ -43,6 +43,7 @@ export type DraftOperatingSystem = {
   id: string;
   label: string;
   default?: boolean;
+  disabledReason?: string;
 };
 
 export type DraftMachineOption = {
@@ -202,6 +203,7 @@ function readDraftOperatingSystems(value: unknown): DraftOperatingSystem[] {
     }
     const id = normalizeOptionalString(raw.id);
     const label = normalizeOptionalString(raw.label);
+    const disabledReason = normalizeOptionalString(raw.disabledReason)?.slice(0, 256);
     if (!id || id.length > 64 || !label || label.length > 64 || options.has(id)) {
       continue;
     }
@@ -209,6 +211,7 @@ function readDraftOperatingSystems(value: unknown): DraftOperatingSystem[] {
       id,
       label,
       ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
+      ...(disabledReason ? { disabledReason } : {}),
     });
   }
   return [...options.values()];

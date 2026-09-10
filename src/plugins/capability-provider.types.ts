@@ -63,6 +63,8 @@ export type WorkerOperatingSystem = Readonly<{
   id: string;
   label: string;
   default?: boolean;
+  /** Why this advertised target cannot currently be selected, including a repair hint. */
+  disabledReason?: string;
 }>;
 
 /** SSH endpoint material returned by a worker provider after provisioning. */

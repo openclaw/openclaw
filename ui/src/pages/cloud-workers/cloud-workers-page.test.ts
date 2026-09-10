@@ -43,6 +43,7 @@ const operatingSystems = [
   { id: "linux", label: "Linux", default: true },
   { id: "macos", label: "macOS" },
   { id: "windows/wsl2", label: "Windows (WSL2)" },
+  { id: "future-os", label: "Future OS", disabledReason: "Upgrade the worker provider." },
 ];
 
 describe("Cloud Workers mutation requests", () => {
@@ -180,6 +181,16 @@ describe("Cloud Workers mutation requests", () => {
                 ? [initialTarget]
                 : []),
             ]);
+            for (const system of systems) {
+              if (system.disabledReason) {
+                const option = expectDefined(
+                  [...select.options].find((candidate) => candidate.value === system.id),
+                  "Unavailable operating system",
+                );
+                expect(option.disabled).toBe(true);
+                expect(option.textContent).toContain(system.disabledReason);
+              }
+            }
             select.value = expectDefined(target, "Selected OS");
             select.dispatchEvent(new Event("change", { bubbles: true }));
           }

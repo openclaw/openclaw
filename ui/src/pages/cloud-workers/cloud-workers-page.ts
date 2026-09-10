@@ -445,15 +445,24 @@ class CloudWorkersPage extends OpenClawLightDomElement {
                   aria-label=${t("cloudWorkersPage.fields.operatingSystem")}
                   .value=${this.draft.target}
                   ?disabled=${busy}
-                  @change=${(event: Event) => this.patchDraft({ target: formControlValue(event) })}
+                  @change=${(event: Event) => {
+                    const target = formControlValue(event);
+                    if (!operatingSystems.find((system) => system.id === target)?.disabledReason) {
+                      this.patchDraft({ target });
+                    }
+                  }}
                 >
                   <option value="" ?selected=${!this.draft.target}>
                     ${t("cloudWorkersPage.fields.providerDefault")}
                   </option>
                   ${operatingSystems.map(
                     (system) => html`
-                      <option value=${system.id} ?selected=${this.draft.target === system.id}>
-                        ${system.label}
+                      <option
+                        value=${system.id}
+                        ?selected=${this.draft.target === system.id}
+                        ?disabled=${Boolean(system.disabledReason)}
+                      >
+                        ${system.label}${system.disabledReason ? ` — ${system.disabledReason}` : ""}
                       </option>
                     `,
                   )}

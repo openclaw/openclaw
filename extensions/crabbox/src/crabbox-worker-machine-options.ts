@@ -2,6 +2,7 @@ import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-e
 import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
+  CRABBOX_NON_LINUX_MIN_VERSION,
   type createCrabboxVersionResolver,
   supportsCrabboxNonLinuxTargets,
 } from "./crabbox-worker-doctor-runtime.js";
@@ -125,8 +126,12 @@ export function createCrabboxMachineOptionsResolver(
       if (version.status === "indeterminate" || !supportsCrabboxNonLinuxTargets(version.version)) {
         return {
           parsed,
+          disabledReason:
+            version.status === "indeterminate"
+              ? `Could not verify Crabbox version. Install Crabbox ${CRABBOX_NON_LINUX_MIN_VERSION} or newer, then restart the Gateway.`
+              : `Upgrade Crabbox to ${CRABBOX_NON_LINUX_MIN_VERSION} or newer, then restart the Gateway.`,
           catalog: {
-            operatingSystems: catalog.operatingSystems.filter((os) => os === "linux"),
+            operatingSystems: catalog.operatingSystems,
             machines: catalog.machines.filter((machine) => machine.os === "linux"),
           },
         };
@@ -140,10 +145,15 @@ export function createCrabboxMachineOptionsResolver(
       return listCrabboxMachineOptions(parsed.class, catalog?.machines);
     },
     async listOperatingSystems(profile) {
-      const { parsed, catalog } = await resolveCatalog(profile);
+      const { parsed, catalog, disabledReason } = await resolveCatalog(profile);
       return (catalog?.operatingSystems ?? []).map((id) => {
         const label = CRABBOX_OS_LABELS[id];
-        return id === parsed.target ? { id, label, default: true } : { id, label };
+        return {
+          id,
+          label,
+          ...(id === parsed.target ? { default: true } : {}),
+          ...(id !== "linux" && disabledReason ? { disabledReason } : {}),
+        };
       });
     },
   };
