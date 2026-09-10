@@ -3891,7 +3891,7 @@ ui/src/pages/chat/input-history.ts	3
 ui/src/pages/chat/performance.ts	1
 ui/src/pages/chat/realtime-talk-gateway-relay.ts	1
 ui/src/pages/chat/realtime-talk-google-live.ts	2
-ui/src/pages/chat/realtime-talk-shared.ts	7
+ui/src/pages/chat/realtime-talk-shared.ts	5
 ui/src/pages/chat/realtime-talk-webrtc.ts	2
 ui/src/pages/chat/realtime-talk.ts	2
 ui/src/pages/chat/run-lifecycle.ts	1
