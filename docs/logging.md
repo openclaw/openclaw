@@ -324,6 +324,21 @@ quiet while this whole-operation warning exposes slow preparation between them.
 The record inherits an existing parent trace when available; it contains no
 database path, session identifier, plan content, or raw error.
 
+### SQLite transaction timing
+
+The `sqlite/transaction` warnings `slow SQLite transaction hold`,
+`slow SQLite transaction lock wait`, and `SQLite transaction lock wait failed`
+include `pid`, Node's `threadId`, and `isMainThread` for the thread executing the
+transaction. Inspect the original `raw` record in `openclaw logs --json` to
+distinguish the main thread from Workers sharing the same process. `async: false`
+describes the synchronous transaction helper; it does not identify the thread.
+
+Hold time covers the synchronous callback and its result checks after `BEGIN`
+and before `COMMIT`, including any JavaScript consumer work inside that callback.
+It excludes database opening and the separately timed begin and commit steps.
+These elapsed durations do not measure SQL CPU time or establish a causal link
+to a nearby request.
+
 ### SQLite session writes
 
 The `session-sqlite` subsystem emits `slow SQLite session write` when total
