@@ -21,6 +21,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
 import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
@@ -42,6 +43,7 @@ import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runti
 import { nodeFilePath } from "../test-utils/node-file-path.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgent } from "./agent-create.js";
+import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
@@ -261,6 +263,84 @@ it("finishes creation bookkeeping when delegated authority closes after successf
     await state.cleanup();
   }
 });
+
+it.each(["commit", "rollback"] as const)(
+  "stores staged auth for a recreated id inside the creation claim (%s)",
+  async (phase) => {
+    const state = await createOpenClawTestState({
+      scenario: "minimal",
+      label: `agent-create-recreated-auth-${phase}`,
+    });
+    const workspace = state.path("work-workspace");
+    const agentDir = state.agentDir("work");
+    const deletion = beginAgentDeletionJournal({
+      agentId: "work",
+      operationId: randomUUID(),
+      agentDir,
+      workspaceDir: workspace,
+      sessionsDir: state.sessionsDir("work"),
+      deleteFiles: false,
+    });
+    runOpenClawStateWriteTransaction((database) =>
+      completeAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
+    );
+    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    const readProfiles = () =>
+      ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false }).profiles;
+    let staged = false;
+    try {
+      const creation = createAgent({
+        name: "work",
+        workspace,
+        beforePersistentApply: () => {
+          if (phase === "rollback" && staged) {
+            throw new Error("creation authority closed");
+          }
+        },
+        prepareConfigCommit: async () => {
+          // The guided wizard's staged auth write opens the recreated agent's own database.
+          const receipt = await stageProviderAuthProfileBatch({
+            profiles: [
+              {
+                profileId: "openai:default",
+                credential: { type: "api_key", provider: "openai", key: "sk-test-recreated" },
+              },
+            ],
+            config: {},
+            agentDir,
+          });
+          staged = true;
+          return receipt;
+        },
+      });
+      if (phase === "commit") {
+        expect(await creation).toMatchObject({ status: "created", agentId: "work" });
+        expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toHaveProperty(
+          "agents.entries.work",
+        );
+        expect(readAgentDeletionJournal("work")).toBeUndefined();
+        expect(readProfiles()["openai:default"]).toMatchObject({
+          type: "api_key",
+          provider: "openai",
+        });
+      } else {
+        const error = await creation.then(
+          () => undefined,
+          (cause: unknown) => cause,
+        );
+        expect(String(error)).toContain("creation authority closed");
+        expect(String(error)).not.toContain("staged config rollback failed");
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+        expect(readAgentDeletionJournal("work")).toMatchObject({ cleanupCompleted: true });
+        expect(readProfiles()["openai:default"]).toBeUndefined();
+      }
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      await state.cleanup();
+    }
+  },
+);
 
 it("preserves env references from guided staging when preparation changes the environment", async () => {
   const state = await createOpenClawTestState({
