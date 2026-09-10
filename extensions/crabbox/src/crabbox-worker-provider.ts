@@ -499,6 +499,7 @@ export function createCrabboxWorkerProvider(
       const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({
         enrollment,
         desktop: parsed.desktop,
+        target: parsed.target,
         leaseId,
       });
       const enrollmentSignal =
@@ -530,6 +531,7 @@ export function createCrabboxWorkerProvider(
         // Read node evidence before cleanup destroys its only copy on the leased machine.
         const evidence = await collectCrabboxNodeEnrollmentEvidence({
           ...leaseContext,
+          target: parsed.target,
           args: leaseRunArgs(leaseContext),
           ...(enrollmentSignal ? { signal: enrollmentSignal } : {}),
         });

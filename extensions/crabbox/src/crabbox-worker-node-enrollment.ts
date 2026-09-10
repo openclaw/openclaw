@@ -1,5 +1,7 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
+import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
+import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
@@ -14,6 +16,7 @@ export function createCrabboxNodeEnrollmentSetup(params: {
   enrollment: CrabboxWorkerNodeEnrollment;
   desktop?: boolean;
   leaseId: string;
+  target?: CrabboxOperatingSystem;
 }): { command: string; forwardedEnv: Record<string, string> } {
   return createCrabboxNodeSetup({ ...params, nodeBootstrap: params.enrollment.nodeBootstrap });
 }
@@ -38,6 +41,7 @@ function createCrabboxNodeSetup(params: {
   enrollment?: CrabboxWorkerNodeEnrollment;
   workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
   desktop?: boolean;
+  target?: CrabboxOperatingSystem;
 }): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
   const { token, ...nodeBootstrap } = params.nodeBootstrap;
@@ -53,9 +57,7 @@ function createCrabboxNodeSetup(params: {
     : null;
   // The script receives credentials only through the private forwarded environment.
   // Its children inherit neither download authority nor the enrollment credential.
-  const command = `set -eu
-node <<'CRABBOX_NODE_ENROLLMENT_SCRIPT'
-const fs = require("node:fs");
+  const script = `const fs = require("node:fs");
 const fsp = fs.promises;
 const path = require("node:path");
 const os = require("node:os");
@@ -74,7 +76,7 @@ const credentials = process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
-process.umask(0o077);
+if (process.platform !== "win32") process.umask(0o077);
 let phase;
 const setPhase = (next) => {
   if (phase === next) return;
@@ -86,8 +88,9 @@ setPhase("preparation");
   let tokens;
   try { tokens = JSON.parse(credentials || "{}"); }
   catch { throw new Error("Cloud worker bootstrap credential format is invalid"); }
-  const stateDir = path.join(os.homedir(), ".openclaw", "cloud-workers", leaseId);
-  const runtimeRoot = path.join(os.homedir(), ".openclaw-worker", "node-runtimes");
+  const home = fs.realpathSync(os.homedir());
+  const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
+  const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
   const pidFile = path.join(stateDir, "node.pid");
@@ -95,6 +98,11 @@ setPhase("preparation");
   const setupFile = path.join(stateDir, "setup-code");
   const runtimeLink = path.join(stateDir, "runtime");
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
+  const directoryOptions = process.platform === "win32" ? {} : { mode: 0o700 };
+  const launcher = path.join(process.env.ProgramFiles || "C:\\\\Program Files", "Crabbox", "bin", "Start-CrabboxDetachedProcess.ps1");
+  if (process.platform === "win32" && mode && !fs.existsSync(launcher)) {
+    throw new Error("Cloud worker requires " + launcher + "; update the Crabbox Windows bootstrap image and reprovision the worker");
+  }
   if (desktopEnvironment) {
     // Inspect XFCE only after stripping forwarded credentials from every child environment.
     const desktop = spawnSync("bash", ["-c", desktopEnvironment, "bash", process.execPath], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
@@ -103,14 +111,28 @@ setPhase("preparation");
     Object.assign(nodeEnv, JSON.parse(desktop.stdout));
   }
   if (mode) {
-    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-    fs.chmodSync(stateDir, 0o700);
+    fs.mkdirSync(stateDir, { recursive: true, ...directoryOptions });
+    if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
   }
   const probeProcess = (binary, args) => {
-    const result = spawnSync(binary, args, { env: nodeEnv, encoding: "utf8", timeout: 2000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 });
+    const result = spawnSync(binary, args, { env: nodeEnv, encoding: "utf8", windowsHide: true, timeout: process.platform === "win32" ? 10000 : 2000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 });
     return result.status === 0 && !result.error ? result.stdout.trim() : null;
   };
   const processStartTime = (pid) => probeProcess("ps", ["-o", "lstart=", "-p", String(pid)])?.replace(/\\s+/g, " ");
+  const windowsProcesses = (filter) => {
+    const output = probeProcess("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; @(Get-CimInstance Win32_Process -Filter '" + filter + "' | ForEach-Object { @{ pid = $_.ProcessId; startTime = $_.CreationDate.ToUniversalTime().ToString('o'); executablePath = $_.ExecutablePath; commandLine = $_.CommandLine } }) | ConvertTo-Json -Compress"]);
+    if (!output) return [];
+    const parsed = JSON.parse(output);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  };
+  const isWindowsNode = (entry) => {
+    if (!entry || !Number.isSafeInteger(entry.pid) || entry.pid < 1 || typeof entry.startTime !== "string" || !entry.startTime || typeof entry.executablePath !== "string" || typeof entry.commandLine !== "string") return false;
+    // Our invocation has exactly executable + CLI before its options. Windows paths
+    // cannot contain quotes; accept quoted or unquoted path tokens in those positions.
+    // CIM retains this command line even when Node changes the console title.
+    const invocation = entry.commandLine.match(/^(?:"([^"]+)"|([^\\s"]+))\\s+(?:"([^"]+)"|([^\\s"]+))(?:\\s|$)/);
+    return invocation !== null && (invocation[3] ?? invocation[4]) === cli && fs.realpathSync(invocation[1] ?? invocation[2]) === fs.realpathSync(process.execPath) && fs.realpathSync(entry.executablePath) === fs.realpathSync(process.execPath);
+  };
   if (mode && fs.existsSync(pidFile)) {
     const pidText = fs.readFileSync(pidFile, "utf8").trim();
     if (!/^[1-9][0-9]*$/.test(pidText)) throw new Error("Cloud worker node PID is invalid; release and reprovision the worker");
@@ -126,6 +148,15 @@ setPhase("preparation");
         const title = args[0];
         const nodeInvocation = args[1] === cli || ["openclaw", "openclaw-connect", "openclaw-node"].includes(title);
         verified = nodeInvocation && fs.realpathSync(path.join("/proc", pidText, "cwd")) === runtimeDir && env.includes("OPENCLAW_STATE_DIR=" + stateDir);
+      } else if (process.platform === "win32") {
+        try {
+          const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));
+          const entries = windowsProcesses("ProcessId=" + pidText);
+          const entry = entries.length === 1 ? entries[0] : undefined;
+          // Windows exposes no cheap cwd probe. Bind launch-owned cwd/state to the
+          // actual node.exe creation time and independently inspect its executable/argv.
+          verified = isWindowsNode(entry) && entry.pid === pid && launch.pid === pid && launch.startTime === entry.startTime && launch.runtimeDir === runtimeDir && launch.stateDir === stateDir && launch.cli === cli;
+        } catch { /* Missing launch or process identity must never authorize replay. */ }
       } else {
         try {
           // Darwin loses ps-visible environment when process.title changes. Bind the launch
@@ -237,7 +268,7 @@ setPhase("preparation");
     setPhase("worker archive publication");
     const archive = workerArchivePath(root);
     const directory = path.dirname(archive);
-    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(directory, { recursive: true, ...directoryOptions });
     if (fs.realpathSync(directory) !== directory || !fs.lstatSync(directory).isDirectory()) throw new Error("Cloud worker prepared archive directory is unsafe");
     if (downloaded) fs.renameSync(downloaded, archive);
     // This package owns one immutable source archive; ordinary node installs never write here.
@@ -248,7 +279,7 @@ setPhase("preparation");
       }
     }
   };
-  fs.mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(runtimeRoot, { recursive: true, ...directoryOptions });
   const existingRuntime = fs.existsSync(runtimeDir);
   if (existingRuntime) verifyRuntime(runtimeDir);
   if (existingRuntime && (!workerBundle || await verifyWorkerArchive(runtimeDir))) {
@@ -266,7 +297,7 @@ setPhase("preparation");
     const installDir = existingRuntime ? runtimeDir : path.join(stage, "runtime");
     if (!existingRuntime) {
       setPhase("installation");
-      fs.mkdirSync(installDir, { mode: 0o700 });
+      fs.mkdirSync(installDir, directoryOptions);
       // npm 12 requires a project policy even when ignore-scripts is false.
       // Trust only the verified artifact; dependency script policy stays unchanged.
       fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ private: true, allowScripts: { ["file:" + archive]: true } }), { mode: 0o600 });
@@ -274,7 +305,9 @@ setPhase("preparation");
       const log = fs.openSync(logPath, "w", 0o600);
       let installed;
       try {
-        installed = spawnSync("npm", ["install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, stdio: ["ignore", log, log], timeout: 600000 });
+        const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+        if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
+        installed = spawnSync(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, windowsHide: true, stdio: ["ignore", log, log], timeout: 600000 });
       } finally { fs.closeSync(log); }
       if (installed.status !== 0) {
         const tail = fs.readFileSync(logPath, "utf8").slice(-2048);
@@ -297,7 +330,7 @@ setPhase("preparation");
     if (!fs.lstatSync(runtimeLink).isSymbolicLink()) throw new Error("Cloud worker runtime pointer is occupied");
     fs.unlinkSync(runtimeLink);
   } catch (error) { if (error.code !== "ENOENT") throw error; }
-  fs.symlinkSync(runtimeDir, runtimeLink);
+  fs.symlinkSync(runtimeDir, runtimeLink, process.platform === "win32" ? "junction" : "dir");
   setPhase("plugin activation");
   for (const pluginId of new Set([...bootstrap.enabledPluginIds, ...${JSON.stringify(params.desktop ? ["cua-computer"] : [])}])) {
     const enabled = spawnSync(process.execPath, [cli, "plugins", "enable", pluginId], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
@@ -309,31 +342,61 @@ setPhase("preparation");
   }
   const args = mode === "connect" ? ["connect", "--target-file", setupFile] : ["node", "run"];
   setPhase("node launch");
-  const log = fs.openSync(path.join(stateDir, "node.log"), "a", 0o600);
+  const logPath = path.join(stateDir, "node.log");
+  const log = process.platform === "win32" ? undefined : fs.openSync(logPath, "a", 0o600);
   let child;
+  let pid;
+  let parentPid;
+  let startTime;
   try {
-    child = spawn(process.execPath, [cli, ...args, "--ephemeral", "--display-name", displayName], { cwd: runtimeDir, env: nodeEnv, detached: true, stdio: ["ignore", log, log] });
-    await once(child, "spawn");
-    try {
+    const nodeArgs = [cli, ...args, "--ephemeral", "--display-name", displayName];
+    if (process.platform === "win32") {
+      const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
+      // The managed launcher owns OpenSSH job breakaway. Its hidden PowerShell child
+      // owns logging because detached processes must not inherit SSH stdio handles.
+      const launchScript = "$env:OPENCLAW_STATE_DIR = " + quote(stateDir) + "; & " + [process.execPath, ...nodeArgs].map(quote).join(" ") + " *>> " + quote(logPath) + "; exit $LASTEXITCODE";
+      const argumentList = "-NoLogo -NoProfile -NonInteractive -EncodedCommand " + Buffer.from(launchScript, "utf16le").toString("base64");
+      const launched = probeProcess("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcher, "-FilePath", "powershell.exe", "-ArgumentList", argumentList, "-WorkingDirectory", runtimeDir]);
+      if (!/^[1-9][0-9]*$/.test(launched || "")) throw new Error("Cloud worker managed Windows launcher failed; release and reprovision the worker");
+      parentPid = Number(launched);
+      const deadline = Date.now() + 30000;
+      while (!pid && Date.now() < deadline) {
+        const entries = windowsProcesses("ParentProcessId=" + parentPid).filter(isWindowsNode);
+        if (entries.length > 1) throw new Error("Cloud worker node invocation is ambiguous; release and reprovision the worker");
+        if (entries.length === 1) { pid = entries[0].pid; startTime = entries[0].startTime; }
+        else await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      if (!pid) throw new Error("Cloud worker node start time is unavailable; release and reprovision the worker");
+    } else {
+      child = spawn(process.execPath, nodeArgs, { cwd: runtimeDir, env: nodeEnv, detached: true, windowsHide: true, stdio: ["ignore", log, log] });
+      await once(child, "spawn");
+      pid = child.pid;
+      if (process.platform !== "linux") startTime = processStartTime(pid);
+    }
       if (process.platform !== "linux") {
-        const startTime = processStartTime(child.pid);
         if (!startTime) throw new Error("Cloud worker node start time is unavailable; release and reprovision the worker");
         const temporary = launchFile + "." + crypto.randomUUID();
         try {
-          fs.writeFileSync(temporary, JSON.stringify({ pid: child.pid, startTime, runtimeDir, stateDir, cli }), { mode: 0o600, flag: "wx" });
+          fs.writeFileSync(temporary, JSON.stringify({ pid, startTime, runtimeDir, stateDir, cli }), { mode: 0o600, flag: "wx" });
           fs.renameSync(temporary, launchFile);
         } finally { fs.rmSync(temporary, { force: true }); }
       }
-      fs.writeFileSync(pidFile, String(child.pid) + "\\n", { mode: 0o600 });
-    }
-    catch (error) { process.kill(-child.pid, "SIGTERM"); throw error; }
-    child.unref();
-  } finally { fs.closeSync(log); }
+      fs.writeFileSync(pidFile, String(pid) + "\\n", { mode: 0o600 });
+    child?.unref();
+  } catch (error) {
+    if (parentPid) spawnSync("taskkill.exe", ["/PID", String(parentPid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
+    else if (pid) process.kill(-pid, "SIGTERM");
+    throw error;
+  } finally { if (log !== undefined) fs.closeSync(log); }
   setPhase("complete");
 })().catch((error) => { console.error("Cloud worker node bootstrap " + phase + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message); process.exitCode = 1; });
-CRABBOX_NODE_ENROLLMENT_SCRIPT`;
+`;
   return {
-    command,
+    command: wrapCrabboxNodeScript(
+      script.trimEnd(),
+      params.target,
+      "CRABBOX_NODE_ENROLLMENT_SCRIPT",
+    ),
     forwardedEnv: {
       [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
         nodeBootstrap: token,

@@ -71,7 +71,8 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
       for (const [profileId, profile] of profiles) {
         const settings = readRecord(profile.settings);
         const target = nonEmptyString(settings?.target);
-        const nonLinux = target === "windows/wsl2" || target === "macos";
+        const nonLinux =
+          target === "windows/wsl2" || target === "windows/normal" || target === "macos";
         const targetLabel = nonLinux ? CRABBOX_OS_LABELS[target] : undefined;
         const minimumVersion = nonLinux ? doctorRuntime.CRABBOX_NON_LINUX_MIN_VERSION : "0.41.1";
         const explicitBinary = nonEmptyString(settings?.binary);

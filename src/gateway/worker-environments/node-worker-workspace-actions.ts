@@ -376,7 +376,9 @@ export function createNodeWorkerWorkspaceActions(params: {
       gitToken: source.gitToken,
     });
     if (prepared.kind === "failed") {
-      throw new Error(`Cloud repository preparation failed: ${prepared.reason}`);
+      throw new Error(
+        `Cloud repository preparation failed: ${prepared.reason}${prepared.detail ? `: ${prepared.detail}` : ""}`,
+      );
     }
     const baseManifestRef = prepared.result.manifestRef;
     const baseCommit = prepared.result.baseCommit;

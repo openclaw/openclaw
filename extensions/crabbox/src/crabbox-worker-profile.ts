@@ -57,11 +57,17 @@ type CrabboxProfile = {
 
 const MAX_CRABBOX_MACHINE_CLASS_LENGTH = 128;
 const MAX_CRABBOX_MACHINE_OPTIONS = 64;
-export const CRABBOX_ENROLLABLE_TARGETS = ["linux", "windows/wsl2", "macos"] as const;
+export const CRABBOX_ENROLLABLE_TARGETS = [
+  "linux",
+  "windows/wsl2",
+  "windows/normal",
+  "macos",
+] as const;
 export type CrabboxOperatingSystem = (typeof CRABBOX_ENROLLABLE_TARGETS)[number];
 export const CRABBOX_OS_LABELS: Record<CrabboxOperatingSystem, string> = {
   linux: "Linux",
   "windows/wsl2": "Windows (WSL2)",
+  "windows/normal": "Windows",
   macos: "macOS",
 };
 
@@ -394,6 +400,9 @@ export function buildCrabboxAllocationArgs(
     "--tailscale=false",
     ...(profile.class ? ["--class", profile.class] : []),
     ...(profile.target === "windows/wsl2" ? ["--target", "windows", "--windows-mode", "wsl2"] : []),
+    ...(profile.target === "windows/normal"
+      ? ["--target", "windows", "--windows-mode", "normal"]
+      : []),
     ...(profile.target === "macos" ? ["--target", "macos", "--market", "on-demand"] : []),
     "--ttl",
     profile.ttl,

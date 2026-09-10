@@ -30,7 +30,11 @@ const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" });
 if (token) Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http." + origin + ".extraheader", GIT_CONFIG_VALUE_0: "Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64") });
-const result = spawnSync("git", process.argv.slice(1), { env, stdio: ["ignore", "inherit", "inherit"] });
+const args = process.argv.slice(1);
+// Identity-scoped workspaces can put partial-clone .promisor files at MAX_PATH.
+if (process.platform === "win32") args.unshift("-c", "core.longpaths=true");
+const result = spawnSync("git", args, { env, stdio: ["ignore", "inherit", "inherit"] });
+if (result.error) console.error((result.error.code ? result.error.code + ": " : "") + result.error.message);
 process.exitCode = result.status ?? 1;`;
 
 export type NodeWorkerRepositoryOutcome =
@@ -42,10 +46,26 @@ export type NodeWorkerRepositoryOutcome =
   | {
       kind: "failed";
       reason: "clone-failed" | "checkout-failed" | "manifest-capture-failed" | "manifest-mismatch";
+      detail?: string;
     };
 
 function succeeded(result: SpawnResult): boolean {
   return result.termination === "exit" && result.code === 0;
+}
+
+function gitFailure(
+  reason: "clone-failed" | "checkout-failed",
+  stage: string,
+  result: SpawnResult,
+  invariant?: string,
+): NodeWorkerRepositoryOutcome {
+  return {
+    kind: "failed",
+    reason,
+    detail: boundedWorkerError(
+      `${stage}: ${result.termination} (exit code ${result.code}, signal ${result.signal}): ${invariant ?? (result.stderr.trim() || "no stderr output")}`,
+    ),
+  };
 }
 
 /**
@@ -94,20 +114,30 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
       identity.commit ?? identity.ref ?? "HEAD",
     ]);
     if (!succeeded(fetched)) {
-      return { kind: "failed", reason: "checkout-failed" };
+      return gitFailure("checkout-failed", "git fetch", fetched);
     }
     const resolved = await git(identity, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
     const revision = resolved.stdout.trim();
-    if (
-      !succeeded(resolved) ||
-      !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(revision) ||
-      (identity.commit !== undefined && revision !== identity.commit)
-    ) {
-      return { kind: "failed", reason: "checkout-failed" };
+    if (!succeeded(resolved)) {
+      return gitFailure("checkout-failed", "git rev-parse", resolved);
+    }
+    if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(revision)) {
+      return gitFailure("checkout-failed", "git rev-parse", resolved, "invalid commit revision");
+    }
+    if (identity.commit !== undefined && revision !== identity.commit) {
+      return gitFailure("checkout-failed", "git rev-parse", resolved, "requested commit mismatch");
     }
     const checkedOut = await git(identity, ["checkout", "--detach", "--force", revision]);
-    if (!succeeded(checkedOut) || checkedOut.workspaceDir !== workspaceDir) {
-      return { kind: "failed", reason: "checkout-failed" };
+    if (!succeeded(checkedOut)) {
+      return gitFailure("checkout-failed", "git checkout --detach", checkedOut);
+    }
+    if (checkedOut.workspaceDir !== workspaceDir) {
+      return gitFailure(
+        "checkout-failed",
+        "git checkout --detach",
+        checkedOut,
+        "workspace directory changed during checkout",
+      );
     }
     const captured = await capture(checkedOut.workspaceDir, revision);
     const manifestRef = captured.stdout.trim();
@@ -215,7 +245,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
           true,
         );
         if (!succeeded(cloned)) {
-          return { kind: "failed", reason: "clone-failed" };
+          return gitFailure("clone-failed", "git clone", cloned);
         }
         outcome = await checkoutAndCapture(
           identity,
@@ -255,7 +285,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
           outcome.result.baseCommit,
         ]);
         if (!succeeded(bound)) {
-          return { kind: "failed", reason: "checkout-failed" };
+          return gitFailure("checkout-failed", "git checkout -B", bound);
         }
       }
       return outcome;

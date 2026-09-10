@@ -313,6 +313,11 @@ describe("Crabbox worker provider", () => {
                       classProfile("tiny", { vcpu: 4 }, { target: "windows", windowsMode: "wsl2" }),
                       classProfile(
                         "tiny",
+                        { vcpu: 16 },
+                        { target: "windows", windowsMode: "normal", architecture: "arm64" },
+                      ),
+                      classProfile(
+                        "tiny",
                         { vcpu: 8 },
                         { target: "windows", windowsMode: "normal" },
                       ),
@@ -338,6 +343,7 @@ describe("Crabbox worker provider", () => {
       const operatingSystems = [
         { id: "linux", label: "Linux", default: true },
         ...(nonLinux ? [{ id: "windows/wsl2", label: "Windows (WSL2)" }] : []),
+        ...(nonLinux ? [{ id: "windows/normal", label: "Windows" }] : []),
         ...(nonLinux ? [{ id: "macos", label: "macOS" }] : []),
       ];
       expect(await provider.listOperatingSystems?.(profile)).toEqual(operatingSystems);
@@ -346,6 +352,9 @@ describe("Crabbox worker provider", () => {
         { id: "tiny", label: "Tiny", os: "linux", cpu: 2, default: true },
         ...(nonLinux
           ? [{ id: "tiny", label: "Tiny", os: "windows/wsl2", cpu: 4, default: true }]
+          : []),
+        ...(nonLinux
+          ? [{ id: "tiny", label: "Tiny", os: "windows/normal", cpu: 8, default: true }]
           : []),
         ...(nonLinux ? [{ id: "tiny", label: "Tiny", os: "macos", default: true }] : []),
       ]);
@@ -360,11 +369,21 @@ describe("Crabbox worker provider", () => {
         ).toEqual([
           { id: "linux", label: "Linux" },
           { id: "windows/wsl2", label: "Windows (WSL2)", default: true },
+          { id: "windows/normal", label: "Windows" },
+          { id: "macos", label: "macOS" },
+        ]);
+        expect(
+          await provider.listOperatingSystems?.({ ...profile, target: "windows/normal" }),
+        ).toEqual([
+          { id: "linux", label: "Linux" },
+          { id: "windows/wsl2", label: "Windows (WSL2)" },
+          { id: "windows/normal", label: "Windows", default: true },
           { id: "macos", label: "macOS" },
         ]);
         expect(await provider.listOperatingSystems?.({ ...profile, target: "macos" })).toEqual([
           { id: "linux", label: "Linux" },
           { id: "windows/wsl2", label: "Windows (WSL2)" },
+          { id: "windows/normal", label: "Windows" },
           { id: "macos", label: "macOS", default: true },
         ]);
       }
@@ -402,6 +421,11 @@ describe("Crabbox worker provider", () => {
     { configured: "windows/wsl2", requested: undefined },
     { configured: undefined, requested: "windows/wsl2" },
     { configured: "windows/wsl2", requested: "linux" },
+    { configured: "windows/normal", requested: undefined },
+    { configured: undefined, requested: "windows/normal" },
+    { configured: "windows/normal", requested: "linux" },
+    { configured: "windows/wsl2", requested: "windows/normal" },
+    { configured: "windows/normal", requested: "windows/wsl2" },
     { configured: "macos", requested: undefined },
     { configured: undefined, requested: "macos" },
     { configured: "macos", requested: "linux" },
@@ -426,12 +450,13 @@ describe("Crabbox worker provider", () => {
       const lease = await provider.provision(profile, OPERATION_ID, { os: requested });
       await provider.destroy({ ...lease, profile });
       const warmup = calls.find((argv) => argv[1] === "warmup")!;
-      if ((requested ?? configured) === "windows/wsl2") {
+      const resolved = requested ?? configured;
+      if (resolved === "windows/wsl2" || resolved === "windows/normal") {
         expect(warmup.slice(warmup.indexOf("--target"), warmup.indexOf("--target") + 4)).toEqual([
           "--target",
           "windows",
           "--windows-mode",
-          "wsl2",
+          resolved === "windows/wsl2" ? "wsl2" : "normal",
         ]);
       } else if ((requested ?? configured) === "macos") {
         expect(warmup.slice(warmup.indexOf("--target"), warmup.indexOf("--target") + 4)).toEqual([
@@ -448,7 +473,7 @@ describe("Crabbox worker provider", () => {
     },
   );
 
-  it.each([null, 4, "", " ", "windows/normal", "plan9"])(
+  it.each([null, 4, "", " ", "windows/unknown", "plan9"])(
     "rejects invalid OS %j before allocation",
     async (target) => {
       const runCommand = vi.fn(async () => commandResult());
@@ -457,14 +482,14 @@ describe("Crabbox worker provider", () => {
         expect.objectContaining({
           name: "WorkerProviderError",
           code: "invalid_profile",
-          message: "Crabbox target must be linux or windows/wsl2 or macos",
+          message: "Crabbox target must be linux or windows/wsl2 or windows/normal or macos",
         }),
       );
       await expect(
         provider.provision(PROFILE, OPERATION_ID, { os: target as never }),
       ).rejects.toMatchObject({
         code: "invalid_profile",
-        message: "Crabbox target must be linux or windows/wsl2 or macos",
+        message: "Crabbox target must be linux or windows/wsl2 or windows/normal or macos",
       });
       expect(runCommand).not.toHaveBeenCalled();
     },
@@ -473,6 +498,7 @@ describe("Crabbox worker provider", () => {
   it.each(
     ["0.52.0", "0.53.0", "dev", "0.53", "0.53.1-"].flatMap((version) => [
       { version, target: "windows/wsl2", label: "Windows (WSL2)" },
+      { version, target: "windows/normal", label: "Windows" },
       { version, target: "macos", label: "macOS" },
     ]),
   )("rejects $target before allocation on Crabbox $version", async ({ version, target, label }) => {
@@ -498,6 +524,7 @@ describe("Crabbox worker provider", () => {
   it.each(
     ["desktop", "warmImage"].flatMap((setting) => [
       { setting, target: "windows/wsl2" },
+      { setting, target: "windows/normal" },
       { setting, target: "macos" },
     ]),
   )("keeps $setting Linux only for $target settings and overrides", async ({ setting, target }) => {
