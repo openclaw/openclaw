@@ -74,7 +74,8 @@ export async function activateStagedNpmPackageRoot(
   );
 }
 
-export function removePackagePath(target: string): Promise<void> {
+export function removePackagePath(target: string, assertCurrent = () => {}): Promise<void> {
+  assertCurrent();
   return fs.rm(target, {
     recursive: true,
     force: true,
@@ -91,7 +92,7 @@ export async function copyPackagePathEntry(
   const stat = await fs.lstat(source);
   assertCurrent();
   if (stat.isDirectory()) {
-    await removePackagePath(destination);
+    await removePackagePath(destination, assertCurrent);
     assertCurrent();
     await fs.cp(source, destination, { recursive: true, force: true, preserveTimestamps: false });
     return;
@@ -137,8 +138,8 @@ export async function restoreNpmPackageRoot(params: {
   } catch (error) {
     // A denied rename must leave the candidate available. Never substitute a
     // copied old tree for the exact object whose identity was verified.
+    assertCurrent();
     if (params.candidatePresent) {
-      assertCurrent();
       await fs.rename(params.displacedRoot, params.liveRoot);
     }
     throw error;
@@ -150,11 +151,13 @@ export async function discardPackageUpdateBackup(
   backupPath: string,
   label: string,
   globalRoot: string,
+  assertCurrent = () => {},
 ): Promise<string | null> {
   try {
-    await removePackagePath(backupPath);
+    await removePackagePath(backupPath, assertCurrent);
     return null;
   } catch {
+    assertCurrent();
     const retiredPath = path.join(
       globalRoot,
       path.basename(backupPath).replace(/^\.openclaw\./, ".openclaw-"),
@@ -162,9 +165,11 @@ export async function discardPackageUpdateBackup(
     try {
       // npm may clean the disposable namespace on a later update. Only an
       // already-obsolete backup can enter it; failure preserves the artifact.
+      assertCurrent();
       await fs.rename(backupPath, retiredPath);
       return `preserved ${label} at ${retiredPath} for delayed cleanup`;
     } catch {
+      assertCurrent();
       return `preserved ${label} at ${backupPath}; remove it manually after verifying the installation`;
     }
   }

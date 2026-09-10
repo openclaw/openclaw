@@ -8014,9 +8014,10 @@ describe("update-cli", () => {
       JSON.parse(await fs.readFile(path.join(retained.backupRoot, "package.json"), "utf8")),
     ).toMatchObject({ version: "2026.4.21" });
     await expect(fs.readFile(packageEntry, "utf8")).resolves.toBe("candidate package entry\n");
-    const rollback = await retained.rollback();
+    const assertCurrent = () => {};
+    const rollback = await retained.rollback(assertCurrent);
     expect(rollback.exitCode).toBe(0);
-    await retained.complete({ activationVerified: false });
+    await retained.complete({ activationVerified: false }, assertCurrent);
     const doctorStep = result.steps.find((step) => step.name === "openclaw doctor");
     expect(doctorStep?.exitCode).toBe(1);
     expect(doctorStep?.advisory).toBeUndefined();

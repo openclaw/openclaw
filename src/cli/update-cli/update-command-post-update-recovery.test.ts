@@ -638,7 +638,7 @@ describe("failed package update recovery safety", () => {
       if (!retained) {
         throw new Error("The package owner did not retain its recovery transaction.");
       }
-      expect((await retained.rollback()).exitCode).toBe(1);
+      expect((await retained.rollback(() => {})).exitCode).toBe(1);
       expect(renameSpy).toHaveBeenCalledWith(retained.backupRoot, packageRoot);
     } finally {
       renameSpy.mockRestore();

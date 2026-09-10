@@ -70,8 +70,8 @@ it("preserves recovery material through rollback and finalizer completion", asyn
         ownerRevision: 1,
       }),
     ).toMatchObject({ status: "verified" });
-    expect(await transaction!.rollback()).toMatchObject({ exitCode: 0 });
-    await transaction!.complete({ activationVerified: false });
+    expect(await transaction!.rollback(() => {})).toMatchObject({ exitCode: 0 });
+    await transaction!.complete({ activationVerified: false }, () => {});
     await expect(
       fs.readFile(path.join(fixture.packageRoot, "package.json"), "utf8"),
     ).resolves.toContain('"version":"1.0.0"');
@@ -222,7 +222,7 @@ it.each([
         expect(await owner.rollback()).toMatchObject({ status: "verified" });
       }
       const descriptor = owner.descriptor();
-      await transaction!.complete({ activationVerified: !rollback });
+      await transaction!.complete({ activationVerified: !rollback }, () => {});
       await expect(fs.lstat(descriptor.shimBackupRoot!)).resolves.toBeDefined();
       expect(await owner.retire({ state: "unselected", ownerRevision: 1 })).toMatchObject({
         status: "verified",
@@ -254,7 +254,7 @@ it("reports and preserves the displaced candidate when rollback compensation als
       return original(source, destination);
     });
     try {
-      expect(await f.transaction.rollback()).toMatchObject({
+      expect(await f.transaction.rollback(() => {})).toMatchObject({
         exitCode: 1,
         activePackageRoot: null,
         stderrTail: expect.stringContaining(displaced),
@@ -262,7 +262,7 @@ it("reports and preserves the displaced candidate when rollback compensation als
     } finally {
       rename.mockRestore();
     }
-    await f.transaction.complete({ activationVerified: false });
+    await f.transaction.complete({ activationVerified: false }, () => {});
     await expect(fs.readFile(path.join(displaced, "package.json"), "utf8")).resolves.toContain(
       '"version":"2.0.0"',
     );
@@ -365,7 +365,7 @@ it.each(["none", "between roots", "partial tree"] as const)(
         status: "verified",
         descriptor: { retention: selected },
       });
-      await f.transaction.complete({ activationVerified: true });
+      await f.transaction.complete({ activationVerified: true }, () => {});
       await expect(fs.stat(f.transaction.backupRoot)).resolves.toBeDefined();
       const loaded = await reopened(f.recovery);
       if (loaded.status !== "ready") {
@@ -641,7 +641,7 @@ it("reports restored absence without claiming that a previous runtime can restar
         })
       ).status,
     ).toBe("committed");
-    expect(await transaction!.rollback()).toMatchObject({
+    expect(await transaction!.rollback(() => {})).toMatchObject({
       exitCode: 1,
       activePackageRoot: null,
       stderrTail: "Package absence restored; no previous runtime is available to restart.",

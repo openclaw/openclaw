@@ -12,10 +12,15 @@ export type PackageUpdateTransaction = {
   backupRoot: string;
   recovery?: PackageRecoveryTransaction;
   assertRollbackSafe?: () => Promise<void>;
-  rollback: () => Promise<
+  rollback: (
+    assertCurrent: () => void,
+  ) => Promise<
     UpdateStepResult & { activePackageRoot: string | null; reason?: "rollback-project-changed" }
   >;
-  complete: (outcome: { activationVerified: boolean }) => Promise<UpdateStepResult | void>;
+  complete: (
+    outcome: { activationVerified: boolean },
+    assertCurrent: () => void,
+  ) => Promise<UpdateStepResult | void>;
 };
 
 // Service suspension and cancellation belong to the caller. Carry their exact
