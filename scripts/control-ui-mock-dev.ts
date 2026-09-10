@@ -1720,7 +1720,7 @@ async function createChatPickerScenario(
   ]);
   const sessionFileCases = [
     {
-      match: { sessionKey: "agent:alpha" },
+      match: { sessionKey: "agent:main:main" },
       response: {
         browser: {
           entries: [
@@ -1762,7 +1762,7 @@ async function createChatPickerScenario(
     },
   ];
   const sessionFileGetCases = sessionFiles.map((file) => ({
-    match: { sessionKey: "agent:alpha", path: file.path },
+    match: { sessionKey: "agent:main:main", path: file.path },
     response: {
       file: {
         ...file,
@@ -1775,7 +1775,7 @@ async function createChatPickerScenario(
     },
   }));
   const sessionFileSetCases = sessionFiles.map((file) => ({
-    match: { sessionKey: "agent:alpha", path: file.path },
+    match: { sessionKey: "agent:main:main", path: file.path },
     response: {
       file: {
         ...file,
@@ -3127,7 +3127,7 @@ async function createChatPickerScenario(
       "sessions.files.list": {
         cases: [
           {
-            match: { sessionKey: "agent:alpha", path: "ui" },
+            match: { sessionKey: "agent:main:main", path: "ui" },
             response: {
               browser: {
                 entries: [
@@ -3155,7 +3155,7 @@ async function createChatPickerScenario(
             },
           },
           {
-            match: { sessionKey: "agent:alpha", search: "chat" },
+            match: { sessionKey: "agent:main:main", search: "chat" },
             response: {
               browser: {
                 entries: [
@@ -3189,7 +3189,7 @@ async function createChatPickerScenario(
       "artifacts.list": {
         cases: [
           {
-            match: { sessionKey: "agent:alpha" },
+            match: { sessionKey: "agent:main:main" },
             response: { artifacts: [lobsterArtifact] },
           },
         ],
@@ -3197,7 +3197,7 @@ async function createChatPickerScenario(
       "artifacts.download": {
         cases: [
           {
-            match: { sessionKey: "agent:alpha", artifactId: lobsterArtifact.id },
+            match: { sessionKey: "agent:main:main", artifactId: lobsterArtifact.id },
             response: {
               artifact: lobsterArtifact,
               data: Buffer.from(lobsterSvg, "utf8").toString("base64"),
