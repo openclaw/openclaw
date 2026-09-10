@@ -6080,35 +6080,13 @@ describe("main-session-restart-recovery", () => {
   it.each([
     { label: "inherited full access", mode: "full", permissionMode: undefined, restricted: false },
     { label: "explicit full access", mode: "ask", permissionMode: "full", restricted: false },
-    {
-      label: "delegated full access",
-      mode: "full",
-      permissionMode: "full",
-      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-      recoveryPrompt: true,
-      restricted: true,
-    },
     { label: "inherited approvals", mode: "ask", permissionMode: undefined, restricted: true },
     { label: "explicit guarded access", mode: "full", permissionMode: "guarded", restricted: true },
   ] as const)("continues interrupted work with $label", async (testCase) => {
     const { mode, permissionMode, restricted } = testCase;
-    const provenance = "provenance" in testCase ? testCase.provenance : undefined;
-    const recoveryPrompt = "recoveryPrompt" in testCase && testCase.recoveryPrompt;
     const sessionsDir = await writeMainSessionTranscript(
       [
-        { role: "user", content: "do the thing", provenance },
-        ...(recoveryPrompt
-          ? [
-              {
-                role: "user",
-                content: "continue after restart",
-                provenance: {
-                  kind: "internal_system",
-                  sourceTool: "main_session_restart_recovery",
-                },
-              },
-            ]
-          : []),
+        { role: "user", content: "do the thing" },
         createAssistantToolCallMessage([
           { type: "text", text: "Running the check now." },
           {
@@ -6136,6 +6114,51 @@ describe("main-session-restart-recovery", () => {
         sessionKey: "agent:main:main",
       })?.restartRecoveryForceSafeTools === true,
     ).toBe(restricted);
+  });
+
+  it("fails delegated restart recovery before a sender-denied safe tool can run", async () => {
+    const sessionsDir = await writeMainSessionTranscript(
+      [
+        {
+          role: "user",
+          content: "read the file after restart",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+        {
+          role: "user",
+          content: "continue after restart",
+          provenance: {
+            kind: "internal_system",
+            sourceTool: "main_session_restart_recovery",
+          },
+        },
+        createAssistantToolCallMessage([
+          {
+            type: "toolCall",
+            id: "call-read-1",
+            name: "read",
+            arguments: { path: "/tmp/sender-denied" },
+          },
+        ]),
+      ],
+      { permissionMode: "full", restartRecoveryForceSafeTools: true },
+    );
+
+    await expectRecovery(
+      { started: 0, settled: 0, failed: 0, skipped: 1 },
+      { tools: { exec: { mode: "full" } } },
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(
+      loadSessionEntry({
+        storePath: path.join(sessionsDir, "sessions.json"),
+        sessionKey: "agent:main:main",
+      }),
+    ).toMatchObject({
+      abortedLastRun: false,
+      status: "failed",
+      mainRestartRecovery: { tombstone: expect.any(Object) },
+    });
   });
 
   it("reports an interrupted native tool outcome as unknown", async () => {

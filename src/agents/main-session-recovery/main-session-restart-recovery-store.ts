@@ -467,27 +467,6 @@ export async function recoverStore(params: {
       result[completed ? "settled" : "skipped"]++;
       continue;
     }
-    if (pendingAction === "fail") {
-      await resumeCurrent({
-        ...(entry.pendingFinalDelivery?.kind === "replayable"
-          ? { pendingFinalDeliveryText: entry.pendingFinalDelivery.text }
-          : {}),
-        forceRestartSafeTools: true,
-      });
-      continue;
-    }
-
-    if (
-      entry.pendingFinalDelivery?.kind === "replayable" &&
-      entry.restartRecoveryForceSafeTools === true
-    ) {
-      await resumeCurrent({
-        pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
-        forceRestartSafeTools: true,
-      });
-      continue;
-    }
-
     const execPolicy = resolveExecDefaults({
       cfg: params.cfg,
       agentId,
@@ -501,6 +480,7 @@ export async function recoverStore(params: {
       entry.restartRecoveryDeliveryMediaUrls === undefined &&
       entry.restartRecoveryDisableMessageTool !== true &&
       entry.restartRecoverySuppressTextDelivery !== true;
+    const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
     let replaySafeCheckpoint = false;
     let interSessionSource: boolean;
     let fullAccess: boolean;
@@ -516,7 +496,11 @@ export async function recoverStore(params: {
         maxMessages: 20,
         maxBytes: 256 * 1024,
       });
-      interSessionSource = hasInterSessionRecoverySource(messages);
+      const staleCompletionSource =
+        hasRecoveryRuns &&
+        !hasOnlyAnnounceRecoveryRuns(entry) &&
+        hasCompletionReportUserTail(messages);
+      interSessionSource = !staleCompletionSource && hasInterSessionRecoverySource(messages);
       fullAccess = configuredFullAccess && !interSessionSource;
       if (fullAccess && !entry.pendingFinalDelivery) {
         replaySafeCheckpoint = await readMainSessionReplaySafeCheckpoint(transcriptScope);
@@ -542,18 +526,9 @@ export async function recoverStore(params: {
     if (stopped()) {
       return result;
     }
-    if (entry.pendingFinalDelivery?.kind === "replayable") {
-      await resumeCurrent({
-        pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
-        forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
-      });
-      continue;
-    }
-
     // Completion reports are delivery turns, not human work. Same-process
     // rotation retains their announce run ids; a full restart can recover the
     // same fact from the already-persisted user-message provenance.
-    const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
     const completionSource = hasOnlyAnnounceRecoveryRuns(entry)
       ? "announce_runs"
       : !hasRecoveryRuns && hasCompletionReportUserTail(messages)
@@ -582,10 +557,48 @@ export async function recoverStore(params: {
       continue;
     }
 
+    if (interSessionSource) {
+      if (stopped()) {
+        return result;
+      }
+      const tombstone = await tombstoneMainRestartRecoveryWithNotice({
+        ...target,
+        cfg: params.cfg,
+        entry,
+        gatewayRuntime: params.gatewayRuntime,
+        observation: recoveryView.observation,
+        reason: "delegated restart recovery authority is unavailable",
+      });
+      if (tombstone === "notice_failed") {
+        result.failed++;
+      } else {
+        result.skipped++;
+      }
+      continue;
+    }
+
+    if (pendingAction === "fail") {
+      await resumeCurrent({
+        ...(entry.pendingFinalDelivery?.kind === "replayable"
+          ? { pendingFinalDeliveryText: entry.pendingFinalDelivery.text }
+          : {}),
+        forceRestartSafeTools: true,
+      });
+      continue;
+    }
+
+    if (entry.pendingFinalDelivery?.kind === "replayable") {
+      await resumeCurrent({
+        pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
+        forceRestartSafeTools:
+          entry.restartRecoveryForceSafeTools === true ||
+          hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
+      });
+      continue;
+    }
+
     const retainedSafeTools =
-      interSessionSource ||
-      replaySafeCheckpoint ||
-      (entry.restartRecoveryForceSafeTools === true && !fullAccess);
+      replaySafeCheckpoint || (entry.restartRecoveryForceSafeTools === true && !fullAccess);
     const resumePolicy = resolveMainSessionResumePolicy(
       messages,
       retainedSafeTools,
