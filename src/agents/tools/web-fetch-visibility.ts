@@ -7,7 +7,13 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isAsciiWhitespace, readTagToken } from "./web-fetch-html-tag.js";
+import {
+  readRawTextBounds,
+  readRawTextOpenTagName,
+  isAsciiWhitespace,
+  readTagToken,
+  skipHtmlComment,
+} from "./web-fetch-html-tag.js";
 
 // Compile property matchers once: this list is checked for every styled element.
 const HIDDEN_STYLE_PATTERNS = (
@@ -119,19 +125,10 @@ function isStyleHidden(style: string): boolean {
   return false;
 }
 
-// HTML attribute names are wider than tag names: framework syntax like
-// `@click` or `(click)` is legal, and stopping at the first such character
-// would abandon the whole attribute list and let a later `hidden`, `class`,
-// or `style` escape visibility filtering.
-function isAttributeNameChar(value: string): boolean {
-  return value !== "" && !isAsciiWhitespace(value) && value !== "/" && value !== "=";
-}
-
-// The fixed visibility attributes share one reader grammar. It walks real
-// attribute names instead of matching the raw attribute text: a substring like
-// "hidden" inside a quoted value (`title="The hidden cost of cloud"`) is part
-// of a value, not an attribute, and must not flip visibility.
-function createAttributeReader(attribute: "aria-hidden" | "class" | "hidden" | "style" | "type") {
+// Consume complete attributes so quoted values and framework names cannot become visibility names.
+function createAttributeReader(
+  attribute: "aria-hidden" | "class" | "hidden" | "style" | "type" | "encoding",
+) {
   return (attrs: string): string | undefined => {
     let pos = 0;
     while (pos < attrs.length) {
@@ -142,14 +139,20 @@ function createAttributeReader(attribute: "aria-hidden" | "class" | "hidden" | "
         pos += 1;
       }
       const nameStart = pos;
-      while (pos < attrs.length && isAttributeNameChar(attrs.charAt(pos))) {
+      // A leading equals sign is part of a malformed name, not a new value boundary.
+      if (attrs.charAt(pos) === "=") {
+        pos += 1;
+      }
+      while (
+        pos < attrs.length &&
+        !isAsciiWhitespace(attrs.charAt(pos)) &&
+        attrs.charAt(pos) !== "/" &&
+        attrs.charAt(pos) !== "="
+      ) {
         pos += 1;
       }
       if (pos === nameStart) {
-        // Nothing consumable here (a stray separator): skip it and keep
-        // scanning so later attributes are still classified.
-        pos += 1;
-        continue;
+        break;
       }
       const name = attrs.slice(nameStart, pos).toLowerCase();
       while (pos < attrs.length && isAsciiWhitespace(attrs.charAt(pos))) {
@@ -188,6 +191,7 @@ const readAriaHidden = createAttributeReader("aria-hidden");
 const readHidden = createAttributeReader("hidden");
 const readClass = createAttributeReader("class");
 const readStyle = createAttributeReader("style");
+const readEncoding = createAttributeReader("encoding");
 
 function shouldRemoveElement(tagNameRaw: string, attrs: string): boolean {
   const tagName = normalizeLowercaseStringOrEmpty(tagNameRaw);
@@ -221,133 +225,395 @@ function shouldRemoveElement(tagNameRaw: string, attrs: string): boolean {
   return false;
 }
 
-function popDroppedElement(dropStack: string[], tagName: string): void {
-  const index = dropStack.lastIndexOf(tagName);
-  if (index >= 0) {
-    dropStack.length = index;
-  }
-}
-
-// These elements may legally omit their end tag, and HTML closes a dropped one
-// implicitly when the same-name sibling or an ancestor end tag arrives. Without
-// this, a dropped <li>/<p>/<td> swallows the rest of the document.
-const OPTIONALLY_CLOSED_ELEMENTS = new Set(["dd", "dt", "li", "option", "p", "td", "th", "tr"]);
-
-// When one of these container end tags arrives, it implicitly closes the
-// keyed still-open element, because HTML lets those elements omit their end
-// tag and closes them via the container instead.
-const IMPLICIT_CONTAINER_CLOSE = new Map<string, ReadonlySet<string>>([
-  ["dd", new Set(["dl"])],
-  ["dt", new Set(["dl"])],
-  ["li", new Set(["menu", "ol", "ul"])],
-  ["option", new Set(["datalist", "optgroup", "select"])],
-  [
-    "p",
-    new Set([
-      "address",
-      "article",
-      "aside",
-      "blockquote",
-      "body",
-      "details",
-      "dialog",
-      "div",
-      "dl",
-      "fieldset",
-      "figcaption",
-      "figure",
-      "footer",
-      "form",
-      "header",
-      "hgroup",
-      "li",
-      "main",
-      "menu",
-      "nav",
-      "ol",
-      "section",
-      "table",
-      "td",
-      "th",
-      "ul",
-    ]),
-  ],
-  ["td", new Set(["table", "tr"])],
-  ["th", new Set(["table", "tr"])],
-  ["tr", new Set(["table"])],
+const LIST_CONTAINERS = new Set(["ul", "ol", "menu"]);
+const OPAQUE_TEXT_ELEMENTS = new Set([
+  "script",
+  "style",
+  "noscript",
+  "textarea",
+  "title",
+  "xmp",
+  "iframe",
+  "noembed",
+  "noframes",
+  "plaintext",
+]);
+const MATH_TEXT_INTEGRATION_POINTS = new Set(["mi", "mo", "mn", "ms", "mtext"]);
+const SVG_HTML_INTEGRATION_POINTS = new Set(["foreignobject", "desc", "title"]);
+// HTML's li start-tag rule stops at special elements other than address, div, and p.
+// Foreign-content containers also retain scope; void elements never enter the stack.
+const LIST_ITEM_BOUNDARIES = new Set([
+  "applet",
+  "article",
+  "aside",
+  "blockquote",
+  "body",
+  "button",
+  "caption",
+  "center",
+  "colgroup",
+  "dd",
+  "details",
+  "dialog",
+  "dir",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "frameset",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "head",
+  "header",
+  "hgroup",
+  "html",
+  "iframe",
+  "listing",
+  "main",
+  "marquee",
+  "math",
+  "menu",
+  "nav",
+  "noembed",
+  "noframes",
+  "noscript",
+  "object",
+  "ol",
+  "plaintext",
+  "pre",
+  "script",
+  "search",
+  "section",
+  "select",
+  "style",
+  "summary",
+  "svg",
+  "table",
+  "tbody",
+  "td",
+  "template",
+  "textarea",
+  "tfoot",
+  "th",
+  "thead",
+  "title",
+  "tr",
+  "ul",
+  "xmp",
 ]);
 
-// A same-name element reached across an intervening container (a nested <ul>
-// between two <li>s) is a descendant, not a sibling: closing it would release
-// the outer drop region and leak its content. Only implied-end-tag elements
-// (<p>) may sit between true siblings.
-function findSiblingScopeIndex(dropStack: string[], tagName: string): number {
-  for (let index = dropStack.length - 1; index >= 0; index -= 1) {
-    const name = dropStack[index] ?? "";
-    if (name === tagName) {
-      return index;
-    }
-    if (name !== "p") {
-      return -1;
-    }
-  }
-  return -1;
-}
+const DEFINITION_ITEMS = new Set(["dt", "dd"]);
+const LIST_ITEMS = new Set(["li"]);
+const DEFINITION_CONTAINERS = new Set(["dl"]);
+const PARAGRAPH_CLOSE_START = new Set([
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "dd",
+  "details",
+  "dialog",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hgroup",
+  "hr",
+  "li",
+  "listing",
+  "main",
+  "menu",
+  "nav",
+  "ol",
+  "p",
+  "plaintext",
+  "pre",
+  "search",
+  "section",
+  "table",
+  "ul",
+  "xmp",
+]);
+const BUTTON_SCOPE_BOUNDARIES = new Set([
+  "applet",
+  "button",
+  "caption",
+  "html",
+  "marquee",
+  "math",
+  "object",
+  "svg",
+  "table",
+  "td",
+  "template",
+  "th",
+]);
+const TABLE_SCOPE_BOUNDARIES = new Set(["html", "math", "svg", "table", "template"]);
+const PARAGRAPH_REQUIRED_END_PARENTS = new Set([
+  "a",
+  "audio",
+  "del",
+  "ins",
+  "map",
+  "noscript",
+  "video",
+]);
+const ROW_GROUPS = new Set(["tbody", "thead", "tfoot"]);
 
-function closeImplicitlyDroppedElement(dropStack: string[], tagName: string): boolean {
-  if (!OPTIONALLY_CLOSED_ELEMENTS.has(tagName)) {
-    return false;
-  }
-  const index = findSiblingScopeIndex(dropStack, tagName);
-  if (index >= 0) {
-    dropStack.length = index;
-    return true;
-  }
-  return false;
-}
-
-// An end tag for an element that was never opened is only trustworthy as a
-// region terminator when it is a container that implicitly closes a still-open
-// dropped element (like </ul> closing an omitted </li>). Any other unmatched
-// closer is stray markup, and releasing the region on it would leak the rest
-// of the hidden subtree.
-function findImplicitContainerCloseIndex(dropStack: string[], tagName: string): number {
-  for (let index = dropStack.length - 1; index >= 0; index -= 1) {
-    const containers = IMPLICIT_CONTAINER_CLOSE.get(dropStack[index] ?? "");
-    if (containers?.has(tagName)) {
-      return index;
-    }
-  }
-  return -1;
-}
+type OpenElement = {
+  name: string;
+  previousSameName: number | undefined;
+  special: number;
+  buttonBoundary: number;
+  tableBoundary: number;
+  selectOwner: number;
+  namespace: "html" | "math" | "svg";
+  childNamespace: "html" | "math" | "svg";
+};
 
 function removeMarkedElements(html: string): string {
   let output = "";
   let cursor = 0;
-  const dropStack: string[] = [];
+  // Scope facts belong to each open frame and restore when it closes. Indexed names
+  // avoid rescanning unchanged ancestry for malformed closers or repeated siblings.
+  const elements: OpenElement[] = [
+    {
+      name: "",
+      previousSameName: undefined,
+      special: 0,
+      buttonBoundary: 0,
+      tableBoundary: 0,
+      selectOwner: -1,
+      namespace: "html",
+      childNamespace: "html",
+    },
+  ];
+  const positions = new Map<string, number>();
+  let hiddenRoot = -1;
+
+  function closeElements(index: number): void {
+    while (elements.length > index) {
+      const element = elements.pop()!;
+      if (element.previousSameName === undefined) {
+        positions.delete(element.name);
+      } else {
+        positions.set(element.name, element.previousSameName);
+      }
+    }
+  }
+
+  function closeOptionalElement(index: number): void {
+    // Recovery cannot close a genuinely unclosed, non-optional hidden descendant.
+    if (
+      index > 0 &&
+      elements[index]!.namespace === "html" &&
+      (hiddenRoot < 0 || hiddenRoot <= index)
+    ) {
+      closeElements(index);
+      if (hiddenRoot === index) {
+        hiddenRoot = -1;
+      }
+    }
+  }
+
+  function lastOpen(names: readonly string[]): number {
+    let index = -1;
+    for (const name of names) {
+      const position = positions.get(name);
+      if (position !== undefined && position > index) {
+        index = position;
+      }
+    }
+    return index;
+  }
+
+  function scopedItem(items: Set<string>, owners: Set<string>): number {
+    const index = elements.at(-1)!.special;
+    if (index > 0 && items.has(elements[index]!.name)) {
+      const owner = elements[index - 1]!.special;
+      if (owners.has(elements[owner]!.name)) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  function paragraph(): number {
+    const index = positions.get("p");
+    return index !== undefined && index > elements.at(-1)!.buttonBoundary ? index : -1;
+  }
+
+  function tableScope() {
+    const table = elements.at(-1)!.tableBoundary;
+    const owner = elements[table]!.name === "table" ? table : -1;
+    const group = lastOpen(["tbody", "thead", "tfoot"]);
+    const row = lastOpen(["tr"]);
+    const cell = lastOpen(["td", "th"]);
+    return {
+      owner,
+      group: owner >= 0 && group > owner ? group : owner,
+      row: owner >= 0 && row > owner ? row : -1,
+      cell: owner >= 0 && row > owner && cell > row ? cell : -1,
+    };
+  }
+
+  function optionScope() {
+    const owner = elements.at(-1)!.selectOwner;
+    const group = lastOpen(["optgroup"]);
+    const option = lastOpen(["option"]);
+    return {
+      owner,
+      group: owner >= 0 && group > owner ? group : -1,
+      option: owner >= 0 && option > owner ? option : -1,
+    };
+  }
+
+  function closesOptionalElement(element: number, index: number): boolean {
+    if (element <= 0 || index >= element || elements[element]!.namespace !== "html") {
+      return false;
+    }
+    const name = elements[element]!.name;
+    if (name === "li" || DEFINITION_ITEMS.has(name)) {
+      const item =
+        name === "li"
+          ? scopedItem(LIST_ITEMS, LIST_CONTAINERS)
+          : scopedItem(DEFINITION_ITEMS, DEFINITION_CONTAINERS);
+      return item === element && elements[element - 1]!.special === index;
+    }
+    if (name === "p") {
+      const parent = elements[element - 1]!.name;
+      return (
+        paragraph() === element &&
+        !PARAGRAPH_REQUIRED_END_PARENTS.has(parent) &&
+        !parent.includes("-") &&
+        (index === element - 1 || closesOptionalElement(element - 1, index))
+      );
+    }
+    if (name === "td" || name === "th" || name === "tr" || ROW_GROUPS.has(name)) {
+      const scope = tableScope();
+      if (name === "td" || name === "th") {
+        return scope.cell === element && [scope.row, scope.group, scope.owner].includes(index);
+      }
+      if (name === "tr") {
+        return scope.row === element && [scope.group, scope.owner].includes(index);
+      }
+      return scope.group === element && index === scope.owner;
+    }
+    if (name === "option" || name === "optgroup") {
+      const scope = optionScope();
+      return name === "option"
+        ? scope.option === element && [scope.group, scope.owner].includes(index)
+        : scope.group === element && index === scope.owner;
+    }
+    return false;
+  }
+
+  function closeForStart(name: string): void {
+    if (PARAGRAPH_CLOSE_START.has(name)) {
+      closeOptionalElement(paragraph());
+    }
+    if (name === "li") {
+      closeOptionalElement(scopedItem(LIST_ITEMS, LIST_CONTAINERS));
+    } else if (DEFINITION_ITEMS.has(name)) {
+      closeOptionalElement(scopedItem(DEFINITION_ITEMS, DEFINITION_CONTAINERS));
+    } else if (name === "td" || name === "th" || name === "tr" || ROW_GROUPS.has(name)) {
+      if (tableScope().cell > 0) {
+        closeOptionalElement(paragraph());
+      }
+      closeOptionalElement(tableScope().cell);
+      if (name === "tr" || ROW_GROUPS.has(name)) {
+        closeOptionalElement(tableScope().row);
+      }
+      if (ROW_GROUPS.has(name)) {
+        const scope = tableScope();
+        if (scope.group > scope.owner) {
+          closeOptionalElement(scope.group);
+        }
+      }
+    } else if (name === "option" || name === "optgroup") {
+      const scope = optionScope();
+      const inSelect = scope.owner >= 0 && elements[scope.owner]!.name === "select";
+      // Body-mode datalist parsing only closes an option that is the current node.
+      if (inSelect || elements.at(-1)!.name === "option") {
+        closeOptionalElement(scope.option);
+      }
+      if (name === "optgroup" && inSelect) {
+        closeOptionalElement(scope.group);
+      }
+    }
+  }
+
+  function openElement(name: string, attrs: string, namespace: OpenElement["namespace"]): void {
+    const parent = elements.at(-1)!;
+    const index = elements.length;
+    const foreign = name === "math" || name === "svg";
+    const encoding =
+      namespace === "math" && name === "annotation-xml"
+        ? readEncoding(attrs)?.toLowerCase()
+        : undefined;
+    const htmlChildren =
+      (namespace === "math" &&
+        (MATH_TEXT_INTEGRATION_POINTS.has(name) ||
+          encoding === "text/html" ||
+          encoding === "application/xhtml+xml")) ||
+      (namespace === "svg" && SVG_HTML_INTEGRATION_POINTS.has(name));
+    elements.push({
+      name,
+      previousSameName: positions.get(name),
+      special: name === "li" || LIST_ITEM_BOUNDARIES.has(name) ? index : parent.special,
+      buttonBoundary: BUTTON_SCOPE_BOUNDARIES.has(name) ? index : parent.buttonBoundary,
+      tableBoundary: TABLE_SCOPE_BOUNDARIES.has(name) ? index : parent.tableBoundary,
+      selectOwner:
+        name === "select" || name === "datalist"
+          ? index
+          : foreign || name === "html" || name === "template"
+            ? -1
+            : parent.selectOwner,
+      namespace,
+      childNamespace: htmlChildren ? "html" : namespace,
+    });
+    positions.set(name, index);
+  }
 
   while (cursor < html.length) {
     const tagStart = html.indexOf("<", cursor);
     if (tagStart < 0) {
-      if (dropStack.length === 0) {
+      if (hiddenRoot < 0) {
         output += html.slice(cursor);
       }
       break;
     }
 
-    if (dropStack.length === 0) {
+    if (hiddenRoot < 0) {
       output += html.slice(cursor, tagStart);
     }
 
     if (html.startsWith("<!--", tagStart)) {
-      const commentEnd = html.indexOf("-->", tagStart + 4);
-      cursor = commentEnd < 0 ? html.length : commentEnd + 3;
+      cursor = skipHtmlComment(html, tagStart);
       continue;
     }
 
     const read = readTagToken(html, tagStart, "visibility");
     if (!read) {
-      if (dropStack.length === 0) {
+      if (hiddenRoot < 0) {
         output += html.slice(tagStart);
       }
       break;
@@ -356,55 +622,78 @@ function removeMarkedElements(html: string): string {
     const token = html.slice(tagStart, read.next);
     const parsed = read.token;
     if (!parsed) {
-      if (dropStack.length === 0) {
+      if (hiddenRoot < 0) {
         output += token;
       }
       cursor = read.next;
       continue;
     }
 
-    if (dropStack.length > 0) {
-      if (parsed.closing) {
-        if (dropStack.lastIndexOf(parsed.name) >= 0) {
-          popDroppedElement(dropStack, parsed.name);
-        } else {
-          const implicitCloseIndex = findImplicitContainerCloseIndex(dropStack, parsed.name);
-          if (implicitCloseIndex >= 0) {
-            // The dropped element's own end tag was omitted, so this container
-            // end tag closes the drop region. The container's end tag belongs
-            // to the surviving markup.
-            dropStack.length = implicitCloseIndex;
-            output += token;
-          }
-          // Otherwise this closer matches nothing still open: stray markup
-          // inside the hidden region stays suppressed.
-        }
-      } else if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.name)) {
-        if (closeImplicitlyDroppedElement(dropStack, parsed.name)) {
-          // A same-name sibling implicitly closed the dropped element (HTML
-          // omits </li>/<p>/<td> freely). Re-evaluate this sibling: it is only
-          // dropped when it is hidden in its own right.
-          if (!shouldRemoveElement(parsed.name, parsed.attrs)) {
-            output += token;
-          } else {
-            dropStack.push(parsed.name);
-          }
-        } else {
-          dropStack.push(parsed.name);
-        }
+    const parent = elements.at(-1)!;
+    let namespace = parent.childNamespace;
+    if (
+      parent.namespace === "math" &&
+      MATH_TEXT_INTEGRATION_POINTS.has(parent.name) &&
+      (parsed.name === "mglyph" || parsed.name === "malignmark")
+    ) {
+      namespace = "math";
+    } else if (namespace === "html" && (parsed.name === "math" || parsed.name === "svg")) {
+      namespace = parsed.name;
+    }
+    if (
+      !parsed.closing &&
+      namespace === "html" &&
+      OPAQUE_TEXT_ELEMENTS.has(parsed.name) &&
+      readRawTextOpenTagName(html, tagStart, OPAQUE_TEXT_ELEMENTS) === parsed.name
+    ) {
+      closeForStart(parsed.name);
+      const bounds =
+        parsed.name === "plaintext"
+          ? { contentEnd: html.length, end: html.length }
+          : readRawTextBounds(html, parsed.name, read.next, "visibility");
+      if (hiddenRoot < 0 && !shouldRemoveElement(parsed.name, parsed.attrs)) {
+        // Readability's DOM parser does not recognize double-escaped script data.
+        // Empty comments preserve token boundaries without retaining their hidden text.
+        output +=
+          parsed.name === "script"
+            ? token +
+              html
+                .slice(read.next, bounds.contentEnd)
+                .replace(/<!--[\s\S]*?(?:-->|$)/g, "<!---->") +
+              html.slice(bounds.contentEnd, bounds.end)
+            : html.slice(tagStart, bounds.end);
       }
-      cursor = read.next;
+      cursor = bounds.end;
       continue;
     }
 
     if (parsed.closing) {
-      output += token;
-    } else if (shouldRemoveElement(parsed.name, parsed.attrs)) {
-      if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.name)) {
-        dropStack.push(parsed.name);
+      const index = positions.get(parsed.name);
+      const visible = hiddenRoot < 0;
+      const closesHiddenOptional = index !== undefined && closesOptionalElement(hiddenRoot, index);
+      if (index !== undefined && (visible || index >= hiddenRoot || closesHiddenOptional)) {
+        closeElements(index);
+        if (hiddenRoot >= index) {
+          hiddenRoot = -1;
+        }
+      }
+      if (visible || closesHiddenOptional) {
+        output += token;
       }
     } else {
-      output += token;
+      if (namespace === "html") {
+        closeForStart(parsed.name);
+      }
+      const hidden = hiddenRoot >= 0 || shouldRemoveElement(parsed.name, parsed.attrs);
+      if (!hidden) {
+        output += token;
+      }
+      if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.name)) {
+        if (hidden && hiddenRoot < 0) {
+          hiddenRoot = elements.length;
+        }
+        openElement(parsed.name, parsed.attrs, namespace);
+      }
     }
     cursor = read.next;
   }

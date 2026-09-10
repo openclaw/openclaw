@@ -11,6 +11,47 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
   const grin = String.fromCodePoint(0x1f600); // 😀 — an astral (> U+FFFF) code point
   const doubleT = String.fromCodePoint(0x1d54b); // 𝕋 — mathematical double-struck capital T
 
+  it.each(["script.foo", "textarea.foo", "title.foo", "plaintext.foo", " script", "\u00a0script"])(
+    "filters hidden content inside the ordinary element %s",
+    async (name) => {
+      const html = `<${name}><p hidden>Secret data</p></${name}><p>Visible sibling</p>`;
+      const result = await extractBasicHtmlContent({ html, extractMode: "text" });
+      expect(result?.text).toContain("Visible sibling");
+      expect(result?.text).not.toContain("Secret data");
+    },
+  );
+
+  it.each(["<!-->", "<!--->", "<!-- Secret comment --!>"])(
+    "retains visible text after the recovered comment boundary %s",
+    async (comment) => {
+      const result = await extractBasicHtmlContent({
+        html: `<p>Visible before</p>${comment}<p>Visible after</p>`,
+        extractMode: "text",
+      });
+      expect(result?.text).toBe("Visible before\nVisible after");
+    },
+  );
+
+  it.each(['x</script data-note="<!--">', "<!-- Secret script text</script>"])(
+    "preserves the script closing boundary around %s",
+    async (script) => {
+      const html = `<p>Visible before</p><script>${script}<p>Visible after</p>`;
+      expect(htmlToMarkdown(html).text).toBe("Visible before\nVisible after");
+      const result = await extractBasicHtmlContent({ html, extractMode: "text" });
+      expect(result?.text).toBe("Visible before\nVisible after");
+    },
+  );
+
+  it.each(["</scr<!-- -->ipt>", "</script<!-- -->>"])(
+    "keeps script delimiters separated around %s",
+    async (delimiter) => {
+      const html = `<script>${delimiter}<p>Secret data</p></script><p>Visible sibling</p>`;
+      expect(htmlToMarkdown(html).text).toBe("Visible sibling");
+      const result = await extractBasicHtmlContent({ html, extractMode: "text" });
+      expect(result?.text).toBe("Visible sibling");
+    },
+  );
+
   it("decodes astral numeric entities via code points instead of truncating to garbage", () => {
     expect(htmlToMarkdown(`<p>I &#128512; this</p>`).text).toBe(`I ${grin} this`);
     expect(htmlToMarkdown(`<p>&#x1F600;</p>`).text).toBe(grin);
@@ -72,6 +113,17 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(htmlToMarkdown(`<p>Visible</p><script data=">IGNORE</script><p>Shown</p>`).text).toBe(
       "Visible\nShown",
     );
+  });
+
+  it("keeps double-escaped script data out of rendered text", () => {
+    expect(
+      htmlToMarkdown("<script><!--<script></script><p>Secret data</p>--></script><p>Visible</p>")
+        .text,
+    ).toBe("Visible");
+  });
+
+  it("returns to normal script data after an empty escaped comment", () => {
+    expect(htmlToMarkdown("<script><!--><script></script><p>Visible</p>").text).toBe("Visible");
   });
 
   it("does not end raw-text blocks inside opener attributes", () => {
