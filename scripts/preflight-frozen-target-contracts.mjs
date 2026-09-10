@@ -258,7 +258,14 @@ function consumerForLane(name) {
   if (name === "live-mcp-code-mode-gateway") {
     return "mcp-code-mode-gateway";
   }
-  if (/^bundled-plugin-install-uninstall(-|$)/u.test(name)) {
+  if (name === "live-gateway") {
+    return "live-cli-backend";
+  }
+  if (
+    name === "mcp-channels" ||
+    name === "kitchen-sink-rpc" ||
+    /^bundled-plugin-install-uninstall(-|$)/u.test(name)
+  ) {
     return "plugins";
   }
   return Object.hasOwn(shellOwners, name) || Object.hasOwn(targetFiles, name) ? name : null;

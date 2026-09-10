@@ -144,6 +144,173 @@ function fixture(
   return { root, selected, tooling, run, bin };
 }
 
+describe("frozen admission Docker consumer aliases", () => {
+  const cliMetadata = "scripts/print-cli-backend-live-metadata.ts";
+  const pluginAssertions = "scripts/e2e/lib/plugins/assertions.mjs";
+  const aliases = [
+    {
+      lane: "live-gateway",
+      consumer: "live-cli-backend",
+      path: cliMetadata,
+      current: "export function resolveCliBackendDockerPackages() {}",
+      legacy: "// Released metadata without the package resolver.",
+      mode: "OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE",
+    },
+    ...["mcp-channels", "kitchen-sink-rpc"].map((lane) => ({
+      lane,
+      consumer: "plugins",
+      path: pluginAssertions,
+      current: "export function assertPluginUninstallConfigState() {}",
+      legacy: "export function assertPluginTgzRemoved() {}",
+      mode: "OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE",
+    })),
+  ];
+  const executionSentinel = [
+    'import { writeFileSync } from "node:fs";',
+    'writeFileSync(`${process.env.HOME}/selected-code-executed`, "executed");',
+  ].join("\n");
+
+  it.each(aliases)(
+    "rejects a missing committed $lane contract before emitting admission",
+    ({ lane, path, current }) => {
+      const source = `${executionSentinel}\n${current}\n`;
+      const f = fixture({ [path]: source });
+      const tree = f.selected.git("rev-parse", "HEAD^{tree}");
+      const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
+      f.selected.git("config", "remote.origin.url", "fixture::unavailable");
+      f.selected.git("config", "remote.origin.promisor", "true");
+      f.selected.git("config", "extensions.partialClone", "origin");
+      f.selected.git("config", "protocol.fixture.allow", "always");
+      rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+      expect(f.selected.git("rev-parse", "HEAD^{tree}")).toBe(tree);
+      expect(readFileSync(join(f.selected.root, path), "utf8")).toBe(source);
+
+      const result = f.run({ docker: { lanes: [lane] } });
+      expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("unable to read selected source");
+      expect(result.stdout).toBe("");
+
+      const currentOnly = f.run(
+        { docker: { lanes: [lane] } },
+        { allowFrozenTargetScenarioOmissions: false },
+      );
+      expect(currentOnly.status, currentOnly.stderr).toBe(0);
+      expect(JSON.parse(currentOnly.stdout).sources.selected).toEqual([]);
+      expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+    },
+  );
+
+  it.each(
+    aliases.flatMap((alias) =>
+      (["current", "legacy"] as const).map((dialect) => Object.assign({}, alias, { dialect })),
+    ),
+  )("admits $lane with the committed $dialect contract", (alias) => {
+    const { lane, consumer, path, mode, dialect } = alias;
+    const f = fixture({ [path]: `${executionSentinel}\n${alias[dialect]}\n` });
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.selection.consumers).toEqual([consumer]);
+    expect(record.contracts).toEqual([
+      {
+        consumer,
+        status: "ADMITTED",
+        modes: {
+          [mode]: dialect,
+          ...(consumer === "plugins"
+            ? { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "current" }
+            : {}),
+        },
+        files: [],
+      },
+    ]);
+    expect(record.selectedSha).toBe(f.selected.sha);
+    expect(record.toolingSha).toBe(f.tooling.sha);
+    expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+    expect(existsSync(join(f.selected.root, "node_modules"))).toBe(false);
+    expect(existsSync(join(f.tooling.root, "node_modules"))).toBe(false);
+  });
+
+  it.each(aliases)(
+    "preserves the legitimate absent-file fallback for $lane",
+    ({ lane, consumer, mode }) => {
+      const f = fixture();
+      const result = f.run({ docker: { lanes: [lane] } });
+      expect(result.status, result.stderr).toBe(0);
+      const record = JSON.parse(result.stdout);
+      expect(record.contracts).toEqual([
+        {
+          consumer,
+          status: "ADMITTED",
+          modes: {
+            [mode]: consumer === "plugins" ? "current" : "legacy",
+            ...(consumer === "plugins"
+              ? { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "current" }
+              : {}),
+          },
+          files: [],
+        },
+      ]);
+      expect(record.sources.selected).toEqual([]);
+    },
+  );
+
+  it("deduplicates both plugin aliases without selecting kitchen-sink-plugin files", () => {
+    const f = fixture({
+      [pluginAssertions]: `${executionSentinel}\nexport function assertPluginTgzRemoved() {}\n`,
+    });
+    const result = f.run({ docker: { lanes: ["mcp-channels", "kitchen-sink-rpc"] } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker.lanes.toSorted()).toEqual(["kitchen-sink-rpc", "mcp-channels"]);
+    expect(record.selection.consumers).toEqual(["plugins"]);
+    expect(record.contracts).toEqual([
+      {
+        consumer: "plugins",
+        status: "ADMITTED",
+        modes: {
+          OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy",
+          OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "current",
+        },
+        files: [],
+      },
+    ]);
+    expect(record.selectedSha).toBe(f.selected.sha);
+    for (const source of [f.selected, f.tooling]) {
+      expect(existsSync(join(source.root, "scripts/e2e/lib/kitchen-sink-plugin"))).toBe(false);
+    }
+    expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+  });
+
+  it.each([
+    { lane: "live-gateway", removed: [pluginAssertions], consumer: "live-cli-backend" },
+    { lane: "mcp-channels", removed: [cliMetadata], consumer: "plugins" },
+    { lane: "kitchen-sink-rpc", removed: [cliMetadata], consumer: "plugins" },
+    { lane: "docker-package-install", removed: [cliMetadata, pluginAssertions], consumer: null },
+  ])("keeps unreadable unrelated contracts inert for $lane", ({ lane, removed, consumer }) => {
+    const f = fixture({
+      [cliMetadata]: `${executionSentinel}\nexport function resolveCliBackendDockerPackages() {}\n`,
+      [pluginAssertions]: `${executionSentinel}\nexport function assertPluginUninstallConfigState() {}\n`,
+    });
+    for (const path of removed) {
+      const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
+      rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+    }
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.selection.consumers).toEqual(consumer ? [consumer] : []);
+    expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
+      consumer ? [consumer] : [],
+    );
+    expect(record.selectedSha).toBe(f.selected.sha);
+    expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+  });
+});
+
 describe("frozen admission bootstrap repairs", () => {
   const recipeDirectory = "scripts/e2e/lib/upgrade-survivor/config-recipe";
   const reader = "scripts/lib/frozen-target-source.mjs";
