@@ -17,7 +17,12 @@ export function isAvatarImageMimeType(value: string): boolean {
   return /^image\//i.test(value);
 }
 
+/** Detects an `image/*` data URL before the renderable size bound is applied. */
+export function isAvatarImageDataUrl(value: string): boolean {
+  return AVATAR_IMAGE_DATA_URL_RE.test(value);
+}
+
 /** Accepts image data URLs that fit the Gateway and Control UI payload boundary. */
 export function isRenderableAvatarImageDataUrl(value: string): boolean {
-  return value.length <= AVATAR_MAX_DATA_URL_CHARS && AVATAR_IMAGE_DATA_URL_RE.test(value);
+  return value.length <= AVATAR_MAX_DATA_URL_CHARS && isAvatarImageDataUrl(value);
 }
