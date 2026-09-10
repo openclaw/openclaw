@@ -1,26 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth-method.js";
-import type { ProviderAuthContext } from "../plugins/provider-authentication.types.js";
+import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
+import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-auth-method.js";
+import type { ProviderAuthContext } from "../../plugins/provider-authentication.types.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
-} from "../process/gateway-work-admission.js";
-import { createNonExitingRuntime } from "../runtime.js";
-import { createDeferredCore } from "../shared/deferred.js";
+} from "../../process/gateway-work-admission.js";
+import { createNonExitingRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createProviderBrowserAuthSession,
   handleProviderOAuthCallback,
   PROVIDER_OAUTH_CALLBACK_PATH,
-} from "./provider-browser-auth.js";
+} from "../provider-browser-auth.js";
 import {
   AUTH_TOKEN,
   createRequest,
   createResponse,
   dispatchRequest,
   withGatewayServer,
-} from "./server-http.test-harness.js";
-import { prepareTailscalePublishedOrigin } from "./tailscale-published-origin.js";
+} from "../server-http.test-harness.js";
+import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 
 let clearOrigin: () => void;
 beforeEach(() => {
@@ -195,7 +195,7 @@ describe("provider browser sign-in", () => {
     session.close();
   });
 
-  it("gives setup and login methods the same callback capability and closes retained copies", async () => {
+  it("forwards caller-owned browser authorization and rejects retained copies after closure", async () => {
     const opened = createDeferredCore<string>();
     const run = vi.fn(async (context: ProviderAuthContext) => {
       const result = await context.oauth.authorize!({
@@ -207,17 +207,22 @@ describe("provider browser sign-in", () => {
       expect(result.code).toBe("valid");
       return { profiles: [] };
     });
+    const browser = createProviderBrowserAuthSession({
+      openUrl: async (url) => opened.resolve(url),
+    });
     const result = runProviderPluginAuthMethodUnpersisted({
       method: { id: "oauth", label: "Sign in", kind: "oauth", run },
       config: {},
       runtime: createNonExitingRuntime(),
       prompter: createWizardPrompter(),
       isRemote: true,
-      openUrl: async (url) => opened.resolve(url),
+      signal: browser.signal,
+      browserAuthorization: browser.authorize,
     });
     await opened.promise;
     callback("state=login-state&code=valid");
     await expect(result).resolves.toEqual({ profiles: [] });
+    browser.close();
     const context = run.mock.calls[0]![0];
     await expect(
       context.oauth.authorize!({

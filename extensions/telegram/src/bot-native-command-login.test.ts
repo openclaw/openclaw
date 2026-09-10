@@ -334,7 +334,7 @@ describe("registerTelegramNativeCommands /login", () => {
   });
 
   it("rejects /login for authorized senders who are not owners", async () => {
-    const loginFlow = vi.fn(async () => ({
+    const loginFlow = vi.fn<TelegramLoginFlow>(async () => ({
       providerId: "openai",
       methodId: "device-code",
       authRefresh: "refreshed",
@@ -395,7 +395,7 @@ describe("registerTelegramNativeCommands /login", () => {
     const finish = createDeferred<void>();
     const signals: AbortSignal[] = [];
     let settled = 0;
-    const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
+    const loginFlow = vi.fn<TelegramLoginFlow>(async (params) => {
       if (!params.signal) {
         throw new Error("Expected login cancellation signal.");
       }

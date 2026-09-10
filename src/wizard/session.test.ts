@@ -178,7 +178,7 @@ describe("WizardSession", () => {
   test.each(["done", "cancelled"] as const)(
     "keeps a browser waiting link through progress until %s without an answer",
     async (status) => {
-      const callback = createDeferredCore<void>();
+      const callback = createDeferredCore();
       const ready = createDeferredCore<WizardPrompter>();
       const destination = "https://provider.example/oauth?state=state-1";
       const session = new WizardSession(async (prompter) => {

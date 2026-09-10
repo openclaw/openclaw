@@ -11,7 +11,9 @@ import {
 } from "../../plugins/provider-login-options.js";
 import { createNonExitingRuntime } from "../../runtime.js";
 import { WizardSession } from "../../wizard/session.js";
+import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
 import { bindWizardLoginOwner } from "../server-wizard-sessions.js";
+import { getTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import { refreshModelAuthStateAfterMutation } from "./models-auth-refresh.js";
 import {
   createAdmittedWizardSession,
@@ -88,35 +90,51 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
       assertCurrent();
       return new WizardSession(
         async (prompter, signal, runner) => {
-          const result = await runModelsAuthLoginFlowCore({
-            provider: choice.providerId,
-            method: choice.methodId,
-            ownerPluginId: choice.pluginId,
-            credentialOnly: true,
-            agent: params.agentId,
-            config: context.getRuntimeConfig(),
-            runtime: createNonExitingRuntime(),
-            prompter,
-            signal,
-            isRemote: true,
-            openUrl: async (url) => {
-              assertCurrent();
-              await prompter.openUrl?.(url);
-            },
-            assertCurrent: () => {
-              signal.throwIfAborted();
-              assertCurrent();
-            },
-            beforePersistentEffect: () => {
-              signal.throwIfAborted();
-              assertCurrent();
-              runner.lockCancellation();
-            },
-            refreshAfterLogin: (agentId) =>
-              refreshModelAuthStateAfterMutation(context, "login", agentId),
-          });
-          if (result.profiles.length === 0) {
-            throw new Error(`${choice.choiceLabel} did not return a credential profile.`);
+          const openUrl = async (url: string) => {
+            assertFlowCurrent();
+            await prompter.openUrl?.(url);
+            assertFlowCurrent();
+          };
+          const published = getTailscalePublishedOrigin();
+          const browser =
+            published && client.browserOrigin?.origin === published.origin
+              ? createProviderBrowserAuthSession({
+                  signal: AbortSignal.any([signal, published.signal]),
+                  openUrl,
+                })
+              : undefined;
+          const assertFlowCurrent = () => {
+            signal.throwIfAborted();
+            assertCurrent();
+            browser?.assertCurrent();
+          };
+          try {
+            const result = await runModelsAuthLoginFlowCore({
+              provider: choice.providerId,
+              method: choice.methodId,
+              ownerPluginId: choice.pluginId,
+              credentialOnly: true,
+              agent: params.agentId,
+              config: context.getRuntimeConfig(),
+              runtime: createNonExitingRuntime(),
+              prompter,
+              signal: browser?.signal ?? signal,
+              isRemote: true,
+              openUrl,
+              browserAuthorization: browser?.authorize,
+              assertCurrent: assertFlowCurrent,
+              beforePersistentEffect: () => {
+                assertFlowCurrent();
+                runner.lockCancellation();
+              },
+              refreshAfterLogin: (agentId) =>
+                refreshModelAuthStateAfterMutation(context, "login", agentId),
+            });
+            if (result.profiles.length === 0) {
+              throw new Error(`${choice.choiceLabel} did not return a credential profile.`);
+            }
+          } finally {
+            browser?.close();
           }
         },
         { timeoutMs: 25 * 60_000 },

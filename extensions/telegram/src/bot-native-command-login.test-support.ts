@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsAuthLoginFlowResult } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
+import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createCommandBot,
@@ -35,7 +36,7 @@ export function createOwnerLoginConfig(): OpenClawConfig {
 
 export function registerLoginCommand(params: {
   cfg: OpenClawConfig;
-  loginFlow: ReturnType<typeof vi.fn>;
+  loginFlow: NonNullable<TelegramNativeCommandDeps["runModelsAuthLoginFlow"]>;
   accountId?: string;
   allowFrom?: string[];
   abortSignal?: AbortSignal;
