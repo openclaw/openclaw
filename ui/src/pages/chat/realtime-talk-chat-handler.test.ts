@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createChatHandler } from "./realtime-talk-chat-handler.js";
 
 function makePayload(runId: string, state: string, text?: string): ChatPayload {
@@ -8,7 +8,7 @@ function makePayload(runId: string, state: string, text?: string): ChatPayload {
 }
 
 function makeFrame(runId: string, state: string, text?: string): GatewayEventFrame {
-  return { event: "chat", payload: makePayload(runId, state, text) };
+  return { type: "event", event: "chat", payload: makePayload(runId, state, text) };
 }
 
 type ChatPayload = Parameters<
@@ -19,7 +19,7 @@ type ChatPayload = Parameters<
     : never
   : never;
 
-type GatewayEventFrame = { event: string; payload?: unknown };
+type GatewayEventFrame = { type: "event"; event: string; payload?: unknown };
 
 describe("chat handler buffering and bounds", () => {
   it("buffers terminal events from unknown runs before follow-up discovery", () => {
