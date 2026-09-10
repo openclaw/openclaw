@@ -9,8 +9,6 @@ import {
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
 import { renderBillingReplyCopy } from "../failover/user-copy.js";
-import { appendFailedCandidateAttempt } from "../model-fallback-attempt.js";
-import type { FallbackAttempt } from "../model-fallback.types.js";
 import {
   buildBlockedCliRunResult,
   buildCliRunResult,
@@ -235,20 +233,20 @@ describe("settleCliBackendOutcome failover auth mode", () => {
   });
 
   it("renders subscription billing copy for a subscription-auth CLI run", () => {
-    const error = settle({
-      provider: "claude-cli",
-      model: "claude-sonnet-5",
-      sessionId: "sess-1",
-      authMode: "oauth",
-    });
-    const attempts: FallbackAttempt[] = [];
-    appendFailedCandidateAttempt({
-      attempts,
-      candidate: { provider: "claude-cli", model: "claude-sonnet-5" },
-      error,
-    });
-    expect(renderBillingReplyCopy({ attempts })).toContain(
-      "check your account for subscription or usage limits",
-    );
+    // The settled error carries authMode ("carries..." case above); the reply
+    // copy selects it from the attempt record, so build that record directly.
+    expect(
+      renderBillingReplyCopy({
+        attempts: [
+          {
+            provider: "claude-cli",
+            model: "claude-sonnet-5",
+            reason: "billing",
+            error: "Credit balance is too low",
+            authMode: "oauth",
+          },
+        ],
+      }),
+    ).toContain("check your account for subscription or usage limits");
   });
 });
