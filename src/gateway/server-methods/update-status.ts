@@ -10,13 +10,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
-import { inspectUpdateRunAbandonment } from "../../infra/update-run-activity.js";
 import {
-  findActiveUpdateRun,
-  getUpdateRunAsync,
-  listUpdateRuns,
+  getUpdateRunWithReconciliationAsync,
   listUpdateRunsAsync,
-  reconcileAbandonedUpdateRuns,
+  reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import {
   getUpdateAvailable,
@@ -68,9 +65,15 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         );
       }
     }
-    reconcileAbandonedUpdateRuns();
-    const activeRun = findActiveUpdateRun();
-    const [lastRun] = listUpdateRuns({ limit: 1 });
+    try {
+      await reconcileAbandonedUpdateRunsAsync();
+    } catch (error) {
+      context?.logGateway?.warn(
+        `update.status reconciliation failed: ${formatErrorMessage(error)}`,
+      );
+    }
+    const [activeRun] = await listUpdateRunsAsync({ active: true, limit: 1 });
+    const [lastRun] = await listUpdateRunsAsync({ limit: 1 });
     const result = {
       sentinel,
       ...(activeRun ? { activeRun } : {}),
@@ -124,15 +127,13 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     }
     respond(true, result);
   },
-  "update.runs.get": async ({ params, respond }) => {
+  "update.runs.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUpdateRunsGetParams, "update.runs.get", respond)) {
       return;
     }
-    // Protected rows keep the asynchronous, artifact-preserving read path.
-    let run = await getUpdateRunAsync(params.runId);
-    if (run && inspectUpdateRunAbandonment(run)) {
-      const [reconciled] = reconcileAbandonedUpdateRuns({ runIds: [params.runId] });
-      run = reconciled ?? (await getUpdateRunAsync(params.runId));
+    const { run, reconciliationError } = await getUpdateRunWithReconciliationAsync(params.runId);
+    if (reconciliationError) {
+      context?.logGateway?.warn(`update.runs.get reconciliation failed: ${reconciliationError}`);
     }
     respond(true, { run: run ?? null });
   },

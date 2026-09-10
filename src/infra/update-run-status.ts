@@ -12,14 +12,20 @@ import {
 
 /** Status heals the bounded legacy defect while other recovery keeps its existing owner. */
 export function readUpdateRunStatus() {
+  let runReconciliationError: string | undefined;
   try {
     reconcileAbandonedUpdateRuns({ legacyOnly: true });
+  } catch (error) {
+    runReconciliationError = formatErrorMessage(error);
+  }
+  try {
     const activeRun = findActiveUpdateRun();
     const lastRun = listUpdateRuns({ limit: 1 })[0];
     const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
     const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
     const expired = listUpdateRuns({ limit: 1, reason: LEGACY_UPDATE_RUN_EXPIRED_REASON })[0];
     return {
+      ...(runReconciliationError ? { runReconciliationError } : {}),
       ...(activeRun ? { activeRun } : {}),
       ...(lastRun ? { lastRun } : {}),
       ...(staleGuidance && activeRun

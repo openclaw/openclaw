@@ -39,6 +39,12 @@ export function buildStatusUpdateRows(
   }
   const run = history.activeRun ?? history.lastRun;
   const rows = run ? [{ Item: "Update run", Value: renderUpdateRunReport(run).headline }] : [];
+  if (history.runReconciliationError) {
+    rows.push({
+      Item: "Update reconciliation",
+      Value: `Update run reconciliation failed: ${history.runReconciliationError}`,
+    });
+  }
   for (const advisory of history.advisories ?? []) {
     rows.push({ Item: "Update advisory", Value: advisory.message });
   }

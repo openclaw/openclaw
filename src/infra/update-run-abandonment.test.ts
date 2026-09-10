@@ -57,6 +57,43 @@ afterEach(() => {
 });
 
 describe("abandoned update runs", () => {
+  it.each(["young", "recovery", "live-driver", "legacy-only"] as const)(
+    "does not request write access for protected %s history",
+    (shape) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun(
+        {
+          trigger: "cli",
+          ...(shape === "legacy-only" ? { origin: { driver: exitedDriver() } } : {}),
+        },
+        options,
+      );
+      if (shape === "recovery") {
+        const from = {
+          root: options.env.OPENCLAW_STATE_DIR,
+          nodePath: process.execPath,
+          version: "2026.9.2",
+          buildId: null,
+        };
+        createRetainedUpdateRecovery(
+          { runId: run.runId, from, to: { ...from, version: "2026.9.3" } },
+          options,
+        );
+      } else if (shape === "live-driver") {
+        adoptUpdateRun(run.runId, options);
+      }
+      const before = getUpdateRun(run.runId, options);
+      vi.advanceTimersByTime((shape === "young" ? 1 : 25) * 60 * 60_000);
+      expect(
+        reconcileAbandonedUpdateRuns(
+          { legacyOnly: shape === "legacy-only" },
+          { ...options, readOnly: true },
+        ),
+      ).toEqual([]);
+      expect(getUpdateRun(run.runId, options)).toEqual(before);
+    },
+  );
+
   it.each([60_000, 24 * 60 * 60_000 - 60_000, 24 * 60 * 60_000, 24 * 60 * 60_000 + 1])(
     "expires only untouched legacy admissions older than 24 hours (age=%s)",
     (age) => {

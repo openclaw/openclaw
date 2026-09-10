@@ -17,6 +17,7 @@ import {
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { updateStatusCommand } from "./status.js";
 
 const runtime = vi.hoisted(() => ({
@@ -263,6 +264,52 @@ afterEach(() => {
 });
 
 describe("update status abandoned-run reporting", () => {
+  it.each(["json", "text", "status"])(
+    "preserves readable history when reconciliation is refused through %s",
+    async (surface) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
+      const run = createUpdateRun({ trigger: "cli" });
+      clock.mockReturnValue(now);
+      claimOpenClawStateOwnership("test-supervisor", {
+        env: { ...process.env, OPENCLAW_SUPERVISOR_MODE: "external" },
+      });
+      vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
+      if (surface === "status") {
+        const rows = buildStatusUpdateRows(null);
+        expect(rows).toContainEqual(
+          expect.objectContaining({
+            Item: "Update run",
+            Value: expect.stringContaining("update in progress: requested"),
+          }),
+        );
+        expect(rows).toContainEqual(
+          expect.objectContaining({
+            Item: "Update reconciliation",
+            Value: expect.stringContaining("externally supervised"),
+          }),
+        );
+      } else {
+        await updateStatusCommand({ json: surface === "json" });
+        if (surface === "json") {
+          const result = runtime.writeJson.mock.lastCall?.[0];
+          expect(result).toMatchObject({
+            activeRun: run,
+            lastRun: run,
+            runReconciliationError: expect.stringContaining("externally supervised"),
+          });
+          expect(result).not.toHaveProperty("runStatusError");
+        } else {
+          const output = runtime.log.mock.calls.flat().join("\n");
+          expect(output).toContain(run.runId);
+          expect(output).toContain("Update run reconciliation failed:");
+          expect(output).not.toContain("Update run status unavailable:");
+        }
+      }
+      expect(getUpdateRun(run.runId)).toEqual(run);
+    },
+  );
+
   it("does not advertise expiry for a legacy admission reserved by recovery", async () => {
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);

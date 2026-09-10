@@ -124,6 +124,12 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   );
   defaultRuntime.log("");
 
+  if ("runReconciliationError" in runStatus) {
+    defaultRuntime.log(
+      theme.warn(`Update run reconciliation failed: ${runStatus.runReconciliationError}`),
+    );
+    defaultRuntime.log("");
+  }
   if ("runStatusError" in runStatus) {
     defaultRuntime.log(theme.warn(`Update run status unavailable: ${runStatus.runStatusError}`));
     defaultRuntime.log("");
