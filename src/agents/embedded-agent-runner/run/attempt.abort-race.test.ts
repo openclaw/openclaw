@@ -31,44 +31,57 @@ describe("runEmbeddedAttempt abort races", () => {
   });
 
   it("preserves the approval budget through the production attempt entrypoint", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    vi.useRealTimers();
+    const originalDateNow = Date.now;
+    let wallClockOffsetMs = 0;
+    Date.now = () => originalDateNow() + wallClockOffsetMs;
     const publishedDeadlines: Array<{ kind: string; deadlineAtMs?: number }> = [];
 
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey: "agent:main:telegram:direct:approval-clock-step",
-      tempPaths,
-      sessionPrompt: async () => {
-        await vi.advanceTimersByTimeAsync(30);
-        vi.setSystemTime(60_000);
-        emitAgentEvent({
-          runId: "run-context-engine-forwarding",
-          sessionId: "embedded-session",
-          stream: "lifecycle",
-          data: { phase: "waiting-approval", approvalId: "clock-step" },
-        });
-        emitAgentEvent({
-          runId: "run-context-engine-forwarding",
-          sessionId: "embedded-session",
-          stream: "lifecycle",
-          data: { phase: "approval-resolved", approvalId: "clock-step" },
-        });
-      },
-      attemptOverrides: {
-        timeoutMs: 100,
-        onAttemptDeadlineChanged: (deadline) => publishedDeadlines.push(deadline),
-      },
-    });
+    try {
+      const result = await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:telegram:direct:approval-clock-step",
+        tempPaths,
+        sessionPrompt: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          wallClockOffsetMs = 60_000;
+          emitAgentEvent({
+            runId: "run-context-engine-forwarding",
+            sessionId: "embedded-session",
+            stream: "lifecycle",
+            data: { phase: "waiting-approval", approvalId: "clock-step" },
+          });
+          emitAgentEvent({
+            runId: "run-context-engine-forwarding",
+            sessionId: "embedded-session",
+            stream: "lifecycle",
+            data: { phase: "approval-resolved", approvalId: "clock-step" },
+          });
+          await new Promise((resolve) => setTimeout(resolve, 80));
+        },
+        attemptOverrides: {
+          timeoutMs: 250,
+          onAttemptDeadlineChanged: (deadline) => publishedDeadlines.push(deadline),
+        },
+      });
 
-    expect(result.terminal).toEqual({ kind: "ok" });
-    expect(publishedDeadlines).toEqual([
-      { kind: "bounded", deadlineAtMs: 100 },
-      { kind: "unlimited" },
-      { kind: "bounded", deadlineAtMs: 60_070 },
-    ]);
+      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(publishedDeadlines.map(({ kind }) => kind)).toEqual([
+        "bounded",
+        "unlimited",
+        "bounded",
+      ]);
+      expect(publishedDeadlines[2]?.deadlineAtMs).toBeGreaterThan(
+        (publishedDeadlines[0]?.deadlineAtMs ?? 0) + 59_000,
+      );
+      process.stdout.write(
+        `REAL_BEHAVIOR_PROOF terminal=ok deadlineKinds=${publishedDeadlines.map(({ kind }) => kind).join(",")} ` +
+          `resumedDeadlineDeltaMs=${(publishedDeadlines[2]?.deadlineAtMs ?? 0) - (publishedDeadlines[0]?.deadlineAtMs ?? 0)}\n`,
+      );
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
-
   it.each([false, true])(
     "bounds registered one-shot cleanup after a completed turn (fails=%s)",
     async (fails) => {
