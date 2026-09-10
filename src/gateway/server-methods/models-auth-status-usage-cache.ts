@@ -64,10 +64,20 @@ let usageMetricsGeneration = 0;
 
 const PROVIDER_USAGE_METRICS_REFRESH_INTERVAL_MS = 60_000;
 const SAFE_METRIC_DIMENSION_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const WINDOW_METRIC_DIMENSION_ALIASES = new Map([
+  ["Tokens (6h)", "tokens_6h"],
+  ["Tokens (15m)", "tokens_15m"],
+  ["Tokens (Limit)", "tokens_limit"],
+]);
 
 function safeMetricDimension(value: string): string {
   const trimmed = value.trim();
   return SAFE_METRIC_DIMENSION_RE.test(trimmed) ? trimmed : "unknown";
+}
+
+function safeWindowMetricDimension(value: string): string {
+  const trimmed = value.trim();
+  return WINDOW_METRIC_DIMENSION_ALIASES.get(trimmed) ?? safeMetricDimension(trimmed);
 }
 
 function providerUsageRefreshOutcome(
@@ -193,11 +203,11 @@ function recordProviderUsageMetricsRefresh(params: {
         ? snapshot.windows.map((window) =>
             window.resetAt === undefined
               ? {
-                  window: safeMetricDimension(window.label),
+                  window: safeWindowMetricDimension(window.label),
                   usedRatio: Math.min(1, Math.max(0, window.usedPercent / 100)),
                 }
               : {
-                  window: safeMetricDimension(window.label),
+                  window: safeWindowMetricDimension(window.label),
                   usedRatio: Math.min(1, Math.max(0, window.usedPercent / 100)),
                   resetTimestampSeconds: window.resetAt / 1000,
                 },

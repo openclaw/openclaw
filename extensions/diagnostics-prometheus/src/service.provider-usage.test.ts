@@ -84,7 +84,18 @@ describe("diagnostics-prometheus provider usage", () => {
       providers: [
         {
           provider: "openai",
-          windows: [{ window: "5h", usedRatio: 0.15, resetTimestampSeconds: 1_700_003_600 }],
+          windows: [
+            {
+              window: "tokens_6h",
+              usedRatio: 0.32,
+              resetTimestampSeconds: 1_700_003_600,
+            },
+            {
+              window: "tokens_15m",
+              usedRatio: 0.08,
+              resetTimestampSeconds: 1_700_000_900,
+            },
+          ],
           lastAttemptTimestampSeconds: 1_700_000_000,
           lastSuccessTimestampSeconds: 1_700_000_001,
           refreshSuccess: true,
@@ -93,7 +104,16 @@ describe("diagnostics-prometheus provider usage", () => {
       ],
     });
     expect(exporter.render()).toContain(
-      'openclaw_provider_usage_used_ratio{provider="openai",window="5h"} 0.15',
+      'openclaw_provider_usage_used_ratio{provider="openai",window="tokens_6h"} 0.32',
+    );
+    expect(exporter.render()).toContain(
+      'openclaw_provider_usage_used_ratio{provider="openai",window="tokens_15m"} 0.08',
+    );
+    expect(exporter.render()).toContain(
+      'openclaw_provider_usage_reset_timestamp_seconds{provider="openai",window="tokens_6h"} 1700003600',
+    );
+    expect(exporter.render()).toContain(
+      'openclaw_provider_usage_reset_timestamp_seconds{provider="openai",window="tokens_15m"} 1700000900',
     );
     expect(exporter.render()).toContain(
       'openclaw_provider_usage_refresh_success{provider="openai"} 1',

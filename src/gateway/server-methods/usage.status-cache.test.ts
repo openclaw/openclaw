@@ -453,6 +453,48 @@ describe("usage.status provider usage cache", () => {
     }
   });
 
+  it("preserves distinct bounded identities for provider token windows", async () => {
+    mocks.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [
+            { label: "Tokens (6h)", usedPercent: 32, resetAt: 1_700_003_600_000 },
+            { label: "Tokens (15m)", usedPercent: 8, resetAt: 1_700_000_900_000 },
+          ],
+        },
+      ],
+    });
+    const snapshots: Parameters<
+      Parameters<typeof observeProviderUsageMetrics>[0]["listener"]
+    >[0][] = [];
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: (snapshot) => snapshots.push(snapshot),
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers[0]?.windows).toEqual([
+          {
+            window: "tokens_6h",
+            usedRatio: 0.32,
+            resetTimestampSeconds: 1_700_003_600,
+          },
+          {
+            window: "tokens_15m",
+            usedRatio: 0.08,
+            resetTimestampSeconds: 1_700_000_900,
+          },
+        ]);
+      });
+    } finally {
+      release();
+    }
+  });
+
   it("classifies a refresh exception as a failed provider observation", async () => {
     mocks.loadProviderUsageSummary.mockRejectedValueOnce(new Error("401 Unauthorized"));
     const snapshots: Parameters<
