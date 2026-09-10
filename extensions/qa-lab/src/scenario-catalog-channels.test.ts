@@ -273,6 +273,26 @@ describe("qa scenario catalog channel contracts", () => {
     });
   });
 
+  it("keeps Telegram semantic receipts and compaction previews order-independent", () => {
+    const semantic = requireFlowScenario(
+      readQaScenarioById("telegram-semantic-formatting-boundaries"),
+    );
+    const compaction = requireFlowScenario(
+      readQaScenarioById("telegram-claude-cli-compaction-final-priority"),
+    );
+    const semanticFlow = JSON.stringify(semantic.execution.flow);
+    const compactionFlow = JSON.stringify(compaction.execution.flow);
+
+    expect(semanticFlow).toContain(
+      "received.some((message) => String(message.botApiMessageId) === String(receipt.messageId))",
+    );
+    expect(semanticFlow).not.toContain("received.at(-1)?.botApiMessageId");
+    expect(compactionFlow).toContain('"minimumPreviewEvents":2');
+    expect(compactionFlow).toContain("config.commentaryOne");
+    expect(compactionFlow).toContain("config.commentaryTwo");
+    expect(compactionFlow).toContain("Compacting context");
+  });
+
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
