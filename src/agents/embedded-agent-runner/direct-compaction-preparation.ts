@@ -50,6 +50,7 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionRuntimeParams & {
   sessionFile: string;
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
+  requestedRouteResolution?: "resolved";
   transcriptBytePreflightAuthority?: true;
   transcriptByteCompactionPersistence?: TranscriptByteCompactionPersistence;
 };
@@ -142,6 +143,7 @@ export async function prepareDirectCompactionAttempt(
   const { resolution: modelResolution } = await resolveTieredModel({
     provider: runtimeProvider,
     modelId,
+    requestedRouteResolution: params.requestedRouteResolution,
     agentDir,
     config: params.config,
     workspaceDir: resolvedWorkspace,
@@ -192,6 +194,7 @@ export async function prepareDirectCompactionAttempt(
   >[0]) =>
     resolveModelAsync(runtimeProvider, modelId, agentDir, config, {
       ...modelResolutionOptions,
+      modelIdSource: params.requestedRouteResolution === "resolved" ? "selected" : "input",
       skipAgentDiscovery: true,
       allowBundledStaticCatalogFallback: true,
       preferBundledStaticCatalogTransport: true,

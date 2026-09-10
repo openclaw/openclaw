@@ -1900,61 +1900,118 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
-  it("uses the session model fallback chain when overflow compaction fails", async () => {
-    sessionCompactImpl
-      .mockRejectedValueOnce(
-        Object.assign(new Error("primary compaction rate limited"), {
-          status: 429,
-          code: "rate_limit_exceeded",
-        }),
-      )
-      .mockResolvedValueOnce({
-        summary: "overflow fallback summary",
-        firstKeptEntryId: "entry-fallback",
-        tokensBefore: 120,
-        details: { ok: true },
-      });
-
-    const result = await compactEmbeddedAgentSessionDirect({
-      sessionId: "session-1",
-      sessionKey: TEST_SESSION_KEY,
-      sessionFile: TEST_SESSION_KEY,
-      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
-      provider: "openai",
-      model: "gpt-primary",
-      trigger: "overflow",
-      modelFallbacksOverride: ["anthropic/claude-fallback"],
-      config: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-primary",
-              fallbacks: [],
+  it.each([false, true])(
+    "preserves configured fallback identity through compaction (credential refresh=%s)",
+    async (credentialRefresh) => {
+      const provider = "compaction-fallback-fixture";
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: provider,
+            providers: [provider],
+            modelIdNormalization: {
+              providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
             },
           },
+        ],
+      });
+      const { normalizeStaticProviderModelId } =
+        await vi.importActual<typeof import("../model-ref-shared.js")>("../model-ref-shared.js");
+      const { shouldPreferProviderRuntimeResolvedModel } =
+        await import("../../plugins/provider-runtime.js");
+      const acquire = expectDefined(
+        acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
+        "prepared runtime fixture",
+      );
+      const resolveModel = expectDefined(
+        resolveModelAsyncMock.getMockImplementation(),
+        "model resolver fixture",
+      );
+      const preferRuntime = expectDefined(
+        vi.mocked(shouldPreferProviderRuntimeResolvedModel).getMockImplementation(),
+        "runtime metadata fixture",
+      );
+      const materializedModels: string[] = [];
+      acquireAgentRunPreparedModelRuntimeMock.mockImplementation(async (...args) => {
+        const lease = await acquire(...args);
+        return {
+          ...lease,
+          snapshot: {
+            ...lease.snapshot,
+            metadataSnapshot: { ...metadataSnapshot, workspaceDir: lease.snapshot.workspaceDir },
+          },
+        };
+      });
+      // Model the resolver's raw-input contract with the real captured alias policy.
+      resolveModelAsyncMock.mockImplementation(
+        async (providerId, modelId, agentDir, config, options) => {
+          const resolvedId =
+            options?.modelIdSource === "selected"
+              ? modelId
+              : normalizeStaticProviderModelId(providerId, modelId, {
+                  manifestPlugins: metadataSnapshot,
+                });
+          materializedModels.push(resolvedId);
+          return resolveModel(providerId, resolvedId, agentDir, config, options);
         },
-      } as never,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.result?.summary).toBe("overflow fallback summary");
-    const primaryCall = findMockCall(
-      resolveModelMock,
-      ([provider, modelId]) => provider === "openai" && modelId === "gpt-primary",
-    );
-    expect(primaryCall[2]).toBeTypeOf("string");
-    if (primaryCall[3] === undefined) {
-      throw new Error("Expected primary resolve-model options");
-    }
-    const fallbackCall = findMockCall(
-      resolveModelMock,
-      ([provider, modelId]) => provider === "anthropic" && modelId === "claude-fallback",
-    );
-    expect(fallbackCall[2]).toBeTypeOf("string");
-    if (fallbackCall[3] === undefined) {
-      throw new Error("Expected fallback resolve-model options");
-    }
-  });
+      );
+      vi.mocked(shouldPreferProviderRuntimeResolvedModel).mockImplementation(
+        ({ provider: candidateProvider }) => credentialRefresh && candidateProvider === provider,
+      );
+      resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
+      sessionCompactImpl
+        .mockRejectedValueOnce(
+          Object.assign(new Error("primary compaction rate limited"), {
+            status: 429,
+            code: "rate_limit_exceeded",
+          }),
+        )
+        .mockResolvedValueOnce({
+          summary: "overflow fallback summary",
+          firstKeptEntryId: "entry-fallback",
+          tokensBefore: 120,
+          details: { ok: true },
+        });
+      try {
+        const result = await compactEmbeddedAgentSessionDirect({
+          ...wrappedCompactionArgs({ provider, model: "primary" }),
+          trigger: "overflow",
+          modelFallbacksOverride: [`${provider}/entry`],
+          config: {
+            agents: { defaults: { model: { primary: `${provider}/primary`, fallbacks: [] } } },
+            models: {
+              providers: {
+                [provider]: {
+                  auth: "api-key",
+                  apiKey: "synthetic-fixture",
+                  baseUrl: "http://127.0.0.1:1/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+        });
+        expect(result, result.reason).toMatchObject({
+          ok: true,
+          result: { summary: "overflow fallback summary" },
+        });
+        expect(createAgentSessionMock.mock.calls.map(([input]) => input)).toEqual([
+          expect.objectContaining({ model: expect.objectContaining({ id: "primary" }) }),
+          expect.objectContaining({ model: expect.objectContaining({ id: "middle" }) }),
+        ]);
+        expect(materializedModels).not.toContain("final");
+        if (credentialRefresh) {
+          expect(
+            materializedModels.filter((model) => model === "middle").length,
+          ).toBeGreaterThanOrEqual(2);
+        }
+      } finally {
+        acquireAgentRunPreparedModelRuntimeMock.mockImplementation(acquire);
+        resolveModelAsyncMock.mockImplementation(resolveModel);
+        vi.mocked(shouldPreferProviderRuntimeResolvedModel).mockImplementation(preferRuntime);
+      }
+    },
+  );
 
   describe("safeguard failure provenance", () => {
     registerAgentSessionLoopTestLifecycle();
@@ -2708,34 +2765,50 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
-  it("does not reuse a source-provider profile for cross-provider compaction", async () => {
-    const result = await compactEmbeddedAgentSessionDirect({
-      ...wrappedCompactionArgs(),
-      provider: "openai",
-      model: "gpt-5.5",
-      authProfileId: "openai:work",
-      runtimeAuthPlan: {
-        providerForAuth: "openai",
-        modelId: "gpt-5.5",
-        authProfileProviderForAuth: "openai",
-        forwardedAuthProfileId: "openai:work",
-      },
-      config: {
-        agents: {
-          defaults: {
-            compaction: { model: "github-copilot/gpt-5.6-sol" },
+  it.each(["override", "fallback"] as const)(
+    "does not reuse a source-provider profile for cross-provider compaction (%s)",
+    async (targetSource) => {
+      const targetModel = "github-copilot/gpt-5.6-sol";
+      if (targetSource === "fallback") {
+        sessionCompactImpl.mockRejectedValueOnce(
+          Object.assign(new Error("primary compaction rate limited"), {
+            status: 429,
+            code: "rate_limit_exceeded",
+          }),
+        );
+      }
+      const result = await compactEmbeddedAgentSessionDirect({
+        ...wrappedCompactionArgs(),
+        provider: "openai",
+        model: "gpt-5.5",
+        authProfileId: "openai:test",
+        runtimeAuthPlan: {
+          providerForAuth: "openai",
+          modelId: "gpt-5.5",
+          authProfileProviderForAuth: "openai",
+          forwardedAuthProfileId: "openai:test",
+        },
+        config: {
+          agents: {
+            defaults:
+              targetSource === "override"
+                ? { compaction: { model: targetModel } }
+                : { model: { primary: "openai/gpt-5.5", fallbacks: [targetModel] } },
           },
         },
-      } as never,
-    });
+      });
 
-    expect(result.ok).toBe(true);
-    const initialResolveCall = resolveModelAsyncMock.mock.calls[0] as
-      | [string, string, string, unknown, { authProfileId?: string }?]
-      | undefined;
-    expect(initialResolveCall?.[0]).toBe("github-copilot");
-    expect(initialResolveCall?.[4]?.authProfileId).toBeUndefined();
-  });
+      expect(result, result.reason).toMatchObject({ ok: true, compacted: true });
+      const targetResolveCall = resolveModelAsyncMock.mock.calls.find(
+        ([provider]) => provider === "github-copilot",
+      );
+      expect(targetResolveCall).toBeDefined();
+      expect(targetResolveCall?.[4]?.authProfileId).toBeUndefined();
+      expectRecordFields(resolveEmbeddedAgentStreamMock.mock.lastCall?.[0], {
+        authProfileId: undefined,
+      });
+    },
+  );
 
   it("materializes subscription-auth OpenAI compaction while preserving logical context", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
