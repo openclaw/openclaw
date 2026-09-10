@@ -68,9 +68,13 @@ Omit `ref` to use the repository's remote default branch. A branch, tag, or comm
 
 To keep the existing Gateway-source flow, create with `{"worktree":true,"cwd":"/path/to/repo","worktreeName":"big-refactor"}` instead. `projectGitUrl` still means a Gateway-managed project clone.
 
+Public repository preparation pins immutable source metadata before eligible cloud allocation without creating a Gateway checkout. Selecting prepared capacity and binding it to a session verify current access and public visibility, including when interrupted provisioning resumes after a Gateway restart. An already-active session keeps its checkout and saved changes across restart; this does not re-admit prepared capacity or revoke downloaded files when GitHub access changes. Initially verified private repositories keep ordinary cold checkout after enrollment; this is not an anonymous fallback for a failed credential. Public sources can use anonymous access only when no shared or native GitHub identity is configured; an unavailable configured identity remains an error.
+
+Public source preparation and prepared checkout adoption do not transfer GitHub credentials. Subsequent OpenClaw worker turns use the effective shared or native GitHub identity through the existing [per-turn credential binding](/gateway/config-tools/github-identity), when one is available.
+
 Private repository fetches use the effective shared [`tools.github`](/gateway/config-tools#tools-github) identity. Access through the Control UI repository picker does not by itself authorize that worker identity, and personal publication credentials are never used for the checkout.
 
-Repository setup uses the existing executable `.openclaw/worktree-setup.sh` contract on the node. It runs only when creation requested setup as an administrator and the current dispatch caller is also an administrator. An interrupted initial setup requires an administrator to retry dispatch; checkpoint restoration does not rerun setup. There is no local source from which to copy `.worktreeinclude` files.
+Repository setup uses the existing executable `.openclaw/worktree-setup.sh` contract on the node. It runs only when creation requested setup as an administrator and the current dispatch caller is also an administrator. An interrupted initial setup requires an administrator to retry dispatch unless the node attests that the admitted setup already completed. Prepared adoption and checkpoint restoration do not rerun setup. There is no local source from which to copy `.worktreeinclude` files.
 
 <a id="choose-a-machine-class-per-session" />
 

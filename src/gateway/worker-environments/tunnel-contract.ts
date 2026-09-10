@@ -105,8 +105,18 @@ type WorkerRepositoryCheckpointPreparation = {
   discard(): Promise<void>;
 };
 
+/** Attested by the dedicated node's one-use workspace binding. */
+export type PreparedRepositoryWorkspace = {
+  baseCommit: string;
+  workspaceDir: string;
+  sourceManifestRef: string;
+  preparedManifestRef: string;
+};
+
 type WorkerRepositoryWorkspaceSource = {
   kind: "repository";
+  /** Owner-held result of binding this exact dedicated prepared workspace. */
+  prepared?: PreparedRepositoryWorkspace;
   url: string;
   ref?: string;
   branch: string;

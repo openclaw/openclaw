@@ -190,29 +190,17 @@ When browsing Claude sessions on paired nodes, update those nodes alongside the 
 
 ## Troubleshooting
 
-`404 Not Found`
+**`404 Not Found`** The Beam plugin is disabled, the Gateway has not reloaded it since enablement, or the request is reaching another Gateway.
 
-: The Beam plugin is disabled, the Gateway has not reloaded it since enablement, or the request is reaching another Gateway.
+**`401 Unauthorized`** The request did not satisfy Gateway HTTP auth. Check the bearer credential or trusted-proxy/Access session.
 
-`401 Unauthorized`
+**`405 Method Not Allowed`** The receiver accepts only `POST`.
 
-: The request did not satisfy Gateway HTTP auth. Check the bearer credential or trusted-proxy/Access session.
+**`413 Payload Too Large`** The serialized request exceeded 56 KiB. The official skill drops older sanitized messages until the snapshot fits.
 
-`405 Method Not Allowed`
+**`429 Too Many Requests`** The authenticated client exceeded the bounded request or concurrency limit. Retry after the current minute window.
 
-: The receiver accepts only `POST`.
-
-`413 Payload Too Large`
-
-: The serialized request exceeded 56 KiB. The official skill drops older sanitized messages until the snapshot fits.
-
-`429 Too Many Requests`
-
-: The authenticated client exceeded the bounded request or concurrency limit. Retry after the current minute window.
-
-`beam mirror upload blocked ... receiver returned redirect`
-
-: The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart probes the configured endpoint once again.
+**`beam mirror upload blocked ... receiver returned redirect`** The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart probes the configured endpoint once again.
 
 ## Related
 

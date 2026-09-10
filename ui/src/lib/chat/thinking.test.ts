@@ -10,6 +10,51 @@ import {
 } from "./thinking.ts";
 
 describe("chat thinking helpers", () => {
+  it("keeps an explicitly empty session profile and its saved override", () => {
+    const state = resolveChatThinkingSelectState({
+      catalog: [
+        {
+          id: "model",
+          provider: "openai",
+          name: "Model",
+          thinkingLevels: [{ id: "high", label: "High" }],
+          thinkingDefault: "high",
+        },
+      ],
+      session: {
+        model: "model",
+        modelProvider: "openai",
+        thinkingLevels: [],
+        thinkingLevel: "off",
+      },
+      sessionKey: "main",
+      sessionsResult: null,
+    });
+    expect(state.options).toEqual([]);
+    expect(state.inherited.value).toBe("");
+    expect(state.selection).toMatchObject({ source: "override", value: "off" });
+  });
+
+  it("does not combine a session model with another provider from defaults", () => {
+    const state = resolveChatThinkingSelectState({
+      catalog: [
+        {
+          id: "model",
+          provider: "openai",
+          name: "Model",
+          thinkingLevels: [{ id: "high", label: "High" }],
+          thinkingDefault: "high",
+        },
+      ],
+      session: { model: "model" },
+      defaults: { model: "other", modelProvider: "openai", contextTokens: null },
+      sessionKey: "main",
+      sessionsResult: null,
+    });
+    expect(state.options).toEqual([]);
+    expect(state.inherited.value).toBe("");
+  });
+
   it("reports unknown capability without inventing thinking choices or a default", () => {
     const session = { modelProvider: "thinking-fixture", model: "unpublished" };
     const state = resolveChatThinkingSelectState({
@@ -133,7 +178,7 @@ describe("chat thinking helpers", () => {
       thinkingLevels: [{ id: "off", label: "off" }],
       thinkingDefault: "off",
     };
-    const session = { modelProvider: model.provider, model: model.id };
+    const session = { modelProvider: model.provider, model: model.id, thinkingLevel: "off" };
     const state = resolveChatThinkingSelectState({
       catalog: [model],
       session,
@@ -142,6 +187,7 @@ describe("chat thinking helpers", () => {
     });
 
     expect(state.options).toEqual([]);
+    expect(state.selection).toMatchObject({ source: "default", value: "off" });
     expect(isThinkingLevelOptionForSession(session, undefined, "off", [model])).toBe(true);
     expect(isThinkingLevelOptionForSession(session, undefined, "high", [model])).toBe(false);
   });

@@ -11,6 +11,7 @@ import {
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import type { RepositoryWorkerProjectSnapshot } from "./workspace-git-base.js";
 
 const DEFAULT_READY_WORKERS = 1;
 const DEFAULT_MAX_TOTAL = 4;
@@ -25,6 +26,7 @@ type PoolOptions = {
     options: {
       projectPath?: string;
       projectCommit?: string;
+      projectRepository?: RepositoryWorkerProjectSnapshot;
       runSetupScript?: boolean;
       machineClass?: string;
       os?: string;
@@ -345,8 +347,9 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       try {
         const preparation = readWorkerProjectPreparation(source.profileSnapshot.project)!;
         const intent = await options.prepareIntent(source.profileId, {
-          projectPath: project.root,
-          projectCommit: project.baseCommit,
+          ...("source" in project
+            ? { projectRepository: project }
+            : { projectPath: project.root, projectCommit: project.baseCommit }),
           ...(typeof source.profileSnapshot.machineClass === "string"
             ? { machineClass: source.profileSnapshot.machineClass }
             : {}),

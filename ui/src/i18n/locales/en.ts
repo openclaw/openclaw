@@ -5551,6 +5551,7 @@ export const en: TranslationMap & {
       editFile: "Edit file",
       searchInFile: "Search in file",
       showInFiles: "Show in Files",
+      unavailable: "Unable to open",
       previousMatch: "Previous match",
       nextMatch: "Next match",
       overwrite: "Overwrite",

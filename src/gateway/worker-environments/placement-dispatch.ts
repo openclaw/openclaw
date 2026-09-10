@@ -170,19 +170,31 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       const projectPath = workspace.kind === "local" ? workspace.path : undefined;
       // Workspace preparation yields; fence the current paired node again before durable provision.
       await startup.validateDevicePlacement(request);
-      const preparedIntent =
-        !request.deviceId && workspace.kind === "local"
-          ? await environments.prepareProjectIntent(request.profileId, {
-              machineClass: request.machineClass,
-              executionMode: request.executionMode,
-              projectPath,
-              inherited: request.inheritedProfile,
-              signal,
-              os: request.os,
-              runSetupScript: request.runSetupScript,
-              setupAuthorized: request.runSetupScript !== undefined,
-            })
-          : undefined;
+      const preparedIntent = !request.deviceId
+        ? await environments.prepareProjectIntent(request.profileId, {
+            machineClass: request.machineClass,
+            executionMode: request.executionMode,
+            projectPath,
+            ...(workspace.kind === "repository"
+              ? {
+                  repository: {
+                    agentId: request.agentId,
+                    url: workspace.repository.url,
+                    ref: workspace.repository.requestedRef ?? undefined,
+                    baseCommit: workspace.repository.baseCommit ?? undefined,
+                  },
+                }
+              : {}),
+            inherited: request.inheritedProfile,
+            signal,
+            os: request.os,
+            runSetupScript:
+              workspace.kind === "repository"
+                ? workspace.repository.runSetupScript && request.runSetupScript !== false
+                : request.runSetupScript,
+            setupAuthorized: request.runSetupScript !== undefined,
+          })
+        : undefined;
       assertCurrent();
       const prepared = preparedIntent
         ? await startup.bindPreparedPlacement({

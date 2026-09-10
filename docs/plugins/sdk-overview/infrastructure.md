@@ -35,7 +35,6 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
 | `api.registerAutoEnableProbe(probe)`              | Config probe that can auto-enable this plugin                          |
 | `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
-| `api.registerNodeHostCommand(command)`            | Command handler exposed to paired nodes                                |
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
 

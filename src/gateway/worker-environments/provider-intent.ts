@@ -1,6 +1,8 @@
 import fsp from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { matchesAgentLifecycleBinding } from "../../agents/agent-lifecycle-registry.js";
+import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode, WorkerProfile, WorkerProvider } from "../../plugins/types.js";
 import {
@@ -10,6 +12,8 @@ import {
 } from "./preparation-identity.js";
 import { readWorkerProjectSetupRecipe, readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import { requireInheritedWorkerProfileAuthorization } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -42,6 +46,8 @@ type WorkerProviderIntentPreparationOptions = {
   executionMode?: WorkerExecutionMode;
   projectPath?: string;
   projectCommit?: string;
+  repository?: { agentId: string; url: string; ref?: string; baseCommit?: string };
+  projectRepository?: RepositoryWorkerProjectSnapshot;
   runSetupScript?: boolean;
   signal?: AbortSignal;
   setupAuthorized?: boolean;
@@ -166,6 +172,9 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       typeof profileSnapshot.machineClass === "string" ? profileSnapshot.machineClass : undefined;
     const os = typeof profileSnapshot.os === "string" ? profileSnapshot.os : undefined;
     let assertArtifactsCurrent: (() => void) | undefined;
+    let repositoryAdmission:
+      | Awaited<ReturnType<typeof prepareRepositoryWorkerProjectSource>>
+      | undefined;
     const profile = requireWorkerProfile(profileSnapshot.settings);
     const profileOptions = {
       inherited: createOptions.inherited ? structuredClone(createOptions.inherited) : undefined,
@@ -182,21 +191,73 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         throw serviceError("invalid_profile", "Worker profile changed during preparation");
       }
     };
-    if (projectPath && provider.supportsProjectPreparation?.(profile, machineClass, os)) {
+    if (
+      [projectPath, createOptions.repository, createOptions.projectRepository].filter(Boolean)
+        .length > 1
+    ) {
+      throw serviceError(
+        "invalid_profile",
+        "Worker preparation must have exactly one project source",
+      );
+    }
+    if (
+      (projectPath || createOptions.repository || createOptions.projectRepository) &&
+      provider.supportsProjectPreparation?.(profile, machineClass, os)
+    ) {
       if (!options.projectNamespace) {
         throw serviceError("invalid_state", "Worker project preparation namespace is unavailable");
       }
-      const project = await prepareWorkerProjectSnapshot({
-        localPath: projectPath,
-        namespace: options.projectNamespace,
-        baseCommit: createOptions.projectCommit,
-        signal,
-      });
+      if (createOptions.repository || createOptions.projectRepository) {
+        repositoryAdmission = await prepareRepositoryWorkerProjectSource({
+          ...(createOptions.projectRepository
+            ? { expected: createOptions.projectRepository }
+            : { repository: createOptions.repository! }),
+          namespace: options.projectNamespace,
+          getConfig: options.getConfig,
+          assertCurrent: assertProfileCurrent,
+          signal,
+          knownRecipe: (admittedProject) => {
+            for (const record of store.list()) {
+              const value = record.profileSnapshot.project;
+              if (
+                !isRecord(value) ||
+                value.key !== admittedProject.key ||
+                value.baseCommit !== admittedProject.baseCommit
+              ) {
+                continue;
+              }
+              const cached = readWorkerProjectSnapshot(value);
+              const preparation = readWorkerProjectPreparation(value);
+              if (
+                cached &&
+                "source" in cached &&
+                preparation &&
+                isDeepStrictEqual(cached, admittedProject)
+              ) {
+                return { project: cached, setupRecipe: preparation.setupRecipe };
+              }
+            }
+            return undefined;
+          },
+        });
+      }
+      const project =
+        repositoryAdmission?.project ??
+        (projectPath
+          ? await prepareWorkerProjectSnapshot({
+              localPath: projectPath,
+              namespace: options.projectNamespace,
+              baseCommit: createOptions.projectCommit,
+              signal,
+            })
+          : undefined);
       signal?.throwIfAborted();
       if (project) {
         const target = provider.resolvePreparationTarget?.(profile, machineClass, os);
         const setupRecipe = target
-          ? await readWorkerProjectSetupRecipe(project, signal)
+          ? "source" in project
+            ? repositoryAdmission?.setupRecipe
+            : await readWorkerProjectSetupRecipe(project, signal)
           : undefined;
         signal?.throwIfAborted();
         // An executable recipe does not authorize itself. Non-admin callers retain
@@ -235,6 +296,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     const assertCurrent = () => {
       assertProfileCurrent();
       assertArtifactsCurrent?.();
+      repositoryAdmission?.assertCurrent();
     };
     assertCurrent();
     const preparation = readWorkerProjectPreparation(profileSnapshot.project);
@@ -318,6 +380,32 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       ) {
         throw serviceError("invalid_profile", "Prepared worker retention policy changed");
       }
+      if ("source" in project) {
+        const config = options.getConfig();
+        const { agent, identity } = project.source.owner;
+        const agentIdentity = resolveConfiguredGitHubToolIdentity({
+          config,
+          agentId: agent.agentId,
+          scope: "agent",
+        });
+        const systemIdentity = resolveConfiguredGitHubToolIdentity({
+          config,
+          agentId: agent.agentId,
+          scope: "system",
+        });
+        const selected = agentIdentity ?? systemIdentity;
+        const selectedSource = agentIdentity ? "agent-override" : "system-configured";
+        if (
+          !matchesAgentLifecycleBinding(config, agent) ||
+          (selected
+            ? identity.source !== selectedSource ||
+              !("profileId" in identity) ||
+              identity.profileId !== selected.profileId
+            : identity.source !== "anonymous" && identity.source !== "system-detected")
+        ) {
+          throw serviceError("invalid_profile", "Prepared repository owner selection changed");
+        }
+      }
     };
     assertProfileCurrent();
     const prepared = await options.prepareNodeArtifacts(profileSnapshot, signal);
@@ -387,7 +475,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         if (existingProject && projectPath) {
           const root = await fsp.realpath(projectPath);
           signal?.throwIfAborted();
-          if (existingProject.root !== root) {
+          if ("source" in existingProject || existingProject.root !== root) {
             throw serviceError("invalid_profile", "Idempotency key belongs to another project");
           }
         }
@@ -397,6 +485,21 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             !isDeepStrictEqual(
               projectReplayIdentity(existing.profileSnapshot.project),
               projectReplayIdentity(admittedIntent.profileSnapshot.project),
+            )
+          ) {
+            throw serviceError(
+              "invalid_profile",
+              "Idempotency key belongs to another project preparation",
+            );
+          }
+        } else if (createOptions.repository || createOptions.projectRepository) {
+          const requested = await prepareIntent(profileId, createOptions);
+          signal?.throwIfAborted();
+          assertPreparedIntentCurrent(profileId, requested);
+          if (
+            !isDeepStrictEqual(
+              projectReplayIdentity(existing.profileSnapshot.project),
+              projectReplayIdentity(requested.profileSnapshot.project),
             )
           ) {
             throw serviceError(

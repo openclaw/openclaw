@@ -74,12 +74,18 @@ Normalize plugin-owned attachment records with `toInboundMediaFacts(...)`, then
 pass the resulting ordered array through the context's `media` field:
 
 ```ts
+// saved, nativeUrl, messageId, and caption are plugin-supplied values from the
+// platform event you just normalized.
 const media = toInboundMediaFacts([
   { path: saved.path, url: nativeUrl, contentType: saved.contentType, messageId },
 ]);
 
-const ctx = finalizeInboundContext({ Body: caption, media });
+const ctx = runtime.channel.reply.finalizeInboundContext({ Body: caption, media });
 ```
+
+`toInboundMediaFacts` is exported from this subpath. `finalizeInboundContext` is
+not: it is reached through the injected plugin runtime as
+`runtime.channel.reply.finalizeInboundContext`.
 
 Array position is attachment identity. Per-fact `transcribed`, `messageId`, and
 `workspaceDir` replace the legacy parallel index/workspace fields. The
