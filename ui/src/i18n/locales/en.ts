@@ -2338,6 +2338,7 @@ export const en: TranslationMap & {
       requestFailed: "Browser request failed: {error}",
       downloadFailed:
         "Could not download this file: {error}. Try again, or open it in your browser to save it.",
+      downloadEmpty: "No file returned.",
       screenshotPathMissing: "Browser screenshot did not return a media path.",
       screenshotFetchTimedOut: "Screenshot fetch timed out.",
       screenshotFetchFailed: "Screenshot fetch failed ({status}).",

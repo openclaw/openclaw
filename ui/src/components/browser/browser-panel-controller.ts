@@ -654,10 +654,6 @@ export class BrowserPanelController implements ReactiveController {
     });
   }
 
-  setUrlDraft(value: string): void {
-    this.setState("urlDraft", value);
-  }
-
   setUrlDraftEditing(editing: boolean): void {
     this.urlDraftEditing = editing;
   }

@@ -1,3 +1,4 @@
+import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import {
   postNativeBrowserMessage,
   type NativeBrowserTab,
@@ -5,11 +6,17 @@ import {
 import { t } from "../../i18n/index.ts";
 import { downloadBlobFile } from "../../lib/download.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { labelForMediaPath } from "../../lib/media-file-extension.ts";
+import { downloadBrowserDocument, type BrowserRequestClient } from "./browser-client.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 
 interface BrowserPanelDownloadHost {
-  readonly host: { readonly isConnected: boolean; requestUpdate(): void };
+  readonly host: {
+    readonly isConnected: boolean;
+    readonly resourceBasePath: string;
+    readonly authToken: string | null;
+    requestUpdate(): void;
+  };
+  readonly operations: { captureClient(): BrowserRequestClient | null };
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };
   readonly activeTargetId: string | null;
   readonly view: BrowserPanelView | null;
@@ -64,6 +71,7 @@ export class BrowserPanelDownload {
     const panel = this.panel;
     const tabId = panel.activeTargetId;
     const nativeTab = panel.native.activeTab;
+    const client = nativeTab ? null : panel.operations.captureClient();
     const request = new AbortController();
     this.request = request;
     this.pending = true;
@@ -74,7 +82,8 @@ export class BrowserPanelDownload {
       this.request === request &&
       panel.host.isConnected &&
       panel.activeTargetId === tabId &&
-      this.url === url;
+      this.url === url &&
+      (nativeTab !== undefined || panel.operations.captureClient() === client);
     try {
       if (nativeTab) {
         const reply = await postNativeBrowserMessage({ type: "download", tabId: nativeTab.id });
@@ -82,9 +91,27 @@ export class BrowserPanelDownload {
           throw new Error(reply && !reply.ok ? reply.error : t("browser.tabUnavailable"));
         }
       } else {
-        // Fetching a Blob forces a download even for cross-origin inline media.
-        // Cross-origin servers must permit this client; do not proxy credentials.
-        const response = await fetch(url, { signal: request.signal, credentials: "same-origin" });
+        if (!client || !tabId) {
+          throw new Error(t("browser.tabUnavailable"));
+        }
+        const file = await downloadBrowserDocument(client, tabId, url, request.signal);
+        if (!current()) {
+          return;
+        }
+        // External asset fetches violate the dashboard CSP. The Browser owns the
+        // transfer; reuse the authenticated same-origin media boundary for delivery.
+        const headers = new Headers();
+        if (panel.host.authToken) {
+          headers.set("Authorization", `Bearer ${panel.host.authToken}`);
+        }
+        const response = await fetch(
+          buildAssistantMediaUrl(file.path, panel.host.resourceBasePath),
+          {
+            headers,
+            signal: request.signal,
+            credentials: "same-origin",
+          },
+        );
         if (!response.ok) {
           void response.body?.cancel().catch(() => undefined);
           throw new Error(`HTTP ${response.status}`);
@@ -93,7 +120,7 @@ export class BrowserPanelDownload {
         if (!current()) {
           return;
         }
-        downloadBlobFile(labelForMediaPath(response.url || url), content);
+        downloadBlobFile(file.filename, content);
       }
     } catch (error) {
       if (current() && !request.signal.aborted) {

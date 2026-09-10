@@ -4,10 +4,16 @@
  */
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { Page } from "playwright-core";
+import type { Frame, Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
-import type { BrowserDownloadResult } from "./download-types.js";
+import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
+import {
+  assertBrowserNavigationAllowed,
+  InvalidBrowserNavigationUrlError,
+  parseBrowserNavigationUrl,
+  requiresInspectableBrowserNavigationRedirectsForUrl,
+} from "./navigation-guard.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
@@ -53,6 +59,7 @@ function createExplicitDownloadCapture(params: {
   outPath?: string;
   rootDir?: string;
   signal?: AbortSignal;
+  beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
 }) {
   params.state.armIdDownload = bumpDownloadArmId();
   const armId = params.state.armIdDownload;
@@ -61,7 +68,11 @@ function createExplicitDownloadCapture(params: {
     outputPath: params.outPath,
     outputRoot: params.rootDir,
     signal: params.signal,
-    beforeSave: () => {
+    beforeSave: async (download) => {
+      if (params.state.armIdDownload !== armId) {
+        throw new Error("Download was superseded by another waiter");
+      }
+      await params.beforeSave?.(download);
       if (params.state.armIdDownload !== armId) {
         throw new Error("Download was superseded by another waiter");
       }
@@ -323,4 +334,111 @@ export async function downloadViaPlaywright(opts: {
       : toAIFriendlyError(err, ref);
   }
   return await capture.promise;
+}
+
+/** Save the displayed document using its browser session without navigating its preview. */
+export async function downloadCurrentDocumentViaPlaywright(
+  opts: NavigationTargetOptions & {
+    expectedUrl: string;
+    rootDir?: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  },
+): Promise<BrowserDownloadResult> {
+  opts.signal?.throwIfAborted();
+  const expectedUrl = opts.expectedUrl;
+  const parsed = parseBrowserNavigationUrl(expectedUrl);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new InvalidBrowserNavigationUrlError("Only HTTP(S) documents can be downloaded");
+  }
+  // Chromium's native downloads do not expose their redirect requests to page.route.
+  // Do not start traffic when the profile requires inspectable redirect chains.
+  if (requiresInspectableBrowserNavigationRedirectsForUrl(expectedUrl, opts.ssrfPolicy)) {
+    throw new InvalidBrowserNavigationUrlError(
+      "Current-document downloads are unavailable under strict browser navigation policy because download redirects cannot be inspected",
+    );
+  }
+  const operation = new AbortController();
+  const signal = opts.signal ? AbortSignal.any([opts.signal, operation.signal]) : operation.signal;
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
+  let page: Page | undefined;
+  const changedError = () => new Error("The tab changed before its download completed. Try again.");
+  const assertCurrentDocument = () => {
+    signal.throwIfAborted();
+    if (!page || page.isClosed() || page.url() !== expectedUrl) {
+      throw changedError();
+    }
+  };
+  const onClose = () => operation.abort(changedError());
+  const onNavigation = (frame: Frame) => {
+    if (frame === page?.mainFrame()) {
+      operation.abort(changedError());
+    }
+  };
+  try {
+    page = await awaitActionWithAbort(getPageForTargetId(opts), abortPromise);
+    page.on("close", onClose);
+    page.on("framenavigated", onNavigation);
+    assertCurrentDocument();
+    await awaitActionWithAbort(
+      assertBrowserNavigationAllowed({
+        url: page.url(),
+        ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
+        signal,
+      }),
+      abortPromise,
+    );
+    assertCurrentDocument();
+    const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
+    const capture = createExplicitDownloadCapture({
+      page,
+      state: ensurePageState(page),
+      timeoutMs: timeout,
+      rootDir: opts.rootDir ?? resolveImplicitDownloadRoot(),
+      signal,
+      beforeSave: async (download) => {
+        try {
+          assertCurrentDocument();
+          await assertBrowserNavigationAllowed({
+            url: download.url,
+            ssrfPolicy: opts.ssrfPolicy,
+            browserProxyMode: opts.browserProxyMode,
+            signal,
+          });
+          assertCurrentDocument();
+        } catch (error) {
+          operation.abort(error);
+          throw error;
+        }
+      },
+    });
+    void capture.promise.catch(() => {});
+    try {
+      assertCurrentDocument();
+      const trigger = page.evaluate(
+        ({ expectedUrl, deadline }) => {
+          if (location.href !== expectedUrl || Date.now() >= deadline) {
+            throw new Error("The tab changed before its download started. Try again.");
+          }
+          // The browser owns cookies, streaming and Content-Disposition. A detached,
+          // same-origin download link leaves the inline document and its playback intact.
+          const anchor = document.createElement("a");
+          anchor.href = location.href;
+          anchor.download = "";
+          anchor.click();
+        },
+        { expectedUrl, deadline: Date.now() + timeout },
+      );
+      await Promise.race([trigger, capture.promise]);
+      return await capture.promise;
+    } catch (error) {
+      operation.abort(error);
+      throw error;
+    }
+  } finally {
+    page?.off("close", onClose);
+    page?.off("framenavigated", onNavigation);
+    cleanup();
+  }
 }

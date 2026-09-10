@@ -112,6 +112,9 @@ function controllerFixture(screencast = false) {
       if (envelope.path === "/screenshot") {
         return { path: "/fresh.png", targetId: "remote", url: "https://remote.test/" };
       }
+      if (envelope.path === "/download") {
+        return { download: { path: "/managed/remote.png", suggestedFilename: "remote.png" } };
+      }
       if (envelope.path === "/act") {
         return {
           result: { cssWidth: 100, cssHeight: 100, title: "Remote", url: "https://remote.test/" },

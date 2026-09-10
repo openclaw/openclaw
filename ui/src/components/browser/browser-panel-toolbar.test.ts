@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createView } from "./browser-panel-controller-test-support.ts";
+import { createBrowserClient, createView } from "./browser-panel-controller-test-support.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import "./browser-panel.ts";
 
@@ -22,6 +23,9 @@ describe("Browser toolbar", () => {
     const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       available: boolean;
       embedded: boolean;
+      presented: boolean;
+      refreshOnPresentation: boolean;
+      client: GatewayBrowserClient;
       browserPanelController: BrowserPanelController;
       renderRoot: ShadowRoot;
       requestUpdate: () => void;
@@ -29,6 +33,11 @@ describe("Browser toolbar", () => {
     };
     panel.available = true;
     panel.embedded = true;
+    panel.presented = true;
+    panel.refreshOnPresentation = false;
+    panel.client = createBrowserClient(async () => ({
+      download: { path: "/managed/preview.png", suggestedFilename: "preview.png" },
+    })).client;
     document.body.append(panel);
     await panel.updateComplete;
     const controller = panel.browserPanelController;

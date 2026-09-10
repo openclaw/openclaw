@@ -148,7 +148,7 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         }}
         @blur=${() => controller.setUrlDraftEditing(false)}
         @input=${(event: InputEvent) =>
-          controller.setUrlDraft((event.target as HTMLInputElement).value)}
+          controller.setState("urlDraft", (event.target as HTMLInputElement).value)}
         @keydown=${(event: KeyboardEvent) => {
           if (event.key === "Enter") {
             event.preventDefault();
