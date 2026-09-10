@@ -155,6 +155,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
+  // worktree.sh invokes this journal-state validator by path before native replay.
+  "scripts/pr-lib/review-transition-state.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/print-live-docker-plugin-selection.mjs!",
