@@ -1650,6 +1650,7 @@
                 "pages": [
                   "channels/pairing",
                   "channels/access-groups",
+                  "channels/bot-loop-protection",
                   "channels/group-messages",
                   "channels/groups",
                   "channels/ambient-room-events",
@@ -1797,6 +1798,7 @@
                       "plugins/codex-supervision"
                     ]
                   },
+                  "plugins/copilot",
                   {
                     "group": "Meetings and calls",
                     "pages": [
@@ -2203,6 +2205,7 @@
                       "providers/alibaba",
                       "providers/anthropic",
                       "providers/arcee",
+                      "providers/baseten",
                       "providers/bedrock",
                       "providers/bedrock-mantle",
                       "providers/cerebras",
@@ -2641,6 +2644,7 @@
                 "pages": [
                   "security/network-proxy",
                   "security/formal-verification",
+                  "security/incident-response",
                   "security/THREAT-MODEL-ATLAS",
                   "security/THREAT-MODEL-ATLAS/reconnaissance",
                   "security/THREAT-MODEL-ATLAS/initial-access",
@@ -2811,6 +2815,7 @@
                       "cli/promos",
                       "cli/sessions",
                       "cli/tasks",
+                      "cli/transcripts",
                       "cli/wiki"
                     ]
                   },
