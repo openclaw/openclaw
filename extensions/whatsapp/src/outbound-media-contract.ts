@@ -57,7 +57,7 @@ type CanonicalWhatsAppLoadedMedia = {
 };
 
 const WHATSAPP_VOICE_FILE_NAME = "voice.ogg";
-const WHATSAPP_VOICE_SAMPLE_RATE_HZ = 48_000;
+const WHATSAPP_VOICE_SAMPLE_RATE_HZ = 16_000;
 const WHATSAPP_VOICE_BITRATE = "64k";
 const WHATSAPP_VOICE_MIMETYPE = "audio/ogg; codecs=opus";
 
@@ -189,25 +189,32 @@ export async function prepareWhatsAppOutboundMedia(
   if (normalized.kind !== "audio") {
     return normalized;
   }
+  // Primeiro: se não é Ogg/Opus por MIME ou extensão, transcodifica.
   if (
-    isWhatsAppNativeVoiceAudio({
+    !isWhatsAppNativeVoiceAudio({
       contentType: media.contentType,
       fileName: media.fileName,
       mediaUrl,
     })
   ) {
-    return normalized;
+    const buffer = await transcodeToWhatsAppVoiceOpus({
+      buffer: media.buffer,
+      fileName: media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl) ?? "audio",
+    });
+    return { buffer, kind: "audio", mimetype: WHATSAPP_VOICE_MIMETYPE };
   }
-
-  const buffer = await transcodeToWhatsAppVoiceOpus({
-    buffer: media.buffer,
-    fileName: media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl) ?? "audio",
-  });
-  return {
-    buffer,
-    kind: "audio",
-    mimetype: WHATSAPP_VOICE_MIMETYPE,
-  };
+  // Segundo: é Ogg/Opus por tipo, mas se a taxa real (OpusHead) não é 16 kHz
+  // (ex.: TTS MiniMax 48 kHz), também transcodifica — WhatsApp mobile não toca 48 kHz.
+  const inputRate = media.buffer ? getOpusInputRate(media.buffer) : undefined;
+  if (inputRate !== undefined && inputRate !== WHATSAPP_VOICE_SAMPLE_RATE_HZ) {
+    const buffer = await transcodeToWhatsAppVoiceOpus({
+      buffer: media.buffer,
+      fileName: media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl) ?? "audio",
+    });
+    return { buffer, kind: "audio", mimetype: WHATSAPP_VOICE_MIMETYPE };
+  }
+  // É nativo de verdade (16 kHz): passa como está.
+  return normalized;
 }
 
 function isWhatsAppNativeVoiceAudio(params: {
@@ -228,7 +235,7 @@ async function transcodeToWhatsAppVoiceOpus(params: {
   buffer: Buffer;
   fileName: string;
 }): Promise<Buffer> {
-  return await transcodeAudioBufferToOpus({
+  const transcoded = await transcodeAudioBufferToOpus({
     audioBuffer: params.buffer,
     inputFileName: params.fileName,
     tempPrefix: "whatsapp-voice-",
@@ -238,6 +245,141 @@ async function transcodeToWhatsAppVoiceOpus(params: {
     channels: 1,
     bitrate: WHATSAPP_VOICE_BITRATE,
   });
+  // O WhatsApp mobile exige a tag vendor "WhatsApp" nas OpusTags; o ffmpeg
+  // grava "Lavf*", e sem isso o celular recusa a nota de voz ("áudio indisponível").
+  return fixWhatsAppOpusVendor(transcoded);
+}
+
+function getOpusInputRate(buf: Buffer): number | undefined {
+  // Lê o campo input sample rate do OpusHead (offset 12, uint32le) na primeira página Ogg.
+  if (buf.length < 32 || buf.subarray(0, 4).toString("ascii") !== "OggS") {
+    return undefined;
+  }
+  const nSegs = buf[26];
+  const bodyStart = 27 + nSegs;
+  if (buf.subarray(bodyStart, bodyStart + 8).toString("ascii") !== "OpusHead") {
+    return undefined;
+  }
+  return buf.readUInt32LE(bodyStart + 12);
+}
+
+// Ogg/Opus minimal vendor-tag patch: reescreve apenas a página OpusTags,
+// trocando o vendor para "WhatsApp" e zerando comentários. Todas as outras
+// páginas (OpusHead + áudio) ficam byte a byte intactas; CRC Ogg recalculado.
+function fixWhatsAppOpusVendor(buf: Buffer): Buffer {
+  const POLY = 0x04c11db7;
+  const table = new Array<number>(256);
+  for (let i = 0; i < 256; i++) {
+    let r = (i << 24) >>> 0;
+    for (let j = 0; j < 8; j++) {
+      r =
+        (r & 0x80000000) !== 0
+          ? (((r << 1) >>> 0) ^ POLY) >>> 0
+          : ((r << 1) >>> 0);
+    }
+    table[i] = r >>> 0;
+  }
+  const oggCrc = (data: Buffer): number => {
+    let c = 0;
+    for (let i = 0; i < data.length; i++) {
+      c = (((c << 8) >>> 0) ^ table[((c >>> 24) ^ data[i]) & 0xff]) >>> 0;
+    }
+    return c >>> 0;
+  };
+  const u32 = (n: number): Buffer => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32LE(n >>> 0, 0);
+    return b;
+  };
+  const lace = (blob: Buffer): number[] => {
+    const l: number[] = [];
+    let rest = blob;
+    while (rest.length >= 255) {
+      l.push(255);
+      rest = rest.subarray(255);
+    }
+    l.push(rest.length);
+    return l;
+  };
+  const makePage = (
+    htype: number,
+    granule: bigint,
+    serial: number,
+    seq: number,
+    laces: number[],
+    body: Buffer,
+  ): Buffer => {
+    const segTable = Buffer.from(laces);
+    const h = Buffer.alloc(27 + segTable.length);
+    h.write("OggS", 0, "ascii");
+    h[5] = htype;
+    h.writeBigUInt64LE(granule, 6);
+    h.writeUInt32LE(serial >>> 0, 14);
+    h.writeUInt32LE(seq >>> 0, 18);
+    h[26] = segTable.length;
+    segTable.copy(h, 27);
+    const full = Buffer.concat([h, body]);
+    full.writeUInt32LE(oggCrc(full), 22);
+    return full;
+  };
+
+  const pages: Array<{
+    htype: number;
+    granule: bigint;
+    serial: number;
+    seq: number;
+    body: Buffer;
+    raw: Buffer;
+  }> = [];
+  let off = 0;
+  while (
+    off + 27 <= buf.length &&
+    buf.subarray(off, off + 4).toString("ascii") === "OggS"
+  ) {
+    const htype = buf[off + 5];
+    const granule = buf.readBigUInt64LE(off + 6);
+    const serial = buf.readUInt32LE(off + 14);
+    const seq = buf.readUInt32LE(off + 18);
+    const nSegs = buf[off + 26];
+    const segs = Array.from(buf.subarray(off + 27, off + 27 + nSegs));
+    const bodyLen = segs.reduce((a, b) => a + b, 0);
+    const body = buf.subarray(off + 27 + nSegs, off + 27 + nSegs + bodyLen);
+    pages.push({
+      htype,
+      granule,
+      serial,
+      seq,
+      body,
+      raw: buf.subarray(off, off + 27 + nSegs + bodyLen),
+    });
+    off += 27 + nSegs + bodyLen;
+  }
+
+  let out = Buffer.alloc(0);
+  let fixed = false;
+  for (const p of pages) {
+    if (
+      !fixed &&
+      p.body.length >= 8 &&
+      p.body.subarray(0, 8).toString("ascii") === "OpusTags"
+    ) {
+      const vendor = Buffer.from("WhatsApp");
+      const newBody = Buffer.concat([
+        Buffer.from("OpusTags"),
+        u32(vendor.length),
+        vendor,
+        u32(0),
+      ]);
+      out = Buffer.concat([
+        out,
+        makePage(p.htype, p.granule, p.serial, p.seq, lace(newBody), newBody),
+      ]);
+      fixed = true;
+    } else {
+      out = Buffer.concat([out, p.raw]);
+    }
+  }
+  return fixed ? out : buf;
 }
 
 function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | undefined {
