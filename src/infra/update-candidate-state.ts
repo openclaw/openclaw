@@ -119,11 +119,27 @@ async function withStateDatabaseSnapshot<T>(
   // The sync snapshot never attaches SQLite to the live family. Production runs
   // in our dedicated child so filesystem closes cannot release updater locks.
   const snapshot = prepareSqliteReadOnlyLocationSyncInProcess(file);
+  let outcome: { value: T } | { cause: unknown };
   try {
-    return await read(snapshot.location);
-  } finally {
-    snapshot.cleanup();
+    outcome = { value: await read(snapshot.location) };
+  } catch (cause) {
+    outcome = { cause };
   }
+  if (!snapshot.cleanup()) {
+    // The exit retry is best-effort, not proof that this private copy was removed.
+    const readFailure =
+      "cause" in outcome
+        ? `${outcome.cause instanceof Error ? outcome.cause.message : String(outcome.cause)}; `
+        : "";
+    throw new Error(
+      `${readFailure}State database snapshot cleanup failed: ${path.dirname(snapshot.location)}. Check directory permissions and available storage before retrying.`,
+      "cause" in outcome ? outcome : undefined,
+    );
+  }
+  if ("cause" in outcome) {
+    throw outcome.cause;
+  }
+  return outcome.value;
 }
 
 async function collectStateDatabasePaths(input: StateInput): Promise<string[]> {
