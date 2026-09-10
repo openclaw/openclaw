@@ -179,6 +179,19 @@ describe("update global helpers", () => {
     expect(canResolveRegistryVersionForPackageTarget("/tmp/openclaw.tgz")).toBe(false);
   });
 
+  it.each([
+    "https://github.com/openclaw/openclaw.git#main",
+    "https://github.com/openclaw/openclaw#main",
+    "openclaw/openclaw#main",
+    "git@github.com:openclaw/openclaw.git#main",
+  ])("passes source package target %s through without registry resolution", (tag) => {
+    envSnapshot = captureEnv(["OPENCLAW_UPDATE_PACKAGE_SPEC"]);
+    delete process.env.OPENCLAW_UPDATE_PACKAGE_SPEC;
+
+    expect(canResolveRegistryVersionForPackageTarget(tag)).toBe(false);
+    expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag, env: {} })).toBe(tag);
+  });
+
   it("resolves scoped package paths from the package manager global root", async () => {
     const globalRoot = path.join("tmp", "npm-root");
     const runCommand: CommandRunner = async () => ({
