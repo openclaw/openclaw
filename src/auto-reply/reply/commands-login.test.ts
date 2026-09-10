@@ -4,7 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { SessionEntryPatchOptions } from "../../config/sessions/session-accessor.js";
+import type { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ProviderCredentialsSavedError } from "../../plugins/provider-auth-errors.js";
@@ -12,8 +12,14 @@ import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
+type SessionPatchArguments = Parameters<typeof patchSessionEntryCore>;
+type SessionPatchInvocation = SessionPatchArguments[0] &
+  NonNullable<SessionPatchArguments[2]> & { update: SessionPatchArguments[1] };
+
 const runModelsAuthLoginFlowMock = vi.hoisted(() => vi.fn());
-const patchSessionEntryMock = vi.hoisted(() => vi.fn());
+const patchSessionEntryMock = vi.hoisted(() =>
+  vi.fn<(params: SessionPatchInvocation) => ReturnType<typeof patchSessionEntryCore>>(),
+);
 
 vi.mock("../../commands/models/auth.js", () => ({
   runModelsAuthLoginFlowCore: (opts: unknown) => runModelsAuthLoginFlowMock(opts),
@@ -24,11 +30,8 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   );
   return {
     ...actual,
-    patchSessionEntryCore: (
-      scope: { storePath?: string; sessionKey: string },
-      update: unknown,
-      options: SessionEntryPatchOptions,
-    ) => patchSessionEntryMock({ ...scope, update, ...options }),
+    patchSessionEntryCore: (...[scope, update, options]: SessionPatchArguments) =>
+      patchSessionEntryMock({ ...scope, update, ...options }),
   };
 });
 
@@ -142,7 +145,12 @@ describe("handleLoginCommand", () => {
 
   it("reports saved credentials when a later sign-in step fails", async () => {
     runModelsAuthLoginFlowMock.mockRejectedValueOnce(
-      new ProviderCredentialsSavedError(new Error("Owner revoked after save")),
+      new ProviderCredentialsSavedError(
+        "Provider credentials were saved, but sign-in did not finish.",
+        {
+          cause: new Error("Owner revoked after save"),
+        },
+      ),
     );
     const result = await handleLoginCommand(
       buildLoginParams("/login codex", { opts: blockReplyOpts() }),
@@ -218,18 +226,13 @@ describe("handleLoginCommand", () => {
     });
     setRuntimeConfigSnapshot(params.cfg);
     let persisted = previous;
-    patchSessionEntryMock.mockImplementationOnce(
-      async (write: {
-        update: (entry: SessionEntry) => Partial<SessionEntry> | null;
-        assertCommitAllowed?: () => void;
-      }) => {
-        const patch = await write.update({ ...previous });
-        setRuntimeConfigSnapshot({ ...params.cfg, commands: { ownerAllowFrom: ["replacement"] } });
-        write.assertCommitAllowed?.();
-        persisted = patch ? { ...previous, ...patch } : previous;
-        return persisted;
-      },
-    );
+    patchSessionEntryMock.mockImplementationOnce(async (write) => {
+      const patch = await write.update({ ...previous }, { existingEntry: { ...previous } });
+      setRuntimeConfigSnapshot({ ...params.cfg, commands: { ownerAllowFrom: ["replacement"] } });
+      write.assertCommitAllowed?.();
+      persisted = patch ? { ...previous, ...patch } : previous;
+      return persisted;
+    });
 
     const result = await handleLoginCommand(params, true);
 
@@ -252,18 +255,13 @@ describe("handleLoginCommand", () => {
       storePath: "/tmp/openclaw-login-sessions.json",
     });
     setRuntimeConfigSnapshot(params.cfg);
-    patchSessionEntryMock.mockImplementationOnce(
-      async (write: {
-        update: (entry: SessionEntry) => Partial<SessionEntry> | null;
-        assertCommitAllowed?: () => void;
-      }) => {
-        const patch = await write.update({ ...previous });
-        write.assertCommitAllowed?.();
-        const persisted = patch ? { ...previous, ...patch } : previous;
-        setRuntimeConfigSnapshot({ ...params.cfg, commands: { ownerAllowFrom: ["replacement"] } });
-        return persisted;
-      },
-    );
+    patchSessionEntryMock.mockImplementationOnce(async (write) => {
+      const patch = await write.update({ ...previous }, { existingEntry: { ...previous } });
+      write.assertCommitAllowed?.();
+      const persisted = patch ? { ...previous, ...patch } : previous;
+      setRuntimeConfigSnapshot({ ...params.cfg, commands: { ownerAllowFrom: ["replacement"] } });
+      return persisted;
+    });
 
     const result = await handleLoginCommand(params, true);
 
@@ -487,18 +485,14 @@ describe("handleLoginCommand", () => {
       sessionId: "sess-owner",
       updatedAt: 1,
     };
-    patchSessionEntryMock.mockImplementationOnce(
-      async (params: {
-        update: (
-          entry: SessionEntry,
-        ) => Partial<SessionEntry> | null | Promise<Partial<SessionEntry> | null>;
-        assertCommitAllowed?: () => void;
-      }) => {
-        const patch = await params.update({ ...previousEntry });
-        params.assertCommitAllowed?.();
-        return patch ? { ...previousEntry, ...patch } : previousEntry;
-      },
-    );
+    patchSessionEntryMock.mockImplementationOnce(async (params) => {
+      const patch = await params.update(
+        { ...previousEntry },
+        { existingEntry: { ...previousEntry } },
+      );
+      params.assertCommitAllowed?.();
+      return patch ? { ...previousEntry, ...patch } : previousEntry;
+    });
     const params = buildLoginParams("/login codex", {
       opts: blockReplyOpts(),
       sessionEntry: previousEntry,
@@ -672,16 +666,14 @@ describe("handleLoginCommand", () => {
       authProfileOverride: "openai:concurrent-owner@example.com",
       updatedAt: 2,
     };
-    patchSessionEntryMock.mockImplementationOnce(
-      async (params: {
-        update: (entry: SessionEntry) => Partial<SessionEntry> | null;
-        assertCommitAllowed?: () => void;
-      }) => {
-        const patch = await params.update({ ...concurrentlySelectedEntry });
-        params.assertCommitAllowed?.();
-        return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
-      },
-    );
+    patchSessionEntryMock.mockImplementationOnce(async (params) => {
+      const patch = await params.update(
+        { ...concurrentlySelectedEntry },
+        { existingEntry: { ...concurrentlySelectedEntry } },
+      );
+      params.assertCommitAllowed?.();
+      return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
+    });
     const sessionStore = {
       "agent:main:slack:channel:C123": previousEntry,
     };
@@ -714,16 +706,14 @@ describe("handleLoginCommand", () => {
       authProfileOverride: "openai:concurrent-owner@example.com",
       updatedAt: 2,
     };
-    patchSessionEntryMock.mockImplementationOnce(
-      async (params: {
-        update: (entry: SessionEntry) => Partial<SessionEntry> | null;
-        assertCommitAllowed?: () => void;
-      }) => {
-        const patch = await params.update({ ...concurrentlySelectedEntry });
-        params.assertCommitAllowed?.();
-        return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
-      },
-    );
+    patchSessionEntryMock.mockImplementationOnce(async (params) => {
+      const patch = await params.update(
+        { ...concurrentlySelectedEntry },
+        { existingEntry: { ...concurrentlySelectedEntry } },
+      );
+      params.assertCommitAllowed?.();
+      return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
+    });
     const params = buildLoginParams("/login codex", {
       opts: blockReplyOpts(),
       sessionEntry: previousEntry,

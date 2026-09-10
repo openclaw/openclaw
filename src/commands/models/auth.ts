@@ -567,8 +567,13 @@ async function persistProviderAuthResult(params: {
     }
     return persistedProfiles;
   } catch (error) {
-    if (persistedProfiles.length > 0) {
-      throw new ProviderCredentialsSavedError(error);
+    if (persistedProfiles.length > 0 && !(error instanceof ProviderCredentialsSavedError)) {
+      throw new ProviderCredentialsSavedError(
+        error instanceof Error
+          ? `Provider credentials were saved, but sign-in did not finish: ${error.message}`
+          : "Provider credentials were saved, but sign-in did not finish.",
+        { cause: error },
+      );
     }
     throw error;
   }
@@ -614,7 +619,7 @@ async function promotePersistedAuthProfile(params: {
     ...(selection.order ? { createFromOrder: selection.order } : {}),
   });
   if (!promotion.ok) {
-    throw new Error(
+    throw new ProviderCredentialsSavedError(
       "The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then retry the login.",
     );
   }
