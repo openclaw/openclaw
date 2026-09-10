@@ -242,6 +242,48 @@ function createConfiguredModel(
 }
 
 describe("resolveEmbeddedRuntimeModelPolicy", () => {
+  it("rejects an authored context window below the floor despite a larger contextTokens cap", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example.test/v1",
+            models: [
+              createConfiguredModel({
+                id: "tiny-model",
+                name: "Tiny model",
+                contextWindow: 3_000,
+                contextTokens: 16_000,
+                maxTokens: 256,
+              }),
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveEmbeddedRuntimeModelPolicy({
+        cfg,
+        provider: "custom",
+        modelId: "tiny-model",
+        runtimeModel: {
+          ...createRuntimeModel(),
+          provider: "custom",
+          id: "tiny-model",
+          name: "Tiny model",
+          baseUrl: "https://models.example.test/v1",
+          contextWindow: 3_000,
+          contextTokens: 16_000,
+          maxTokens: 256,
+        },
+        nativeModelOwned: false,
+      }),
+    ).toThrow(
+      "Model context window too small (3000 tokens; source=modelsConfig). Minimum is 4000.",
+    );
+  });
+
   it("can read Codex OAuth context overrides for native Codex harness runs", () => {
     const cfg = {
       models: {
