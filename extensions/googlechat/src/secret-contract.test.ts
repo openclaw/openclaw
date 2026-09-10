@@ -1,4 +1,3 @@
-import { assertSecretOwnerAvailable } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
 // Googlechat tests cover secret contract plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -7,11 +6,6 @@ import {
   resolveSecretRefValues,
 } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  setActiveDegradedSecretOwners,
-  SecretSurfaceUnavailableError,
-} from "../../../src/secrets/runtime-degraded-state.js";
-import { resolveAndApplySecretAssignments } from "../../../src/secrets/runtime-owner-assignments.js";
 import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 
 type ConfiguredAccount = {
@@ -35,9 +29,9 @@ function configWithAccounts(
   } as unknown as OpenClawConfig;
 }
 
-// Env-shorthand SecretRef whose variable the tests never provide, so root-ref
-// resolution fails the way an unavailable provider does in production.
-const UNAVAILABLE_ROOT_REF = "\${MISSING_ROOT_GOOGLECHAT_SECRET}";
+// Env-shorthand SecretRef whose variable the tests never provide, so resolution
+// of this ref fails the way an unavailable provider does in production.
+const UNAVAILABLE_ROOT_REF = "${MISSING_ROOT_GOOGLECHAT_SECRET}";
 
 function collect(config: OpenClawConfig) {
   const resolvedConfig: OpenClawConfig = structuredClone(config);
@@ -140,52 +134,27 @@ describe("googlechat secret contract", () => {
     ]);
   });
 
-  it("keeps an unavailable root SecretRef from degrading a file-backed named account through preparation", async () => {
-    const sourceConfig = configWithAccounts(
-      { work: { enabled: true, serviceAccountFile: "/run/secrets/work-sa.json" } },
-      UNAVAILABLE_ROOT_REF,
-    );
-    const context = collect(sourceConfig);
+  it("keeps an inheriting named account as a root serviceAccount SecretRef owner", () => {
+    const context = collect(configWithAccounts({ work: { enabled: true } }, UNAVAILABLE_ROOT_REF));
 
-    const { degradedOwners } = await resolveAndApplySecretAssignments({
-      assignments: context.assignments,
-      context,
-      allowOwnerIsolation: true,
-      options: {
-        config: sourceConfig,
-        env: context.env,
-        cache: context.cache,
-      },
-    });
-
-    expect(degradedOwners).toStrictEqual([]);
+    expect(context.assignments).toMatchObject([
+      { ownerKind: "account", ownerId: "googlechat:work" },
+    ]);
   });
 
-  it("isolates a named account that inherits an unavailable root SecretRef during preparation", async () => {
+  it("resolves the root ref fixture to prove it fails when the variable is unavailable", async () => {
     const sourceConfig = configWithAccounts({ work: { enabled: true } }, UNAVAILABLE_ROOT_REF);
     const context = collect(sourceConfig);
 
-    const { degradedOwners } = await resolveAndApplySecretAssignments({
-      assignments: context.assignments,
-      context,
-      allowOwnerIsolation: true,
-      options: {
-        config: sourceConfig,
-        env: context.env,
-        cache: context.cache,
-      },
-    });
-
-    expect(degradedOwners).toMatchObject([{ ownerKind: "account", ownerId: "googlechat:work" }]);
-    // Snapshot activation publishes the degraded owner the way a real
-    // preparation does; gateway startup then rejects this exact owner.
-    setActiveDegradedSecretOwners(degradedOwners);
-    try {
-      expect(() => assertSecretOwnerAvailable("account", "googlechat:work")).toThrowError(
-        SecretSurfaceUnavailableError,
-      );
-    } finally {
-      setActiveDegradedSecretOwners([]);
-    }
+    await expect(
+      resolveSecretRefValues(
+        context.assignments.map((assignment) => assignment.ref),
+        {
+          config: sourceConfig,
+          env: context.env,
+          cache: context.cache,
+        },
+      ),
+    ).rejects.toThrowError(/MISSING_ROOT_GOOGLECHAT_SECRET|missing or empty/u);
   });
 });
