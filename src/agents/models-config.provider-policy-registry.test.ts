@@ -41,7 +41,9 @@ vi.mock("./model-auth-env-vars.js", () => ({
   }),
 }));
 
-let planOpenClawModelsJsonWithDeps: typeof import("./models-config.plan.test-support.js").planOpenClawModelsJsonWithDeps;
+let planModelsJsonForTest: typeof import("./models-config.plan.test-support.js").planModelsJsonForTest;
+let modelsConfigProviders: typeof import("./models-config.providers.js");
+let resolveImplicitProvidersSpy: MockInstance | undefined;
 let loadPluginManifestRegistrySpy: MockInstance | undefined;
 let loadBundledPluginPublicArtifactModuleFromCandidatesSyncSpy: MockInstance | undefined;
 let bundledPluginsDir: string;
@@ -76,10 +78,12 @@ beforeAll(async () => {
         }),
       };
     });
-  ({ planOpenClawModelsJsonWithDeps } = await import("./models-config.plan.test-support.js"));
+  ({ planModelsJsonForTest } = await import("./models-config.plan.test-support.js"));
+  modelsConfigProviders = await import("./models-config.providers.js");
 });
 
 afterAll(() => {
+  resolveImplicitProvidersSpy?.mockRestore();
   loadPluginManifestRegistrySpy?.mockRestore();
   loadBundledPluginPublicArtifactModuleFromCandidatesSyncSpy?.mockRestore();
   if (originalBundledPluginsDir === undefined) {
@@ -111,26 +115,24 @@ describe("models-config provider policy registry", () => {
       "index" | "manifestRegistry" | "owners" | "pluginIds"
     >;
 
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: { models: { providers: {} } },
-        agentDir: "/tmp/openclaw-provider-policy-registry-test/agent",
-        env: {},
-        existingRaw: "",
-        existingParsed: null,
-        pluginMetadataSnapshot,
-      },
-      {
-        resolveImplicitProviders: async () => ({
-          "x-ai": {
-            baseUrl: "https://mock.example/v1",
-            api: "openai-responses",
-            apiKey: "OPENAI_API_KEY",
-            models: [],
-          },
-        }),
-      },
-    );
+    resolveImplicitProvidersSpy = vi
+      .spyOn(modelsConfigProviders, "resolveImplicitProviders")
+      .mockResolvedValue({
+        "x-ai": {
+          baseUrl: "https://mock.example/v1",
+          api: "openai-responses",
+          apiKey: "OPENAI_API_KEY",
+          models: [],
+        },
+      });
+    const plan = await planModelsJsonForTest({
+      cfg: { models: { providers: {} } },
+      agentDir: "/tmp/openclaw-provider-policy-registry-test/agent",
+      env: {},
+      existingRaw: "",
+      existingParsed: null,
+      pluginMetadataSnapshot,
+    });
 
     expect(plan.action).toBe("write");
     expect(
