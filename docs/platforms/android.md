@@ -2,7 +2,7 @@
 summary: "Android app (node): pairing, connection recovery, chat, voice, and device commands"
 read_when:
   - Pairing or reconnecting the Android node
-  - Debugging Android gateway discovery or auth
+  - Debugging Android Gateway discovery or auth
   - Mirroring or controlling an Android device from a remote Mac
   - Verifying chat history parity across clients
 title: "Android app"
@@ -28,7 +28,7 @@ New replies stay in view while you are at the end of the settings conversation. 
 
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
 
-## Simultaneous gateway sessions
+## Simultaneous Gateway sessions
 
 Pair each Gateway once, then open **Settings → Gateway**. The checkmark marks
 the focused Gateway and each switch controls whether a non-focused Gateway's
@@ -82,7 +82,7 @@ Mac are in different locations but share a private Tailscale network.
 
 - Install Tailscale on the Android device and the Mac, and connect both to the same tailnet.
 - On Android, enable **Developer options** and **USB debugging**. Android 16 places **Wireless
-  debugging** under **Settings > System > Developer options**. See [Android developer
+  debugging** under **Settings → System → Developer options**. See [Android developer
   options](https://developer.android.com/studio/debug/dev-options).
 - Install scrcpy and ADB on the Mac:
 
@@ -106,7 +106,7 @@ adb tcpip 5555
 
 You can now disconnect USB. If port 5555 stops listening after a device reboot or debugging reset,
 repeat this local setup step. Android 11 and later can also establish the initial trust with
-**Wireless debugging > Pair device with pairing code** and `adb pair`.
+**Wireless debugging → Pair device with pairing code** and `adb pair`.
 
 ### Allow only the controller Mac
 
@@ -155,7 +155,7 @@ private network path.
   peer reachability, not that policy permits this TCP port. Test with
   `nc -vz <android-tailnet-ip> 5555` from the Mac.
 - `unauthorized`: unlock Android and approve the remote Mac's ADB key, or remove the stale workstation
-  under **Wireless debugging > Paired devices** and pair it again.
+  under **Wireless debugging → Paired devices** and pair it again.
 - `Connection refused`: reconnect locally and run `adb tcpip 5555` again.
 - More than one device listed: keep the explicit `--serial <android-tailnet-ip>:5555` argument.
 
@@ -180,12 +180,12 @@ For Tailscale or public hosts, Android requires a secure endpoint:
 ### Prerequisites
 
 - Gateway running on another machine (or reachable via SSH).
-- Android device/emulator can reach the gateway WebSocket:
+- Android device/emulator can reach the Gateway WebSocket:
   - Same LAN with mDNS/NSD, **or**
   - Same Tailscale tailnet using Wide-Area Bonjour / unicast DNS-SD (see below), **or**
-  - Manual gateway host/port (fallback)
+  - Manual Gateway host/port (fallback)
 - Tailnet/public mobile pairing does **not** use raw tailnet IP `ws://` endpoints. Use Tailscale Serve or another `wss://` URL instead.
-- The `openclaw` CLI available on the gateway machine (or via SSH), to approve pairing requests.
+- The `openclaw` CLI available on the Gateway machine (or via SSH), to approve pairing requests.
 
 ### 1. Start the Gateway
 
@@ -207,7 +207,7 @@ This gives Android a secure `wss://` / `https://` endpoint. A plain `gateway.bin
 
 ### 2. Verify discovery (optional)
 
-From the gateway machine:
+From the Gateway machine:
 
 ```bash
 dns-sd -B _openclaw-gw._tcp local.
@@ -225,9 +225,9 @@ That shows `local.` plus the configured wide-area domain in one pass, using the 
 
 #### Cross-network discovery via unicast DNS-SD
 
-Android NSD/mDNS discovery does not cross networks. If the Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead. Discovery alone is not sufficient for tailnet/public Android pairing — the discovered route still needs a secure endpoint (`wss://` or Tailscale Serve):
+Android NSD/mDNS discovery does not cross networks. If the Android node and the Gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead. Discovery alone is not sufficient for tailnet/public Android pairing — the discovered route still needs a secure endpoint (`wss://` or Tailscale Serve):
 
-1. Set up a DNS-SD zone (example `openclaw.internal.`) on the gateway host and publish `_openclaw-gw._tcp` records.
+1. Set up a DNS-SD zone (example `openclaw.internal.`) on the Gateway host and publish `_openclaw-gw._tcp` records.
 2. Configure Tailscale split DNS for your chosen domain pointing at that DNS server.
 
 Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
@@ -236,14 +236,14 @@ Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 
 In the Android app:
 
-- The app keeps its gateway connection alive via a **foreground service** (persistent notification).
+- The app keeps its Gateway connection alive via a **foreground service** (persistent notification).
 - During first-run setup, choose **Scan QR or setup code** or **Set up manually**.
 - After setup, open **Settings → Gateway**. **Add Gateway** lets you scan or paste a setup code, or connect to a discovered Gateway.
 - If discovery is blocked, use **Manual Gateway** on that page: enter the host and port, select **Connection security**, and tap **Save & Connect**. Private LAN hosts support `ws://`; for Tailscale/public hosts, use **Secure (TLS)** with a `wss://` / Tailscale Serve endpoint.
 
 Gateway tokens, bootstrap tokens, passwords, and setup codes are masked and accept paste. The app requests password input with autocorrection disabled, but cannot guarantee how a third-party keyboard stores or learns from input.
 
-After the first successful pairing, Android auto-reconnects on launch to the active paired gateway (best-effort for discovered gateways, which must be visible on the network).
+After the first successful pairing, Android auto-reconnects on launch to the active paired Gateway (best-effort for discovered Gateways, which must be visible on the network).
 
 Android retries temporary connection losses automatically. For a fresh attempt with the saved endpoint, open **Settings → Gateway** and tap **Reconnect**. **Disconnect** stops the connections and suppresses automatic reconnect for the current app session; it does not forget the pairing. Authentication or pairing errors can pause retries until you address the reported problem.
 
@@ -258,14 +258,14 @@ with `openclaw qr`, then scan or paste it on that page and reconnect. Operators
 who want the reduced profile can select **Limited access** in Control UI or run
 `openclaw qr --limited`.
 
-### Manage paired gateways
+### Manage paired Gateways
 
-The app keeps a registry of every gateway it has paired with, so you can keep operator sessions connected and change focus without pairing again:
+The app keeps a registry of every Gateway it has paired with, so you can keep operator sessions connected and change focus without pairing again:
 
-- **Settings → Gateway** lists paired gateways in the **Gateways** section, with a checkmark beside the focused one. Tap another entry to focus it; the other enabled operator sessions remain connected.
+- **Settings → Gateway** lists paired Gateways in the **Gateways** section, with a checkmark beside the focused one. Tap another entry to focus it; the other enabled operator sessions remain connected.
 - Each switch controls whether that non-focused Gateway stays connected while the app is in the foreground. The focused Gateway remains enabled and owns the phone's node connection and device capabilities.
 - Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per Gateway. Changing focus never mixes state between Gateways, and messages queued while offline are delivered only to the Gateway they were written for.
-- **Forget** removes a gateway's registry entry together with its credentials, device tokens, TLS pin, and cached chats.
+- **Forget** removes a Gateway's registry entry together with its credentials, device tokens, TLS pin, and cached chats.
 
 The **Channels**, **Dreaming**, **Health** logs, **Skills**, and **Usage** pages keep their last loaded data while refreshing. A failed first load shows an error rather than empty counts or default health values. When refreshes overlap, only the latest request updates the page's data, error, and progress. Disconnecting clears the displayed summaries.
 
@@ -273,13 +273,13 @@ On **Health**, **Chat: Not ready** means chat health is unconfirmed or its check
 
 ### Presence alive beacons
 
-After the authenticated node session connects, and when the app moves to the background while the foreground service is still connected, Android calls `node.event` with `event: "node.presence.alive"`. The gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
+After the authenticated node session connects, and when the app moves to the background while the foreground service is still connected, Android calls `node.event` with `event: "node.presence.alive"`. The Gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
 
-The app counts the beacon as successfully recorded only when the gateway response includes `handled: true`. Older gateways may acknowledge `node.event` with `{ "ok": true }`; that response is compatible but does not count as a durable last-seen update.
+The app counts the beacon as successfully recorded only when the Gateway response includes `handled: true`. Older Gateways may acknowledge `node.event` with `{ "ok": true }`; that response is compatible but does not count as a durable last-seen update.
 
 ### 4. Approve pairing (CLI)
 
-On the gateway machine:
+On the Gateway machine:
 
 ```bash
 openclaw devices list
@@ -345,10 +345,10 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - **Refresh chat** in chat actions reloads history and rechecks Gateway health without clearing pending messages. Chat readiness is separate from the Gateway connection: an empty connected thread shows **Chat not ready** while health is unconfirmed or a check has failed. Use **Refresh chat** to check again; **Gateway offline** indicates a disconnected Gateway. History failures do not stop subsequent health checks. Once Android observes a recovered run finish, a delayed history response does not bring back that run's Stop button or partial reply.
 - Send: `chat.send`. Outside an active Talk session, you can send text or staged attachments while the agent is working. A new draft brings back **Send**; clearing it restores **Stop**. The Gateway applies the existing [queue mode](/concepts/queue), so steering does not require stopping the current run. Sending remains disabled while another submission, attachment staging, or microphone capture owns the draft.
 - Queued message controls: **Delete** removes the local queued copy, including when a reconnect refresh is still finishing. It does not undo a message already accepted by the Gateway; use **Stop** to cancel an active turn.
-- Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Acknowledged reconnect sends show the same streaming progress as online sends; requests that never reach the socket queue remain queued for the next connection. Ambiguous outcomes (lost acknowledgement, app killed mid-send, gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. If refreshed history changes branches, earlier queued input keeps its text and attachments but requires explicit retry; input admitted after that history is displayed can send normally when reconnecting to the same branch. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
+- Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Acknowledged reconnect sends show the same streaming progress as online sends; requests that never reach the socket queue remain queued for the next connection. Ambiguous outcomes (lost acknowledgement, app killed mid-send, Gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. If refreshed history changes branches, earlier queued input keeps its text and attachments but requires explicit retry; input admitted after that history is displayed can send normally when reconnecting to the same branch. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per Gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
 - Image input works through the picker and Android Sharesheet. Assistant-generated images resolve through the paired Gateway connection, render inline with a full-screen preview, and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
-- Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
+- Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via Gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the Gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
 ### 7. Camera
 
@@ -362,14 +362,14 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
   transcript into the draft. Long-press the microphone to record a voice-note
   attachment. The UI reports unavailable recognition, missing permission,
   busy/network failures, and no-speech outcomes instead of silently dropping
-  the attempt. If dictation is unavailable and a gateway is selected,
+  the attempt. If dictation is unavailable and a Gateway is selected,
   **Record voice note** offers a new recording while keeping the draft. It does
   not recover speech from the failed dictation attempt or send anything
   automatically.
 - Start continuous **Talk** from the Chat waveform. Dictation, voice-note
   recording, and Talk are mutually exclusive microphone paths.
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
-- By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. It inherits the session's thinking setting. Local system TTS is used only when `talk.speak` is unavailable.
+- By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured Gateway Talk provider. It inherits the session's thinking setting. Local system TTS is used only when `talk.speak` is unavailable.
 - Gateway config changes refresh Android's cached Talk settings on the next use, without reconnecting or interrupting an active capture.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
 - Enable **Settings → Voice → Listen for wake words** for foreground on-device
@@ -378,7 +378,7 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
   synchronized with the current Gateway.
 - Additional Android command families (availability depends on device, permissions, and user settings):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
-  - `device.apps` only when **Settings > Phone Capabilities > Installed Apps** is enabled; it lists launcher-visible apps by default (pass `includeNonLaunchable` for the full list).
+  - `device.apps` only when **Settings → Phone Capabilities → Installed Apps** is enabled; it lists launcher-visible apps by default (pass `includeNonLaunchable` for the full list).
   - `notifications.list`, `notifications.actions` (see [Notification forwarding](#notification-forwarding) below)
   - `photos.latest`
   - `contacts.search`, `contacts.add`
@@ -389,7 +389,7 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 
 ### 9. Workspace files (read-only)
 
-Open **Work** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the gateway.
+Open **Work** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` Gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the Gateway.
 
 If the app cannot prepare a file or open the share sheet, it shows **Could not share file** and keeps the preview open so you can retry or go back.
 
@@ -435,7 +435,7 @@ App Actions availability depends on the device, Google Play Services version, an
 
 ## Notification forwarding
 
-Android can forward device notifications to the gateway as `node.event` items. This is configured **on the device**, in the app's Settings sheet — not in gateway/`openclaw.json` config.
+Android can forward device notifications to the Gateway as `node.event` items. This is configured **on the device**, in the app's Settings sheet — not in Gateway/`openclaw.json` config.
 
 | Setting                     | Description                                                                                                                                                                                            |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

@@ -7,7 +7,7 @@ read_when:
   - Setting up standalone Apple Watch voice
   - Enabling or troubleshooting the direct Apple Watch node
   - Running the iOS app from source
-  - Debugging gateway discovery or iOS node commands
+  - Debugging Gateway discovery or iOS node commands
   - Choosing colors for native chat sessions
 title: "iOS app"
 ---
@@ -19,22 +19,22 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 - Connects to a Gateway over WebSocket (LAN or tailnet).
 - Exposes node capabilities: Screen snapshot, Camera capture, Location, Talk mode, Voice wake, and opt-in Health summaries.
 - Receives `node.invoke` commands and reports node status events.
-- Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the gateway.
-- Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
+- Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the Gateway.
+- Keeps a small read-only offline cache of recent chat sessions and transcripts per paired Gateway: cold opens paint the last known transcript immediately and refresh once the Gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
 - Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
 - Long-press a message or open its actions menu and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
-- Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
+- Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
 ## Settings
 
 Open **Settings** in the sidebar to use the same Dashboard settings pages as the
 web and macOS apps. A connected operator session with `operator.admin` is required.
 The toolbar's **Gateway** button opens the native connection screen, including
-setup, paired gateways, manual connection, and advanced connection options.
+setup, paired Gateways, manual connection, and advanced connection options.
 **Approvals** opens the native approval inbox and shows the pending count.
 
 The Gateway must serve Dashboard pages that support the companion iOS app.
@@ -147,10 +147,10 @@ creation has a token or password auth path.
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
    the setup code), and connect.
 
-   Paired gateways remain in the **Gateways** list. The checkmark identifies
-   the focused gateway; use the bolt control on another row to keep its
+   Paired Gateways remain in the **Gateways** list. The checkmark identifies
+   the focused Gateway; use the bolt control on another row to keep its
    operator session connected at the same time. Switching focus does not
-   disconnect other enabled gateways. Only the focused gateway receives the
+   disconnect other enabled Gateways. Only the focused Gateway receives the
    iPhone's capability-bearing node session, so camera, screen, location, and
    other device commands always have one unambiguous owner. iOS may suspend
    these foreground connections after the app enters the background.
@@ -165,7 +165,7 @@ creation has a token or password auth path.
    then reconnect to enable settings and upgrades.
 
 The Control UI button requires an already paired session with `operator.admin`.
-As a terminal fallback, pick a discovered gateway in the iOS app (or enable
+As a terminal fallback, pick a discovered Gateway in the iOS app (or enable
 Manual Host and enter host/port), then approve the request on the Gateway host:
 
 ```bash
@@ -406,7 +406,7 @@ resolved notification, and whenever a resolve acknowledgement may have been
 lost. Actions stay unavailable until that readback confirms whether the
 request remains pending.
 
-Approval ownership is bound to the selected Gateway. Switching gateways cannot
+Approval ownership is bound to the selected Gateway. Switching Gateways cannot
 apply an old prompt to the replacement connection. Gateways that predate the
 unified approval methods fall back to the shipped exec-specific methods;
 retained terminal state and richer cross-surface results require an updated
@@ -473,9 +473,9 @@ Direct watchOS node commands:
 
 ## Relay-backed push for official builds
 
-Official distributed iOS builds use an external push relay instead of publishing the raw APNs token to the gateway. Official App Store builds from the public release lane use the hosted relay at `https://ios-push-relay.openclaw.ai`; this base URL is hardcoded for App Store distribution and does not read any override.
+Official distributed iOS builds use an external push relay instead of publishing the raw APNs token to the Gateway. Official App Store builds from the public release lane use the hosted relay at `https://ios-push-relay.openclaw.ai`; this base URL is hardcoded for App Store distribution and does not read any override.
 
-Custom relay deployments require a deliberately separate iOS build/deployment path whose relay URL matches the gateway relay URL. The App Store release lane never accepts a custom relay URL. If you're using a custom relay build, set the matching gateway relay URL:
+Custom relay deployments require a deliberately separate iOS build/deployment path whose relay URL matches the Gateway relay URL. The App Store release lane never accepts a custom relay URL. If you're using a custom relay build, set the matching Gateway relay URL:
 
 ```json5
 {
@@ -495,32 +495,32 @@ How the flow works:
 
 - The iOS app registers with the relay using App Attest and a StoreKit app transaction JWS.
 - The relay returns an opaque relay handle plus a registration-scoped send grant.
-- The iOS app fetches the paired gateway identity (`gateway.identity.get`) and includes it in relay registration, so the relay-backed registration is delegated to that specific gateway.
-- The app forwards that relay-backed registration to the paired gateway with `push.apns.register`.
-- The gateway uses that stored relay handle for `push.test`, background wakes, and wake nudges.
-- If the app later connects to a different gateway or a build with a different relay base URL, it refreshes the relay registration instead of reusing the old binding.
+- The iOS app fetches the paired Gateway identity (`gateway.identity.get`) and includes it in relay registration, so the relay-backed registration is delegated to that specific Gateway.
+- The app forwards that relay-backed registration to the paired Gateway with `push.apns.register`.
+- The Gateway uses that stored relay handle for `push.test`, background wakes, and wake nudges.
+- If the app later connects to a different Gateway or a build with a different relay base URL, it refreshes the relay registration instead of reusing the old binding.
 
-What the gateway does **not** need for this path: no deployment-wide relay token, no direct APNs key for official App Store relay-backed sends.
+What the Gateway does **not** need for this path: no deployment-wide relay token, no direct APNs key for official App Store relay-backed sends.
 
 Expected operator flow:
 
 1. Install the official iOS app.
-2. Optional: set `gateway.push.apns.relay.baseUrl` on the gateway only when using a deliberately separate custom relay build.
-3. Pair the app to the gateway and let it finish connecting.
+2. Optional: set `gateway.push.apns.relay.baseUrl` on the Gateway only when using a deliberately separate custom relay build.
+3. Pair the app to the Gateway and let it finish connecting.
 4. The app publishes `push.apns.register` once it has an APNs token, the operator session is connected, and relay registration succeeds.
 5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
 
 ## Background alive beacons
 
-When iOS wakes the app for a silent push, background refresh, or significant-location event, the app attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`. The gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
+When iOS wakes the app for a silent push, background refresh, or significant-location event, the app attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`. The Gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
 
-The app treats a background wake as successfully recorded only when the gateway response includes `handled: true`. Older gateways may acknowledge `node.event` with `{ "ok": true }`; that response is compatible but does not count as a durable last-seen update.
+The app treats a background wake as successfully recorded only when the Gateway response includes `handled: true`. Older Gateways may acknowledge `node.event` with `{ "ok": true }`; that response is compatible but does not count as a durable last-seen update.
 
 Background refresh wakes are requested through the system BackgroundTasks scheduler whenever the app moves to the background, after a silent push that could not be applied, and again after each refresh run; iOS decides when they actually execute. They stop if Background App Refresh is turned off for OpenClaw in iOS Settings, leaving push and significant-location wakes.
 
 Compatibility note:
 
-- `OPENCLAW_APNS_RELAY_BASE_URL` still works as a temporary env override for the gateway (`gateway.push.apns.relay.baseUrl` is the config-first path).
+- `OPENCLAW_APNS_RELAY_BASE_URL` still works as a temporary env override for the Gateway (`gateway.push.apns.relay.baseUrl` is the config-first path).
 - The App Store release build's push mode hardcodes the hosted relay host and never reads a relay-URL override — the `OPENCLAW_PUSH_RELAY_BASE_URL` build-time env var only affects local/sandbox iOS build modes.
 
 ## Authentication and trust flow
@@ -528,19 +528,19 @@ Compatibility note:
 The relay exists to enforce two constraints direct APNs-on-gateway cannot provide for official iOS builds:
 
 - Only genuine OpenClaw iOS builds distributed through Apple can use the hosted relay.
-- A gateway can send relay-backed pushes only for iOS devices that paired with that specific gateway.
+- A Gateway can send relay-backed pushes only for iOS devices that paired with that specific Gateway.
 
 Hop by hop:
 
-1. `iOS app -> gateway`: the app pairs with the gateway through the normal Gateway auth flow, giving it an authenticated node session plus an authenticated operator session. The operator session calls `gateway.identity.get`.
+1. `iOS app -> gateway`: the app pairs with the Gateway through the normal Gateway auth flow, giving it an authenticated node session plus an authenticated operator session. The operator session calls `gateway.identity.get`.
 2. `iOS app -> relay`: the app calls the relay registration endpoints over HTTPS with App Attest proof plus a StoreKit app transaction JWS. The relay validates the bundle ID, App Attest proof, and Apple distribution proof, and requires the official/production distribution path — this is what blocks local Xcode/dev builds from using the hosted relay, since a local build cannot satisfy the official Apple distribution proof.
-3. `gateway identity delegation`: before relay registration, the app fetches the paired gateway identity from `gateway.identity.get` and includes it in the relay registration payload. The relay returns a relay handle and a registration-scoped send grant delegated to that gateway identity.
-4. `gateway -> relay`: the gateway stores the relay handle and send grant from `push.apns.register`. On `push.test`, reconnect wakes, and wake nudges, the gateway signs the send request with its own device identity; the relay verifies both the stored send grant and the gateway signature against the delegated gateway identity from registration. Another gateway cannot reuse that stored registration, even if it somehow obtains the handle.
-5. `relay -> APNs`: the relay owns the production APNs credentials and the raw APNs token for the official build. The gateway never stores the raw APNs token for relay-backed official builds; the relay sends the final push to APNs on behalf of the paired gateway.
+3. `gateway identity delegation`: before relay registration, the app fetches the paired Gateway identity from `gateway.identity.get` and includes it in the relay registration payload. The relay returns a relay handle and a registration-scoped send grant delegated to that Gateway identity.
+4. `gateway -> relay`: the Gateway stores the relay handle and send grant from `push.apns.register`. On `push.test`, reconnect wakes, and wake nudges, the Gateway signs the send request with its own device identity; the relay verifies both the stored send grant and the Gateway signature against the delegated Gateway identity from registration. Another Gateway cannot reuse that stored registration, even if it somehow obtains the handle.
+5. `relay -> APNs`: the relay owns the production APNs credentials and the raw APNs token for the official build. The Gateway never stores the raw APNs token for relay-backed official builds; the relay sends the final push to APNs on behalf of the paired Gateway.
 
-Why this design was created: to keep production APNs credentials out of user gateways, avoid storing raw official-build APNs tokens on the gateway, allow hosted relay usage only for official OpenClaw iOS builds, and prevent one gateway from sending wake pushes to iOS devices owned by a different gateway.
+Why this design was created: to keep production APNs credentials out of user Gateways, avoid storing raw official-build APNs tokens on the Gateway, allow hosted relay usage only for official OpenClaw iOS builds, and prevent one Gateway from sending wake pushes to iOS devices owned by a different Gateway.
 
-Local/manual builds remain on direct APNs. If you are testing those builds without the relay, the gateway still needs direct APNs credentials:
+Local/manual builds remain on direct APNs. If you are testing those builds without the relay, the Gateway still needs direct APNs credentials:
 
 ```bash
 export OPENCLAW_APNS_TEAM_ID="TEAMID"
@@ -566,7 +566,7 @@ Do not commit the `.p8` file or place it under the repo checkout.
 
 ### Bonjour (LAN)
 
-The iOS app browses `_openclaw-gw._tcp` on `local.` and, when configured, the same wide-area DNS-SD discovery domain. Same-LAN gateways appear automatically from `local.`; cross-network discovery can use the configured wide-area domain without changing the beacon type.
+The iOS app browses `_openclaw-gw._tcp` on `local.` and, when configured, the same wide-area DNS-SD discovery domain. Same-LAN Gateways appear automatically from `local.`; cross-network discovery can use the configured wide-area domain without changing the beacon type.
 
 ### Tailnet (cross-network)
 
@@ -574,22 +574,22 @@ If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `opencl
 
 ### Manual host/port
 
-Open **Settings -> Gateway**, enable **Use Manual Gateway**, and enter the gateway host + port (default `18789`).
+Open **Settings → Gateway**, enable **Use Manual Gateway**, and enter the Gateway host + port (default `18789`).
 
-## Multiple gateways
+## Multiple Gateways
 
-The app keeps a registry of every gateway it has paired with, so you can switch between them without pairing again:
+The app keeps a registry of every Gateway it has paired with, so you can switch between them without pairing again:
 
-- **Settings -> Gateway** shows a **Paired Gateways** list with the active gateway marked. Tap an entry to switch; the app tears down the current sessions and reconnects to the selected gateway.
-- Credentials, TLS trust decisions, per-gateway preferences, and cached chat history are stored per gateway. Switching never mixes state between gateways, and push registration follows the active gateway.
-- Swipe a paired gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
-- Discovered gateways must be visible on the network to switch to them; manual gateways reconnect by saved host and port.
+- **Settings → Gateway** shows a **Paired Gateways** list with the active Gateway marked. Tap an entry to switch; the app tears down the current sessions and reconnects to the selected Gateway.
+- Credentials, TLS trust decisions, per-gateway preferences, and cached chat history are stored per Gateway. Switching never mixes state between Gateways, and push registration follows the active Gateway.
+- Swipe a paired Gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
+- Discovered Gateways must be visible on the network to switch to them; manual Gateways reconnect by saved host and port.
 
 ## Computer Use relationship
 
 The iOS app is a mobile node surface, not a Codex Computer Use backend. Codex Computer Use and `cua-driver mcp` control a local macOS desktop through MCP tools; the iOS app exposes iPhone capabilities through OpenClaw node commands such as `camera.*`, `screen.*`, `location.*`, and `talk.*`.
 
-Agents can still operate the iOS app through OpenClaw by invoking node commands, but those calls go through the gateway node protocol and follow iOS foreground/background limits. Use [Codex Computer Use](/plugins/codex-computer-use) for local desktop control and this page for iOS node capabilities.
+Agents can still operate the iOS app through OpenClaw by invoking node commands, but those calls go through the Gateway node protocol and follow iOS foreground/background limits. Use [Codex Computer Use](/plugins/codex-computer-use) for local desktop control and this page for iOS node capabilities.
 
 ## Voice wake + talk mode
 
@@ -607,14 +607,14 @@ chat and starts the same Talk path as the inline Talk control.
 1. Open OpenClaw and [pair and connect to your Gateway](/platforms/ios#quick-start-pair-+-connect)
    first. Live voice uses your existing [Talk mode voice provider configuration](/nodes/talk);
    the shortcut does not configure a provider or bypass pairing.
-2. In **Shortcuts > Apps > OpenClaw**, choose **Start Live Voice**. You can also
+2. In **Shortcuts → Apps → OpenClaw**, choose **Start Live Voice**. You can also
    ask Siri: **"Start live voice with OpenClaw"**.
 3. Allow microphone access when iOS prompts. Unlock your iPhone if asked, and
    keep OpenClaw in the foreground while Talk starts. The shortcut does not
    bypass iOS unlock or foreground restrictions.
 
 For quick access, save a shortcut containing **Start Live Voice**, then assign
-it under **Settings > Action Button > Shortcut** on a supported iPhone, or use
+it under **Settings → Action Button → Shortcut** on a supported iPhone, or use
 **Add to Home Screen** in Shortcuts. Background voice remains subject to the
 same iOS limits as Talk started inside the app.
 

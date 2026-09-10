@@ -18,7 +18,7 @@ If you only want stock Matrix notification behavior, use `streaming.mode: "parti
 - bot user = the OpenClaw Matrix account that sends the reply
 - use the recipient user's access token for the API calls below
 - match `sender` in the push rule against the bot user's full MXID
-- the recipient account must already have working pushers; quiet preview rules only work when normal Matrix push delivery is healthy
+- the recipient account must already have working pushers. Quiet preview rules only work when normal Matrix push delivery is healthy
 
 ## Steps
 
@@ -124,7 +124,7 @@ To remove the rule later, `DELETE` the same rule URL with the recipient's token.
 
 Push rules are keyed by `ruleId`: re-running `PUT` against the same ID updates a single rule. For multiple OpenClaw bots notifying the same recipient, create one rule per bot with a distinct sender match.
 
-New user-defined `override` rules are inserted ahead of server-default suppress rules, so no extra ordering parameter is needed. The rule only affects text-only preview edits that can be finalized in place; media replies, stale-preview fallbacks, and final texts that would activate Matrix mentions are delivered as normal notifying messages instead.
+New user-defined `override` rules are inserted ahead of server-default suppress rules, so no extra ordering parameter is needed. The rule only affects text-only preview edits that can be finalized in place. Media replies, stale-preview fallbacks, and final texts that would activate Matrix mentions are delivered as normal notifying messages instead.
 
 ## Homeserver notes
 
@@ -139,7 +139,7 @@ New user-defined `override` rules are inserted ahead of server-default suppress 
   </Accordion>
 
   <Accordion title="Tuwunel">
-    Same flow as Synapse; no Tuwunel-specific config is needed for the finalized preview marker.
+    Same flow as Synapse. No Tuwunel-specific config is needed for the finalized preview marker.
 
     If notifications disappear while the user is active on another device, check whether `suppress_push_when_active` is enabled. Tuwunel added this option in 1.4.2 (September 2025) and it can intentionally suppress pushes to other devices while one device is active.
 

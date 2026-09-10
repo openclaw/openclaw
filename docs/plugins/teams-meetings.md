@@ -26,7 +26,7 @@ join button. It recognizes the consumer launcher and Chrome's
 
 Tenant policy may require sign-in, email verification, organizer admission, or
 a browser device-permission decision. The plugin reports these as
-`manualAction`; complete the requested step in the same OpenClaw Chrome profile,
+`manualAction`. Complete the requested step in the same OpenClaw Chrome profile,
 then retry status or speech. It does not bypass tenant policy.
 
 The consumer web client has been live-validated through the interstitial,
@@ -38,7 +38,7 @@ policy.
 ## Tool and Gateway surface
 
 The `teams_meetings` tool supports `join`, `leave`, `status`, `transcript`, and
-`speak`. Gateway methods use `teamsmeetings.*`; the node command is
+`speak`. Gateway methods use `teamsmeetings.*`. The node command is
 `teamsmeetings.chrome`.
 
 ## Related
