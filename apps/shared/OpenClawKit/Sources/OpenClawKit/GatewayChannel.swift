@@ -1563,7 +1563,7 @@ extension GatewayChannelActor {
         }
     }
 
-    /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
+    /// Wrap low-level transport errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
         if error is CancellationError ||
             error is GatewayConnectAuthError ||
@@ -1573,10 +1573,11 @@ extension GatewayChannelActor {
         {
             return error
         }
+        // TLS validation belongs to the session, independent of the transport's error type.
+        if let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure() {
+            return GatewayTLSValidationError(failure: failure, context: context)
+        }
         if let urlError = error as? URLError {
-            if let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure() {
-                return GatewayTLSValidationError(failure: failure, context: context)
-            }
             let desc = urlError.localizedDescription.isEmpty ? "cancelled" : urlError.localizedDescription
             return NSError(
                 domain: URLError.errorDomain,
