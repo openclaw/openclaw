@@ -77,9 +77,15 @@ describe("branch base resolution", () => {
       const calls: string[][] = [];
       const gitOut = vi.fn(async (_root: string, args: string[]) => {
         calls.push(args);
-        if (args[0] === "symbolic-ref") return null;
-        if (args[0] === "rev-parse" && args.at(-1) === candidate) return `${candidate}-sha\n`;
-        if (args[0] === "merge-base" && args[1] === candidate) return "merge-base-sha\n";
+        if (args[0] === "symbolic-ref") {
+          return null;
+        }
+        if (args[0] === "rev-parse" && args.at(-1) === candidate) {
+          return `${candidate}-sha\n`;
+        }
+        if (args[0] === "merge-base" && args[1] === candidate) {
+          return "merge-base-sha\n";
+        }
         return null;
       });
 
@@ -92,9 +98,15 @@ describe("branch base resolution", () => {
 
   it("keeps local main ahead of remote-tracking defaults", async () => {
     const gitOut = vi.fn(async (_root: string, args: string[]) => {
-      if (args[0] === "symbolic-ref") return null;
-      if (args[0] === "rev-parse" && args.at(-1) === "main") return "main-sha\n";
-      if (args[0] === "merge-base" && args[1] === "main") return "local-base\n";
+      if (args[0] === "symbolic-ref") {
+        return null;
+      }
+      if (args[0] === "rev-parse" && args.at(-1) === "main") {
+        return "main-sha\n";
+      }
+      if (args[0] === "merge-base" && args[1] === "main") {
+        return "local-base\n";
+      }
       return null;
     });
 
