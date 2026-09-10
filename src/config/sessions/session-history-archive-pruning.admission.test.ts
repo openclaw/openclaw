@@ -8,6 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
+import * as logging from "../../logging/logger.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
@@ -255,6 +256,20 @@ it.each([
       ),
     );
     await blockerEntered.promise;
+    const archivePruning = { trigger: "initial" as const };
+    const warnings: unknown[] = [];
+    const getChildLogger = logging.getChildLogger;
+    vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
+      const logger = getChildLogger(...args);
+      vi.spyOn(logger, "warn").mockImplementation((message, fields) => {
+        if (message === "SQLite session write failed") {
+          assert(fields && typeof fields === "object");
+          warnings.push("archivePruning" in fields ? fields.archivePruning : undefined);
+        }
+        return undefined;
+      });
+      return logger;
+    });
     const work = own(
       runExclusiveSqliteSessionWrite(
         options,
@@ -263,9 +278,10 @@ it.each([
           events.push("maintenance-entered");
           try {
             return boundary === "drain"
-              ? await reclaimSqliteFreePages(options)
+              ? await reclaimSqliteFreePages(options, archivePruning)
               : await pruneAllSessionTranscriptArchivesToHighWater({
                   archiveDirectory: path.dirname(archivePath),
+                  diagnostics: archivePruning,
                   databaseOptions: options,
                   highWaterBytes: 1,
                   storePath,
@@ -276,6 +292,7 @@ it.each([
           }
         },
         "session.history.archive-prune",
+        { archivePruning },
       ),
     );
     const later = own(
@@ -319,6 +336,16 @@ it.each([
     if (outcome === "revoked") {
       await expect(work).rejects.toThrow(/revoked/);
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          trigger: "initial",
+          completed: false,
+          asyncAdmissions: 1,
+          admissionMs: expect.any(Number),
+          checkpointCalls: expect.any(Number),
+          checkpointMs: expect.any(Number),
+        }),
+      ]);
     } else if (boundary === "drain") {
       await work;
     } else {
@@ -350,6 +377,11 @@ it.each([
       expect(fs.existsSync(archivePath)).toBe(false);
     }
     if (boundary === "drain") {
+      expect(archivePruning).toMatchObject({
+        vacuumMs: expect.any(Number),
+        vacuumPasses: expect.any(Number),
+        vacuumPagesRequested: outcome === "revoked" ? firstDrainedPages : initialFreePages,
+      });
       expect(firstDrainedPages).toBeGreaterThan(0);
       expect(firstDrainedPages).toBeLessThanOrEqual(512);
       expect(readFreePages(reopened.db)).toBe(
