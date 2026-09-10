@@ -6,7 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  listMemoryArtifactProvenance,
+  replaceMemoryArtifactFileWithProvenance,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
@@ -3289,6 +3292,77 @@ describe("short-term promotion", () => {
   });
 
   describe("MEMORY.md atomic promotion write", () => {
+    for (const testCase of [
+      { name: "atomic replace", forceInPlaceFallback: false },
+      { name: "in-place fallback", forceInPlaceFallback: true },
+    ]) {
+      it(`serializes a late provenance quarantine through ${testCase.name} publication`, async () => {
+        const { forceInPlaceFallback } = testCase;
+        await withTempWorkspace(async (workspaceDir) => {
+          const dailyText = "Keep the publication authority boundary intact.\n";
+          const dailyPath = await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+            dailyText.trim(),
+          ]);
+          const memoryPath = path.join(workspaceDir, "MEMORY.md");
+          await fs.writeFile(memoryPath, "# Long-Term Memory\n\n", "utf8");
+          await recordMemoryRecalls(
+            workspaceDir,
+            "publication authority",
+            [memoryRecallResult("memory/2026-04-29.md", 1, 1, 0.96, dailyText.trim())],
+            { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+          );
+          const ranked = await rankAllCandidates(workspaceDir);
+          const originalRename = fs.rename.bind(fs);
+          let quarantinePromise: Promise<void> | undefined;
+          let quarantineWasBlocked = false;
+          vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+            const sourcePath = source.toString();
+            const destinationPath = destination.toString();
+            if (
+              !quarantinePromise &&
+              path.resolve(destinationPath) === path.resolve(memoryPath) &&
+              path.basename(sourcePath).startsWith("MEMORY.md.promotion")
+            ) {
+              const quarantinedText = `${dailyText}- Later quarantined append.\n`;
+              quarantinePromise = replaceMemoryArtifactFileWithProvenance({
+                workspaceDir,
+                relativePath: "memory/2026-04-29.md",
+                expectedContentBefore: dailyText,
+                contentAfter: quarantinedText,
+                observedAt: Date.parse("2026-04-29T10:00:01.000Z"),
+              });
+              quarantineWasBlocked = await Promise.race([
+                quarantinePromise.then(() => false),
+                new Promise<true>((resolve) => {
+                  setTimeout(() => resolve(true), 25);
+                }),
+              ]);
+              if (forceInPlaceFallback) {
+                throw Object.assign(new Error("EPERM: atomic replace denied"), { code: "EPERM" });
+              }
+            }
+            return await originalRename(source, destination);
+          });
+
+          const applied = await applyAllCandidates(workspaceDir, ranked);
+          await quarantinePromise;
+
+          expect(quarantineWasBlocked).toBe(true);
+          expect(applied).toMatchObject({ applied: 1, appended: 1 });
+          await expect(fs.readFile(memoryPath, "utf8")).resolves.toContain(dailyText.trim());
+          await expect(fs.readFile(dailyPath, "utf8")).resolves.toContain(
+            "Later quarantined append",
+          );
+          await expect(listMemoryArtifactProvenance({ workspaceDir })).resolves.toEqual([
+            expect.objectContaining({
+              relativePath: "memory/2026-04-29.md",
+              provenance: expect.objectContaining({ originClass: "untrusted" }),
+            }),
+          ]);
+        });
+      });
+    }
+
     it.runIf(process.platform !== "win32")(
       "preserves a dangling MEMORY.md symlink and its target directory mode",
       async () => {

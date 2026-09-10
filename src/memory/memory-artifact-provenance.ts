@@ -2,13 +2,20 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { withFileLock } from "../infra/file-lock.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 
 const MEMORY_ARTIFACT_PROVENANCE_OWNER_ID = "core:memory-artifact-provenance";
 const MEMORY_ARTIFACT_PROVENANCE_NAMESPACE = "workspace-files";
 const MEMORY_ARTIFACT_PROVENANCE_MAX_ENTRIES = 50_000;
+const MEMORY_ARTIFACT_WRITE_LOCK_OPTIONS = {
+  retries: { retries: 100, factor: 1.2, minTimeout: 25, maxTimeout: 250 },
+  stale: 120_000,
+  staleRecovery: "fail-closed" as const,
+};
 
 export type MemoryArtifactOriginClass = "agent" | "untrusted";
 
@@ -295,6 +302,8 @@ function buildRebasedProvenance(params: {
     content: params.contentAfter,
     segments: [...prefixSegments, ...changedSegments, ...suffixSegments],
     observedAt: params.observedAt,
+    ...(params.previous?.sessionId ? { sessionId: params.previous.sessionId } : {}),
+    ...(params.previous?.sessionKey ? { sessionKey: params.previous.sessionKey } : {}),
   });
 }
 
@@ -312,6 +321,20 @@ function normalizeWorkspaceKey(workspaceDir: string): string {
   }
   const normalized = canonical.replaceAll("\\", "/");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+export async function withMemoryArtifactWriteLock<T>(
+  workspaceDir: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const lockDir = path.join(resolveStateDir(), "locks");
+  await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+  const workspaceHash = sha256(normalizeWorkspaceKey(workspaceDir));
+  return await withFileLock(
+    path.join(lockDir, `memory-promotion-${workspaceHash}`),
+    MEMORY_ARTIFACT_WRITE_LOCK_OPTIONS,
+    task,
+  );
 }
 
 export function normalizeMemoryArtifactRelativePath(relativePath: string): string | undefined {
@@ -504,54 +527,59 @@ export async function replaceMemoryArtifactFileWithProvenance(params: {
   contentAfter: string;
   observedAt: number;
 }): Promise<void> {
-  const address = resolveAddress(params);
-  if (!address) {
-    throw new Error(`Unsupported memory artifact path: ${params.relativePath}`);
-  }
-  const filePath = path.join(path.resolve(params.workspaceDir), ...address.relativePath.split("/"));
-  const contentBefore = await fs.readFile(filePath, "utf8").catch((error: unknown) => {
-    if (isMissingPathError(error)) {
-      return "";
+  await withMemoryArtifactWriteLock(params.workspaceDir, async () => {
+    const address = resolveAddress(params);
+    if (!address) {
+      throw new Error(`Unsupported memory artifact path: ${params.relativePath}`);
     }
-    throw error;
-  });
-  if (contentBefore !== params.expectedContentBefore) {
-    throw new Error(`Memory artifact changed before managed write: ${address.relativePath}`);
-  }
-
-  const rollback = await reserveRebasedMemoryArtifactWriteProvenance({
-    workspaceDir: params.workspaceDir,
-    relativePath: address.relativePath,
-    contentBefore,
-    contentAfter: params.contentAfter,
-    observedAt: params.observedAt,
-  });
-  try {
-    const directoryPath = path.dirname(filePath);
-    await fs.mkdir(directoryPath, { recursive: true });
-    const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
-    await replaceFileAtomic({
-      filePath,
-      content: params.contentAfter,
-      dirMode,
-      mode: 0o600,
-      preserveExistingMode: true,
-      tempPrefix: `${path.basename(filePath)}.memory-artifact`,
-      syncTempFile: true,
-      syncParentDir: true,
-      throwOnCleanupError: true,
+    const filePath = path.join(
+      path.resolve(params.workspaceDir),
+      ...address.relativePath.split("/"),
+    );
+    const contentBefore = await fs.readFile(filePath, "utf8").catch((error: unknown) => {
+      if (isMissingPathError(error)) {
+        return "";
+      }
+      throw error;
     });
-  } catch (error) {
-    try {
-      await rollback?.();
-    } catch (rollbackError) {
-      throw new Error(
-        `Memory artifact write failed and provenance rollback also failed: ${String(error)}`,
-        { cause: rollbackError },
-      );
+    if (contentBefore !== params.expectedContentBefore) {
+      throw new Error(`Memory artifact changed before managed write: ${address.relativePath}`);
     }
-    throw error;
-  }
+
+    const rollback = await reserveRebasedMemoryArtifactWriteProvenance({
+      workspaceDir: params.workspaceDir,
+      relativePath: address.relativePath,
+      contentBefore,
+      contentAfter: params.contentAfter,
+      observedAt: params.observedAt,
+    });
+    try {
+      const directoryPath = path.dirname(filePath);
+      await fs.mkdir(directoryPath, { recursive: true });
+      const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
+      await replaceFileAtomic({
+        filePath,
+        content: params.contentAfter,
+        dirMode,
+        mode: 0o600,
+        preserveExistingMode: true,
+        tempPrefix: `${path.basename(filePath)}.memory-artifact`,
+        syncTempFile: true,
+        syncParentDir: true,
+        throwOnCleanupError: true,
+      });
+    } catch (error) {
+      try {
+        await rollback?.();
+      } catch (rollbackError) {
+        throw new Error(
+          `Memory artifact write failed and provenance rollback also failed: ${String(error)}`,
+          { cause: rollbackError },
+        );
+      }
+      throw error;
+    }
+  });
 }
 
 export async function clearMemoryArtifactProvenance(params: {

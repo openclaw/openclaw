@@ -4,7 +4,10 @@ import { zstdCompressSync } from "node:zlib";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
-import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  listMemoryArtifactProvenance,
+  replaceMemoryArtifactFileWithProvenance,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -102,6 +105,51 @@ describe("memory forget curated writes", () => {
     expect(report).toEqual({ ...preview, dryRun: false });
     expect(report.artifacts.memoryFiles).toBe(0);
     expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(curatedContent);
+  });
+
+  it("keeps a session-authored daily file attributable after a managed replacement", async () => {
+    await seedSession("target");
+    const relativePath = "memory/2026-08-20.md";
+    const contentBefore = "trusted prefix\nold managed block\ntrusted suffix\n";
+    const contentAfter = "trusted prefix\nnew managed block\ntrusted suffix\n";
+    const writeTool = createOpenClawCodingTools({
+      workspaceDir,
+      config: cfg,
+      sessionId: "target",
+      sessionKey: "agent:main:target",
+      senderIsOwner: true,
+    }).find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+    await writeTool!.execute("write-daily-memory", {
+      path: relativePath,
+      content: contentBefore,
+    });
+
+    await replaceMemoryArtifactFileWithProvenance({
+      workspaceDir,
+      relativePath,
+      expectedContentBefore: contentBefore,
+      contentAfter,
+      observedAt: Date.parse("2026-08-20T12:00:00.000Z"),
+    });
+
+    await expect(listMemoryArtifactProvenance({ workspaceDir })).resolves.toEqual([
+      expect.objectContaining({
+        relativePath,
+        provenance: expect.objectContaining({
+          sessionId: "target",
+          sessionKey: "agent:main:target",
+        }),
+      }),
+    ]);
+    const preview = await forgetMemoryEntries({
+      cfg,
+      agentId: "main",
+      sessionIds: ["target"],
+      dryRun: true,
+    });
+    expect(preview.curatedWrites).toEqual([{ relativePath, observedAt: expect.any(Number) }]);
+    expect(await fs.readFile(path.join(workspaceDir, relativePath), "utf8")).toBe(contentAfter);
   });
 
   it("reports harness memory writes from selected live and archived transcripts without observer state", async () => {

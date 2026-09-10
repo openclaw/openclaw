@@ -42,7 +42,7 @@ describe("memory write provenance", () => {
             }
             await commit();
           },
-          clearAfterDelete: async () => {},
+          remove: async ({ commit }) => await commit(),
         },
       );
       const pending = withGatewayToolCallerIdentity(

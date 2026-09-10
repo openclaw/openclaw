@@ -6,6 +6,7 @@ import {
   clearMemoryArtifactProvenance,
   normalizeMemoryArtifactRelativePath,
   recordMemoryArtifactWriteProvenance,
+  withMemoryArtifactWriteLock,
 } from "../memory/memory-artifact-provenance.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 
@@ -17,7 +18,11 @@ export type MemoryWriteProvenanceObserver = {
     contentAfter: string;
     commit: () => Promise<void>;
   }) => Promise<void>;
-  clearAfterDelete: (absolutePath: string, contentBefore: string) => Promise<void>;
+  remove: (params: {
+    absolutePath: string;
+    contentBefore: string;
+    commit: () => Promise<void>;
+  }) => Promise<void>;
 };
 
 type ProvenanceWriteOperations = {
@@ -78,9 +83,14 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
                     return "";
                   })
               : "";
-            assertCurrent();
-            await remove(absolutePath);
-            await observer.clearAfterDelete(absolutePath, contentBefore);
+            await observer.remove({
+              absolutePath,
+              contentBefore,
+              commit: () => {
+                assertCurrent();
+                return remove(absolutePath);
+              },
+            });
           },
         }
       : {}),
@@ -128,46 +138,52 @@ export function createMemoryWriteProvenanceObserver(params: {
         await commit();
         return;
       }
-      const rollback = await recordMemoryArtifactWriteProvenance({
-        workspaceDir: params.workspaceDir,
-        relativePath,
-        contentBefore,
-        contentAfter,
-        originClass: params.resolveOriginClass(),
-        observedAt: now(),
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-      });
-      try {
-        await commit();
-      } catch (error) {
-        try {
-          await rollback?.();
-        } catch (rollbackError) {
-          throw new Error(
-            `File write failed and memory provenance rollback also failed: ${String(error)}`,
-            { cause: rollbackError },
-          );
-        }
-        throw error;
-      }
-    },
-    clearAfterDelete: async (absolutePath, contentBefore) => {
-      const relativePath = await resolveRelativePath(absolutePath);
-      if (!relativePath) {
-        return;
-      }
-      try {
-        await clearMemoryArtifactProvenance({
+      await withMemoryArtifactWriteLock(params.workspaceDir, async () => {
+        const rollback = await recordMemoryArtifactWriteProvenance({
           workspaceDir: params.workspaceDir,
           relativePath,
           contentBefore,
+          contentAfter,
+          originClass: params.resolveOriginClass(),
+          observedAt: now(),
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
         });
-      } catch (error) {
-        // The file is already gone. Retaining stale quarantine is safer than
-        // reporting the filesystem mutation as failed after it committed.
-        logWarn(`memory provenance cleanup failed for ${relativePath}: ${String(error)}`);
+        try {
+          await commit();
+        } catch (error) {
+          try {
+            await rollback?.();
+          } catch (rollbackError) {
+            throw new Error(
+              `File write failed and memory provenance rollback also failed: ${String(error)}`,
+              { cause: rollbackError },
+            );
+          }
+          throw error;
+        }
+      });
+    },
+    remove: async ({ absolutePath, contentBefore, commit }) => {
+      const relativePath = await resolveRelativePath(absolutePath);
+      if (!relativePath) {
+        await commit();
+        return;
       }
+      await withMemoryArtifactWriteLock(params.workspaceDir, async () => {
+        await commit();
+        try {
+          await clearMemoryArtifactProvenance({
+            workspaceDir: params.workspaceDir,
+            relativePath,
+            contentBefore,
+          });
+        } catch (error) {
+          // The file is already gone. Retaining stale quarantine is safer than
+          // reporting the filesystem mutation as failed after it committed.
+          logWarn(`memory provenance cleanup failed for ${relativePath}: ${String(error)}`);
+        }
+      });
     },
   };
 }

@@ -128,6 +128,8 @@ describe("memory artifact provenance", () => {
         contentAfter: before,
         originClass: "agent",
         observedAt: 1,
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
       });
       await replaceMemoryArtifactFileWithProvenance({
         ...address,
@@ -141,6 +143,8 @@ describe("memory artifact provenance", () => {
       );
       await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
         originClass: "untrusted",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
         segments: [
           expect.objectContaining({ originClass: "agent" }),
           expect.objectContaining({ originClass: "untrusted" }),

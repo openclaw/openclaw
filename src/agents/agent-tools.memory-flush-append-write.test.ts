@@ -92,7 +92,7 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
             }
             await commit();
           },
-          clearAfterDelete: async () => {},
+          remove: async ({ commit }) => await commit(),
         },
       });
       const pending = withGatewayToolCallerIdentity(

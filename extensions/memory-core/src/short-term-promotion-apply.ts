@@ -1,14 +1,14 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withFileLock } from "openclaw/plugin-sdk/file-lock";
-import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  listMemoryArtifactProvenance,
+  withMemoryArtifactWriteLock,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendConsolidationSkippedSummary,
@@ -68,11 +68,6 @@ import {
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
-const MEMORY_WRITE_LOCK_OPTIONS = {
-  retries: { retries: 100, factor: 1.2, minTimeout: 25, maxTimeout: 250 },
-  stale: 120_000,
-  staleRecovery: "fail-closed" as const,
-};
 
 function buildPromotionSection(
   candidates: PromotionCandidate[],
@@ -166,16 +161,6 @@ function consolidationCandidateFingerprint(candidate: PromotionCandidate): strin
 
 function recallStoreEntryFingerprint(entry: ShortTermRecallEntry | undefined): string {
   return JSON.stringify(entry ?? null);
-}
-
-async function resolveMemoryPromotionLockTarget(workspaceDir: string): Promise<string> {
-  const lockDir = path.join(resolveStateDir(), "locks");
-  await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
-  const canonicalWorkspace = await fs
-    .realpath(workspaceDir)
-    .catch(() => path.resolve(workspaceDir));
-  const workspaceHash = createHash("sha256").update(canonicalWorkspace).digest("hex");
-  return path.join(lockDir, `memory-promotion-${workspaceHash}`);
 }
 
 export async function applyShortTermPromotions(
@@ -395,8 +380,7 @@ export async function applyShortTermPromotions(
   let committedMemoryContent: string | undefined;
   let appendedCandidates = 0;
   let rewriteSkippedReason: string | undefined;
-  const promotionLockTarget = await resolveMemoryPromotionLockTarget(workspaceDir);
-  await withFileLock(promotionLockTarget, MEMORY_WRITE_LOCK_OPTIONS, async () => {
+  await withMemoryArtifactWriteLock(workspaceDir, async () => {
     await withMemoryWorkspaceLock(workspaceDir, async () => {
       const latestStore = await readStore(workspaceDir, nowIso);
       let retainedPreimageKeys: Set<string> | undefined;

@@ -41,6 +41,7 @@ export {
   listMemoryArtifactProvenance,
   readMemoryArtifactProvenance,
   replaceMemoryArtifactFileWithProvenance,
+  withMemoryArtifactWriteLock,
 } from "../memory/memory-artifact-provenance.js";
 export type {
   MemoryArtifactOriginClass,
