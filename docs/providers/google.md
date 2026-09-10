@@ -128,6 +128,11 @@ the Gateway already runs inside a managed Google Cloud environment.
     - Auth: selected Google AI Studio API-key profile
     - Model refs: canonical `google/*`
 
+    `google-gemini-cli` is the CLI backend the bundled Google plugin registers.
+    See [CLI backends](/gateway/cli-backends) for its argv, JSONL dialect, and
+    session and compaction behavior, and for the settings shared by every
+    registered backend.
+
     Existing valid Gemini CLI OAuth profiles remain executable for compatibility,
     but OpenClaw cannot create or repair them. If one breaks, replace it with a
     Google AI Studio API-key profile.
