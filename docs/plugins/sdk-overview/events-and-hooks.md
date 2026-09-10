@@ -21,6 +21,18 @@ each hook result. Part of the [Plugin SDK overview](/plugins/sdk-overview).
 See [Plugin hooks](/plugins/hooks) for examples, common hook names, and guard
 semantics.
 
+## Prompt input origin
+
+`before_prompt_build` receives optional `ctx.inputProvenance` for the current
+input. Its `kind` is `external_user`, `inter_session`, or `internal_system`;
+optional `originSessionId`, `sourceSessionKey`, `sourceChannel`, and `sourceTool`
+identify the source when available. An absent value means no origin was supplied.
+
+`ctx.trigger === "user"` alone does not establish human input: routed session
+messages and sub-agent completion deliveries can use the same trigger. Use the
+structured provenance when deciding whether to enrich a conversational turn;
+do not infer its origin from prompt text or earlier transcript messages.
+
 ## Hook decision semantics
 
 `before_install` is a plugin-runtime lifecycle hook, not the operator install

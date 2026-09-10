@@ -35,6 +35,7 @@ inference feature:
 | ------------------------------------------------------------------- | -------------------------------------------------------- |
 | Control UI / web chat persistent sessions                           | Yes, when either activation path targets the agent       |
 | Other interactive channel sessions on the same persistent chat path | Yes, when either activation path allows the conversation |
+| Inter-session messages and sub-agent completion deliveries          | No                                                       |
 | Headless one-shot runs                                              | No                                                       |
 | Heartbeat/background runs                                           | No                                                       |
 | Generic internal `agent-command` paths                              | No                                                       |
