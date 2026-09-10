@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       workflow_ref:
-        description: Trusted repo ref for workflow scripts and Docker E2E harness
+        description: "Assertion of the called workflow identity: dispatch/call at the desired ref and supply its matching SHA/ref; package_ref independently selects package source"
         required: true
         default: main
         type: string
@@ -161,7 +161,7 @@ on:
         default: false
         type: boolean
       workflow_ref:
-        description: Trusted repo ref for workflow scripts and Docker E2E harness
+        description: "Assertion of the called workflow identity: dispatch/call at the desired ref and supply its matching SHA/ref; package_ref independently selects package source"
         required: false
         default: main
         type: string
@@ -468,10 +468,45 @@ jobs:
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
       telegram_scenarios: ${{ steps.profile.outputs.telegram_scenarios }}
     steps:
+      - name: Resolve called package tooling identity
+        id: tooling_identity
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          const message = 'Invalid package tooling identity or workflow_ref assertion. Dispatch or call package-acceptance.yml at the desired ref and set workflow_ref to its captured SHA, full ref, or corresponding branch/tag name; package_ref independently selects package source.';
+          let job;
+          try {
+            job = JSON.parse(process.env.JOB_CONTEXT);
+          } catch {
+            throw new Error(message);
+          }
+          const prefix = 'openclaw/openclaw/.github/workflows/package-acceptance.yml@';
+          const ref = typeof job?.workflow_ref === 'string' && job.workflow_ref.startsWith(prefix)
+            ? job.workflow_ref.slice(prefix.length) : '';
+          const namedRef = /^refs\/(?:heads|tags)\/([^\x00-\x20\x7f~^:?*[\]\\]+)$/.exec(ref);
+          const validNamedRef = namedRef && namedRef[0] === ref && !ref.includes('..') && !ref.includes('@{') &&
+            !ref.endsWith('.') && ref.split('/').every(part => part && !part.startsWith('.') && !part.endsWith('.lock'));
+          const sha = job?.workflow_sha;
+          if (job?.workflow_repository !== 'openclaw/openclaw' ||
+              process.env.GITHUB_REPOSITORY !== 'openclaw/openclaw' ||
+              typeof sha !== 'string' || sha.length !== 40 || !/^[0-9a-f]{40}$/.test(sha) ||
+              (!validNamedRef && ref !== sha)) {
+            throw new Error(message);
+          }
+          const assertions = new Set([sha, ref]);
+          if (validNamedRef) assertions.add(namedRef[1]);
+          if (!assertions.has(process.env.WORKFLOW_REF)) throw new Error(message);
+          appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
+          NODE
+
       - name: Checkout package workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.workflow_ref }}
+          ref: ${{ steps.tooling_identity.outputs.sha }}
           fetch-depth: 0
           filter: blob:none
           persist-credentials: false
@@ -479,18 +514,16 @@ jobs:
       - name: Validate exact package tooling checkout
         id: tooling
         env:
-          JOB_CONTEXT: ${{ toJSON(job) }}
+          EXPECTED_TOOLING_SHA: ${{ steps.tooling_identity.outputs.sha }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
           import { execFileSync } from 'node:child_process';
           import { appendFileSync } from 'node:fs';
-          const job = JSON.parse(process.env.JOB_CONTEXT);
           const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-          if (job.workflow_repository !== 'openclaw/openclaw' ||
-              job.workflow_repository !== process.env.GITHUB_REPOSITORY ||
-              !/^[0-9a-f]{40}$/.test(job.workflow_sha) || sha !== job.workflow_sha) {
-            throw new Error('package workflow_ref must resolve to the exact called trusted tooling SHA before setup');
+          const expected = process.env.EXPECTED_TOOLING_SHA;
+          if (expected?.length !== 40 || !/^[0-9a-f]{40}$/.test(expected) || sha !== expected) {
+            throw new Error('package tooling checkout must match the captured called workflow SHA before setup');
           }
           appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
           NODE

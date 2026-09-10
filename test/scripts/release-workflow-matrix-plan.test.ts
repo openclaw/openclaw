@@ -182,6 +182,70 @@ function staticProfileMatrixJobs() {
 }
 
 describe("scripts/plan-release-workflow-matrix.mjs", () => {
+  it.each([
+    { input: undefined, profile: "stable" },
+    { input: "", profile: "stable" },
+    ...PROFILE_EXPECTATIONS.map(({ profile }) => ({ input: profile, profile })),
+  ])("normalizes CLI profile $input to $profile matrices", ({ input, profile }) => {
+    const result = spawnSync(process.execPath, ["scripts/plan-release-workflow-matrix.mjs"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        RELEASE_TEST_PROFILE: input,
+        INCLUDE_RELEASE_PATH_SUITES: "true",
+        INCLUDE_LIVE_SUITES: "true",
+        DOCKER_LANES: "",
+        LIVE_MODEL_PROVIDERS: "",
+        LIVE_SUITE_FILTER: "",
+        LIVE_MODELS_ONLY: "false",
+        PREPARE_ONLY: "false",
+        GITHUB_STEP_SUMMARY: "",
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const outputs = Object.fromEntries(
+      result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+    );
+    const expected = expectDefined(
+      PROFILE_EXPECTATIONS.find((row) => row.profile === profile),
+      `matrix expectations for ${profile}`,
+    );
+    expect(
+      JSON.parse(expectDefined(outputs.docker_e2e_matrix, "Docker E2E matrix output")).include.map(
+        (row: MatrixEntry) => row.chunk_id,
+      ),
+    ).toEqual(expected.dockerE2eChunks);
+    expect(outputs.docker_e2e_count).toBe(String(expected.dockerE2eChunks.length));
+    expect(
+      JSON.parse(
+        expectDefined(outputs.live_models_matrix, "live models matrix output"),
+      ).include.map((row: MatrixEntry) => row.providers),
+    ).toEqual(expected.liveModelProviders);
+    expect(outputs.live_models_count).toBe(String(expected.liveModelProviders.length));
+  });
+
+  it.each(["unknown", " stable "])("rejects nonempty invalid CLI profile %j", (profile) => {
+    const result = spawnSync(process.execPath, ["scripts/plan-release-workflow-matrix.mjs"], {
+      encoding: "utf8",
+      env: { ...process.env, RELEASE_TEST_PROFILE: profile, GITHUB_STEP_SUMMARY: "" },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("unknown release profile");
+  });
+
+  it("keeps the API strict for an empty CLI profile value", () => {
+    expect(() => createReleaseWorkflowMatrixPlan({ releaseProfile: "" })).toThrow(
+      "unknown release profile",
+    );
+  });
+
   it("keeps prepare-only asset union separate from every execution job", () => {
     const selected = createReleaseSourceSelection({
       releaseProfile: "full",

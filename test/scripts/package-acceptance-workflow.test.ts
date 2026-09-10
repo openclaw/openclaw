@@ -556,6 +556,148 @@ function packageAdmissionBaselineFixture(
   };
 }
 
+function packageToolingCheckoutFixture() {
+  const root = tempDirs.make("package-tooling-checkout-");
+  const repository = join(root, "repository");
+  const beforeCheckout = join(root, "before-checkout");
+  mkdirSync(repository);
+  mkdirSync(beforeCheckout);
+  const git = (...args: string[]) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.test",
+        "-C",
+        repository,
+        ...args,
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    ).trim();
+  git("init", "-q", "--initial-branch=main");
+  mkdirSync(join(repository, ".github/workflows"), { recursive: true });
+  copyFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, join(repository, PACKAGE_ACCEPTANCE_WORKFLOW));
+  git("add", ".");
+  git("commit", "-qm", "captured workflow");
+  const capturedSha = git("rev-parse", "HEAD");
+  git("branch", "release/candidate", capturedSha);
+  git("branch", "alias", capturedSha);
+  git("tag", "release-candidate", capturedSha);
+  writeFileSync(join(repository, "advanced.txt"), "main advanced after dispatch\n");
+  git("add", ".");
+  git("commit", "-qm", "advance main");
+  const advancedSha = git("rev-parse", "HEAD");
+  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+  const checkout = workflowStep(job, "Checkout package workflow ref");
+  const validate = workflowStep(job, "Validate exact package tooling checkout");
+  const identity = job.steps?.find((step) => step.id === "tooling_identity");
+  let sequence = 0;
+  function run(
+    options: {
+      workflowRef?: string;
+      capturedRef?: string;
+      context?: Record<string, unknown>;
+      attempt?: number;
+      wrongCheckout?: boolean;
+      githubRepository?: string;
+      callerWorkflowRef?: string;
+    } = {},
+  ) {
+    const context = {
+      workflow_repository: "openclaw/openclaw",
+      workflow_ref: `openclaw/openclaw/.github/workflows/package-acceptance.yml@${options.capturedRef ?? "refs/heads/main"}`,
+      workflow_sha: capturedSha,
+      ...options.context,
+    };
+    const identityOutput = join(root, `identity-${sequence}`);
+    const validationOutput = join(root, `validation-${sequence++}`);
+    writeFileSync(identityOutput, "");
+    writeFileSync(validationOutput, "");
+    const env = {
+      PATH: process.env.PATH,
+      JOB_CONTEXT: JSON.stringify(context),
+      GITHUB_REPOSITORY: options.githubRepository ?? "openclaw/openclaw",
+      GITHUB_SHA: advancedSha,
+      GITHUB_REF: "refs/heads/other-caller",
+      GITHUB_WORKFLOW_REF:
+        options.callerWorkflowRef ??
+        "openclaw/openclaw/.github/workflows/other-caller.yml@refs/heads/main",
+      GITHUB_RUN_ATTEMPT: String(options.attempt ?? 1),
+      WORKFLOW_REF: options.workflowRef ?? "main",
+      PACKAGE_REF: advancedSha,
+    };
+    const outputs = (file: string): Record<string, string> =>
+      Object.fromEntries(
+        readFileSync(file, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+    if (identity) {
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", identity.run ?? ""], {
+        cwd: beforeCheckout,
+        encoding: "utf8",
+        env: { ...env, GITHUB_OUTPUT: identityOutput },
+      });
+      if (result.status !== 0) {
+        return {
+          result,
+          checkoutReached: false,
+          selectedRef: undefined,
+          sha: undefined,
+          identityOutputs: outputs(identityOutput),
+          validationOutputs: outputs(validationOutput),
+        };
+      }
+    }
+    const identityOutputs = outputs(identityOutput);
+    const selectedRef: unknown = runInNewContext(
+      String(checkout.with?.ref).replace(/^\$\{\{(.*)\}\}$/u, "$1"),
+      {
+        inputs: { workflow_ref: env.WORKFLOW_REF, package_ref: env.PACKAGE_REF },
+        steps: { tooling_identity: { outputs: identityOutputs } },
+      },
+    );
+    if (typeof selectedRef !== "string") {
+      throw new Error("package workflow checkout did not select a ref");
+    }
+    git("checkout", "-q", "--detach", options.wrongCheckout ? advancedSha : selectedRef);
+    const sha = git("rev-parse", "HEAD");
+    const result = spawnSync(
+      "bash",
+      ["--noprofile", "--norc", "-c", `${validate.run}\nprintf 'installation-reachable\\n'`],
+      {
+        cwd: repository,
+        encoding: "utf8",
+        env: {
+          ...env,
+          EXPECTED_TOOLING_SHA: identityOutputs.sha ?? "",
+          GITHUB_OUTPUT: validationOutput,
+        },
+      },
+    );
+    return {
+      result,
+      checkoutReached: true,
+      selectedRef,
+      sha,
+      identityOutputs,
+      validationOutputs: outputs(validationOutput),
+    };
+  }
+  return { capturedSha, advancedSha, git, job, checkout, validate, identity, run };
+}
+
 describe("frozen admission workflow barriers", () => {
   it("keeps admission artifacts distinct across the owned nested release callers", () => {
     const jobs = Object.values(readWorkflow(RELEASE_CHECKS_WORKFLOW).jobs ?? {});
@@ -1665,42 +1807,195 @@ describe("frozen admission workflow barriers", () => {
     }
   });
 
+  it.each([1, 2])(
+    "pins package tooling after main advances for queued/rerun attempt %s",
+    (attempt) => {
+      const fixture = packageToolingCheckoutFixture();
+      expect(fixture.git("rev-parse", "refs/heads/main")).toBe(fixture.advancedSha);
+      expect(fixture.advancedSha).not.toBe(fixture.capturedSha);
+      const actual = fixture.run({ attempt });
+      expect(actual.checkoutReached).toBe(true);
+      expect(
+        actual.result.status,
+        JSON.stringify({
+          checkoutRef: fixture.checkout.with?.ref,
+          selectedRef: actual.selectedRef,
+          capturedSha: fixture.capturedSha,
+          advancedSha: fixture.advancedSha,
+          checkedOutSha: actual.sha,
+          stderr: actual.result.stderr,
+        }),
+      ).toBe(0);
+      expect(actual.selectedRef).toBe(fixture.capturedSha);
+      expect(actual.sha).toBe(fixture.capturedSha);
+      expect(actual.validationOutputs).toEqual({ sha: fixture.capturedSha });
+      expect(actual.result.stdout).toBe("installation-reachable\n");
+    },
+  );
+
   it("validates exact package tooling before reusing its sole dependency installation", () => {
-    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+    const fixture = packageToolingCheckoutFixture();
+    const { job, checkout, validate } = fixture;
     const steps = job.steps ?? [];
-    const validate = workflowStep(job, "Validate exact package tooling checkout");
+    const identity = workflowStep(job, "Resolve called package tooling identity");
     const setup = workflowStep(job, "Setup Node environment");
+    expect(steps.indexOf(identity)).toBe(0);
+    expect(steps.indexOf(identity)).toBeLessThan(steps.indexOf(checkout));
+    expect(steps.indexOf(checkout)).toBeLessThan(steps.indexOf(validate));
     expect(steps.indexOf(validate)).toBeLessThan(steps.indexOf(setup));
+    expect(identity.env).toEqual({
+      JOB_CONTEXT: "${{ toJSON(job) }}",
+      WORKFLOW_REF: "${{ inputs.workflow_ref }}",
+    });
+    expect(checkout.with).toEqual({
+      ref: "${{ steps.tooling_identity.outputs.sha }}",
+      "fetch-depth": 0,
+      filter: "blob:none",
+      "persist-credentials": false,
+    });
+    expect(validate.env).toEqual({
+      EXPECTED_TOOLING_SHA: "${{ steps.tooling_identity.outputs.sha }}",
+    });
     expect(
       steps.filter(
         (step) => step.uses?.includes("setup-node-env") || step.run?.includes("pnpm install"),
       ),
     ).toEqual([setup]);
-    const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    const root = tempDirs.make("frozen-package-tooling-");
-    for (const workflowSha of [sha, "a".repeat(40)]) {
-      const result = spawnSync(
-        "bash",
-        ["-c", `${validate.run}\nprintf 'installation-reachable\\n'`],
-        {
-          encoding: "utf8",
-          cwd: resolve("."),
-          env: {
-            PATH: process.env.PATH,
-            GITHUB_REPOSITORY: "openclaw/openclaw",
-            GITHUB_OUTPUT: join(root, "outputs"),
-            JOB_CONTEXT: JSON.stringify({
-              workflow_repository: "openclaw/openclaw",
-              workflow_sha: workflowSha,
-            }),
-          },
-        },
-      );
-      expect(result.status === 0).toBe(workflowSha === sha);
-      expect(result.stdout.includes("installation-reachable")).toBe(workflowSha === sha);
-    }
+    const actual = fixture.run({ wrongCheckout: true });
+    expect(actual.checkoutReached).toBe(true);
+    expect(actual.sha).toBe(fixture.advancedSha);
+    expect(actual.result.status).toBe(1);
+    expect(actual.result.stderr).toContain("checkout must match the captured called workflow SHA");
+    expect(actual.result.stdout).toBe("");
+    expect(actual.validationOutputs).toEqual({});
     expect(job.outputs?.tooling_sha).toBe("${{ steps.tooling.outputs.sha }}");
   });
+
+  it.each([
+    ["main", "refs/heads/main"],
+    ["refs/heads/main", "refs/heads/main"],
+    ["release/candidate", "refs/heads/release/candidate"],
+    ["refs/heads/release/candidate", "refs/heads/release/candidate"],
+    ["release-candidate", "refs/tags/release-candidate"],
+    ["refs/tags/release-candidate", "refs/tags/release-candidate"],
+    ["captured-sha", "refs/heads/main"],
+    ["captured-sha", "captured-sha"],
+  ])("accepts package tooling assertion %s for captured %s", (input, ref) => {
+    const fixture = packageToolingCheckoutFixture();
+    const actual = fixture.run({
+      workflowRef: input === "captured-sha" ? fixture.capturedSha : input,
+      capturedRef: ref === "captured-sha" ? fixture.capturedSha : ref,
+    });
+    expect(actual.result.status, actual.result.stderr).toBe(0);
+    expect(actual.selectedRef).toBe(fixture.capturedSha);
+    expect(actual.sha).toBe(fixture.capturedSha);
+    expect(actual.sha).not.toBe(fixture.advancedSha);
+    expect(actual.identityOutputs).toEqual({ sha: fixture.capturedSha });
+    expect(actual.validationOutputs).toEqual({ sha: fixture.capturedSha });
+    expect(actual.result.stdout).toBe("installation-reachable\n");
+  });
+
+  it.each([
+    ["advanced-sha", "refs/heads/main"],
+    ["alias", "refs/heads/main"],
+    ["refs/heads/alias", "refs/heads/main"],
+    ["release-candidate", "refs/heads/main"],
+    ["main", "refs/heads/release/candidate"],
+    [" main", "refs/heads/main"],
+    ["", "refs/heads/main"],
+    ["refs/heads/main\n", "refs/heads/main"],
+  ])("rejects package tooling assertion %j for captured %s before checkout", (input, ref) => {
+    const fixture = packageToolingCheckoutFixture();
+    const actual = fixture.run({
+      workflowRef: input === "advanced-sha" ? fixture.advancedSha : input,
+      capturedRef: ref,
+    });
+    expect(actual.checkoutReached).toBe(false);
+    expect(actual.result.status).toBe(1);
+    expect(actual.result.stderr).toContain(
+      "Dispatch or call package-acceptance.yml at the desired ref",
+    );
+    expect(actual.result.stdout).toBe("");
+    expect(actual.identityOutputs).toEqual({});
+    expect(actual.validationOutputs).toEqual({});
+  });
+
+  it.each([
+    ["repository", { workflow_repository: "other/openclaw" }],
+    ["missing repository", { workflow_repository: undefined }],
+    ["missing SHA", { workflow_sha: undefined }],
+    ["short SHA", { workflow_sha: "a".repeat(39) }],
+    ["uppercase SHA", { workflow_sha: "A".repeat(40) }],
+    ["newline SHA", { workflow_sha: `${"a".repeat(40)}\n` }],
+    ["non-string SHA", { workflow_sha: 42 }],
+    [
+      "wrong file",
+      { workflow_ref: "openclaw/openclaw/.github/workflows/other.yml@refs/heads/main" },
+    ],
+    [
+      "wrong path owner",
+      { workflow_ref: "other/openclaw/.github/workflows/package-acceptance.yml@refs/heads/main" },
+    ],
+    ["missing ref", { workflow_ref: undefined }],
+    ["non-string ref", { workflow_ref: 42 }],
+    [
+      "short captured ref",
+      { workflow_ref: "openclaw/openclaw/.github/workflows/package-acceptance.yml@main" },
+    ],
+    [
+      "empty branch",
+      { workflow_ref: "openclaw/openclaw/.github/workflows/package-acceptance.yml@refs/heads/" },
+    ],
+    [
+      "invalid branch",
+      {
+        workflow_ref:
+          "openclaw/openclaw/.github/workflows/package-acceptance.yml@refs/heads/../main",
+      },
+    ],
+    [
+      "newline ref",
+      {
+        workflow_ref:
+          "openclaw/openclaw/.github/workflows/package-acceptance.yml@refs/heads/main\n",
+      },
+    ],
+  ] as const)("rejects malformed package tooling identity: %s", (_label, context) => {
+    const fixture = packageToolingCheckoutFixture();
+    const actual = fixture.run({
+      context,
+      callerWorkflowRef:
+        "openclaw/openclaw/.github/workflows/package-acceptance.yml@refs/heads/main",
+    });
+    expect(actual.checkoutReached).toBe(false);
+    expect(actual.result.status).toBe(1);
+    expect(actual.result.stderr).toContain(
+      "Invalid package tooling identity or workflow_ref assertion",
+    );
+    expect(actual.result.stdout).toBe("");
+    expect(actual.identityOutputs).toEqual({});
+    expect(actual.validationOutputs).toEqual({});
+  });
+
+  it.each(["repository", "SHA ref"])(
+    "rejects inconsistent package tooling %s before checkout",
+    (kind) => {
+      const fixture = packageToolingCheckoutFixture();
+      const actual = fixture.run(
+        kind === "repository"
+          ? { githubRepository: "other/openclaw" }
+          : { capturedRef: fixture.advancedSha },
+      );
+      expect(actual.checkoutReached).toBe(false);
+      expect(actual.result.status).toBe(1);
+      expect(actual.result.stderr).toContain(
+        "Invalid package tooling identity or workflow_ref assertion",
+      );
+      expect(actual.result.stdout).toBe("");
+      expect(actual.identityOutputs).toEqual({});
+      expect(actual.validationOutputs).toEqual({});
+    },
+  );
 
   it.each([
     [FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"],

@@ -626,7 +626,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     liveSuiteFilter: process.env.LIVE_SUITE_FILTER,
     liveModelsOnly: process.env.LIVE_MODELS_ONLY,
     prepareOnly: process.env.PREPARE_ONLY,
-    releaseProfile: process.env.RELEASE_TEST_PROFILE,
+    releaseProfile: process.env.RELEASE_TEST_PROFILE || undefined,
   });
 
   writeOutputs(plan);
