@@ -50,6 +50,7 @@ describe("plugin entry hook option contracts", () => {
       readonly id: string;
       readonly label: string;
       readonly default?: boolean;
+      readonly disabledReason?: string;
     }>();
   });
 });
