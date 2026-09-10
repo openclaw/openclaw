@@ -44,8 +44,7 @@ export const consumeLauncherRootOptionToken = (args, index) => {
   return 0;
 };
 
-// Mirror the entry's foreground Gmail policy before any built modules can load.
-// A compile-cache wrapper would kill its owner before descendant cleanup finishes.
+// Mirror the entry's foreground Gmail policy: a wrapper would kill that run before descendant cleanup finishes.
 export const isForegroundGmailRunInvocation = (argv) => {
   const args = argv.slice(2);
   const commandPath = [];
@@ -76,10 +75,7 @@ export const runRespawnedChild = (command, args, env) => {
     env,
   });
   const listeners = new Map();
-  // This intentionally overlaps with src/entry.compile-cache.ts; keep the
-  // respawn supervision behavior in sync until the launcher can share TS code.
-  // Give the child a moment to honor forwarded signals, then exit the wrapper so
-  // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
+  // Keep signal forwarding and bounded shutdown in sync with src/entry.compile-cache.ts.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
   let signalHardExitTimer = null;
@@ -192,9 +188,7 @@ function readSmallFile(filename, encoding = "utf8") {
   }
 }
 
-// Numeric mappings are owned by src/infra/windows-encoding.ts; use WHATWG
-// labels here, plus the Windows UTF/ISO page IDs, without loading that graph.
-// Skip CP850 (no ICU decoder) and CP949 (ICU silently corrupts UHC); never guess.
+// Match windows-encoding.ts labels; skip CP850 (no decoder) and CP949 (corrupts UHC).
 const WINDOWS_SERVICE_CODEPAGE_LABELS = {
   437: "cp437",
   720: "cp720",
@@ -329,8 +323,7 @@ export function resolveRecoveryPath(
   const paths = /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(expanded) ? path.win32 : path;
   const absolute = paths.resolve(expanded);
   const cwd = realNodePath(process.cwd()) ?? process.cwd();
-  // OpenClaw owns this private recovery root even when the user launches from HOME.
-  // Only private recovery passes it; symlinks into cwd outside it remain excluded.
+  // Trust only the private recovery root when launching from HOME; reject other cwd symlinks.
   const trusted =
     trustedRoot && path.isAbsolute(trustedRoot) && isPathWithin(absolute, trustedRoot);
   const excluded = (filename) =>
@@ -469,17 +462,16 @@ function managedServiceNode(homeDir, env) {
     index += consumed;
   }
   const suffix = profile && profile.toLowerCase() !== "default" ? profile : "";
-  const serviceHome = homeDir;
   let command;
   if (process.platform === "darwin") {
-    if (!serviceHome) {
+    if (!homeDir) {
       return null;
     }
     const label = env.OPENCLAW_LAUNCHD_LABEL?.trim() || `ai.openclaw.${suffix || "gateway"}`;
     if (!/^[A-Za-z0-9._-]+$/.test(label)) {
       return null;
     }
-    const text = readSmallFile(path.join(serviceHome, "Library", "LaunchAgents", `${label}.plist`));
+    const text = readSmallFile(path.join(homeDir, "Library", "LaunchAgents", `${label}.plist`));
     const array = text?.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/)?.[1];
     const recordedArgs = [...(array || "").matchAll(/<string>([^<]*)<\/string>/g)].map(
       ([, value]) =>
@@ -494,7 +486,7 @@ function managedServiceNode(homeDir, env) {
       recordedArgs[wrapperIndex + 1]?.endsWith(`${label}.env`);
     command = recordedArgs[generatedWrapper ? wrapperIndex + 2 : 0];
   } else if (process.platform === "linux") {
-    if (!serviceHome) {
+    if (!homeDir) {
       return null;
     }
     const name =
@@ -503,7 +495,7 @@ function managedServiceNode(homeDir, env) {
       return null;
     }
     const filename = name.endsWith(".service") ? name : `${name}.service`;
-    const text = readSmallFile(path.join(serviceHome, ".config", "systemd", "user", filename));
+    const text = readSmallFile(path.join(homeDir, ".config", "systemd", "user", filename));
     const service = text?.split(/^\s*\[Service\]\s*$/m)[1]?.split(/^\s*\[/m)[0];
     const executable = service?.match(/^\s*ExecStart=\s*(?:"((?:[^"\\]|\\.)*)"|(\S+))/m);
     command = (executable?.[1] ?? executable?.[2])?.replace(/\\(.)/g, "$1");
@@ -514,12 +506,12 @@ function managedServiceNode(homeDir, env) {
     }
     const stateDir = resolveRecoveryPath(
       env.OPENCLAW_STATE_DIR?.trim() ||
-        (serviceHome && path.join(serviceHome, `.openclaw${suffix ? `-${suffix}` : ""}`)),
-      serviceHome,
+        (homeDir && path.join(homeDir, `.openclaw${suffix ? `-${suffix}` : ""}`)),
+      homeDir,
     );
     const filename = resolveRecoveryPath(
       env.OPENCLAW_TASK_SCRIPT?.trim() || (stateDir && path.join(stateDir, scriptName)),
-      serviceHome,
+      homeDir,
     );
     const text = readWindowsServiceScript(filename);
     command = text && windowsServiceNode(text);
@@ -573,9 +565,7 @@ function resolveNvmDefault(root) {
   return null;
 }
 
-// Only inherited environment roots are trusted like PATH; dotenv values must never
-// select an executable. Relative/cwd candidates remain excluded except when an
-// inherited absolute PATH directory explicitly opts into cwd.
+// Discovery uses inherited roots; dotenv must never select an executable.
 function* availableNodeCandidates(homeDir, env) {
   yield [managedServiceNode(homeDir, env), "managed Gateway service"];
   const pathKey =
@@ -588,22 +578,21 @@ function* availableNodeCandidates(homeDir, env) {
       yield [path.join(directory, binary), "PATH"];
     }
   }
-  const managerHome = homeDir;
-  for (const candidate of new Set([env.NVM_DIR, managerHome && path.join(managerHome, ".nvm")])) {
-    const root = resolveRecoveryPath(candidate, managerHome);
+  for (const candidate of new Set([env.NVM_DIR, homeDir && path.join(homeDir, ".nvm")])) {
+    const root = resolveRecoveryPath(candidate, homeDir);
     if (root) {
       yield [resolveNvmDefault(root), "nvm default"];
     }
   }
   for (const candidate of new Set([
     env.FNM_DIR,
-    managerHome && path.join(managerHome, ".fnm"),
-    managerHome && path.join(managerHome, ".local", "share", "fnm"),
-    ...(process.platform === "darwin" && managerHome
-      ? [path.join(managerHome, "Library", "Application Support", "fnm")]
+    homeDir && path.join(homeDir, ".fnm"),
+    homeDir && path.join(homeDir, ".local", "share", "fnm"),
+    ...(process.platform === "darwin" && homeDir
+      ? [path.join(homeDir, "Library", "Application Support", "fnm")]
       : []),
   ])) {
-    const root = resolveRecoveryPath(candidate, managerHome);
+    const root = resolveRecoveryPath(candidate, homeDir);
     if (root) {
       yield [
         path.join(
@@ -617,11 +606,8 @@ function* availableNodeCandidates(homeDir, env) {
       ];
     }
   }
-  for (const candidate of new Set([
-    env.VOLTA_HOME,
-    managerHome && path.join(managerHome, ".volta"),
-  ])) {
-    const root = resolveRecoveryPath(candidate, managerHome);
+  for (const candidate of new Set([env.VOLTA_HOME, homeDir && path.join(homeDir, ".volta")])) {
+    const root = resolveRecoveryPath(candidate, homeDir);
     if (!root) {
       continue;
     }
