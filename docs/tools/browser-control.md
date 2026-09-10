@@ -19,8 +19,8 @@ drivers are rejected; discovery returns an unsupported-operation error. No page 
 registered as agent tools, and there is no DOM fallback.
 
 Chrome's WebMCP developer trial starts at Chrome 146; this integration was
-verified with Chrome 152 and Chrome DevTools MCP 1.8.0. Earlier Chrome versions
-are not covered by that verification. Enable **WebMCP for testing** at
+verified with Chrome for Testing 151 and Chrome DevTools MCP 1.8.0. Other Chrome
+versions are not covered by that verification. Enable **WebMCP for testing** at
 `chrome://flags/#enable-webmcp-testing` and restart your disposable browser.
 See [Chrome's WebMCP documentation](https://developer.chrome.com/docs/ai/webmcp).
 Use a separate user-data directory without personal logins for testing.
@@ -67,9 +67,14 @@ Once an execution request enters the client, node proxy or CLI transport, errors
 are conservatively reported as **execution outcome unknown**, including service
 error responses. A failed response cannot reliably prove that no mutation happened.
 Inspect the page and rediscover its tools before deciding whether to retry; the
-caller never receives generic retry advice. Input validation performed locally
-before sending the request still reports its specific error. Discovery errors
-retain their diagnostic details.
+caller never receives generic retry advice, and the transport detail is kept as
+the error's cause without that advice. Input validation performed locally before
+sending the request still reports its specific error. Discovery errors retain
+their diagnostic details.
+
+Unless `timeoutMs` is given, the agent tool waits `browser.actionTimeoutMs` plus
+5 s of transport slack for WebMCP actions, which outlasts the route's per-call
+Chrome MCP budget. The CLI uses the Gateway `--timeout` option (default 30000 ms).
 
 ## Control API (optional)
 

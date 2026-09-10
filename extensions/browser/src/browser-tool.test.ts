@@ -1,6 +1,7 @@
 // Browser tests cover browser tool plugin behavior.
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveBrowserToolTimeoutMs } from "./browser-tool.routing.js";
@@ -1505,18 +1506,22 @@ describe("browser tool snapshot maxChars", () => {
       new Error("node invoke timed out. Retry the browser tool once."),
     );
     const tool = createBrowserTool();
-    await expect(
-      tool.execute?.("webmcp-node", {
+    const error: unknown = await tool
+      .execute?.("webmcp-node", {
         action: "webmcp_execute",
         target: "node",
         targetId: "tab",
         contextId: "document",
         toolName: "increment_counter",
         input: {},
-      }),
-    ).rejects.toMatchObject({
+      })
+      .catch((cause: unknown) => cause);
+    expect(error).toMatchObject({
       message: "WebMCP execution outcome unknown. Inspect the page before retrying.",
     });
+    // The agent runtime formats network tool errors with their cause graph.
+    expect(formatErrorMessage(error)).not.toMatch(/retry the browser tool/i);
+    expect(formatErrorMessage(error)).toContain("node invoke timed out");
     expect(toolCommonMocks.fetchBrowserJson).not.toHaveBeenCalled();
     expect(webMcpMocks.browserWebMcp).not.toHaveBeenCalled();
   });
@@ -4042,7 +4047,8 @@ describe("browser tool external content wrapping", () => {
         undefined,
         action === "webmcp_list" ? "list" : "execute",
         { targetId: "user-tab", contextId: payload.contextId, toolName: "get_counter", input: {} },
-        expect.objectContaining({ profile: "user" }),
+        // Outlast the route's actionTimeoutMs budget so slow page tools are not reported as lost.
+        expect.objectContaining({ profile: "user", timeoutMs: 65_000 }),
       );
       expect(firstResultText(result)).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
       expect(firstResultText(result)).toContain("[neutralized] MEDIA:/tmp/secret.png");
@@ -5421,6 +5427,8 @@ describe("resolveBrowserToolTimeoutMs", () => {
     ["persistent lifecycle action", "status", true, false, undefined],
     ["proxied profile listing", "profiles", false, true, 60_000],
     ["managed tab listing", "tabs", false, false, undefined],
+    ["WebMCP discovery", "webmcp_list", false, false, 65_000],
+    ["WebMCP execution", "webmcp_execute", false, false, 65_000],
   ] as const)(
     "resolves the %s budget",
     (_label, action, usesPersistentPlaywright, isNodeProxy, expected) => {

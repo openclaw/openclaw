@@ -8,6 +8,7 @@ import {
   resolveProfile,
   getBrowserProfileCapabilities,
 } from "./browser-tool.runtime.js";
+import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "./browser/act-policy.js";
 
 export type BrowserNodeTarget = {
   nodeId: string;
@@ -118,6 +119,7 @@ const EXISTING_SESSION_MANAGE_ACTIONS = new Set([
   "close",
 ]);
 const PERSISTENT_TAB_ACTIONS = new Set(["profiles", "tabs", "open", "focus", "close"]);
+const WEBMCP_ACTIONS = new Set(["webmcp_list", "webmcp_execute"]);
 
 function hasExistingSessionProfile(resolved: ReturnType<typeof resolveBrowserConfig>) {
   return Object.keys(resolved.profiles).some((name) => {
@@ -154,6 +156,12 @@ export function resolveBrowserToolTimeoutMs({
   // must budget tab operations for the possible persistent Playwright path.
   if (PERSISTENT_TAB_ACTIONS.has(action) && (usesPersistentPlaywright || isNodeProxy)) {
     return resolvedBrowser.actionTimeoutMs;
+  }
+  // The WebMCP route budgets each Chrome MCP call on actionTimeoutMs. The outer client must
+  // outlast that budget so "outcome unknown" is reserved for lost responses rather than routine
+  // slow page tools, and so the client abort does not tear down the MCP session mid-execution.
+  if (WEBMCP_ACTIONS.has(action)) {
+    return resolvedBrowser.actionTimeoutMs + BROWSER_ACTION_TRANSPORT_SLACK_MS;
   }
   return undefined;
 }

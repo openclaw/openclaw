@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { browserWebMcp } from "./client-webmcp.js";
 
@@ -34,14 +35,19 @@ describe("WebMCP execution transport uncertainty", () => {
         });
       });
       try {
-        await expect(
-          browserWebMcp(undefined, "execute", request, {
-            timeoutMs: 25,
-            signal: controller.signal,
-          }),
-        ).rejects.toMatchObject({
+        const error: unknown = await browserWebMcp(undefined, "execute", request, {
+          timeoutMs: 25,
+          signal: controller.signal,
+        }).catch((cause: unknown) => cause);
+        expect(error).toMatchObject({
           message: "WebMCP execution outcome unknown. Inspect the page before retrying.",
         });
+        // Agent and log surfaces print the whole cause graph, not just the top message.
+        const formatted = formatErrorMessage(error);
+        expect(formatted).not.toMatch(/retry the browser tool/i);
+        if (failure === "timeout") {
+          expect(formatted).toContain("timed out");
+        }
         expect(counter).toBe(1);
         expect(dispatch).toHaveBeenCalledTimes(1);
       } finally {
@@ -71,11 +77,15 @@ describe("WebMCP execution transport uncertainty", () => {
         throw new Error("Expected TCP listener");
       }
       try {
-        await expect(
-          browserWebMcp(`http://127.0.0.1:${address.port}`, "execute", request),
-        ).rejects.toMatchObject({
+        const error: unknown = await browserWebMcp(
+          `http://127.0.0.1:${address.port}`,
+          "execute",
+          request,
+        ).catch((cause: unknown) => cause);
+        expect(error).toMatchObject({
           message: "WebMCP execution outcome unknown. Inspect the page before retrying.",
         });
+        expect(formatErrorMessage(error)).not.toMatch(/retry the browser tool/i);
         expect(counter).toBe(1);
       } finally {
         server.closeAllConnections();
