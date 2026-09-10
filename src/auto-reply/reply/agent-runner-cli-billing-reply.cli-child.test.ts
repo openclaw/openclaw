@@ -150,7 +150,9 @@ describe("executeAgentTurn: CLI billing failure reply copy", () => {
     if (result.kind !== "final") {
       throw new Error("expected the failed turn to settle into a final failure reply");
     }
-    return result.payload.text;
+    const text = result.payload.text;
+    expect(text, "final failure reply should carry text").toBeTruthy();
+    return text ?? "";
   }
 
   it("reports subscription billing copy when a subscription-backed CLI run fails billing", async () => {
