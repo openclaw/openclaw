@@ -80,14 +80,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   async resolvePinnedMutationTarget(
     params: Parameters<NonNullable<SandboxFsBridge["resolvePinnedMutationTarget"]>>[0],
-  ): Promise<{ canonicalPath: string }> {
+  ): Promise<{ policyPath: string; pinnedPath: string }> {
     const target = this.resolveResolvedPath(params);
-    return {
-      canonicalPath: await this.pathGuard.resolveCanonicalMutationTarget(
-        target,
-        PINNED_MUTATION_ACTION_LABELS[params.action],
-      ),
-    };
+    // The container namespace is both the policy namespace and the runtime
+    // namespace for mounted sandboxes, so the two views agree here.
+    const canonicalPath = await this.pathGuard.resolveCanonicalMutationTarget(
+      target,
+      PINNED_MUTATION_ACTION_LABELS[params.action],
+      { directory: params.action === "mkdir" },
+    );
+    return { policyPath: canonicalPath, pinnedPath: canonicalPath };
   }
 
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
@@ -232,7 +234,9 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         pinned: this.pathGuard.resolvePinnedDirectoryEntry(
           params.pinnedPath === undefined
             ? target
-            : this.authorizedPinnedTarget(target, params.pinnedPath, "create directories"),
+            : this.authorizedPinnedTarget(target, params.pinnedPath, "create directories", {
+                directory: true,
+              }),
           "create directories",
         ),
       }),
@@ -443,9 +447,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     target: SandboxResolvedFsPath,
     pinnedPath: string,
     action: string,
+    options?: { directory?: boolean },
   ): SandboxResolvedFsPath {
     const canonicalPath = normalizeContainerPathCore(pinnedPath);
-    if (path.posix.basename(canonicalPath) !== path.posix.basename(target.containerPath)) {
+    // File-backed pins must preserve the requested basename so the mutation
+    // lands on the authorized entry. Directory pins authorize the full
+    // directory, which an existing alias may rename.
+    if (
+      !options?.directory &&
+      path.posix.basename(canonicalPath) !== path.posix.basename(target.containerPath)
+    ) {
       throw new Error(
         `Pinned sandbox destination does not match the requested path; cannot ${action}: ${target.containerPath}`,
       );

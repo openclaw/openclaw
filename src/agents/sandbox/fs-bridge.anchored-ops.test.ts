@@ -312,7 +312,10 @@ describe("sandbox fs bridge anchored ops", () => {
 
         await expect(
           bridge.resolvePinnedMutationTarget!({ filePath: "alias/note.txt", action: "write" }),
-        ).resolves.toEqual({ canonicalPath: "/workspace/real/note.txt" });
+        ).resolves.toEqual({
+          policyPath: "/workspace/real/note.txt",
+          pinnedPath: "/workspace/real/note.txt",
+        });
       });
     },
   );

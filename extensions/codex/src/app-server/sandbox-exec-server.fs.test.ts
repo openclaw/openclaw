@@ -151,8 +151,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       // Simulates a workspace symlink alias that canonicalizes into .git.
       resolvePinnedMutationTarget: async ({ filePath }) =>
         filePath === "/workspace/alias/config"
-          ? { canonicalPath: "/workspace/.git/config" }
-          : { canonicalPath: filePath },
+          ? { policyPath: "/workspace/.git/config", pinnedPath: "/workspace/.git/config" }
+          : { policyPath: filePath, pinnedPath: filePath },
     });
     const client = createClient();
     await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
@@ -184,8 +184,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       writeFile,
       resolvePinnedMutationTarget: async ({ filePath }) =>
         filePath === "/workspace/alias/config"
-          ? { canonicalPath: "/workspace/real/config" }
-          : { canonicalPath: filePath },
+          ? { policyPath: "/workspace/real/config", pinnedPath: "/workspace/real/config" }
+          : { policyPath: filePath, pinnedPath: filePath },
     });
     const client = createClient();
     await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
@@ -219,8 +219,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       copyFile,
       resolvePinnedMutationTarget: async ({ filePath }) =>
         filePath === "/workspace/alias/config"
-          ? { canonicalPath: "/workspace/.git/config" }
-          : { canonicalPath: filePath },
+          ? { policyPath: "/workspace/.git/config", pinnedPath: "/workspace/.git/config" }
+          : { policyPath: filePath, pinnedPath: filePath },
     });
     const client = createClient();
     await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
@@ -253,8 +253,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       stat: async () => ({ type: "file", size: 4, mtimeMs: 1 }),
       resolvePinnedMutationTarget: async ({ filePath }) =>
         filePath === "/workspace/alias/config"
-          ? { canonicalPath: "/workspace/real/config" }
-          : { canonicalPath: filePath },
+          ? { policyPath: "/workspace/real/config", pinnedPath: "/workspace/real/config" }
+          : { policyPath: filePath, pinnedPath: filePath },
     });
     const client = createClient();
     await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });

@@ -258,7 +258,7 @@ export async function writeFile(
   assertFsSandboxAccess(execServer, record, [
     { path: filePath, access: "write" },
     ...(canonicalDestination
-      ? [{ path: canonicalDestination.canonicalPath, access: "write" as const }]
+      ? [{ path: canonicalDestination.policyPath, access: "write" as const }]
       : []),
   ]);
   const parent = await fsBridge.stat({ filePath: pathPosix.dirname(filePath) });
@@ -269,7 +269,7 @@ export async function writeFile(
     filePath,
     data: Buffer.from(requireBase64String(record.dataBase64, "dataBase64"), "base64"),
     mkdir: false,
-    pinnedPath: canonicalDestination?.canonicalPath,
+    pinnedPath: canonicalDestination?.pinnedPath,
   });
 }
 
@@ -291,7 +291,7 @@ export async function createDirectory(
   assertFsSandboxAccess(execServer, record, [
     { path: filePath, access: "write" },
     ...(canonicalDestination
-      ? [{ path: canonicalDestination.canonicalPath, access: "write" as const }]
+      ? [{ path: canonicalDestination.policyPath, access: "write" as const }]
       : []),
   ]);
   if (record.recursive === false) {
@@ -303,7 +303,7 @@ export async function createDirectory(
   }
   await fsBridge.mkdirp({
     filePath,
-    pinnedPath: canonicalDestination?.canonicalPath,
+    pinnedPath: canonicalDestination?.pinnedPath,
   });
 }
 
@@ -385,20 +385,20 @@ export async function removePath(
   assertResolvedFsSandboxAccess(fsSandboxPolicy, [
     { path: filePath, access: "write" },
     ...(canonicalDestination
-      ? [{ path: canonicalDestination.canonicalPath, access: "write" as const }]
+      ? [{ path: canonicalDestination.policyPath, access: "write" as const }]
       : []),
   ]);
   if (record.recursive !== false) {
     assertNoReadOnlyDescendant(fsSandboxPolicy, filePath, "remove");
     if (canonicalDestination) {
-      assertNoReadOnlyDescendant(fsSandboxPolicy, canonicalDestination.canonicalPath, "remove");
+      assertNoReadOnlyDescendant(fsSandboxPolicy, canonicalDestination.policyPath, "remove");
     }
   }
   await execServer.fsBridge.remove({
     filePath,
     recursive: record.recursive !== false,
     force: record.force !== false,
-    pinnedPath: canonicalDestination?.canonicalPath,
+    pinnedPath: canonicalDestination?.pinnedPath,
   });
 }
 
@@ -449,7 +449,7 @@ async function copySandboxPath(
     { path: params.sourcePath, access: "read" },
     { path: params.destinationPath, access: "write" },
     ...(canonicalDestination
-      ? [{ path: canonicalDestination.canonicalPath, access: "write" as const }]
+      ? [{ path: canonicalDestination.policyPath, access: "write" as const }]
       : []),
   ]);
   const sourceStat = await fsBridge.stat({ filePath: params.sourcePath });
@@ -470,7 +470,7 @@ async function copySandboxPath(
     }
     await fsBridge.mkdirp({
       filePath: params.destinationPath,
-      pinnedPath: canonicalDestination?.canonicalPath,
+      pinnedPath: canonicalDestination?.pinnedPath,
     });
     for (const entry of await listDirectoryEntries(
       execServer,
@@ -495,7 +495,7 @@ async function copySandboxPath(
       sourcePath: params.sourcePath,
       destinationPath: params.destinationPath,
       mkdir: true,
-      pinnedPath: canonicalDestination?.canonicalPath,
+      pinnedPath: canonicalDestination?.pinnedPath,
     });
     return;
   }
@@ -511,7 +511,7 @@ async function copySandboxPath(
     filePath: params.destinationPath,
     data,
     mkdir: true,
-    pinnedPath: canonicalDestination?.canonicalPath,
+    pinnedPath: canonicalDestination?.pinnedPath,
   });
 }
 

@@ -24,20 +24,33 @@ export type SandboxFsStat = {
 export type SandboxFsBridge = {
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
   /**
-   * Resolves the canonical sandbox destination for a mutation before caller
-   * authorization. canonicalPath canonicalizes mutable parents (symlinks) so
-   * callers can authorize the real destination; pass it back as pinnedPath on
-   * the mutation so the pinned operation lands on the same authorized
-   * location. Pinned mutations walk their path without following symlinks, so
-   * any component swapped after resolution fails the mutation instead of
-   * redirecting it.
+   * Resolves the canonical mutation destination before caller authorization.
+   *
+   * Returns two views of the same destination:
+   * - `policyPath`: the destination in the caller's policy namespace. Path
+   *   grants, read-only carveouts, and protected-path policies must be
+   *   evaluated against this path.
+   * - `pinnedPath`: the canonical mutation target in the bridge's runtime
+   *   namespace. Pass it back as `pinnedPath` on the mutation so the pinned
+   *   operation lands on exactly the authorized location.
+   *
+   * The two paths differ when the runtime resolves sandbox aliases onto
+   * different host roots. Pinned mutations walk their path without following
+   * symlinks, so any component swapped after resolution fails the mutation
+   * instead of redirecting it.
+   *
+   * Directory semantics: for `mkdir` both paths describe the directory
+   * itself (which an existing alias may rename); for file-backed actions
+   * (`write`, `create`, `remove`, `copy-destination`) both paths describe the
+   * canonical parent plus the requested basename, so the basename never
+   * changes.
    */
   resolvePinnedMutationTarget?(params: {
     filePath: string;
     cwd?: string;
     action: "write" | "create" | "mkdir" | "remove" | "copy-destination";
     signal?: AbortSignal;
-  }): Promise<{ canonicalPath: string }>;
+  }): Promise<{ policyPath: string; pinnedPath: string }>;
   /** Directory metadata only; callers paginate it without activating file contents. */
   readDirectory?(params: {
     filePath: string;
@@ -67,7 +80,7 @@ export type SandboxFsBridge = {
     data: Buffer | string;
     encoding?: BufferEncoding;
     mkdir?: boolean;
-    /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
+    /** Pre-authorized canonical mutation target from resolvePinnedMutationTarget. */
     pinnedPath?: string;
     signal?: AbortSignal;
   }): Promise<void>;
