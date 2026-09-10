@@ -43,6 +43,20 @@ describe.skipIf(process.platform === "win32")("Matrix mention progress gate", ()
     await rm(gatePath, { recursive: true });
   }
 
+  it("keeps the compatibility boundary payload-free", async () => {
+    const gatewayWorkspaceDir = tempDirs.make("matrix-progress-gate-");
+    const gatePath = path.join(gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY);
+    const gate = await prepareMatrixMentionProgressGate({ gatewayWorkspaceDir });
+
+    const releasePromise = gate.release();
+    await expect.poll(() => readdir(gatePath)).toEqual([]);
+    await rm(gatePath, { recursive: true });
+    await releasePromise;
+    await gate.cleanup();
+
+    await expect(stat(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("waits for failure cleanup to release and consume the gate", async () => {
     const gatewayWorkspaceDir = tempDirs.make("matrix-progress-gate-");
     const gatePath = path.join(gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY);

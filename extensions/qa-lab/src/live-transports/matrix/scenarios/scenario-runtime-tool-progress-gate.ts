@@ -42,6 +42,8 @@ export async function prepareMatrixMentionProgressGate(
     context.gatewayWorkspaceDir,
     MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY,
   );
+  // Directory existence is the complete handshake. Keep it payload-free so the
+  // disposable QA workspace has no serialized state or migration boundary.
   await rm(gatePath, { force: true, recursive: true });
   let closed = false;
   let gatePromise: Promise<void> | undefined;
