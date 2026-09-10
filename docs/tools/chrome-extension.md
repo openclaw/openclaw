@@ -33,7 +33,8 @@ a script launcher or registry key without a proven binary framing path.
 ## Install
 
 Launch Chrome at least once, then run this command on the machine that hosts
-Chrome:
+Chrome. See [`openclaw browser`](/cli/browser) for the full `browser extension`
+subcommand reference:
 
 ```bash
 openclaw browser extension install
@@ -167,7 +168,8 @@ Use the canonical IPv4 endpoint when pairing for standalone operation.
 
 Wake-up uses the port in the extension's existing canonical pairing. It does
 not switch to the first configured profile. The native host resolves current
-`browser.profiles` and permits only an extension-driver relay port, including
+[`browser.profiles`](/gateway/config-browser-ui-desktop#browser) and permits
+only an extension-driver relay port, including
 automatically allocated ports and explicit `cdpPort` pins. A removed profile
 or stale port fails closed. Correct the pairing to match the current profile.
 Gateway `/browser/extension` routes and remote pairings never trigger local
@@ -183,7 +185,8 @@ stop it while a CDP client remains connected. A later reconnect can wake it agai
 
 The standalone daemon defaults to **v2-only authentication**, independently of
 the Gateway relay's legacy default. Only an explicit
-`browser.extensionRelay.allowLegacyAuth=true` enables legacy authentication.
+[`browser.extensionRelay.allowLegacyAuth=true`](/gateway/config-browser-ui-desktop#browser)
+enables legacy authentication.
 An unset value, `false`, or a config-read failure never enables it. Prefer v2
 clients so the persistent key is not disclosed to a process occupying the port.
 

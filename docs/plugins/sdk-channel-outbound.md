@@ -334,3 +334,11 @@ Follow the dated removal-eligibility window in [Migration](/plugins/sdk-migratio
 This subpath is not tied to the next Plugin SDK major, and eligibility does not
 itself remove an export. External imports do not emit a runtime warning; update
 plugin imports rather than waiting for one.
+
+## Related
+
+- [Channel inbound API](/plugins/sdk-channel-inbound) — the receive side that records and dispatches before a reply is sent
+- [Channel ingress API](/plugins/sdk-channel-ingress) — the resolver that produces the participant identity a send is attributed to
+- [Building channel plugins](/plugins/sdk-channel-plugins) — the full channel plugin walkthrough
+- [Plugin SDK subpaths](/plugins/sdk-subpaths) — which subpath exports each helper
+- [Plugin SDK migration](/plugins/sdk-migration) — removal-eligibility windows for legacy outbound exports

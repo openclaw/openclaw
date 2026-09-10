@@ -318,6 +318,7 @@ Both sub-tabs show an enable hint instead when `memory-wiki` is off.
 ## Related
 
 - [Memory](/concepts/memory)
+- [Memory architecture](/concepts/memory-architecture)
 - [Memory CLI](/cli/memory)
 - [Memory configuration reference](/reference/memory-config)
 - [Memory search](/concepts/memory-search)
