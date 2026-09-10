@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
 import "./oauth-external-auth-passthrough.test-support.js";
@@ -19,8 +20,9 @@ import {
 } from "./oauth-test-utils.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
+import { withAuthProfileStoreAgentDir } from "./store.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const {
@@ -43,6 +45,56 @@ vi.mock("../../llm/oauth.js", () => ({
 }));
 
 describe("OAuth external owner boundaries", () => {
+  it("refreshes bounded shared OAuth only in the canonical shared store", async () => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      resetFileLockStateForTest();
+      resetOAuthProviderRuntimeMocks({
+        refreshProviderOAuthCredentialWithPluginMock,
+        formatProviderAuthProfileApiKeyWithPluginMock,
+      });
+      clearRuntimeAuthProfileStoreSnapshots();
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-bounded-shared-");
+      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+      await loadOAuthModuleForTest();
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      const profileId = "openai:default";
+      const original = createExpiredOauthStore({ profileId, provider: "openai" });
+      writePersistedAuthProfileStoreRaw(original);
+      refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue({
+        type: "oauth",
+        provider: "openai",
+        access: "bounded-refreshed-access",
+        refresh: "bounded-refreshed-refresh",
+        expires: Date.now() + 60_000,
+      });
+
+      await withAuthProfileStoreAgentDir(mainAgentDir, tempRoot, async () => {
+        await expect(
+          resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+            store: ensureAuthProfileStore(mainAgentDir),
+            profileId,
+            agentDir: mainAgentDir,
+          }),
+        ).resolves.toEqual(expect.objectContaining({ apiKey: "bounded-refreshed-access" }));
+      });
+
+      expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toMatchObject({
+        access: "bounded-refreshed-access",
+        refresh: "bounded-refreshed-refresh",
+      });
+      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toBeUndefined();
+      expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
+    } finally {
+      envSnapshot.restore();
+      resetFileLockStateForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
+
   it("refuses native refresh when durable metadata assigns the owner to an external CLI", async () => {
     const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
     let tempRoot = "";

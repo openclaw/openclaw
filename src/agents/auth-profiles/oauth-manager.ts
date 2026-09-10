@@ -559,6 +559,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     const result = await updateAuthProfileStoreWithLock({
       agentDir: params.agentDir,
       profileId: params.profileId,
+      sharedStoreWrite: params.agentDir === undefined,
       updater: (store) => {
         const existing = store.profiles[params.profileId];
         if (existing?.type !== "oauth") {
@@ -588,6 +589,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     const updated = await updateAuthProfileStoreWithLock({
       agentDir: params.agentDir,
       profileId: params.profileId,
+      sharedStoreWrite: params.agentDir === undefined,
       updater: (store) => {
         const existing = store.profiles[params.profileId];
         if (
@@ -617,6 +619,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     const updated = await updateAuthProfileStoreWithLock({
       agentDir: params.ownerAgentDir,
       profileId: params.profileId,
+      sharedStoreWrite: params.ownerAgentDir === undefined,
       updater: (store) => {
         const existing = store.profiles[params.profileId];
         if (
@@ -856,6 +859,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           const updated = await updateAuthProfileStoreWithLock({
             agentDir: ownerAgentDir,
             profileId: params.profileId,
+            sharedStoreWrite: ownerAgentDir === undefined,
             updater: (authoritative) => {
               const existing = authoritative.profiles[params.profileId];
               if (

@@ -196,16 +196,19 @@ export function withAuthProfileStoreAgentDir<T>(
     }
     sharedStore = shared ?? createEmptyAuthProfileStore();
   }
-  // Temporary runs must not acquire a second OAuth refresh owner. Keep this
-  // read-through view in the operation scope, never in a persisted agent store.
+  // Temporary runs borrow shared OAuth from its canonical owner while keeping
+  // static copyToAgents policy intact. The scoped owner context keeps OAuth
+  // refreshes and writes bound there; inherited credentials are never persisted.
   if (sharedStore) {
     sharedStore.profiles = Object.fromEntries(
       Object.entries(sharedStore.profiles).filter(
         ([, credential]) =>
+          credential.type === "oauth" ||
           resolveAuthProfilePortability(credential).reason === "portable-static-credential",
       ),
     );
     pruneAuthProfileStoreReferences(sharedStore, new Set(Object.keys(sharedStore.profiles)));
+    sharedStore = withCredentialSources(sharedStore, resolveSharedAuthPath(env));
   }
   return authProfileRuntimeMode.run({ kind: "agent-dir", agentDir, sharedStore, env }, run);
 }
@@ -1489,7 +1492,12 @@ export function createAuthProfileStoreRuntime(
     saveOptions?: SaveAuthProfileStoreOptions;
     updater: (store: AuthProfileStore) => boolean;
   }): Promise<AuthProfileStore | null> {
-    const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
+    // Owner-resolved writes use `undefined` for the shared store. Preserve that
+    // explicit target instead of remapping it to the scoped exec agent.
+    const agentDir =
+      params.sharedStoreWrite === true
+        ? params.agentDir
+        : resolveRuntimeAuthProfileAgentDir(params.agentDir);
     let publishRuntimeSnapshots: RuntimeSnapshotPublication | undefined;
     let store: AuthProfileStore;
     try {
