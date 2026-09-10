@@ -714,7 +714,7 @@ img.chat-avatar.chat-avatar--logo {
   overflow-wrap: break-word;
 }
 
-.chat-thread .chat-bubble {
+:is(.chat-thread, .chat-session-rail__thread) .chat-bubble {
   letter-spacing: 0; /* Custodian shares .chat-bubble but keeps the application-wide tracking. */
 }
 
