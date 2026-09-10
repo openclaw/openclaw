@@ -125,7 +125,13 @@ After the track-specific publication checks pass:
 2. Dev Gateway live model smoke:
    - Use temp HOME/workspace, not the user's normal state:
      `HOME=/tmp/openclaw-release-smoke/home OPENCLAW_WORKSPACE=/tmp/openclaw-release-smoke/work pnpm openclaw --dev gateway run --auth none --force --verbose`.
-   - Health check via CLI: `openclaw --dev gateway health --json`.
+   - Resolve the launched Gateway's bound port from its startup output or log.
+   - For `--auth none`, require unauthenticated
+     `GET http://127.0.0.1:<PORT>/healthz` to return HTTP 200 with the exact JSON
+     object `{"ok":true,"status":"live"}`.
+   - Reserve `gateway health --json` for intentionally credentialed or
+     device-paired smoke, passing the explicit credential required by that
+     Gateway.
    - Run one Gateway-backed agent turn with inherited `OPENAI_API_KEY`, short
      prompt, explicit session key, JSON output, and a known-available model.
    - If the configured default model fails as unavailable, record that caveat
@@ -143,5 +149,5 @@ After the track-specific publication checks pass:
 - Divergent checkout caveat: say when local source SHA differs from release tag
   or origin and which live sources were used instead.
 - Smoke caveat: distinguish Gateway-backed agent success from local embedded
-  fallback. A valid Gateway smoke has health OK plus gateway log/run id for the
-  agent call.
+  fallback. A valid auth-none live smoke has the exact `/healthz` result plus a
+  successful Gateway-backed agent turn and the Gateway log/run id for that call.
