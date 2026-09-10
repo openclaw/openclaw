@@ -2313,8 +2313,6 @@ export const en: TranslationMap & {
     openExternal: "Open in your browser",
     downloading: "Downloading…",
     downloadFile: "Download file",
-    downloadStarted: "Download started.",
-    fileSaved: "File saved.",
     urlPlaceholder: "Enter a URL and press Enter",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",

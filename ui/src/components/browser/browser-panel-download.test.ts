@@ -32,13 +32,15 @@ describe("Browser panel downloads", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
-      downloads.push({ href: this.href, filename: this.download });
-    });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function (this: HTMLAnchorElement) {
+        downloads.push({ href: this.href, filename: this.download });
+      },
+    );
   });
 
   it("downloads the displayed bytes and decoded filename without navigating to the URL draft", async () => {
@@ -56,7 +58,7 @@ describe("Browser panel downloads", () => {
     ]);
     expect(panel.view).toBe(view);
     expect(panel.urlDraft).toBe("https://different.example.test/unfinished");
-    expect(panel.noticeText).toBe("Download started.");
+    expect(panel.noticeText).toBeNull();
     expect(revokeObjectURL).not.toHaveBeenCalled();
     await vi.runOnlyPendingTimersAsync();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:https://ui.example.test/download");

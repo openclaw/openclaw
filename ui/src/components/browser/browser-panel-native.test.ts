@@ -706,10 +706,12 @@ describe("native Browser panel ownership", () => {
     expect(controller.download.available).toBe(true);
     await controller.download.save();
     expect(native.messages()).toContainEqual({ type: "download", tabId: "mac-one" });
-    expect(controller.noticeText).toBe("File saved.");
+    expect(controller.noticeText).toBeNull();
+    expect(controller.download.pending).toBe(false);
     body.resolve(new Blob(["late bytes"]));
     await saving;
-    expect(controller.noticeText).toBe("File saved.");
+    expect(controller.noticeText).toBeNull();
+    expect(controller.download.pending).toBe(false);
   });
 
   it.each([false, true])(
@@ -721,14 +723,20 @@ describe("native Browser panel ownership", () => {
       const { controller, request } = controllerFixture();
       flushFrames();
       controller.urlDraft = "https://example.test/unfinished";
-      native.postMessage.mockResolvedValueOnce({ ok: true, cancelled });
+      const reply = createDeferred<{ ok: true; cancelled: boolean }>();
+      native.postMessage.mockImplementationOnce(() => reply.promise);
       const before = request.mock.calls.length;
-      await controller.download.save();
+      const saving = controller.download.save();
+      expect(controller.download.pending).toBe(true);
+      expect(controller.download.available).toBe(false);
+      expect(controller.noticeText).toBeNull();
+      reply.resolve({ ok: true, cancelled });
+      await saving;
       expect(native.messages().at(-1)).toEqual({ type: "download", tabId: "mac-one" });
       expect(request.mock.calls).toHaveLength(before);
       expect(controller.activeTargetId).toBe("mac-one");
       expect(controller.urlDraft).toBe("https://example.test/unfinished");
-      expect(controller.noticeText).toBe(cancelled ? null : "File saved.");
+      expect(controller.noticeText).toBeNull();
       expect(controller.errorText).toBeNull();
       expect(controller.download.pending).toBe(false);
     },

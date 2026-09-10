@@ -1,16 +1,30 @@
-import { postNativeBrowserMessage } from "../../app/native-browser-bridge.ts";
+import {
+  postNativeBrowserMessage,
+  type NativeBrowserTab,
+} from "../../app/native-browser-bridge.ts";
 import { t } from "../../i18n/index.ts";
 import { downloadBlobFile } from "../../lib/download.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { labelForMediaPath } from "../../lib/media-file-extension.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanelView } from "./browser-panel-surface.ts";
+
+interface BrowserPanelDownloadHost {
+  readonly host: { readonly isConnected: boolean; requestUpdate(): void };
+  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
+  readonly activeTargetId: string | null;
+  readonly view: BrowserPanelView | null;
+  readonly unavailableTabText: string | null;
+  readonly pendingNewTab: boolean;
+  readonly loading: boolean;
+  setState(key: "errorText" | "noticeText", value: string | null): void;
+}
 
 /** Saves the displayed document; address-bar edits never select the download. */
 export class BrowserPanelDownload {
   pending = false;
   private request: AbortController | null = null;
 
-  constructor(private readonly panel: BrowserPanelController) {}
+  constructor(private readonly panel: BrowserPanelDownloadHost) {}
 
   private get url(): string | null {
     const panel = this.panel;
@@ -67,9 +81,6 @@ export class BrowserPanelDownload {
         if (!reply?.ok) {
           throw new Error(reply && !reply.ok ? reply.error : t("browser.tabUnavailable"));
         }
-        if (current() && !reply.cancelled) {
-          panel.setState("noticeText", t("browser.fileSaved"));
-        }
       } else {
         // Fetching a Blob forces a download even for cross-origin inline media.
         // Cross-origin servers must permit this client; do not proxy credentials.
@@ -83,7 +94,6 @@ export class BrowserPanelDownload {
           return;
         }
         downloadBlobFile(labelForMediaPath(response.url || url), content);
-        panel.setState("noticeText", t("browser.downloadStarted"));
       }
     } catch (error) {
       if (current() && !request.signal.aborted) {
