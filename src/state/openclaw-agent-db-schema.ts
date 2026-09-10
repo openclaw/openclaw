@@ -719,9 +719,7 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   if (readSqliteUserVersion(db) !== AGENT_MEDIA_SCHEMA_VERSION) {
     yield* agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname);
   }
-  configureSqlitePreSchemaPragmas(db, {
-    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  });
+  configureSqlitePreSchemaPragmas(db, { busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
   ensureAgentSchema(db, agentId, pathname);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   if (databaseOptions.register === true) {
@@ -741,9 +739,7 @@ export function migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   runSqliteIntegrityOperationSync(agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname));
-  configureSqlitePreSchemaPragmas(db, {
-    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  });
+  configureSqlitePreSchemaPragmas(db, { busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
   ensureAgentSchema(db, agentId, pathname, targetVersion);
 }
 
