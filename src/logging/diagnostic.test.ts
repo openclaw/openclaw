@@ -180,6 +180,21 @@ function expectNoLoggerMessageContaining(spy: unknown, text: string): void {
   expect(loggerMessages(spy).join("\n")).not.toContain(text);
 }
 
+/**
+ * Mirrors the Gateway monitor's `snapshot()` contract: the same object is returned until a
+ * new sampling window commits. Returning a fresh object per read would hide the stale-read
+ * ordering that a starved sampler produces.
+ */
+function createFakeEventLoopMonitor() {
+  let observation: { reasons: string[] } | undefined;
+  return {
+    read: () => observation,
+    commit: (...reasons: string[]) => {
+      observation = { reasons };
+    },
+  };
+}
+
 /** Sampler result for a genuinely blocked event loop, the only state that defers recovery. */
 function stalledEventLoopSample() {
   return {
@@ -552,14 +567,18 @@ describe("stuck session diagnostics threshold", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
     vi.setSystemTime(0);
+    const monitor = createFakeEventLoopMonitor();
+    monitor.commit();
     startEnabledDiagnosticHeartbeat({
       recoverStuckSession,
-      readEventLoopHealth: () => ({ reasons: [] }),
+      readEventLoopHealth: monitor.read,
       sampleLiveness: () => null,
     });
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
 
+    // The sampler keeps up, so every tick sees an observation covering its own interval.
     const advanceLateTick = () => {
+      monitor.commit();
       vi.setSystemTime(Date.now() + 1_500);
       vi.advanceTimersByTime(30_000);
     };
@@ -600,12 +619,13 @@ describe("stuck session diagnostics threshold", () => {
     // progress that has not run yet, and aborting on that snapshot cancels healthy work.
     const recoverStuckSession = vi.fn();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
-    let eventLoopStalled = false;
+    const monitor = createFakeEventLoopMonitor();
+    monitor.commit();
 
     vi.setSystemTime(0);
     startEnabledDiagnosticHeartbeat({
       recoverStuckSession,
-      readEventLoopHealth: () => ({ reasons: eventLoopStalled ? ["event_loop_delay"] : [] }),
+      readEventLoopHealth: monitor.read,
       // Deliberately still null while stalled: this is the Gateway contract, where
       // persistentDegradationSnapshot() withholds under 60s of continuous degradation.
       // Recovery must not read that filter as a responsive loop.
@@ -618,15 +638,46 @@ describe("stuck session diagnostics threshold", () => {
       vi.advanceTimersByTime(30_000);
     };
 
+    monitor.commit();
     advanceLateTick();
+    monitor.commit();
     advanceLateTick();
     recoverStuckSession.mockClear();
 
-    eventLoopStalled = true;
+    monitor.commit("event_loop_delay");
     advanceLateTick();
 
     expect(recoverStuckSession).not.toHaveBeenCalled();
     expectLoggerMessageContaining(warnSpy, "deferring recovery decisions");
+  });
+
+  it("refuses recovery when a stall starved the sampler and the observation is stale", () => {
+    // The monitor commits about once a second and returns the same object until it does.
+    // A stall delays both timers; if the heartbeat resumes first, the retained observation
+    // still reads healthy and must not be mistaken for a responsive loop.
+    const recoverStuckSession = vi.fn();
+    const monitor = createFakeEventLoopMonitor();
+    monitor.commit();
+
+    vi.setSystemTime(0);
+    startEnabledDiagnosticHeartbeat({
+      recoverStuckSession,
+      readEventLoopHealth: monitor.read,
+      sampleLiveness: () => null,
+    });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    // First late tick sees a fresh healthy window, so recovery is allowed to run.
+    monitor.commit();
+    vi.setSystemTime(Date.now() + 1_500);
+    vi.advanceTimersByTime(30_000);
+    recoverStuckSession.mockClear();
+
+    // Now the sampler is starved: the same object is returned, still reading healthy.
+    vi.setSystemTime(Date.now() + 1_500);
+    vi.advanceTimersByTime(30_000);
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
   it("defers a material heartbeat stall even when elapsed time is below the abort threshold", () => {

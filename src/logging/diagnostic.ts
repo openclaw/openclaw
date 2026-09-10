@@ -311,6 +311,22 @@ function stopDiagnosticLivenessSampler(): void {
   lastDiagnosticLivenessWarnAt = 0;
 }
 
+let lastObservedEventLoopHealth: { reasons: readonly string[] } | undefined;
+
+/**
+ * The supplied monitor commits a new observation roughly once a second and keeps returning
+ * the same object until it does. An unchanged reference therefore describes a window that
+ * closed before this tick, and after a stall starves that sampler the retained observation
+ * still reads healthy. Report no evidence in that case rather than a responsive loop.
+ */
+function resolveSuppliedEventLoopDelayed(
+  health: { reasons: readonly string[] } | undefined,
+): boolean | undefined {
+  const advanced = health !== undefined && health !== lastObservedEventLoopHealth;
+  lastObservedEventLoopHealth = health;
+  return advanced && health ? health.reasons.includes("event_loop_delay") : undefined;
+}
+
 /**
  * Reads the current delay window without consuming it. `sampleDiagnosticLiveness` owns
  * the reset, so a caller earlier in the same tick observes the same window.
@@ -1160,6 +1176,7 @@ export function startDiagnosticHeartbeat(
   const livenessGraceUntil =
     opts?.startupGraceMs != null && opts.startupGraceMs > 0 ? Date.now() + opts.startupGraceMs : 0;
   lastDiagnosticHeartbeatTickAt = Date.now();
+  lastObservedEventLoopHealth = undefined;
   heartbeatInterval = setInterval(() => {
     // Reuse this tick for exporter demand changes; GC collection never adds a timer.
     reconcileDiagnosticGcObserver();
@@ -1190,9 +1207,8 @@ export function startDiagnosticHeartbeat(
     // timer late on every tick with a responsive loop, and deferring on lateness alone
     // left recovery disabled for the process lifetime. Absent health evidence the tick
     // still defers, because nothing then rules out a stall holding queued progress.
-    const suppliedHealth = opts?.readEventLoopHealth?.();
     const eventLoopDelayed = opts?.readEventLoopHealth
-      ? suppliedHealth?.reasons.includes("event_loop_delay")
+      ? resolveSuppliedEventLoopDelayed(opts.readEventLoopHealth())
       : readBuiltInEventLoopDelayed();
     const shouldDeferRecovery = heartbeatDelayed && eventLoopDelayed !== false;
     if (heartbeatDelayed && !inStartupGrace) {
@@ -1333,6 +1349,7 @@ export function stopDiagnosticHeartbeat() {
     heartbeatInterval = null;
   }
   lastDiagnosticHeartbeatTickAt = undefined;
+  lastObservedEventLoopHealth = undefined;
   stopDiagnosticRunActivityTracking();
   retireDiagnosticSessionObservations();
   stopDiagnosticLivenessSampler();
