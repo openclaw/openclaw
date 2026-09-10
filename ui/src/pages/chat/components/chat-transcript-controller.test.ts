@@ -933,7 +933,6 @@ describe("chat transcript controller", () => {
         const scrollTo = vi.fn();
         container.scrollTo = scrollTo;
         const bubbles = [...container.querySelectorAll<HTMLElement>(".chat-bubble")];
-        const reveals = bubbles.map((bubble) => (bubble.scrollIntoView = vi.fn()));
         session.syncMessageRows(
           new Map([
             ["first", "first"],
@@ -964,10 +963,12 @@ describe("chat transcript controller", () => {
         }
         update.resolve(true);
         await update.promise;
-        expect(reveals[0]).toHaveBeenCalledTimes(
-          ["none", "idle at end"].includes(interruption) ? 1 : 0,
+        expect(bubbles[0]?.classList.contains("chat-bubble--reply-target")).toBe(
+          ["none", "idle at end"].includes(interruption),
         );
-        expect(reveals[1]).toHaveBeenCalledTimes(interruption === "new reveal" ? 1 : 0);
+        expect(bubbles[1]?.classList.contains("chat-bubble--reply-target")).toBe(
+          interruption === "new reveal",
+        );
       } finally {
         transcript.hostDisconnected();
         vi.useRealTimers();

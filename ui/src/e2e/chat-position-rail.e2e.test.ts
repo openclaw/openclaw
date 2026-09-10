@@ -522,4 +522,138 @@ suite.define(() => {
       );
     },
   );
+  it.each(["dark", "light"] as const)(
+    "keeps one run current while reading its long continuation in %s mode",
+    async (colorScheme) => {
+      await suite.withPage(
+        { colorScheme, viewport: { width: 1440, height: 900 } },
+        async ({ page }) => {
+          const message = (
+            id: string,
+            role: string,
+            content: unknown,
+            seq: number,
+            runId?: string,
+          ) => ({
+            role,
+            content,
+            timestamp: seq * 1_000,
+            __openclaw: { id, seq, ...(runId ? { runId } : {}) },
+          });
+          const longReply = Array.from(
+            { length: 18 },
+            (
+              _,
+              index,
+            ) => `Section ${index + 1}: The review preserves the original request, explains the evidence, and records the resulting decision. Each participant can check the source and understand the next step.
+
+`,
+          ).join("");
+          await installMockGateway(page, {
+            historyMessages: [
+              message("question", "user", "Review the shared design", 1),
+              message("first", "assistant", "I will inspect the design", 2, "review-run"),
+              message(
+                "call",
+                "assistant",
+                [
+                  {
+                    type: "toolCall",
+                    id: "read-1",
+                    name: "read",
+                    arguments: { path: "design.md" },
+                  },
+                ],
+                3,
+                "review-run",
+              ),
+              {
+                ...message("result", "toolResult", "The design was loaded", 4, "review-run"),
+                toolName: "read",
+                toolCallId: "read-1",
+              },
+              message("continuation", "assistant", longReply, 5, "review-run"),
+              message("final", "assistant", "The shared design is ready", 6, "review-run"),
+              message("next-question", "user", "Continue with the next review", 7),
+              message("next-answer", "assistant", "Ready for the next review", 8, "next-run"),
+            ],
+          });
+          await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+          await page.addInitScript(
+            ({ key, mode }) => {
+              localStorage.setItem(
+                key,
+                JSON.stringify({
+                  ...JSON.parse(localStorage.getItem(key) ?? "{}"),
+                  theme: mode,
+                  themeMode: mode,
+                }),
+              );
+            },
+            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), mode: colorScheme },
+          );
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const thread = page.locator(".chat-thread");
+          const marks = thread.locator(".chat-position-rail__marker");
+          await expect.poll(() => marks.count()).toBe(4);
+          const runMarker = thread.locator('[data-position-marker-id="run:review-run"]');
+          await runMarker.focus();
+          await runMarker.press("Enter");
+          const first = thread.locator('.chat-bubble[data-entry-id="first"]');
+          await expect
+            .poll(() =>
+              first.evaluate((element) => element.classList.contains("chat-bubble--reply-target")),
+            )
+            .toBe(true);
+          await expect
+            .poll(async () =>
+              (await thread.locator(".chat-position-rail__preview-copy").textContent())?.trim(),
+            )
+            .toBe("The shared design is ready");
+          const continuation = thread.locator('.chat-bubble[data-entry-id="continuation"]');
+          await continuation.evaluate((element) => {
+            const root = element.closest<HTMLElement>(".chat-thread")!;
+            const rect = element.getBoundingClientRect();
+            root.scrollTop +=
+              rect.top - root.getBoundingClientRect().top + rect.height / 2 - root.clientHeight / 2;
+          });
+          await expect.poll(() => runMarker.getAttribute("aria-current")).toBe("true");
+          await expect.poll(() => runMarker.getAttribute("data-visible")).toBe("");
+          expect(
+            await thread.locator('.chat-position-rail__marker[aria-current="true"]').count(),
+          ).toBe(1);
+          expect(
+            await first.evaluate(
+              (element) =>
+                element.getBoundingClientRect().bottom <
+                element.closest(".chat-thread")!.getBoundingClientRect().top,
+            ),
+          ).toBe(true);
+          expect(
+            await continuation.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              const viewport = element.closest(".chat-thread")!.getBoundingClientRect();
+              return rect.top < viewport.top && rect.bottom > viewport.bottom;
+            }),
+          ).toBe(true);
+          await captureUiProof(
+            suite,
+            page,
+            "chat-position-rail",
+            `run-continuation-${colorScheme}.png`,
+          );
+          await runMarker.press("Enter");
+          await expect
+            .poll(() =>
+              first.evaluate((element) => {
+                const rect = element.getBoundingClientRect();
+                const viewport = element.closest(".chat-thread")!.getBoundingClientRect();
+                return rect.top >= viewport.top && rect.bottom <= viewport.bottom;
+              }),
+            )
+            .toBe(true);
+        },
+      );
+    },
+  );
 });

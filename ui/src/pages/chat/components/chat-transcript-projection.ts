@@ -48,6 +48,7 @@ import {
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message.ts";
+import { projectChatPositions } from "./chat-position-projection.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver, type LoadedReplySource } from "./chat-reply-preview.ts";
 import {
@@ -529,33 +530,7 @@ export function projectChatTranscript(
     (tailStatusOwner.kind !== "group" || !tailStatusOwner.isStreaming)
       ? tailStatusOwner.key
       : null;
-  const positionMessages: unknown[] = [];
   for (const item of transcriptItems) {
-    // Completed runs also contain folded work that is not a visible landmark.
-    const frameActionOwner =
-      item.kind === "agent-run-frame" && item.outcome.kind === "completed"
-        ? item.outcome.actionOwner
-        : null;
-    const visibleFrameSources =
-      item.kind === "agent-run-frame"
-        ? item.parts.flatMap((part) =>
-            part.kind === "group" && part.role === "assistant" && part.visibleContent !== "none"
-              ? part.messages.filter((source) => persistedMessageEntryId(source.message))
-              : [],
-          )
-        : [];
-    const positionSource =
-      item.kind === "group" &&
-      (item.role === "user" || item.role === "assistant") &&
-      item.visibleContent !== "none"
-        ? item.messages.find((source) => persistedMessageEntryId(source.message))
-        : item.kind === "agent-run-frame" && item.outcome.kind === "completed"
-          ? (visibleFrameSources.find((source) => source === frameActionOwner) ??
-            visibleFrameSources.at(-1))
-          : null;
-    if (positionSource) {
-      positionMessages.push(positionSource.message);
-    }
     const groups =
       item.kind === "agent-run-frame"
         ? agentRunFrameGroups(item)
@@ -588,6 +563,11 @@ export function projectChatTranscript(
       }
     }
   }
+  const positionIndex = projectChatPositions(
+    transcriptItems,
+    expandedToolCards,
+    messageRowKeysById,
+  );
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null && tailStatusOwner?.runId === turnRecap.runId) {
@@ -713,7 +693,9 @@ export function projectChatTranscript(
   };
   return {
     isDirectThread,
-    positionMessages: showLoadingSkeleton ? [] : positionMessages,
+    positionIndex: showLoadingSkeleton
+      ? { markers: [], markerIdsByMessageId: new Map() }
+      : positionIndex,
     isEmpty,
     showLoadingSkeleton,
     searchOpen: state.searchOpen,

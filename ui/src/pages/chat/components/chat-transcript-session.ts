@@ -3,6 +3,7 @@
 import type { TemplateResult } from "lit";
 import type { AssistantMessageExpansionState } from "../chat-thread.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
+import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
@@ -60,7 +61,7 @@ export type ChatTranscriptSession = {
 
 /** Presentation contract produced by the chat-item projection. */
 export type ChatTranscriptProjection = {
-  positionMessages: readonly unknown[];
+  positionIndex: ChatPositionIndex;
   isDirectThread: boolean;
   isEmpty: boolean;
   showLoadingSkeleton: boolean;

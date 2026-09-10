@@ -6,7 +6,6 @@ import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
-import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   installTranscriptDomMocks,
   mountTestTranscript,
@@ -235,7 +234,7 @@ describe("conversation position rail", () => {
       state.searchOpen = true;
       state.searchQuery = "Checkpoint 5";
       rerender();
-      expect(markers()).toHaveLength(0);
+      expect(markers()).toHaveLength(1);
       state.searchQuery = "not present";
       rerender();
       expect(markers()).toHaveLength(0);
@@ -295,66 +294,123 @@ describe("conversation position rail", () => {
     },
   );
 
-  it("uses the visible completed answer and keeps attachment-only user landmarks", () => {
+  it("indexes three assistant messages as one run when history starts mid-run", () => {
+    // A paginated history window can omit the user boundary of an existing run.
     const messages = [
-      message("question", "user", "Inspect the design", 1),
-      message("commentary", "assistant", "Checking the files", 2, "run-1"),
-      {
-        ...message("tool", "toolResult", "File contents", 3, "run-1"),
-        toolName: "read",
-        toolCallId: "read-1",
-      },
-      message("answer", "assistant", "The design is ready", 4, "run-1"),
+      message("first", "assistant", "Checking the existing style", 1, "run-partial"),
       message(
-        "attachment",
-        "user",
-        [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AA==" } }],
-        5,
+        "call-1",
+        "assistant",
+        [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
+        2,
+        "run-partial",
       ),
-    ];
-    const props = threadProps("rail-projection", "agent:main:projection", messages);
-    const transcript = createTestTranscript();
-    let landmarks: readonly unknown[] = [];
-    transcript.renderSession(props.paneId, props.sessionKey, (session) => {
-      landmarks = projectChatTranscript(props, session).positionMessages;
-      return html``;
-    });
-    expect(landmarks).toEqual([messages[0], messages[3], messages[4]]);
-    transcript.hostDisconnected();
-  });
-
-  it("targets the visible final answer before later dashboard commentary and tools", () => {
-    const messages = [
-      message("question", "user", "Inspect the design", 1),
-      { ...message("final", "assistant", "Design ready", 2, "run-1"), phase: "final_answer" },
       {
-        ...message("tool-1", "toolResult", "File contents", 3, "run-1"),
-        toolName: "read",
+        ...message("result-1", "toolResult", "Styles loaded", 3, "run-partial"),
         toolCallId: "read-1",
-      },
-      {
-        ...message("tail", "assistant", "Checking the saved result", 4, "run-1"),
-        phase: "commentary",
-      },
-      {
-        ...message("tool-2", "toolResult", "Saved", 5, "run-1"),
         toolName: "read",
-        toolCallId: "read-2",
       },
+      message("second", "assistant", "Rendering the launch card", 4, "run-partial"),
+      message(
+        "call-2",
+        "assistant",
+        [{ type: "toolCall", id: "render-1", name: "exec", arguments: {} }],
+        5,
+        "run-partial",
+      ),
+      {
+        ...message("result-2", "toolResult", "Asset rendered", 6, "run-partial"),
+        toolCallId: "render-1",
+        toolName: "exec",
+      },
+      message("final", "assistant", "The launch card is ready", 7, "run-partial"),
+      message("thinking", "assistant", "<thinking>Private planning</thinking>", 8, "run-partial"),
     ];
     const props = {
-      ...threadProps("rail-folded", "agent:main:dashboard:audit", messages),
+      ...threadProps("rail-partial-run", "agent:main:main", messages),
       showToolCalls: true,
-      persistCommentary: true,
-      runWorking: false,
     };
     const transcript = createTestTranscript();
-    let landmarks: readonly unknown[] = [];
-    transcript.renderSession(props.paneId, props.sessionKey, (session) => {
-      landmarks = projectChatTranscript(props, session).positionMessages;
-      return html``;
+    const container = document.body.appendChild(document.createElement("div"));
+    props.onRequestUpdate = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      props.onRequestUpdate();
+      transcript.hostConnected();
+      const markers = container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker");
+      expect(markers).toHaveLength(1);
+      markers[0]!.focus();
+      expect(container.querySelector(".chat-position-rail__preview-copy")?.textContent).toContain(
+        "The launch card is ready",
+      );
+      expect(
+        container.querySelector(".chat-position-rail__preview-copy")?.textContent,
+      ).not.toContain("Styles loaded");
+    } finally {
+      render(nothing, container);
+      transcript.hostDisconnected();
+    }
+  });
+
+  it("keeps the focused run marker through streaming and retargets its persisted answer", async () => {
+    const user = message("question", "user", "Review the card", 1, "stream-run");
+    const props = threadProps("rail-stream-handoff", "agent:main:main", [user]);
+    Object.assign(props, {
+      runId: "stream-run",
+      runActive: true,
+      runWorking: true,
+      stream: "<thinking>Private planning</thinking>",
+      streamStartedAt: 2_000,
     });
-    expect(landmarks).toEqual([messages[0], messages[1]]);
-    transcript.hostDisconnected();
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    props.onRequestUpdate = rerender;
+    const marker = () =>
+      container.querySelector<HTMLButtonElement>('[data-position-marker-id="run:stream-run"]')!;
+    try {
+      rerender();
+      transcript.hostConnected();
+      expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(1);
+      props.stream = "Draft response";
+      rerender();
+      const provisional = marker();
+      provisional.focus();
+      expect(container.querySelector(".chat-position-rail__preview-copy")?.textContent).toContain(
+        "Draft response",
+      );
+      const streamBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
+        (bubble) => bubble.textContent?.includes("Draft response"),
+      )!;
+      provisional.click();
+      await Promise.resolve();
+      expect(streamBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
+      props.messages = [
+        user,
+        message("persisted-answer", "assistant", "Final response", 3, "stream-run"),
+      ];
+      Object.assign(props, { stream: null, runActive: false, runWorking: false, runId: null });
+      rerender();
+      expect(marker()).toBe(provisional);
+      expect(document.activeElement).toBe(provisional);
+      expect(container.querySelector(".chat-position-rail__preview-copy")?.textContent).toContain(
+        "Final response",
+      );
+      const persistedBubble = container.querySelector<HTMLElement>(
+        '[data-entry-id="persisted-answer"]',
+      )!;
+      marker().click();
+      await Promise.resolve();
+      expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
+      expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(2);
+    } finally {
+      render(nothing, container);
+      transcript.hostDisconnected();
+    }
   });
 });
