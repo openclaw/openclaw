@@ -13,6 +13,7 @@ import {
   planWorkspaceAdoption,
   planWorkspaceAdoptionTargets,
   workspaceAdoptionCapabilityChange,
+  type WorkspaceAdoptionOwnership,
 } from "./lifecycle-adopt-plan.js";
 import { planClawAgent } from "./lifecycle-agent-plan.js";
 import { digestClawMcpServer } from "./mcp.js";
@@ -50,6 +51,7 @@ export type ClawAddPlanContext = {
   agentId?: string;
   workspace?: string;
   resumableWorkspace?: string;
+  resumableWorkspaceOwnership?: WorkspaceAdoptionOwnership;
   adoptExistingWorkspace?: boolean;
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
@@ -437,6 +439,8 @@ export async function buildClawAddPlan(params: {
         workspace,
         pendingFiles: pendingWorkspaceFiles,
         packageBootstrap: actions.find((action) => action.kind === "bootstrap"),
+        ownership:
+          resumableWorkspace === workspace ? context.resumableWorkspaceOwnership : undefined,
       })),
     );
   }

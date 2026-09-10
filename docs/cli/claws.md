@@ -363,9 +363,13 @@ claim or later remove a bootstrap file it did not create.
 Apply re-verifies content digests and fails closed when an adoptable file
 changed after planning. The agent is added to configuration only after every
 workspace file has been safely revalidated and recorded, so a failed adoption
-cannot leave a partially owned workspace routable. Adoption is disclosed as a
-distinct capability change in the plan, and a workspace already configured for
-another agent still blocks.
+cannot leave a partially owned workspace routable. Retrying an interrupted
+adoption rebuilds the consented plan from the recorded adopted set and the files
+this install already wrote, so the original `--plan-integrity` stays valid and a
+bootstrap file seeded by the interrupted attempt is not a conflict; a declared
+file that appeared without being consented or written still blocks. Adoption is
+disclosed as a distinct capability change in the plan, and a workspace already
+configured for another agent still blocks.
 
 Adoption transfers lifecycle ownership of matching declared files to Claws.
 After adoption, `claws update` may replace an unchanged adopted file with the

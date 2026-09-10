@@ -47,6 +47,8 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
 } from "../claws/types.js";
+import { readClawWorkspaceAdoption } from "../claws/workspace-origin.js";
+import { readClawWorkspaceFiles } from "../claws/workspace.js";
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -366,6 +368,12 @@ export async function runClawsAddCommand(
     const canResumeAgent =
       resumeRecord.status === "config_committed" ||
       (resumeRecord.status === "workspace_ready" && committedAgent !== undefined);
+    // A resumed adoption re-plans by the operator's original consent, not disk presence: the
+    // consented adopted-file ids and this install's already-written files must round-trip to the
+    // same actions even though a prior attempt left them existing on disk.
+    const workspaceOrigin = canResumeWorkspace
+      ? readClawWorkspaceAdoption(resumeRecord.agentId, resumeRecord.workspace)
+      : undefined;
     const resumePlanContext = {
       ...basePlanContext,
       packagePreflight,
@@ -378,6 +386,15 @@ export async function runClawsAddCommand(
             .map((agentId) => resolveAgentWorkspaceDir(config, agentId))
         : existingWorkspacePaths,
       ...(canResumeWorkspace ? { resumableWorkspace: resumeRecord.workspace } : {}),
+      ...(workspaceOrigin?.adopted
+        ? {
+            resumableWorkspaceOwnership: {
+              adoptedFiles: workspaceOrigin.adoptedFiles,
+              ownedFiles: readClawWorkspaceFiles(resumeRecord.agentId),
+              bootstrapDigest: resumeRecord.bootstrap?.contentDigest,
+            },
+          }
+        : {}),
     };
     plan = await buildClawAddPlan({
       manifest: result.manifest,

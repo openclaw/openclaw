@@ -213,7 +213,7 @@ export async function applyClawAddPlan(
   }
 
   const workspace = resolve(resolveUserPath(plan.agent.workspace));
-  const workspacePhaseRecorded = statusAtLeast(installRecord.status, "workspace_ready");
+  let workspacePhaseRecorded = statusAtLeast(installRecord.status, "workspace_ready");
   const workspaceAdoption = planAdoptsWorkspace(plan);
   let workspaceState: Stats | undefined;
   try {
@@ -286,6 +286,10 @@ export async function applyClawAddPlan(
         clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
         throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
       }
+      // Reflect the recorded phase locally so a later failure preserves it via
+      // preserveRecordedPhaseOrMarkPartial instead of re-marking a stale expected status.
+      workspacePhaseRecorded = true;
+      installRecord = { ...installRecord, status: "workspace_ready" };
     }
   }
 
