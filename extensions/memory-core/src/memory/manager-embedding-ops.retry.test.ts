@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createMemorySearchDeadlineControl,
   type MemorySearchDeadlineControl,
@@ -67,7 +68,7 @@ describe("memory embedding query retry cancellation", () => {
     vi.useFakeTimers();
     const control = createMemorySearchDeadlineControl();
     control.report("pause");
-    const ready = Promise.withResolvers<void>();
+    const ready = createDeferred<void>();
     const embedQuery = vi.fn<EmbeddingProvider["embed"]>(async () => {
       await ready.promise;
       return [1, 0, 0, 0];

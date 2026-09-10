@@ -423,7 +423,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 searchesWiki
                   ? runMemoryCorpusDeadline({
                       operation: "memory_search",
-                      parentSignal: signal,
+                      parentSignal: callerSignal,
                       // Managed memory readiness must not extend concurrent wiki work.
                       run: (wikiSignal) =>
                         searchMemoryCorpusSupplements({
