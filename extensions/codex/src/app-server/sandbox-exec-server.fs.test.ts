@@ -1,4 +1,5 @@
 // Codex tests cover sandbox exec server.fs plugin behavior.
+import type { SandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
@@ -71,6 +72,63 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     expect(writeFile).toHaveBeenCalledWith({
       filePath: "/workspace/empty.txt",
       data: Buffer.alloc(0),
+      mkdir: false,
+    });
+    socket.close();
+  });
+
+  it("keeps pre-upgrade sandbox fs bridges source- and runtime-compatible", async () => {
+    const writeFile = vi.fn(
+      async (_params: {
+        filePath: string;
+        data: Buffer | string;
+        encoding?: BufferEncoding;
+        mkdir?: boolean;
+        signal?: AbortSignal;
+      }) => undefined,
+    );
+    // Deliberately model the interface shipped before canonical mutation pins:
+    // no resolvePinnedMutationTarget method and no pinnedPath parameters.
+    const legacyBridge = {
+      resolvePath: ({ filePath }: { filePath: string; cwd?: string }) => ({
+        relativePath: filePath,
+        containerPath: filePath,
+      }),
+      readFile: async () => Buffer.alloc(0),
+      writeFile,
+      mkdirp: async (_params: { filePath: string; cwd?: string; signal?: AbortSignal }) =>
+        undefined,
+      remove: async (_params: {
+        filePath: string;
+        cwd?: string;
+        recursive?: boolean;
+        force?: boolean;
+        signal?: AbortSignal;
+      }) => undefined,
+      rename: async () => undefined,
+      stat: async ({ filePath }: { filePath: string; cwd?: string; signal?: AbortSignal }) => ({
+        type: /\.[^/]+$/u.test(filePath) ? ("file" as const) : ("directory" as const),
+        size: 1,
+        mtimeMs: 1,
+      }),
+    } satisfies SandboxFsBridge;
+    const sandbox = { ...createSandboxContext({}), fsBridge: legacyBridge };
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "fs/writeFile", {
+        path: "file:///workspace/legacy.txt",
+        dataBase64: Buffer.from("compatible").toString("base64"),
+      }),
+    ).resolves.toEqual({});
+
+    expect(writeFile).toHaveBeenCalledWith({
+      filePath: "/workspace/legacy.txt",
+      data: Buffer.from("compatible"),
       mkdir: false,
     });
     socket.close();
