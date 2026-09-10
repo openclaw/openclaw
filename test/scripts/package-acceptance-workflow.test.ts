@@ -12802,6 +12802,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         .map((name) => readFileSync(`docs/reference/full-release-validation/${name}`, "utf8")),
     ].join("\n");
     const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
+    const liveUpdater = readFileSync(".agents/skills/openclaw-live-updater/SKILL.md", "utf8");
 
     expect(nightly).toContain('-f expected_sha="$SHA"');
     const canonicalExtendedStableDispatch = [
@@ -12819,6 +12820,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "-f reuse_evidence=false",
       "-f dispatch_release_evidence=false",
     ];
+    expectTextToIncludeAll(liveUpdater, ['--sha "$MAIN_SHA"', '--workflow-sha "$MAIN_SHA"']);
     for (const text of [releaseCi, fullReleaseDocs, releasingDocs]) {
       expectTextToIncludeAll(text, canonicalExtendedStableDispatch);
       expect(text).not.toContain('--ref "$VALIDATION_SHA"');
