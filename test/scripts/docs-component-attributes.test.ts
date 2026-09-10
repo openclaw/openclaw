@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,10 +9,11 @@ function componentPayload(source: string, kind: string) {
   const token = document.tokens.find((entry) =>
     entry.content.startsWith(`${markerPrefix}:${kind}:`),
   );
-  expect(token, `Missing ${kind} renderer token`).toBeDefined();
+  const encodedPayload = token?.content.split(":")[2];
+  assert.ok(encodedPayload !== undefined, `Missing ${kind} renderer payload`);
   return {
     document,
-    payload: Buffer.from(token!.content.split(":")[2], "base64url").toString(),
+    payload: Buffer.from(encodedPayload, "base64url").toString(),
   };
 }
 
