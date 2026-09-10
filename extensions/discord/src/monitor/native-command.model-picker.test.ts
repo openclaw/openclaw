@@ -39,6 +39,18 @@ import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thr
 
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
+const hostSdk = vi.hoisted(() => ({ runtimeChoicesAvailable: true }));
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => {
+  const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>();
+  return {
+    ...sdk,
+    get getModelsRuntimeChoices() {
+      return hostSdk.runtimeChoicesAvailable ? sdk.getModelsRuntimeChoices : undefined;
+    },
+  };
+});
+
 type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0]["ctx"];
 type PickerButton = ReturnType<typeof createDiscordModelPickerFallbackButton>;
 type PickerSelect = ReturnType<typeof createDiscordModelPickerFallbackSelect>;
@@ -316,6 +328,7 @@ function createBoundThreadBindingManager(params: {
 
 describe("Discord model picker interactions", () => {
   beforeEach(async () => {
+    hostSdk.runtimeChoicesAvailable = true;
     tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-model-picker-"));
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -324,8 +337,31 @@ describe("Discord model picker interactions", () => {
   });
 
   afterEach(async () => {
+    hostSdk.runtimeChoicesAvailable = true;
     vi.useRealTimers();
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("refuses a declared minimum host submission without dispatch when the SDK helper is absent", async () => {
+    hostSdk.runtimeChoicesAvailable = false;
+    const context = createModelPickerContext();
+    const data = createDefaultModelPickerData();
+    delete data.runtimeChoicesByModel;
+    delete data.isCurrent;
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
+    mockModelCommandPipeline(createModelCommandDefinition());
+    const dispatchSpy = createDispatchSpy();
+
+    const interaction = await runSubmitButton({
+      context,
+      data: { ...createModelsViewSubmitData(), r: "openclaw" },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(
+      JSON.stringify(firstMockArg(interaction.editReply, "unconfirmed runtime notice")),
+    ).toContain("Runtime availability is not confirmed");
   });
 
   it("registers distinct fallback ids for button and select handlers", () => {

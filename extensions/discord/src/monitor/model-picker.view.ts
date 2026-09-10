@@ -1,10 +1,9 @@
 // Discord plugin module implements model picker.view behavior.
 import type { APISelectMenuOption } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
-import {
-  getModelsRuntimeChoices,
-  type ModelsProviderData,
-  type ModelsRuntimeChoice,
+import type {
+  ModelsProviderData,
+  ModelsRuntimeChoice,
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -18,6 +17,7 @@ import {
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "../internal/discord.js";
+import { getDiscordModelPickerRuntimeChoices } from "./model-picker.runtime.js";
 import {
   buildDiscordModelPickerCustomId,
   createDiscordModelPickerModelToken,
@@ -218,7 +218,7 @@ function getRuntimeChoices(params: {
   modelRef?: string;
 }): ModelsRuntimeChoice[] | undefined {
   const model = parseCurrentModelRef(params.modelRef);
-  return getModelsRuntimeChoices(
+  return getDiscordModelPickerRuntimeChoices(
     params.data,
     params.provider,
     model?.provider === normalizeProviderId(params.provider) ? model.model : undefined,

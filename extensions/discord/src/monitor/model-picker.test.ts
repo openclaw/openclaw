@@ -1,6 +1,6 @@
 // Discord tests cover model picker plugin behavior.
 import { ComponentType } from "discord-api-types/v10";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseCustomId, serializePayload } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
@@ -37,10 +37,22 @@ function parseDiscordModelPickerCustomId(customId: string) {
 
 const buildPreparedModelsProviderDataMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
-  buildPreparedModelsProviderData: buildPreparedModelsProviderDataMock,
-}));
+const hostSdk = vi.hoisted(() => ({ runtimeChoicesAvailable: true }));
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => {
+  const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>();
+  return {
+    ...sdk,
+    get getModelsRuntimeChoices() {
+      return hostSdk.runtimeChoicesAvailable ? sdk.getModelsRuntimeChoices : undefined;
+    },
+    buildPreparedModelsProviderData: buildPreparedModelsProviderDataMock,
+  };
+});
+
+afterEach(() => {
+  hostSdk.runtimeChoicesAvailable = true;
+});
 
 type SerializedComponent = {
   type: number;
@@ -1549,4 +1561,26 @@ describe("model-specific runtime view", () => {
       ).toBe(true);
     },
   );
+});
+
+describe("declared minimum host", () => {
+  it("renders an unavailable runtime and disables Submit without the new SDK helper", () => {
+    hostSdk.runtimeChoicesAvailable = false;
+    const data = createModelsProviderData({ openai: ["gpt-4o"] });
+    delete data.runtimeChoicesByModel;
+    delete data.isCurrent;
+
+    const rows = renderModelsViewRows({
+      command: "model",
+      userId: "owner",
+      data,
+      provider: "openai",
+      pendingModel: "openai/gpt-4o",
+      pendingModelIndex: 1,
+    });
+
+    expect(
+      rows.flatMap((row) => row.components ?? []).find((c) => c.label === "Submit")?.disabled,
+    ).toBe(true);
+  });
 });

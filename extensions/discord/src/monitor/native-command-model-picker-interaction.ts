@@ -6,10 +6,7 @@ import {
   type ChatCommandDefinition,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
-import {
-  getModelsRuntimeChoices,
-  type ModelsProviderData,
-} from "openclaw/plugin-sdk/models-provider-runtime";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -22,6 +19,7 @@ import {
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import { readDiscordModelPickerRecentModels } from "./model-picker-preferences.js";
+import { getDiscordModelPickerRuntimeChoices } from "./model-picker.runtime.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   createDiscordModelPickerModelToken,
@@ -70,7 +68,7 @@ function resolveModelPickerSelectionValue(
 }
 
 function resolveRuntimeToken(
-  choices: ReturnType<typeof getModelsRuntimeChoices>,
+  choices: ReturnType<typeof getDiscordModelPickerRuntimeChoices>,
   token: string | undefined,
 ): string | undefined {
   if (!token) {
@@ -109,7 +107,7 @@ function resolvePendingRuntime(params: {
   return (
     params.parsed.runtime ??
     resolveRuntimeToken(
-      getModelsRuntimeChoices(params.data, params.provider),
+      getDiscordModelPickerRuntimeChoices(params.data, params.provider),
       params.parsed.runtimeToken,
     )
   );
@@ -526,7 +524,7 @@ async function handleDiscordModelPickerInteraction(params: {
     const currentModel = splitDiscordModelRef(currentModelRef ?? "");
     const runtimeModel =
       selectedModel ?? (currentModel?.provider === provider ? currentModel.model : undefined);
-    const choices = getModelsRuntimeChoices(pickerData, provider, runtimeModel);
+    const choices = getDiscordModelPickerRuntimeChoices(pickerData, provider, runtimeModel);
     if (!selectedRuntime || !choices?.some((choice) => choice.id === selectedRuntime)) {
       await showNotice("That runtime is not available for this model. Choose a runtime again.");
       return;
@@ -574,7 +572,7 @@ async function handleDiscordModelPickerInteraction(params: {
     }
 
     const resolvedModelRef = `${parsedModelRef.provider}/${parsedModelRef.model}`;
-    const choices = getModelsRuntimeChoices(
+    const choices = getDiscordModelPickerRuntimeChoices(
       pickerData,
       parsedModelRef.provider,
       parsedModelRef.model,
