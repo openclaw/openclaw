@@ -20,7 +20,6 @@ import {
   renderDiscordModelPickerModelsView,
   renderDiscordModelPickerProvidersView,
   renderDiscordModelPickerRecentsView,
-  toDiscordModelPickerMessagePayload,
 } from "./model-picker.view.js";
 
 const DISCORD_CUSTOM_ID_MAX_CHARS = 100;
@@ -57,6 +56,7 @@ afterEach(() => {
 type SerializedComponent = {
   type: number;
   label?: string;
+  content?: string;
   disabled?: boolean;
   custom_id?: string;
   options?: Array<{ label?: string; value: string; default?: boolean }>;
@@ -84,7 +84,7 @@ function renderModelsViewRows(
   params: Parameters<typeof renderDiscordModelPickerModelsView>[0],
 ): SerializedComponent[] {
   const rendered = renderDiscordModelPickerModelsView(params);
-  const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+  const payload = serializePayload(rendered) as {
     components?: SerializedComponent[];
   };
   return extractContainerRows(payload.components);
@@ -94,7 +94,7 @@ function renderRecentsViewRows(
   params: Parameters<typeof renderDiscordModelPickerRecentsView>[0],
 ): SerializedComponent[] {
   const rendered = renderDiscordModelPickerRecentsView(params);
-  const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+  const payload = serializePayload(rendered) as {
     components?: SerializedComponent[];
   };
   return extractContainerRows(payload.components);
@@ -466,7 +466,7 @@ describe("Discord model picker rendering", () => {
       currentModel: "provider-01/model-1",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       content?: string;
       components?: SerializedComponent[];
     };
@@ -518,7 +518,7 @@ describe("Discord model picker rendering", () => {
       currentModel: "provider-01/model-1",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
 
@@ -547,7 +547,7 @@ describe("Discord model picker rendering", () => {
       userId: "42",
       data,
     });
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
     const providerSelect = requireValue(
@@ -610,7 +610,7 @@ describe("Discord model picker rendering", () => {
       modelBucket: "21-30",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
     const rows = extractContainerRows(payload.components);
@@ -643,7 +643,7 @@ describe("Discord model picker rendering", () => {
       pendingRuntime: "codex",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
     const rows = extractContainerRows(payload.components);
@@ -851,7 +851,7 @@ describe("Discord model picker rendering", () => {
       providerBucket: "p",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
     const rows = extractContainerRows(payload.components);
@@ -882,29 +882,6 @@ describe("Discord model picker rendering", () => {
     }
   });
 
-  it("supports classic fallback rendering with content + action rows", () => {
-    const data = createModelsProviderData({ openai: ["gpt-4o"], anthropic: ["claude-sonnet-4-5"] });
-
-    const rendered = renderDiscordModelPickerProvidersView({
-      command: "model",
-      userId: "99",
-      data,
-      layout: "classic",
-    });
-
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
-      content?: string;
-      components?: SerializedComponent[];
-    };
-
-    expect(payload.content).toContain("Model Picker");
-    const firstComponent = requireValue(
-      payload.components?.[0],
-      "classic provider view should render an action row",
-    );
-    expect(firstComponent.type).toBe(ComponentType.ActionRow);
-  });
-
   it("preserves the stored model suffix spacing in Discord current-model text", () => {
     const data = createModelsProviderData({ openai: [" gpt-5", "gpt-4o"] });
 
@@ -913,14 +890,17 @@ describe("Discord model picker rendering", () => {
       userId: "99",
       data,
       currentModel: " OpenAI/ gpt-5 ",
-      layout: "classic",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
-      content?: string;
+    const payload = serializePayload(rendered) as {
+      components?: SerializedComponent[];
     };
+    const text = payload.components
+      ?.flatMap((component) => component.components ?? [])
+      .map((component) => component.content ?? "")
+      .join("\n");
 
-    expect(payload.content).toContain("Current model: openai/ gpt-5");
+    expect(text).toContain("Current model: openai/ gpt-5");
   });
 
   it("keeps provider navigation available when model bucketing drops the provider select", () => {
@@ -992,7 +972,7 @@ describe("Discord model picker rendering", () => {
       pendingModelIndex: 3,
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
 
@@ -1180,7 +1160,7 @@ describe("Discord model picker rendering", () => {
       providerPage: 3,
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
 

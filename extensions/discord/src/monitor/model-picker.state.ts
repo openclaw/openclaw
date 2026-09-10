@@ -39,7 +39,6 @@ const PICKER_VIEWS = ["providers", "models", "recents"] as const;
 export type DiscordModelPickerCommandContext = (typeof COMMAND_CONTEXTS)[number];
 type DiscordModelPickerAction = (typeof PICKER_ACTIONS)[number];
 type DiscordModelPickerView = (typeof PICKER_VIEWS)[number];
-export type DiscordModelPickerLayout = "v2" | "classic";
 
 export type DiscordModelPickerState = {
   command: DiscordModelPickerCommandContext;

@@ -24,10 +24,7 @@ import {
   createModelsProviderData as createBaseModelsProviderData,
   setFixtureRuntimeChoices,
 } from "./model-picker.test-utils.js";
-import {
-  renderDiscordModelPickerModelsView,
-  toDiscordModelPickerMessagePayload,
-} from "./model-picker.view.js";
+import { renderDiscordModelPickerModelsView } from "./model-picker.view.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
 import { applyDiscordModelPickerSelection } from "./native-command-model-picker-apply.js";
 import {
@@ -1534,7 +1531,7 @@ describe("Discord model picker interactions", () => {
         pendingRuntime: "codex",
       });
       type PickerComponent = { label?: string; custom_id?: string; components?: PickerComponent[] };
-      const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+      const payload = serializePayload(rendered) as {
         components: PickerComponent[];
       };
       const submit = payload.components
