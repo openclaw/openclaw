@@ -132,6 +132,18 @@ describe("readNumberParam", () => {
     ).toThrow("deleteDays must be an integer from 0 to 7");
   });
 
+  it("names the bound when a max-constrained param exceeds it", () => {
+    // Without an explicit message the over-max branch used to reuse the
+    // "not an integer" text, so a caller sending a valid integer above the cap
+    // was told its value was not an integer and never learned the bound.
+    expect(() => readPositiveIntegerParam({ limit: 26 }, "limit", { max: 25 })).toThrow(
+      "limit must be a positive integer no greater than 25",
+    );
+    expect(() => readNonNegativeIntegerParam({ offset: 8 }, "offset", { max: 7 })).toThrow(
+      "offset must be a non-negative integer no greater than 7",
+    );
+  });
+
   it("treats empty or whitespace-only strings as unset for optional positive integer params", () => {
     // Tool-calling models routinely emit empty-string defaults for optional
     // params (e.g. Telegram replyTo/threadId) they are not actually setting.

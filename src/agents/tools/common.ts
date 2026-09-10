@@ -243,7 +243,9 @@ export function readPositiveIntegerParam(
     }
   }
   if (value !== undefined && options.max !== undefined && value > options.max) {
-    throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
+    throw new ToolInputError(
+      options.message ?? `${key} must be a positive integer no greater than ${options.max}`,
+    );
   }
   return value;
 }
@@ -267,7 +269,9 @@ export function readNonNegativeIntegerParam(
     }
   }
   if (value !== undefined && options.max !== undefined && value > options.max) {
-    throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
+    throw new ToolInputError(
+      options.message ?? `${key} must be a non-negative integer no greater than ${options.max}`,
+    );
   }
   return value;
 }
