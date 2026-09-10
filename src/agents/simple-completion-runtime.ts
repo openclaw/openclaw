@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 /**
  * Simple completion runtime preparation.
@@ -16,6 +17,12 @@ import {
 } from "../plugins/provider-hook-runtime.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import {
+  AsyncWorkScope,
+  captureAsyncWorkTracker,
+  getAsyncWorkSignal,
+} from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
@@ -449,6 +456,7 @@ async function acquirePreparedSimpleCompletionRuntime(
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
   runtimePluginSelections: readonly AgentHarnessPluginSelection[],
+  onAcquired?: (release: () => void) => void,
 ): Promise<{ context: PreparedSimpleCompletionResolverContext; release: () => void }> {
   const config = params.cfg ?? {};
   const agentId = params.agentId ?? resolveDefaultAgentId(config);
@@ -478,6 +486,8 @@ async function acquirePreparedSimpleCompletionRuntime(
             : {}),
         },
       );
+  const release = () => lease?.release();
+  onAcquired?.(release);
   const preparedModelRuntime = params.preparedModelRuntime ?? lease!.snapshot;
   const workspaceDir =
     params.workspaceDir ?? preparedModelRuntime.workspaceDir ?? requestedWorkspaceDir;
@@ -488,9 +498,11 @@ async function acquirePreparedSimpleCompletionRuntime(
       modelResolver: params.modelResolver,
       agentRuntimeId: params.agentRuntimeId,
     });
-    return { context, release: () => lease?.release() };
+    return { context, release };
   } catch (error) {
-    lease?.release();
+    if (!onAcquired) {
+      release();
+    }
     throw error;
   }
 }
@@ -590,20 +602,38 @@ export async function acquireSimpleCompletionModelForAgent(
       return { error: `No model configured for agent ${params.agentId}.` };
     }
   }
-  const runtime = await acquirePreparedSimpleCompletionRuntime(
-    {
-      ...params,
-      agentDir: selection.agentDir,
-      pluginMetadataSnapshot: metadataSnapshot,
-    },
-    [{ provider: selection.provider, modelId: selection.modelId }],
-  );
-  let transferred = false;
-  try {
+  const result = createDeferredCore<AcquiredSimpleCompletionModelForAgent>();
+  const trackOwner = captureAsyncWorkTracker();
+  const parentSignal = getAsyncWorkSignal();
+  const work = new AsyncWorkScope();
+  let runInContext = work.run(() => AsyncLocalStorage.snapshot());
+  let releaseRuntime: (() => void) | undefined;
+  let setupSettled = false;
+  let callerReleased = true;
+  const releaseWhenUnused = () => {
+    if (setupSettled && callerReleased) {
+      const release = releaseRuntime;
+      releaseRuntime = undefined;
+      release?.();
+    }
+  };
+  const prepare = async () => {
+    const runtime = await acquirePreparedSimpleCompletionRuntime(
+      {
+        ...params,
+        agentDir: selection.agentDir,
+        pluginMetadataSnapshot: metadataSnapshot,
+      },
+      [{ provider: selection.provider, modelId: selection.modelId }],
+      (release) => {
+        releaseRuntime = release;
+      },
+    );
     const prepared = await withPluginRuntimeGenerationScope(
       runtime.context.preparedModelRuntime,
-      () =>
-        prepareSimpleCompletionModelCore(
+      () => {
+        runInContext = AsyncLocalStorage.snapshot();
+        return prepareSimpleCompletionModelCore(
           {
             cfg: params.cfg,
             agentId: params.agentId,
@@ -620,19 +650,47 @@ export async function acquireSimpleCompletionModelForAgent(
             bindAuthOwner: params.bindAuthOwner,
           },
           runtime.context,
-        ),
+        );
+      },
     );
     if ("error" in prepared) {
       return { ...prepared, selection };
     }
-    const acquired = { ...prepared, selection, release: runtime.release };
-    transferred = true;
-    return acquired;
-  } finally {
-    if (!transferred) {
-      runtime.release();
+    callerReleased = false;
+    return {
+      ...prepared,
+      selection,
+      release: () => {
+        callerReleased = true;
+        releaseWhenUnused();
+      },
+    };
+  };
+  // Host work includes setup only; host close releases adopted model claims after drainage.
+  void trackOwner(async () => {
+    const closeFromParent = () => runInContext(() => work.beginClose(parentSignal?.reason));
+    parentSignal?.addEventListener("abort", closeFromParent, { once: true });
+    if (parentSignal?.aborted) {
+      closeFromParent();
     }
-  }
+    try {
+      result.resolve(await work.track(prepare));
+    } catch (error) {
+      result.reject(error);
+    } finally {
+      try {
+        await AsyncWorkScope.runWhenAllIdle(
+          () => [work],
+          () => runInContext(() => work.drain()),
+        );
+      } finally {
+        parentSignal?.removeEventListener("abort", closeFromParent);
+        setupSettled = true;
+        releaseWhenUnused();
+      }
+    }
+  }).catch(result.reject);
+  return await result.promise;
 }
 
 export { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
