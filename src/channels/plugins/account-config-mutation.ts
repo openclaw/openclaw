@@ -193,12 +193,6 @@ type ChannelAccountRemovalError =
   | { kind: "unknown-account"; action: ChannelAccountRemovalAction; accountIds: string[] }
   | { kind: "nothing-to-remove"; action: "delete"; accountIds: string[] };
 
-function snapshotWrittenConfig(cfg: OpenClawConfig): unknown {
-  // Match the writer's omission of pruned undefined fields.
-  // oxlint-disable-next-line unicorn/prefer-structured-clone -- structuredClone retains undefined fields that the config writer drops.
-  return JSON.parse(JSON.stringify(cfg));
-}
-
 export function prepareChannelAccountRemoval(params: {
   plugin: ChannelAccountMutationPlugin;
   accountId?: string;
@@ -234,12 +228,14 @@ export async function applyPreparedChannelAccountRemoval(params: {
     if (!accountIds.some((id) => normalizeOptionalAccountId(id) === accountId)) {
       return resultError({ kind: "unknown-account", action, accountIds });
     }
-    const previousConfig = snapshotWrittenConfig(params.cfg);
+    const previousConfigJson = JSON.stringify(params.cfg);
     const nextConfig = plugin.config.deleteAccount({
       cfg: { ...params.cfg },
       accountId,
     });
-    if (isDeepStrictEqual(previousConfig, snapshotWrittenConfig(nextConfig))) {
+    const nextConfigJson = JSON.stringify(nextConfig);
+    // Compare serialized config so pruned undefined fields do not count as changes.
+    if (isDeepStrictEqual(JSON.parse(previousConfigJson), JSON.parse(nextConfigJson))) {
       return resultError({ kind: "nothing-to-remove", action, accountIds });
     }
     await plugin.lifecycle?.onAccountRemoved?.({
