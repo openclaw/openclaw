@@ -147,3 +147,4 @@ untrusted inbox.
 - [CLI reference](/cli)
 - [Webhook automation](/automation/cron-jobs#webhooks)
 - [Gmail Pub/Sub integration](/automation/cron-jobs#gmail-pubsub-integration)
+- [Configuration reference](/gateway/configuration-reference) — where each webhook setting is documented

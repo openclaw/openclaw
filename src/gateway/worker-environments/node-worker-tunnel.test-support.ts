@@ -20,6 +20,8 @@ export const BUILD = {
 
 export function environment(): WorkerEnvironmentRecord {
   return {
+    preparation: null,
+    lastActivatedAtMs: null,
     environmentId: "environment-1",
     providerId: "device",
     profileId: "device:node-1",

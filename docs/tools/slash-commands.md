@@ -61,6 +61,8 @@ command handling is enabled for the surface.
   </Accordion>
 </AccordionGroup>
 
+<a id="config" />
+
 ## Configuration
 
 ```json5
@@ -174,15 +176,21 @@ requested reset or run its follow-up text; normal idle/daily rollover still
 applies. Ask your Gateway administrator to reset the session, or send your
 message without the command.
 
+Standalone `/new` and `/reset` acknowledgements do not start a model turn or
+look up model-derived thinking and reasoning defaults. Follow-up text still
+runs through the configured model and reasoning settings.
+
 ## Command list
 
 Commands come from three sources:
 
 - **Core built-ins:** `src/auto-reply/commands-registry.shared.ts`
 - **Plugin commands:** plugin `registerCommand()` calls
+- **Skill commands:** commands exported by installed skills, assembled in
+  `src/auto-reply/commands-registry-list.ts`
 
-Availability depends on config flags, channel surface, and installed/enabled
-plugins.
+Availability depends on config flags, channel surface, installed/enabled
+plugins, and installed skills.
 
 ### Core commands
 
@@ -519,7 +527,7 @@ the source and permits replacement of an existing install; it does not bypass
 are printed informationally; blocked releases remain non-installable.
 Marketplace, linked, and pinned installs remain shell-only.
 
-`/plugins inspect <child>` (also `show` or `get`) and `/plugins inspect all` include the shared package install metadata for multi-entry plugins. Inspection returns `install: null` when package ownership is missing or ambiguous, and preserves its runtime capability report.
+`/plugins inspect <child>` (also `show` or `get`) and `/plugins inspect all` include the shared package install metadata for multi-entry plugins. Inspection returns `install: null` when package ownership is missing or ambiguous, and preserves its runtime capability report. It releases its inspection registration resources before returning a reply, while the running Gateway's active registrations remain available. Cleanup failures propagate as command failures.
 
 When `/plugins install` or `/plugins enable` requires capability consent, it
 returns the plugin's declared capabilities and an exact retry command. Review
@@ -624,6 +632,9 @@ See [BTW side questions](/tools/btw) for the full behavior.
   </Card>
   <Card title="Steer" href="/tools/steer" icon="compass">
     Guide the agent mid-run with `/steer`.
+  </Card>
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="sliders">
+    Settings that change how slash commands are resolved and gated.
   </Card>
   <Card title="OpenProse migration" href="/prose" icon="pen-nib">
     Where the removed `/prose` command went.

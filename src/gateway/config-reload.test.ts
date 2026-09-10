@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
@@ -1259,6 +1260,76 @@ describe("buildGatewayReloadPlan", () => {
     expect(isNoopGatewayReloadPlan(plan)).toBe(false);
   });
 
+  it.each([
+    {
+      label: "inspects unresolved account secrets",
+      inspection: "available",
+      resolves: false,
+      scoped: true,
+    },
+    {
+      label: "promotes failed inspection without falling back to resolution",
+      inspection: "throws",
+      resolves: true,
+      scoped: false,
+    },
+    {
+      label: "resolves accounts when inspection is unavailable",
+      inspection: "absent",
+      resolves: true,
+      scoped: true,
+    },
+    {
+      label: "promotes failed resolution when inspection is unavailable",
+      inspection: "absent",
+      resolves: false,
+      scoped: false,
+    },
+  ])("$label", ({ inspection, resolves, scoped }) => {
+    const plugin: ChannelPlugin = {
+      ...mattermostPlugin,
+      config: {
+        ...mattermostPlugin.config,
+        resolveAccount: () => {
+          if (!resolves) {
+            throw new Error("SecretRef has not been activated");
+          }
+          return {};
+        },
+        ...(inspection === "absent"
+          ? {}
+          : {
+              inspectAccount: () => {
+                if (inspection === "throws") {
+                  throw new Error("Account cannot be inspected");
+                }
+                return { configured: true, botTokenStatus: "configured_unavailable" };
+              },
+            }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "mattermost", plugin, source: "test" }]),
+    );
+    const candidateConfig = {
+      channels: {
+        mattermost: {
+          accounts: {
+            alpha: { botToken: { source: "env", provider: "default", id: "BOT_TOKEN" } },
+            beta: { enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const plan = buildGatewayReloadPlan(["channels.mattermost.accounts.alpha.botToken"], {
+      candidateConfig,
+    });
+    expect(plan.restartChannels).toEqual(new Set(scoped ? [] : ["mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(
+      new Map(scoped ? [["mattermost", new Set(["alpha"])]] : []),
+    );
+  });
+
   it("restarts every channel whose config prefix matches", () => {
     const plan = buildGatewayReloadPlan(["web.enabled", "channels.telegram.botToken"]);
 
@@ -1650,11 +1721,7 @@ function createReloaderHarness(
       }
     };
   });
-  const log = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
+  const log = createInfoWarnErrorLogger();
   const initialConfig = options.initialConfig ?? { gateway: { reload: {} } };
   const reloader = startGatewayConfigReloader({
     testDebounceMs: 0,

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { routeIdFromPath } from "../../app-routes.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -11,12 +12,14 @@ const defaultLanding = { pathname: "/chat/main", search: "", hash: "" };
 async function startRedirect(
   context: ApplicationContext<RouteId>,
   currentLocation = defaultLanding,
+  onInitialDecision?: () => void,
 ): Promise<() => void> {
   return startModelSetupFirstRunRedirectAfterLocation({
     context,
     enabled: true,
     history: { location: () => currentLocation, replace: () => undefined },
     initialLocationReady: Promise.resolve(defaultLanding),
+    onInitialDecision,
   });
 }
 
@@ -269,11 +272,11 @@ describe("model setup first-run redirect", () => {
       modelRef: "openai/expected",
     });
 
-    const dispose = await startRedirect(context);
+    const decision = createDeferred();
+    const dispose = await startRedirect(context, defaultLanding, decision.resolve);
 
-    await vi.waitFor(() => {
-      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
-    });
+    await decision.promise;
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
     dispose();
   });
 
@@ -285,11 +288,11 @@ describe("model setup first-run redirect", () => {
     });
     context.gateway.connection.token = "different-owner-token";
 
-    const dispose = await startRedirect(context);
+    const decision = createDeferred();
+    const dispose = await startRedirect(context, defaultLanding, decision.resolve);
 
-    await vi.waitFor(() => {
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
-    });
+    await decision.promise;
+    expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
     expect(replace).not.toHaveBeenCalled();
     dispose();
   });

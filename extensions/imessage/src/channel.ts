@@ -360,9 +360,16 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             if (!chatType) {
               return null;
             }
+            const parsed = parseIMessageTarget(to);
+            const display =
+              parsed.kind === "handle" &&
+              !isCanonicalIMessageDirectHandle(parsed.to, normalizeIMessageHandle(parsed.to))
+                ? parsed.to.trim()
+                : undefined;
             return {
               to,
               kind: chatType === "direct" ? "user" : "group",
+              ...(display ? { display } : {}),
               source: "normalized" as const,
             };
           },

@@ -44,6 +44,8 @@ Profile changes are staged beside the destination and atomically replace it only
 
 Installed source lines preserve literal cache paths, including spaces, quotes, dollar signs, and backslashes. Reinstalling replaces OpenClaw's previous source line after the state directory changes.
 
+A user-managed portable hook for the same cached script (for example `[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"`, as a dotfile manager would write) is recognized as completion being configured. Doctor and `completion --install` leave such managed lines byte-for-byte untouched instead of appending a duplicate literal-path block.
+
 ## Permission failures
 
 If Doctor or onboarding cannot update your shell profile, completion remains

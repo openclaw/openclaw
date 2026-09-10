@@ -240,3 +240,4 @@ file-system scan or writing a pre-OOM snapshot.
 - [Gateway protocol](/gateway/protocol/rpc-methods#rpc-method-families)
 - [Logging](/logging)
 - [OpenTelemetry export](/gateway/opentelemetry) - separate flow for streaming diagnostics to a collector
+- [Codex harness runtime](/plugins/codex-harness-runtime) - runtime boundaries, permissions, and diagnostics for the Codex harness

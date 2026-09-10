@@ -45,6 +45,34 @@ it("reads a text attachment in Files without downloading or interpreting its con
   expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).has("Authorization")).toBe(false);
 });
 
+it("keeps one pending presentation through metadata and text-body loading", async () => {
+  let resolveBody!: (response: Response) => void;
+  const fetchMock = vi.fn<typeof fetch>(
+    () =>
+      new Promise((resolve) => {
+        resolveBody = resolve;
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  let pending = true;
+  const panel = await mountAttachment({
+    src: undefined,
+    resolveSource: () => (pending ? { status: "pending" } : { status: "ready", src: "/notes.txt" }),
+  });
+  await vi.waitFor(() => expect(panel.querySelector('[role="status"]')).not.toBeNull());
+  const presentation = panel.querySelector('[role="status"]');
+  const header = panel.querySelector(".chat-assistant-attachment-card__header");
+  expect(fetchMock).not.toHaveBeenCalled();
+  pending = false;
+  panel.content = { ...panel.content };
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  expect(panel.querySelector('[role="status"]')).toBe(presentation);
+  expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
+  resolveBody(new Response("Ready text"));
+  await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Ready text"));
+  expect(panel.querySelector('[role="status"]')).toBeNull();
+});
+
 it.each([
   ["notes.md", "text/markdown; charset=utf-8", "# literal Markdown\n"],
   ["preview.html", "text/html", "<h1>literal HTML</h1>"],

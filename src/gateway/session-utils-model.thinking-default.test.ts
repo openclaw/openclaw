@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 
 describe("Gateway all-null thinking map", () => {
-  it("preserves off as the default without selectable levels", () => {
+  it("does not advertise a default without selectable levels", () => {
     const profile = resolveGatewayModelThinkingProfile({
       cfg: {},
       agentId: "main",
@@ -30,7 +30,8 @@ describe("Gateway all-null thinking map", () => {
       ],
     });
 
-    expect(profile).toEqual({ thinkingLevels: [], thinkingDefault: "off" });
+    expect(profile.thinkingLevels).toEqual([]);
+    expect(profile.thinkingDefault).toBeUndefined();
   });
 });
 

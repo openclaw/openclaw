@@ -474,6 +474,7 @@ export async function runCliFallbackCandidate(
         return candidateResult;
       },
       {
+        preparedRunAdmission: params.preparedRunAdmission,
         lifecycleGeneration: params.lifecycleGeneration,
         abortSignal: params.runAbortSignal,
         trigger: turn.isHeartbeat ? "heartbeat" : "user",

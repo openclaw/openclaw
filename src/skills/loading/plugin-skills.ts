@@ -18,7 +18,7 @@ import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-sna
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { iteratePluginRootContributions } from "../../plugins/plugin-root-contributions.js";
 import { isPathInside } from "../../security/scan-paths.js";
-import { CONFIG_DIR } from "../../utils.js";
+import { resolvePluginSkillsDir } from "./skill-paths.js";
 
 const log = createSubsystemLogger("skills");
 
@@ -31,7 +31,10 @@ export type PluginSkillRoot = {
 
 // This tracks the generated SDK links we last published, not plugin metadata.
 // Config and ACP availability can change the desired links without changing package files.
-let lastDefaultPluginSkillsPublication: ReadonlyMap<string, string> | null = null;
+let lastDefaultPluginSkillsPublication: {
+  directory: string;
+  targets: ReadonlyMap<string, string>;
+} | null = null;
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   lastDefaultPluginSkillsPublication = null;
@@ -170,10 +173,6 @@ function collectAgentSkillTargets(skillsRoot: string): string[] {
   return targets;
 }
 
-function resolveDefaultPluginSkillsDir(): string {
-  return path.join(CONFIG_DIR, "plugin-skills");
-}
-
 function resolvePluginSkillLinkType(
   platform: NodeJS.Platform = process.platform,
 ): PluginSkillLinkType {
@@ -244,7 +243,7 @@ function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }):
  * a generated symlink. Cleanup of stale links is therefore safe.
  */
 function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: string }): void {
-  const pluginSkillsDir = opts?.pluginSkillsDir ?? resolveDefaultPluginSkillsDir();
+  const pluginSkillsDir = opts?.pluginSkillsDir ?? resolvePluginSkillsDir();
   const managedTargets = new Map<string, string>();
 
   // Collect basename → target mappings, reporting collisions.
@@ -257,9 +256,10 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
 
   if (
     opts?.pluginSkillsDir === undefined &&
-    lastDefaultPluginSkillsPublication?.size === managedTargets.size &&
+    lastDefaultPluginSkillsPublication?.directory === pluginSkillsDir &&
+    lastDefaultPluginSkillsPublication.targets.size === managedTargets.size &&
     [...managedTargets].every(
-      ([name, target]) => lastDefaultPluginSkillsPublication?.get(name) === target,
+      ([name, target]) => lastDefaultPluginSkillsPublication?.targets.get(name) === target,
     )
   ) {
     return;
@@ -321,7 +321,7 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
     removeGeneratedPluginSkillEntry(linkPath);
   }
   if (opts?.pluginSkillsDir === undefined) {
-    lastDefaultPluginSkillsPublication = managedTargets;
+    lastDefaultPluginSkillsPublication = { directory: pluginSkillsDir, targets: managedTargets };
   }
 }
 

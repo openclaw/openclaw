@@ -1848,17 +1848,21 @@ describe("skills cli commands", () => {
     expectStatusWorkspaceCall("/tmp/workspace-main");
   });
 
-  it("renders the supported skills escape without advertising --all-agents", async () => {
+  it("hands the supported skills escape to the CLI failure owner without --all-agents", async () => {
     resolveDefaultAgentIdMock.mockImplementationOnce((_config, context) => {
       throw new AgentSelectionRequiredError(["main", "helper", "third"], context);
     });
 
-    await expect(runCommand(["skills", "list"])).rejects.toThrow("__exit__:1");
-
-    expect(runtimeErrors).toStrictEqual([
-      "Multiple agents are configured, but the skills command has no explicit owner. Pass --agent <id>.",
-    ]);
-    expect(runtimeErrors[0]).not.toContain("--all-agents");
+    // Agent selection is an expected CLI condition; the root failure owner renders it
+    // without crash framing, so the command must not print a second copy.
+    await expect(runCommand(["skills", "list"])).rejects.toThrow(
+      expect.objectContaining({
+        name: "AgentSelectionRequiredError",
+        message:
+          "Multiple agents are configured, but the skills command has no explicit owner. Pass --agent <id>.",
+      }),
+    );
+    expect(runtimeErrors).toStrictEqual([]);
   });
 
   it("redacts secrets from rendered skills CLI errors", async () => {

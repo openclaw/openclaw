@@ -2,7 +2,15 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  attachErrorDiagnostic,
+  formatErrorMessageForDisplay,
+} from "../../infra/error-diagnostics.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
+import type { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
   resolveManagedServiceUpdateFailureExitCode,
@@ -14,10 +22,76 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
-import type { PreManagedServiceStop } from "./update-command-service-maintenance.js";
+import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
+
+/** Terminal worker diagnostics do not participate in recovery decisions. */
+export function formatUpdateFinalizationError(error: unknown): string {
+  const contention = collectNestedErrorCandidates(error).find(isSqliteLockError);
+  if (error && typeof error === "object" && contention instanceof Error) {
+    // The worker has already unwound ownership. Retain the actual causal site
+    // through aggregate wrappers without changing policy-bearing error fields.
+    attachErrorDiagnostic(
+      error,
+      `SQLite contention call site:\n${formatUncaughtError(contention)}`,
+    );
+  }
+  return formatErrorMessageForDisplay(error);
+}
+
+export type MutableUpdateExecutionResult = {
+  mutationStarted: boolean;
+  result: UpdateRunResult;
+  failure?: { cause: unknown; detail: string };
+  preManagedServiceStop: PreManagedServiceStop | undefined;
+  ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
+  recoveryEnv: NodeJS.ProcessEnv | undefined;
+  packageTransaction?: PackageUpdateTransaction;
+  schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
+  candidateSchemaVersions?: OpenClawSchemaVersions;
+  previousSchemaVersions?: OpenClawSchemaVersions;
+  previousVerified?: boolean;
+  activationConfig?: UpdateConfigSnapshot;
+};
+
+/** Report rejected read-only admission without creating a run or recovery diagnostics. */
+export async function withUpdateAdmissionReporting<T>(
+  opts: UpdateCommandOptions,
+  admit: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await admit();
+  } catch (error) {
+    if (!(error instanceof GatewayServiceUpdateOwnershipError)) {
+      throw error;
+    }
+    const message = `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
+    if (opts.json) {
+      defaultRuntime.error(message);
+    }
+    printResult(
+      {
+        status: "error",
+        mode: "unknown",
+        reason: "managed-service-preflight",
+        steps: [],
+        durationMs: 0,
+      },
+      opts,
+      { nextAction: message },
+    );
+    return exitCliAfterOutput(defaultRuntime, 1);
+  }
+}
 
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
@@ -32,6 +106,30 @@ export class UpdateCommandFailure extends Error {
     super(detail ?? result.reason ?? "Update failed", options);
     this.name = "UpdateCommandFailure";
     this.automaticTriage = options?.automaticTriage;
+  }
+}
+
+/** A conservative pending outcome, never a grant of recovery or mutation authority. */
+export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
+  constructor(result: UpdateRunResult, detail?: string, options?: ErrorOptions) {
+    super(
+      {
+        ...result,
+        status: "error",
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      },
+      1,
+      detail,
+      options,
+    );
+    this.name = "UpdateCommandPendingRecoveryFailure";
+  }
+}
+
+/** Reporting-only marker: the durable finalizer already committed and printed the outcome. */
+export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure {
+  constructor(result: UpdateRunResult) {
+    super(result, 1);
   }
 }
 
@@ -197,7 +295,7 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
     return;
   }
   try {
-    await markControlPlaneUpdateRestartSentinelFailure(params.reason);
+    await markControlPlaneUpdateRestartSentinelFailure(params.reason, params.meta);
   } catch (err) {
     const message = `Failed to mark update.run restart sentinel failed: ${String(err)}`;
     if (params.jsonMode) {
@@ -206,4 +304,26 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
       defaultRuntime.log(theme.warn(message));
     }
   }
+}
+
+export function recordUpdateResultNextAction(
+  params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
+  result: UpdateRunResult,
+) {
+  const run = params.opts.run;
+  const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
+  const nextAction = resolveUpdateResultNextAction({
+    result,
+    restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
+    serviceRunning: active?.verification.serviceRunning,
+    runningVersion: active?.verification.runningVersion,
+    verificationFailure: active?.steps.findLast(
+      (step) => step.step === "gateway verification" && step.status === "failed",
+    )?.detail,
+    env: run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
+  });
+  if (run && active?.status === "running" && active.origin.nextAction !== nextAction) {
+    recordUpdateRunPhase(run.runId, active.phase, { origin: { nextAction } }, { env: run.env });
+  }
+  return nextAction;
 }

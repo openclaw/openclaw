@@ -47,11 +47,8 @@ import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
-import { defineSplitHealthCheckInput } from "./health-check-adapter.js";
-import type {
-  SplitHealthCheckDefinition,
-  SplitHealthCheckInput,
-} from "./health-check-runner-types.js";
+import { copyHealthCheck } from "./health-check-adapter.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
   HealthCheckContext,
@@ -373,7 +370,9 @@ const skillWorkshopRelocationCheck: HealthCheck = {
       inspection.legacyBackupRootCount > inspection.preservedLegacyBackupRootCount
     ) {
       fixHints.push(
-        "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
+        ctx.mode === "doctor"
+          ? "Review the remaining targets and migration warnings above. Resolve their ownership or recovery blockers before retrying Doctor; repeating the same repair alone will not resolve them."
+          : "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
       );
     }
     if (inspection.preservedLegacyBackupRootCount > 0) {
@@ -391,7 +390,7 @@ const skillWorkshopRelocationCheck: HealthCheck = {
           .map(([agentId, count]) => `${agentId}: ${count}`)
           .join(
             ", ",
-          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).`,
+          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).${inspection.externalProposalDetails?.length ? `\nRemaining proposal targets (showing ${inspection.externalProposalDetails.length} of ${inspection.externalProposalCount}):\n${inspection.externalProposalDetails.join("\n")}` : ""}`,
         path: "skills.workshop",
         fixHint: fixHints.join(" "),
       },
@@ -515,7 +514,7 @@ const hooksModelCheck: HealthCheck = {
       return [];
     }
     const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
-    const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
+    const { readPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
     const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
       await import("../agents/model-selection.js");
     const hooksModelRef = resolveHooksGmailModel({
@@ -537,7 +536,7 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadPreparedModelCatalog({
+    const catalog = await readPreparedModelCatalog({
       config: ctx.cfg,
       readOnly: true,
       providerDiscoveryProviderIds: [],
@@ -941,7 +940,7 @@ const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false
   },
 };
 
-const legacyCronStoreCheck: SplitHealthCheckDefinition = {
+const legacyCronStoreCheck: DoctorHealthCheck = {
   id: "core/doctor/legacy-cron-store",
   kind: "core",
   description: "Legacy cron store, run-log, and payload state is normalized.",
@@ -1095,7 +1094,7 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
-function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDefinition {
+function createGatewayHealthCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
   return {
     id: GATEWAY_HEALTH_CHECK_ID,
     kind: "core",
@@ -1108,7 +1107,7 @@ function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDe
   };
 }
 
-function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDefinition {
+function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
   return {
     id: GATEWAY_DAEMON_CHECK_ID,
     kind: "core",
@@ -1120,6 +1119,18 @@ function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDe
     },
   };
 }
+
+const nodeRuntimeCheck: HealthCheck = {
+  id: "core/doctor/node-runtime",
+  kind: "core",
+  description:
+    "Node SQLite capabilities and version support are represented as structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    const { collectNodeRuntimeFindings } = await import("../commands/node-runtime-diagnostics.js");
+    return collectNodeRuntimeFindings(ctx.env);
+  },
+};
 
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
@@ -1419,9 +1430,7 @@ function createWorkspaceSuggestionsCheck(
   };
 }
 
-function createConvertedWorkflowChecks(
-  deps: CoreHealthCheckDeps,
-): readonly SplitHealthCheckDefinition[] {
+function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly DoctorHealthCheck[] {
   return [
     claudeCliCheck,
     gatewayAuthCheck,
@@ -1437,6 +1446,7 @@ function createConvertedWorkflowChecks(
     gatewayPlatformNotesCheck,
     createGatewayHealthCheck(deps),
     createGatewayDaemonCheck(deps),
+    nodeRuntimeCheck,
     createSecurityCheck(deps),
     browserCheck,
     openAIOAuthTlsCheck,
@@ -1488,8 +1498,8 @@ function createConvertedWorkflowChecks(
 
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
-): readonly SplitHealthCheckInput[] {
-  const checks: readonly SplitHealthCheckDefinition[] = [
+): readonly DoctorHealthCheck[] {
+  const checks: readonly DoctorHealthCheck[] = [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
@@ -1497,8 +1507,8 @@ export function createCoreHealthChecks(
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
   ];
-  return checks.map(defineSplitHealthCheckInput);
+  return checks.map(copyHealthCheck);
 }
 
-export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();
+export const CORE_HEALTH_CHECKS: readonly DoctorHealthCheck[] = createCoreHealthChecks();
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

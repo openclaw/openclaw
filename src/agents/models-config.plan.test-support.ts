@@ -63,13 +63,14 @@ export const planOpenClawModelsJsonWithDeps = async (
   params: PlanParams,
   deps?: PlanDeps,
 ): Promise<PlanResult> => {
-  const { authStore, existingRaw, existingParsed, ...contextParams } = params;
+  const { authStore, existingRaw, existingParsed, pluginCatalogs, ...contextParams } = params;
   return await getTestApi().planOpenClawModelsJsonWithDeps(
     {
       context: prepareTestContext(contextParams),
       ...(authStore ? { authStore } : {}),
       existingRaw,
       existingParsed,
+      ...(pluginCatalogs ? { pluginCatalogs } : {}),
     },
     deps,
   );

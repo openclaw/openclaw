@@ -1,5 +1,6 @@
 {
   "id": "opencode-go",
+  "categories": ["models", "media"],
   "activation": {
     "onStartup": false
   },

@@ -121,3 +121,4 @@ falls back to the same `webSearch.baseUrl` unless
 - [Web Search overview](/tools/web) -- all providers and auto-detection
 - [x_search in Web Search](/tools/web#x_search) -- first-class X search via xAI
 - [Gemini Search](/tools/gemini-search) -- AI-synthesized answers via Google grounding
+- [Kimi search](/tools/kimi-search) — the Moonshot-backed search tool

@@ -916,11 +916,13 @@ export function resolvePluginHarnessToolPolicies(
     senderPolicyMode: params.scheduledToolPolicy ? ("never" as const) : ("always" as const),
   };
   const { policy } = capabilityProfile;
-  const requestedToolPolicy = params.disableTools
-    ? { allow: [] }
-    : params.toolsAllow
-      ? { allow: params.toolsAllow }
-      : undefined;
+  // Runtime allowlists treat [] as deny-all; config allow: [] means unrestricted.
+  const requestedToolPolicy =
+    params.disableTools || params.toolsAllow?.length === 0
+      ? { deny: ["*"] }
+      : params.toolsAllow
+        ? { allow: params.toolsAllow }
+        : undefined;
   const explicitPolicies = [
     policy.globalPolicy,
     policy.globalProviderPolicy,

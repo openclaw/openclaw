@@ -572,12 +572,14 @@ export function createProviderRegistryResolver(dependencies: {
 
   function resolvePluginProvidersCore(
     params: Parameters<typeof resolvePluginProviderRegistryCore>[0],
+    onSelectedRegistry?: (registry: PluginRegistry) => void,
   ): ProviderPlugin[] {
     const resolved = resolvePluginProviderRegistryCore(params);
     if (!resolved) {
       return [];
     }
     const { registry, onlyPluginIds } = resolved;
+    onSelectedRegistry?.(registry);
     return registry.providers
       .filter((entry) => !onlyPluginIds || onlyPluginIds.includes(entry.pluginId))
       .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId }));

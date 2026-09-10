@@ -406,7 +406,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     description: [
       "System agent. Setup, config, channels, plugins, agents, repair.",
       "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_list, plugin_search, validate_config, doctor, audit.",
-      "Handoff: connect_channel, configure_skills, configure_search, configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent.",
+      "Handoff: connect_channel, configure_skills, configure_search, configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent. connect_channel/open_setup collect credentials (channel tokens, API keys, passwords) through masked flows; never request them in chat.",
       "Personal model accounts: manage_model_accounts opens the human-owned account controls; no change is made by the handoff. Shared provider/auth setup: exit; run `openclaw onboard`. Never request credentials.",
       "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_set_ref, create_agent, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
       "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",

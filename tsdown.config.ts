@@ -17,6 +17,7 @@ import {
   productionPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mts";
+import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
   createStateSchemaInlinePlugin,
@@ -170,6 +171,8 @@ function nodeBuildConfig(
 ): UserConfig {
   return {
     ...config,
+    // Recovery diagnostics must parse on Node 22; runtime admission still guards live writers.
+    target: "node22",
     dts: declarations,
     hooks: createDeclarationBoundaryHooks(config.hooks),
     env,
@@ -819,7 +822,11 @@ const configs: UserConfig[] = [
       // Explicit ESM chunks avoid repeated package-format parsing in Node;
       // named entrypoints retain their public .js paths.
       outputOptions: { chunkFileNames: "[name]-[hash].mjs" },
-      plugins: [createStateSchemaInlinePlugin(), createGatewayRunChunkMetadataPlugin()],
+      plugins: [
+        createStateSchemaInlinePlugin(),
+        createGatewayRunChunkMetadataPlugin(),
+        createRuntimeDependencyOwnershipBuildPlugin(),
+      ],
     },
     false,
   ),

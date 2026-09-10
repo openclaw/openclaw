@@ -1,6 +1,7 @@
 // Msteams tests cover attachments.graph plugin behavior.
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
@@ -148,27 +149,6 @@ const createJsonResponse = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), { status });
 const createGraphCollectionResponse = (value: unknown[]) => createJsonResponse({ value });
 const createNotFoundResponse = () => new Response("not found", { status: 404 });
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
 const createRedirectResponse = (location: string, status = 302) =>
   new Response(null, { status, headers: { location } });
 const asFetchFn = (fetchFn: unknown): FetchFn => fetchFn as FetchFn;
@@ -346,7 +326,7 @@ describe("msteams graph attachments", () => {
   it.each<GraphMediaSuccessCase>(GRAPH_MEDIA_SUCCESS_CASES)("$label", runGraphMediaSuccessCase);
 
   it("cancels non-OK Graph collection bodies before returning empty hosted content", async () => {
-    const tracked = cancelTrackedResponse("missing hosted contents", { status: 404 });
+    const tracked = cancelTrackedTextResponse("missing hosted contents", { status: 404 });
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = resolveRequestUrl(input);
       if (url === DEFAULT_MESSAGE_URL) {

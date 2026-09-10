@@ -1,5 +1,6 @@
 {
   "id": "copilot",
+  "categories": ["runtime"],
   "doctorContract": {
     "configRepair": true
   },

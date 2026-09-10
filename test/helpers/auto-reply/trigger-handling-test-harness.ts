@@ -122,7 +122,7 @@ const DEFAULT_MODEL_CATALOG = [
 
 const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalog-mocks", () => ({
   loadManifestModelCatalog: vi.fn(() => DEFAULT_MODEL_CATALOG),
-  loadPreparedModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
+  readPreparedModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
 }));
 
 const installModelCatalogMock = () =>
@@ -131,24 +131,24 @@ const installModelCatalogMock = () =>
 installModelCatalogMock();
 
 vi.doMock("../../../src/agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog: (...args: unknown[]) =>
-    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  readPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.readPreparedModelCatalog(...args),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
-    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    const entries = await modelCatalogMocks.readPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
 }));
 
 vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: () => modelCatalogMocks.loadManifestModelCatalog(),
-  loadPreparedModelCatalog: (...args: unknown[]) =>
-    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  readPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.readPreparedModelCatalog(...args),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
-    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    const entries = await modelCatalogMocks.readPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
   loadProviderScopedThinkingCatalog: async (...args: unknown[]) =>
-    await modelCatalogMocks.loadPreparedModelCatalog(...args),
+    await modelCatalogMocks.readPreparedModelCatalog(...args),
 }));
 
 vi.doMock("../../../src/plugins/provider-runtime.runtime.js", () => ({

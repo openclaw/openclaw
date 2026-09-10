@@ -4,7 +4,12 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import * as sessionDirs from "../agents/session-dirs.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions.js";
+import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+  loadSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as agentDatabaseRegistry from "../state/openclaw-agent-db-registry.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -35,7 +40,7 @@ test("session RPC paths name the physical SQLite store", async () => {
   expect(patched).toMatchObject({ ok: true, payload: { path: databasePath } });
 });
 
-test("sessions.list reports multiple physical agent stores", async () => {
+test("sessions.list reads completed models from each physical agent store", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
@@ -44,18 +49,65 @@ test("sessions.list reports multiple physical agent stores", async () => {
   testState.sessionConfig = { store: storeTemplate };
   testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
   for (const agentId of ["main", "ops"]) {
+    const sessionId = `session-${agentId}`;
+    const sessionKey = `agent:${agentId}:main`;
+    const storePath = storeTemplate.replace("{agentId}", agentId);
+    const runId = `run-${agentId}`;
+    const entry: InternalSessionEntry = {
+      sessionId,
+      updatedAt: 10,
+      status: "done",
+      lastRunId: runId,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-5.4",
+        activeModel: "anthropic/claude-sonnet-4-6",
+      },
+    };
     await writeSessionStore({
       agentId,
-      entries: {
-        [`agent:${agentId}:main`]: { sessionId: `session-${agentId}`, updatedAt: 10 },
+      entries: { [sessionKey]: entry },
+      storePath,
+    });
+    const scope = { agentId, sessionId, sessionKey, storePath };
+    await appendTranscriptEvent(scope, { type: "session", version: 3, id: sessionId });
+    await appendTranscriptMessage(scope, {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `Completed ${agentId}` }],
+        provider: agentId === "main" ? "anthropic" : "openai",
+        model: agentId === "main" ? "claude-sonnet-4-6" : "gpt-5.4",
+        stopReason: "stop",
+        __openclaw: { runId },
       },
-      storePath: storeTemplate.replace("{agentId}", agentId),
     });
   }
 
-  const listed = await directSessionReq<{ path: string }>("sessions.list", {});
-
-  expect(listed).toMatchObject({ ok: true, payload: { path: "(multiple)" } });
+  // A bad relative selector must stay inside the disposable fixture if it regresses.
+  const cwd = vi.spyOn(process, "cwd").mockReturnValue(stateDir);
+  try {
+    const listed = await directSessionReq<{
+      path: string;
+      sessions: Array<{ key: string; activeModelProvider?: string; activeModel?: string }>;
+    }>("sessions.list", {});
+    expect(listed).toMatchObject({ ok: true, payload: { path: "(multiple)" } });
+    expect(listed.payload?.sessions.find((row) => row.key === "agent:main:main")).toMatchObject({
+      activeModelProvider: "anthropic",
+      activeModel: "claude-sonnet-4-6",
+    });
+    expect(
+      listed.payload?.sessions.find((row) => row.key === "agent:ops:main")?.activeModel,
+    ).toBeUndefined();
+    expect(fsSync.readdirSync(stateDir).filter((name) => name.startsWith("(multiple)"))).toEqual(
+      [],
+    );
+  } finally {
+    cwd.mockRestore();
+  }
 });
 
 test.runIf(process.platform !== "win32")(

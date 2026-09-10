@@ -8,6 +8,7 @@ import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-co
 import {
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
+  stateDirGatewayFixtureEntrypoint,
 } from "../../src/cli/cli-entrypoint.test-support.ts";
 import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
@@ -19,7 +20,10 @@ import {
   triageMaintenanceRuntimeEntrypoints,
 } from "../../src/infra/triage-runtime.test-support.ts";
 import { nodeHostConfigRuntimeEntrypoint } from "../../src/node-host/config-runtime.test-support.ts";
-import { publishedSdkBridgeEntrypoints } from "../../src/plugins/loader-sdk-bridge-artifacts.test-support.ts";
+import {
+  mcpProviderCatalogEntrypoint,
+  publishedSdkBridgeEntrypoints,
+} from "../../src/plugins/loader-sdk-bridge-artifacts.test-support.ts";
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
@@ -40,8 +44,10 @@ export const vitestWorkerBuildEntries = {
       codeModeDescriptionRetentionEntrypoint,
       ...cliCompactionBackendEntrypoints,
       ...publishedSdkBridgeEntrypoints,
+      mcpProviderCatalogEntrypoint,
       ...Object.values(cliRecoveryEntrypoints),
       ...Object.values(gatewayDirectStopEntrypoints),
+      stateDirGatewayFixtureEntrypoint,
       ...Object.values(doctorConfigRuntimeEntrypoints),
       ...Object.values(cronOwnerHardeningEntrypoints),
       ...Object.values(tuiPtyRuntimeEntrypoints),

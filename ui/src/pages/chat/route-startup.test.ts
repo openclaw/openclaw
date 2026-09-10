@@ -4,10 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
-import { createState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
+import { consumeChatRouteStartup, peekChatRouteStartup } from "./route-startup.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
 
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
@@ -56,9 +58,8 @@ function fixture() {
       },
     };
   });
-  const state = createState({});
-  state.client = { request } as unknown as NonNullable<typeof state.client>;
-  state.sessionKey = sessionKey;
+  const state = makeChatHost({ client: createTestGatewayClient(request), sessionKey });
+  cleanups.push(() => state.sessions.dispose());
   const snapshot = { phase: "connected", client: state.client, hello: state.hello };
   const context = {
     basePath: "",
@@ -73,12 +74,7 @@ function fixture() {
       },
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
-    sessions: {
-      canonicalListRevision: 1,
-      list: vi.fn(),
-      state: { result: null },
-      whenCachedRosterSettled: async () => undefined,
-    },
+    sessions: state.sessions,
   } as unknown as ApplicationContext;
   const loadRoute = async () => {
     await router.navigate("chat", context, undefined, {
@@ -92,6 +88,38 @@ function fixture() {
 }
 
 describe("short chat startup", () => {
+  it.each([
+    ["peek", peekChatRouteStartup],
+    ["consume", consumeChatRouteStartup],
+  ] as const)("retains the replacement handoff after an old owner's %s", async (_label, read) => {
+    const h = fixture();
+    await h.loadRoute();
+    const replacement = makeChatHost({
+      client: h.state.client,
+      hello: h.state.hello,
+      sessionKey,
+    });
+    cleanups.push(() => replacement.sessions.dispose());
+    await h.router.navigate(
+      "chat",
+      { ...h.context, sessions: replacement.sessions },
+      { revalidate: true },
+      h.router.getState().matches[0]!.location,
+    );
+    const client = h.state.client!;
+    expect(h.request).toHaveBeenCalledTimes(2);
+    expect(peekChatRouteStartup(client, sessionKey, replacement.sessions)?.messages).toEqual([
+      message,
+    ]);
+
+    expect(read(client, sessionKey, h.state.sessions)).toBeUndefined();
+    await loadChatHistory(replacement, { startup: true, deferBranches: true });
+
+    expect(replacement.chatMessages).toEqual([message]);
+    expect(h.request).toHaveBeenCalledTimes(2);
+    expect(h.events.size).toBe(0);
+  });
+
   it("renders the selected short-link history using the authoritative startup reply once", async () => {
     const h = fixture();
     await expect(h.loadRoute()).resolves.toMatchObject({ kind: "session", sessionKey });

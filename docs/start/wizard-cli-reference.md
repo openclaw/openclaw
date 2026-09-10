@@ -240,6 +240,10 @@ If a provider setup step fails in interactive onboarding (for example a CLI reus
 without a local sign-in), the wizard shows the error and returns to the provider picker
 instead of exiting. Explicit `--auth-choice` runs still fail fast for automation.
 
+The model defaults and provider support statements below describe v2026.9.3. Model
+defaults move with the product baseline, so check [Models](/concepts/models) if you are
+on a different release.
+
 <AccordionGroup>
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
@@ -471,7 +475,7 @@ prompts to install the plugin (npm or local path) before channel configuration.
 
 ### Installed app recommendations
 
-After the model access check succeeds, classic interactive onboarding on macOS scans application names and bundle IDs without requesting macOS privacy permissions. It searches the official plugin catalogs and ClawHub, then asks the configured model to reject false name matches and recommend relevant plugins or skills. Recommended matches are selected by default; optional matches require an explicit selection.
+After the model access check succeeds, classic interactive onboarding on macOS scans application names and bundle IDs without requesting macOS privacy permissions. It searches the official plugin catalogs and ClawHub, then asks the configured model to reject false name matches and recommend relevant plugins or skills. Only recommended matches from official plugin catalogs are selected by default; optional matches and all ClawHub skills require an explicit selection.
 
 The results screen lists the detected applications and shows: "App names were matched using your configured model and ClawHub search." Set `wizard.appRecommendations` to `false` to disable both this onboarding step and Gateway access to node app inventories. The scan is not used in quickstart or non-macOS onboarding.
 

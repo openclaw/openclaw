@@ -14,7 +14,6 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
-  createMockTypingSignaler,
   createFollowupRun,
   createTestUserTurnRecorder,
   requireRecord,
@@ -22,6 +21,7 @@ import {
   expectMockCallArgFields,
   initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
+  createRunAgentTurnParams,
   makeTestSessionStorePath,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
@@ -270,28 +270,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     followupRun.run.runtimePolicySessionKey = "agent:main:telegram:default:direct:sender-static";
     followupRun.originatingChannel = "telegram";
 
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {

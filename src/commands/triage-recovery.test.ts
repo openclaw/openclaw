@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
 
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
+  confirm: async () => true,
+}));
+
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: mocks.spawn,

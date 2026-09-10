@@ -85,15 +85,82 @@ describe("native plugin browser builds", () => {
     expect(await buildPluginControlUi(project)).toEqual(first);
     assert.ok(first.styles?.[0]);
     const stylesheet = path.join(project.rootDir, first.styles[0]);
-    await fs.writeFile(stylesheet, ".tampered {}");
+    const script = path.join(project.rootDir, first.entry);
+    const generation = path.dirname(script);
+    const originalStyles = await fs.readFile(stylesheet, "utf8");
+    if (process.platform !== "win32") {
+      await fs.chmod(generation, 0o700);
+      await fs.chmod(stylesheet, 0o600);
+      await fs.chmod(script, 0o600);
+    }
+    // CSS sorts before JavaScript; reject the later mismatch before normalizing either file.
+    await fs.writeFile(script, "export const tampered = true;");
     await expect(buildPluginControlUi(project)).rejects.toThrow(
       "immutable Control UI build was modified",
     );
-    expect(await fs.readFile(stylesheet, "utf8")).toBe(".tampered {}");
+    expect(await fs.readFile(script, "utf8")).toBe("export const tampered = true;");
+    expect(await fs.readFile(stylesheet, "utf8")).toBe(originalStyles);
+    if (process.platform !== "win32") {
+      expect(
+        await Promise.all(
+          [generation, stylesheet, script].map(
+            async (target) => (await fs.stat(target)).mode & 0o777,
+          ),
+        ),
+      ).toEqual([0o700, 0o600, 0o600]);
+    }
     expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
       path.basename(path.dirname(first.entry)),
     ]);
   });
+
+  // Windows chmod only toggles the read-only attribute, so exact POSIX mode bits
+  // are asserted where the Gateway can actually run as a different UID.
+  it.skipIf(process.platform === "win32")(
+    "normalizes fresh and validated browser generation permissions",
+    async () => {
+      const project = await fixture();
+      // A restrictive umask on the build host leaves the parent owner-only as well.
+      const generations = path.join(project.rootDir, "dist/control-ui");
+      await fs.mkdir(generations, { recursive: true, mode: 0o700 });
+      const first = await buildPluginControlUi(project);
+      const generation = path.join(project.rootDir, path.dirname(first.entry));
+      const modeOf = async (target: string) => ((await fs.stat(target)).mode & 0o777).toString(8);
+      expect(await modeOf(generations)).toBe("755");
+      expect(await modeOf(generation)).toBe("755");
+      assert.ok(first.styles?.[0]);
+      const script = path.join(project.rootDir, first.entry);
+      const stylesheet = path.join(project.rootDir, first.styles[0]);
+      expect(await modeOf(script)).toBe("644");
+      expect(await modeOf(stylesheet)).toBe("644");
+      const originalAssets = await Promise.all(
+        [script, stylesheet].map((file) => fs.readFile(file)),
+      );
+
+      // A generation published by an earlier build stays reusable and is normalized in place.
+      await fs.chmod(generations, 0o700);
+      await fs.chmod(generation, 0o700);
+      await fs.chmod(script, 0o600);
+      await fs.chmod(stylesheet, 0o600);
+      expect(await buildPluginControlUi({ ...project, check: true })).toEqual(first);
+      expect(await Promise.all([generations, generation, script, stylesheet].map(modeOf))).toEqual([
+        "700",
+        "700",
+        "600",
+        "600",
+      ]);
+      expect(await buildPluginControlUi(project)).toEqual(first);
+      expect(await modeOf(generations)).toBe("755");
+      expect(await modeOf(generation)).toBe("755");
+      expect(await modeOf(script)).toBe("644");
+      expect(await modeOf(stylesheet)).toBe("644");
+      expect(await Promise.all([script, stylesheet].map((file) => fs.readFile(file)))).toEqual(
+        originalAssets,
+      );
+      expect(await modeOf(project.rootDir)).toBe("700");
+      expect(await modeOf(path.dirname(generations))).toBe("700");
+    },
+  );
 
   it("bundles browser-safe primitive SDK exports", async () => {
     const project = await fixture();

@@ -260,7 +260,7 @@ type ShellSessionNavigationState = {
   routeState: { routeId?: RouteId };
   navigate: (routeId: RouteId) => void;
   handleCommandPaletteSlashCommand: (command: string) => void;
-  replaceChatWithCurrentSession: () => boolean;
+  recoverNotFoundRoute: () => boolean;
 };
 
 function committedRouterState(
@@ -539,11 +539,11 @@ describe("OpenClaw shell route session commits", () => {
     shell.activeSessionKey = "main";
     shell.routeState = { routeId: "chat" };
 
-    expect(shell.replaceChatWithCurrentSession()).toBe(false);
+    expect(shell.recoverNotFoundRoute()).toBe(false);
     expect(replace).not.toHaveBeenCalled();
 
     snapshot.phase = "connected";
-    expect(shell.replaceChatWithCurrentSession()).toBe(true);
+    expect(shell.recoverNotFoundRoute()).toBe(true);
     expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/research" });
   });
 
@@ -873,23 +873,33 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     }
   });
 
-  it("normalizes an unloaded palette toggle shortcut to open", async () => {
-    const element = createLazyElementSpec("command palette");
-    const openPalette = vi.fn();
-    const shell = configureLazyPaletteShell(element, openPalette);
-    stubRenderedWhenDefined(shell);
-    const event = new KeyboardEvent("keydown", {
-      key: "л",
-      code: "KeyK",
-      ctrlKey: true,
-      cancelable: true,
-    });
+  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+    "opens an unloaded palette only with the platform shortcut on %s",
+    async (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const element = createLazyElementSpec("command palette");
+      const openPalette = vi.fn();
+      const shell = configureLazyPaletteShell(element, openPalette);
+      stubRenderedWhenDefined(shell);
+      const chord = (metaKey: boolean) =>
+        new KeyboardEvent("keydown", {
+          key: "л",
+          code: "KeyK",
+          metaKey,
+          ctrlKey: !metaKey,
+          cancelable: true,
+        });
+      const other = chord(platform !== "MacIntel");
+      shell.handleDocumentKeydown(other);
+      expect(other.defaultPrevented).toBe(false);
+      expect(openPalette).not.toHaveBeenCalled();
 
-    shell.handleDocumentKeydown(event);
-
-    expect(event.defaultPrevented).toBe(true);
-    await vi.waitFor(() => expect(openPalette).toHaveBeenCalledOnce());
-  });
+      const primary = chord(platform === "MacIntel");
+      shell.handleDocumentKeydown(primary);
+      expect(primary.defaultPrevented).toBe(true);
+      await vi.waitFor(() => expect(openPalette).toHaveBeenCalledOnce());
+    },
+  );
 
   it("clears a rejected command palette action on Close", async () => {
     vi.stubGlobal("sessionStorage", createStorageMock());

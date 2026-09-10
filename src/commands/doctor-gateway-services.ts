@@ -611,6 +611,9 @@ export async function maybeRepairGatewayServiceConfig(
     expectedServicePath: expectedPlan.environment.PATH,
     expectedPort: port,
   });
+  if (audit.runtimeNote) {
+    note(audit.runtimeNote, "Gateway runtime");
+  }
   const serviceToken = readEmbeddedGatewayToken(command);
   if (tokenRefConfigured && serviceToken) {
     audit.issues.push({
@@ -622,7 +625,7 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
-  // Unsupported Bun and version-managed Node services migrate through a concrete system Node.
+  // Unusable runtimes and version-managed Node services migrate through a concrete system Node.
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;

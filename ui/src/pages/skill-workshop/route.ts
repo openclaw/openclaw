@@ -16,11 +16,11 @@ export const page = definePage({
       `,
     })),
   loader: async (context: ApplicationContext) => {
-    const [{ loadSkillWorkshopPageData }, { createSkillWorkshopState, skillWorkshopRouteData }] =
-      await Promise.all([import("./history-scan-page-controller.ts"), import("./proposals.ts")]);
+    const { loadSkillWorkshopProposals, createSkillWorkshopState, skillWorkshopRouteData } =
+      await import("./proposals.ts");
     const state = createSkillWorkshopState();
     state.skillWorkshopMode = loadSkillWorkshopMode();
-    await loadSkillWorkshopPageData({ state, context, force: true });
+    await loadSkillWorkshopProposals(state, context, { force: true });
     return skillWorkshopRouteData(state);
   },
 });

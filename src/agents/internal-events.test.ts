@@ -83,6 +83,25 @@ describe("agent internal events", () => {
     expect(media).toEqual(["https://example.test/report.png"]);
   });
 
+  it("normalizes media references while preserving Unicode and delimiter modes", () => {
+    const unicode = "雪😀\ud800x\udc00\u0085\u200b\u2028Z";
+    const reference = ` /tmp/a\r\nb\rc\nd\te\u0000f\u001fg\u007fh/${unicode}/${INTERNAL_RUNTIME_CONTEXT_BEGIN}/${INTERNAL_RUNTIME_CONTEXT_END}.png `;
+    const normalized = `/tmp/a b c d e f g h/${unicode}/${INTERNAL_RUNTIME_CONTEXT_BEGIN}/${INTERNAL_RUNTIME_CONTEXT_END}.png`;
+    const protectedReference = `/tmp/a b c d e f g h/${unicode}/[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]/[[OPENCLAW_INTERNAL_CONTEXT_END]].png`;
+    const mediaUrls = [reference, normalized];
+    const raw = buildGeneratedMediaDeliveryContext(mediaUrls, false);
+    const protectedPrompt = formatAgentInternalEventsForPrompt([
+      { ...taskCompletionEvent("result"), mediaUrls },
+    ]);
+
+    expect(raw.find((fragment) => fragment.kind === "conversation-data")?.text).toBe(
+      `Generated media:\nMEDIA:${normalized}`,
+    );
+    expect(protectedPrompt).toContain(`\nGenerated media:\nMEDIA:${protectedReference}\n`);
+    expect(protectedPrompt.split("\nMEDIA:")).toHaveLength(2);
+    expect(mediaUrls).toEqual([reference, normalized]);
+  });
+
   it("bounds protected and plain child-result projections after escaping", () => {
     const fullResult = `${"<".repeat(MAX_CHILD_RESULT_CHARS)}-unbounded-tail`;
     const event = taskCompletionEvent(fullResult);

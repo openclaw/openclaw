@@ -535,7 +535,7 @@ describe("browser client", () => {
     );
 
     expect(calls.map((call) => call.init?.timeoutMs)).toEqual([
-      65_000, 35_000, 50_000, 95_000, 12_345,
+      126_250, 56_250, 96_250, 95_000, 12_345,
     ]);
   });
 
@@ -564,7 +564,7 @@ describe("browser client", () => {
     });
 
     const actCalls = calls.filter((call) => call.url.endsWith("/act"));
-    expect(actCalls[0]?.init?.timeoutMs).toBe(125_000);
+    expect(actCalls[0]?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(actCalls[1]?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     const screenshot = calls.find((call) => call.url.endsWith("/screenshot"));
     expect(screenshot?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);

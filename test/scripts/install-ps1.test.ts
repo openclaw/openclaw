@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
@@ -20,13 +20,29 @@ function extractEntrypointLines(source: string): string[] {
 }
 
 function extractFunctionBody(source: string, name: string): string {
-  const match = source.match(
-    new RegExp(`^function ${name} \\{\\r?\\n([\\s\\S]*?)^\\}\\r?\\n`, "m"),
-  );
-  if (match?.[1] === undefined) {
+  const lines = source.split(/\r?\n/u);
+  const start = lines.indexOf(`function ${name} {`);
+  if (start < 0) {
     throw new Error(`Missing PowerShell function body ${name}`);
   }
-  return match[1];
+  const body: string[] = [];
+  let hereStringEnd: string | undefined;
+  for (const line of lines.slice(start + 1)) {
+    if (hereStringEnd) {
+      if (line.startsWith(hereStringEnd)) {
+        hereStringEnd = undefined;
+      }
+    } else if (line === "}") {
+      return `${body.join("\n")}\n`;
+    } else {
+      const hereStringStart = /(?:^|[\s=])@(['"])\s*$/u.exec(line);
+      if (hereStringStart) {
+        hereStringEnd = `${hereStringStart[1]}@`;
+      }
+    }
+    body.push(line);
+  }
+  throw new Error(`Missing PowerShell function body ${name}`);
 }
 
 function findPowerShell(candidates = ["pwsh", "powershell"]): string | undefined {
@@ -149,6 +165,95 @@ describe("install.ps1 failure handling", () => {
     const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
     const entrypointLines = extractEntrypointLines(source);
     const cases = [
+      {
+        name: "private-node-update",
+        source: [
+          scriptWithoutEntryPoint,
+          String.raw`
+$root = Join-Path $script:InstallerTempDirectory ('openclaw-private-node-test-' + [guid]::NewGuid().ToString('N'))
+$NodeOnly = $true
+$NodePrefix = Join-Path $root 'private tools/node'
+$originalTemp = $script:InstallerTempDirectory
+$beforePath = $env:PATH
+$beforeUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$beforeMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$script:InstallerTempDirectory = Join-Path $root 'temp'
+$script:Scenario = ''
+$script:Extractions = 0
+function Check-ExistingOpenClaw { throw 'unexpected OpenClaw lookup' }
+function Install-Node { throw 'unexpected package-manager install' }
+function Install-OpenClaw { throw 'unexpected OpenClaw install' }
+function Ensure-OpenClawOnPath { throw 'unexpected OpenClaw PATH update' }
+function Add-ToProcessPath { throw 'unexpected process PATH update' }
+function Add-ToUserPath { throw 'unexpected user PATH update' }
+function Refresh-GatewayServiceIfLoaded { throw 'unexpected Gateway update' }
+function Invoke-NpmCommand { throw 'unexpected npm invocation' }
+function Invoke-RestMethod {
+    param([string]$Uri, [int]$TimeoutSec)
+    if ($Uri -ne 'https://nodejs.org/dist/index.json') { throw "unexpected metadata URL: $Uri" }
+    return @([pscustomobject]@{ version = 'v26.1.0'; files = @('win-x64-zip', 'win-arm64-zip') })
+}
+function Invoke-WebRequest {
+    param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
+    if ($script:Scenario -eq 'download') { throw 'fixture download failure' }
+    if ($Uri -eq 'https://nodejs.org/dist/v26.1.0/SHASUMS256.txt') {
+        $archive = Get-ChildItem -LiteralPath (Split-Path -Parent $OutFile) -Filter '*.zip' | Select-Object -First 1
+        $hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash
+        if ($script:Scenario -eq 'checksum') { $hash = '0' * 64 }
+        $name = if ($script:Scenario -eq 'missing-checksum') { 'another-node.zip' } else { $archive.Name }
+        [IO.File]::WriteAllText($OutFile, "$hash  $name")
+        return
+    }
+    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.1\.0/node-v26\.1\.0-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
+    [IO.File]::WriteAllText($OutFile, 'downloaded archive bytes')
+}
+function Expand-PortableNodeArchive {
+    param([string]$ZipPath, [string]$DestinationPath)
+    $script:Extractions++
+    New-Item -ItemType Directory -Path $DestinationPath | Out-Null
+    [IO.File]::WriteAllText((Join-Path $DestinationPath 'node.exe'), 'new node')
+    [IO.File]::WriteAllText((Join-Path $DestinationPath 'npm.cmd'), 'matching npm')
+    [IO.File]::WriteAllText((Join-Path $DestinationPath 'npx.cmd'), 'matching npx')
+    if ($script:Scenario -eq 'archive') { throw 'fixture extraction failure' }
+}
+function Check-Node {
+    param([string]$NodePath)
+    if (-not $NodePath -or -not (Test-Path -LiteralPath $NodePath -PathType Leaf)) { throw 'runtime was not checked by its explicit path' }
+    if ([IO.File]::ReadAllText($NodePath) -ne 'new node') { throw 'the downloaded runtime was not checked' }
+    return ($script:Scenario -ne 'runtime')
+}
+try {
+    New-Item -ItemType Directory -Force -Path $script:InstallerTempDirectory, $NodePrefix | Out-Null
+    foreach ($scenario in @('download', 'checksum', 'missing-checksum', 'archive', 'runtime', 'success', 'fresh')) {
+        $script:Scenario = $scenario
+        $script:Extractions = 0
+        $script:InstallExitCode = 0
+        [IO.File]::WriteAllText((Join-Path $NodePrefix 'node.exe'), 'previous node')
+        if ($scenario -eq 'fresh') { Remove-Item -LiteralPath $NodePrefix -Recurse -Force }
+        $output = @(Main *>&1 | ForEach-Object { $_.ToString() })
+        $success = $scenario -in @('success', 'fresh')
+        if (($script:InstallExitCode -eq 0) -ne $success) { throw "incorrect result for $($scenario): $output" }
+        $expectedExtractions = if ($scenario -in @('download', 'checksum', 'missing-checksum')) { 0 } else { 1 }
+        if ($script:Extractions -ne $expectedExtractions) { throw "extraction boundary violated for $scenario" }
+        $expectedNode = if ($success) { 'new node' } else { 'previous node' }
+        if ([IO.File]::ReadAllText((Join-Path $NodePrefix 'node.exe')) -ne $expectedNode) { throw "previous runtime not preserved for $scenario" }
+        if ($success) {
+            if ([IO.File]::ReadAllText((Join-Path $NodePrefix 'npm.cmd')) -ne 'matching npm') { throw 'matching npm missing' }
+            if ([IO.File]::ReadAllText((Join-Path $NodePrefix 'npx.cmd')) -ne 'matching npx') { throw 'matching npx missing' }
+        }
+        if (@(Get-ChildItem -LiteralPath $script:InstallerTempDirectory -Force).Count -ne 0) { throw 'download temporary files remain' }
+        if (@(Get-ChildItem -LiteralPath (Split-Path -Parent $NodePrefix) -Force).Count -ne 1) { throw 'publication temporary directories remain' }
+        if ($env:PATH -cne $beforePath) { throw 'process PATH changed' }
+        if ([Environment]::GetEnvironmentVariable('Path', 'User') -cne $beforeUserPath) { throw 'user PATH changed' }
+        if ([Environment]::GetEnvironmentVariable('Path', 'Machine') -cne $beforeMachinePath) { throw 'machine PATH changed' }
+    }
+} finally {
+    $script:InstallerTempDirectory = $originalTemp
+    Remove-Item -LiteralPath $root -Recurse -Force
+}
+`,
+        ].join("\n"),
+      },
       {
         name: "native-npm-stderr",
         source: [
@@ -400,6 +505,32 @@ try {
         ].join("\n"),
       },
       {
+        name: "node-capabilities",
+        source: [
+          scriptWithoutEntryPoint,
+          "function Get-Command { [pscustomobject]@{ Source = 'Invoke-FixtureNode' } }",
+          "function Invoke-FixtureNode {",
+          "  $global:LASTEXITCODE = 0",
+          "  if ($args[0] -eq '-v') { return $script:FixtureVersion }",
+          "  $input | Out-Null",
+          "  return $script:FixtureSqlite",
+          "}",
+          "foreach ($case in @(",
+          "  @{ version = 'v24.19.0'; text = $true; expected = $true },",
+          "  @{ version = 'v24.19.0'; text = $false; expected = $false },",
+          "  @{ version = 'v24.15.0+vendor.1'; text = $true; expected = $false },",
+          "  @{ version = 'v26.0.0+vendor.1'; text = $true; expected = $false },",
+          "  @{ version = 'v24.15.0'; text = $false; expected = $false },",
+          "  @{ version = 'v22.23.2'; text = $true; expected = $false }",
+          ")) {",
+          "  $script:FixtureVersion = $case.version",
+          "  $script:FixtureSqlite = @{ available = $true; version = '3.51.3'; text = $case.text; blob = $true; json = $true } | ConvertTo-Json -Compress",
+          "  $actual = Check-Node",
+          '  if ($actual -ne $case.expected) { throw "Version=$($case.version) Text=$($case.text) Actual=$actual" }',
+          "}",
+        ].join("\n"),
+      },
+      {
         name: "same-prefix-shim-transaction",
         source: [
           scriptWithoutEntryPoint,
@@ -519,6 +650,13 @@ try {
         source: [
           scriptWithoutEntryPoint,
           "",
+          "function private-node-fixture {",
+          "  $global:LASTEXITCODE = 0",
+          "  if ($args[0] -eq '-v') { return 'v26.1.0' }",
+          "  $input | Out-Null",
+          "  return (@{ available = $true; version = $script:FixtureSqliteVersion; text = $true; blob = $true; json = $true } | ConvertTo-Json -Compress)",
+          "}",
+          "function Get-Command { throw 'unexpected ambient runtime lookup' }",
           "$cases = @{",
           "  '3.44.5' = $false",
           "  '3.44.6' = $true",
@@ -533,6 +671,9 @@ try {
           "foreach ($entry in $cases.GetEnumerator()) {",
           "  $actual = Test-NodeSqliteSupported -Version $entry.Key",
           '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
+          "  $script:FixtureSqliteVersion = $entry.Key",
+          "  $actual = Check-Node -NodePath 'private-node-fixture'",
+          '  if ($actual -ne $entry.Value) { throw "Explicit runtime SQLite=$($entry.Key) Actual=$actual" }',
           "}",
           "",
         ].join("\n"),
@@ -1311,6 +1452,36 @@ try {
     expect(result.stdout).toContain("[OK] Onboard: skipped");
   });
 
+  runIfPowerShell("requires an explicit absolute private prefix for Node-only updates", () => {
+    const root = harness.createTempDir("openclaw-node-only-options-");
+    for (const args of [
+      ["-NodeOnly"],
+      ["-NodeOnly", "-NodePrefix", "relative/node"],
+      ["-NodeOnly", "-NodePrefix", parse(root).root],
+      ["-NodePrefix", join(root, "private-node")],
+    ]) {
+      const result = runInstallerFile([...args, "-DryRun"]);
+      expect(result.status, args.join(" ")).toBe(2);
+      expect(result.stdout).toContain("Error:");
+    }
+    const result = runInstallerFile([
+      "-NodeOnly",
+      "-NodePrefix",
+      join(root, "private node"),
+      "-DryRun",
+    ]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("PATH unchanged");
+    expect(result.stdout).not.toContain("Install method:");
+  });
+
+  runIfPowerShell(
+    "updates only the private runtime after checksum and compatibility checks",
+    () => {
+      expectBatchedPowerShellCase("private-node-update");
+    },
+  );
+
   it("does not exit directly from inside Main", () => {
     const mainBody = extractFunctionBody(source, "Main");
     expect(mainBody).not.toMatch(/\bexit\b/i);
@@ -1352,6 +1523,10 @@ try {
   runIfPowerShell("accepts only supported Node versions", () => {
     expectBatchedPowerShellCase("node-versions");
     expectBatchedPowerShellCase("sqlite-versions");
+  });
+
+  runIfPowerShell("requires the numeric floor and SQLite round trips before reusing Node", () => {
+    expectBatchedPowerShellCase("node-capabilities");
   });
 
   runIfPowerShell("normalizes and exports one installer temp root", () => {

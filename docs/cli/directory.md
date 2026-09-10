@@ -17,6 +17,13 @@ Results are meant to be pasted into other commands, especially `openclaw message
 - `--channel <name>`: channel id/alias (required when multiple channels are configured; auto-selected when only one is configured)
 - `--account <id>`: account id (default: channel default)
 - `--json`: output JSON
+- `--limit <n>`: positive integer cap for peers/groups/members listings
+
+Omit `--account` to select the channel default. Explicitly empty and whitespace-only account
+values fail with `--account must not be blank` before account setup or lookup.
+
+`--limit` requires a positive integer. Omit `--limit` to use the selected channel plugin's default.
+Explicitly empty and whitespace-only values are rejected.
 
 Default output renders IDs and names in a table. Empty list results name the channel and account
 that were queried; JSON list output uses an empty array (`[]`). Failures exit nonzero and use the
@@ -98,6 +105,8 @@ openclaw directory groups list --channel zalouser
 openclaw directory groups list --channel zalouser --query "work"
 openclaw directory groups members --channel zalouser --group-id <id>
 ```
+
+`groups members` requires a non-blank `--group-id`; empty or whitespace-only IDs fail before plugin setup or lookup.
 
 ## Related
 

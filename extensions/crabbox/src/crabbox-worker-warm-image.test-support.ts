@@ -8,7 +8,10 @@ import {
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, vi } from "vitest";
-import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import {
+  createNodeBootstrapFixture,
+  createWorkerArchiveFixture,
+} from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
@@ -174,4 +177,67 @@ export async function captureWarmImage(
 ) {
   const lease = await provisionWarmProfile(provider, profile, operationId, machineClass);
   await provider.destroy({ leaseId: lease.leaseId, profile });
+}
+
+export const PROJECT_KEY = "a".repeat(64);
+export const BASE_COMMIT = "b".repeat(40);
+type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
+
+export function createProjectOptions(
+  events: string[],
+  controller = new AbortController(),
+  preparation?: NonNullable<NonNullable<ProvisionOptions["project"]>["preparation"]>,
+) {
+  let enrollmentStarted = false;
+  const observe = ({ argv }: CommandCall) => {
+    if (argv[1] === "run" && argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")) {
+      events.push(enrollmentStarted ? "enrollment-install" : "runtime-install");
+    }
+    if (argv[1] === "checkpoint" && argv[2] === "create") {
+      events.push("capture");
+    }
+    return undefined;
+  };
+  const options = {
+    nodeRuntimeIdentity: {
+      nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
+      executionMode: "worker-turn" as const,
+      workerBundleSha256: createWorkerArchiveFixture().sha256,
+    },
+    project: {
+      key: PROJECT_KEY,
+      baseCommit: BASE_COMMIT,
+      ...(preparation ? { preparation } : {}),
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
+        await transport.runScript("project-checkout", controller.signal);
+        events.push("project-prepared");
+        return { seedKey: PROJECT_KEY, cacheHit: false };
+      }),
+    },
+    prepareNodeRuntime: vi.fn(async () => {
+      events.push("runtime-granted");
+      return {
+        nodeBootstrap: createNodeBootstrapFixture(),
+        workerBundle: createWorkerArchiveFixture(),
+        signal: controller.signal,
+      };
+    }),
+    beginNodeEnrollment: vi.fn(async () => {
+      events.push("enrollment-begun");
+      enrollmentStarted = true;
+      return {
+        mode: "connect" as const,
+        setupCode: "synthetic-setup-code",
+        setupId: "project-setup",
+        openclawVersion: "2026.8.1",
+        nodeBootstrap: createNodeBootstrapFixture(),
+        displayName: "Project worker",
+        signal: controller.signal,
+        waitForDeviceId: async () => "project-node",
+      };
+    }),
+  } satisfies ProvisionOptions;
+  return { options, observe };
 }

@@ -1,5 +1,6 @@
 {
   "id": "mistral",
+  "categories": ["models", "memory", "voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false

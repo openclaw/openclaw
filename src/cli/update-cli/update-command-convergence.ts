@@ -4,7 +4,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
-import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -21,6 +21,7 @@ import {
 } from "./update-command-post-core.js";
 
 export async function convergeUpdatePlugins(params: {
+  coreAlreadyCurrent?: boolean;
   result: UpdateRunResult;
   root: string;
   installKindChanged: boolean;
@@ -52,11 +53,13 @@ export async function convergeUpdatePlugins(params: {
       }
     : undefined;
 
-  const shouldResumePostCoreInFreshProcess = shouldResumePostCoreUpdateInFreshProcess({
-    result: params.result,
-    downgradeRisk: params.downgradeRisk,
-    installKindChanged: params.installKindChanged,
-  });
+  const shouldResumePostCoreInFreshProcess =
+    !params.coreAlreadyCurrent &&
+    shouldResumePostCoreUpdateInFreshProcess({
+      result: params.result,
+      downgradeRisk: params.downgradeRisk,
+      installKindChanged: params.installKindChanged,
+    });
 
   let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
   if (
@@ -70,17 +73,14 @@ export async function convergeUpdatePlugins(params: {
   }
 
   if (params.opts.run) {
-    // Plugin mutations require the installed root; keep them outside the
-    // service outage and verify their fresh runtime after convergence.
-    recordUpdateRunPhase(
+    // Track convergence without advancing the monotonic run phase past restart.
+    // The service verifier owns "verifying" after the final activation.
+    recordUpdateRunStep(
       params.opts.run.runId,
-      "verifying",
       {
-        step: {
-          step: "post-update verification",
-          status: "in_progress",
-          startedAtMs: Date.now(),
-        },
+        step: "post-update verification",
+        status: "in_progress",
+        startedAtMs: Date.now(),
       },
       { env: params.opts.run.env },
     );
@@ -151,24 +151,24 @@ export async function convergeUpdatePlugins(params: {
         });
       }
 
-      if (postCorePluginUpdate) {
-        // Both package paths release the plugin lease before Doctor; the parent
-        // owns the service boundary after package and network work has finished.
+      if (postCorePluginUpdate && (!params.coreAlreadyCurrent || postCorePluginUpdate.changed)) {
+        // Release the plugin lease before fresh Doctor. The finalizer either
+        // retains its stopped interval or parks an already-current core here.
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
           pluginUpdate: postCorePluginUpdate,
           freshDoctorRequired: postCorePluginUpdate.changed,
+          beforeDoctor: params.beforeDoctor,
           yes: params.opts.yes === true,
           json: params.opts.json === true,
           timeoutMs: params.updateStepTimeoutMs,
-          beforeDoctor: params.beforeDoctor,
           ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
         });
         postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
         postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
       }
 
-      const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
+      let resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
         ? {
             ...params.result,
             status: postCorePluginUpdate.status === "error" ? "error" : params.result.status,
@@ -179,6 +179,15 @@ export async function convergeUpdatePlugins(params: {
             },
           }
         : params.result;
+      if (
+        params.coreAlreadyCurrent &&
+        resultWithPostUpdate.status !== "error" &&
+        (postCorePluginUpdate?.changed ||
+          (params.requestedChannel !== null && params.requestedChannel !== params.storedChannel))
+      ) {
+        resultWithPostUpdate = { ...resultWithPostUpdate, status: "ok" };
+        delete resultWithPostUpdate.reason;
+      }
       if (params.opts.run) {
         recordUpdateRunStep(
           params.opts.run.runId,

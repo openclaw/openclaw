@@ -17,10 +17,11 @@ import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
-  createFailureRunAgentTurnParams,
+  createRunAgentTurnParams,
   createMockTypingSignaler,
   createFollowupRun,
   createMockReplyOperation,
@@ -50,7 +51,7 @@ describe("executeAgentTurn: terminal failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -89,18 +90,7 @@ describe("executeAgentTurn: terminal failures", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(result.kind).toBe("final");
@@ -134,18 +124,7 @@ describe("executeAgentTurn: terminal failures", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(result.kind).toBe("final");
@@ -181,7 +160,7 @@ describe("executeAgentTurn: terminal failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -218,18 +197,7 @@ describe("executeAgentTurn: terminal failures", () => {
       replyOperation,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(result.kind).toBe("final");
@@ -272,18 +240,7 @@ describe("executeAgentTurn: terminal failures", () => {
       replyOperation,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(result.kind).toBe("final");
@@ -388,18 +345,7 @@ describe("executeAgentTurn: terminal failures", () => {
       replyOperation,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
       isRestartRecoveryArmed: () => true,
     });
 
@@ -498,18 +444,7 @@ describe("executeAgentTurn: terminal failures", () => {
       } as unknown as TemplateContext,
       opts: { runId: "run-provider-failure" } as GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(result.kind).toBe("final");

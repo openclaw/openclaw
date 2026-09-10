@@ -107,7 +107,7 @@ export interface ShellViewHost extends DevicePairSetupHost {
   openNewSession(agentId: string, target?: NewSessionTarget): void;
   openPalette(): void;
   refreshControlUi: () => Promise<boolean>;
-  replaceChatWithCurrentSession(): boolean;
+  recoverNotFoundRoute(): boolean;
   requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
@@ -160,10 +160,14 @@ export function renderApplicationShell(host: ShellViewHost) {
     !sessionRoute &&
     activeRoute !== "new-session" &&
     activeRoute !== "appearance";
-  // Plugin tabs share one route; the search picks the active item.
+  // Plugin tabs share one route; the URL picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
-      ? pluginTabRefFromSearch(host.routeState.location?.search ?? "")
+      ? pluginTabRefFromSearch(
+          host.routeState.location?.search ?? "",
+          host.routeState.location?.pathname,
+          context.basePath,
+        )
       : null;
   const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
   // Onboarding renders without any navigation chrome, so the settings takeover
@@ -594,7 +598,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           .router=${runtime.router}
           .retryContext=${context}
           .retentionScope=${gatewayPresentationScope(context.gateway)}
-          .onNotFound=${() => host.replaceChatWithCurrentSession()}
+          .onNotFound=${() => host.recoverNotFoundRoute()}
           .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
       </main>

@@ -1,14 +1,9 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  agentsPolicyShapeFinding,
-  execApprovalsPolicyShapeFinding,
-  ingressPolicyShapeFinding,
-} from "./access-shapes.js";
-import { toolPosturePolicyShapeFinding } from "./agent-tool-shapes.js";
+import { execApprovalsPolicyShapeFinding, ingressPolicyShapeFinding } from "./access-shapes.js";
 import { SUPPORTED_POLICY_SECTIONS } from "./policy-constants.js";
+import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { routingPolicyShapeFinding } from "./routing-shapes.js";
-import { gatewayPolicyShapeFinding, sandboxPolicyShapeFinding } from "./sandbox-gateway-shapes.js";
 import { scopedPolicyShapeFinding } from "./scoped-policy-shape.js";
 import {
   policyShapeFinding,
@@ -54,7 +49,7 @@ export function policyContainerShapeFindings(
     ];
   }
   if (isRecord(policy.tools)) {
-    const postureFinding = toolPosturePolicyShapeFinding(policy.tools, {
+    const postureFinding = posturePolicyShapeFinding("tools", policy.tools, {
       policyDocName,
       policyPath,
     });
@@ -315,7 +310,7 @@ export function policyContainerShapeFindings(
   if (execApprovalsFinding !== undefined) {
     return [execApprovalsFinding];
   }
-  const sandboxFinding = sandboxPolicyShapeFinding(policy.sandbox, {
+  const sandboxFinding = posturePolicyShapeFinding("sandbox", policy.sandbox, {
     policyDocName,
     policyPath,
   });
@@ -329,7 +324,7 @@ export function policyContainerShapeFindings(
   if (ingressFindingValue !== undefined) {
     return [ingressFindingValue];
   }
-  const gatewayFinding = gatewayPolicyShapeFinding(policy.gateway, {
+  const gatewayFinding = posturePolicyShapeFinding("gateway", policy.gateway, {
     policyDocName,
     policyPath,
   });
@@ -343,7 +338,7 @@ export function policyContainerShapeFindings(
   if (routingFinding !== undefined) {
     return [routingFinding];
   }
-  const agentsFinding = agentsPolicyShapeFinding(policy.agents, {
+  const agentsFinding = posturePolicyShapeFinding("agents", policy.agents, {
     policyDocName,
     policyPath,
   });

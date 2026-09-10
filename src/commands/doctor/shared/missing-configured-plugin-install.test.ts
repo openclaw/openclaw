@@ -3503,85 +3503,30 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     },
   );
 
-  it.each([
-    {
-      name: "stale beta follows newer latest",
-      installedVersion: "2026.9.1-beta.1",
-      betaVersion: "2026.9.1-beta.1",
-      latestVersion: "2026.9.2",
-      selectedVersion: "2026.9.2",
-      refresh: true,
-    },
-    {
-      name: "same-base beta follows newer latest",
-      installedVersion: "2026.9.2-beta.1",
-      betaVersion: "2026.9.2-beta.1",
-      latestVersion: "2026.9.2",
-      selectedVersion: "2026.9.2",
-      refresh: true,
-    },
-    {
-      name: "newer beta stays ahead of latest",
-      installedVersion: "2026.9.1-beta.1",
-      betaVersion: "2026.9.3-beta.1",
-      latestVersion: "2026.9.2",
-      selectedVersion: "2026.9.3-beta.1",
-      refresh: true,
-    },
-    {
-      name: "already-current beta older than the host is a no-op",
-      installedVersion: "2026.9.1-beta.1",
-      betaVersion: "2026.9.1-beta.1",
-      latestVersion: "2026.8.31",
-      selectedVersion: "2026.9.1-beta.1",
-      refresh: false,
-    },
-    {
-      name: "already-current same-base beta is a no-op",
-      installedVersion: "2026.9.2-beta.4",
-      betaVersion: "2026.9.2-beta.4",
-      latestVersion: "2026.9.1",
-      selectedVersion: "2026.9.2-beta.4",
-      refresh: false,
-    },
-    {
-      name: "registry tags behind the installed beta are a no-op",
-      installedVersion: "2026.9.1-beta.2",
-      betaVersion: "2026.9.1-beta.1",
-      latestVersion: "2026.8.31",
-      selectedVersion: "2026.9.1-beta.1",
-      refresh: false,
-    },
-    {
-      name: "registry outage retains a healthy installed beta",
-      installedVersion: "2026.9.1-beta.1",
-      betaVersion: "2026.9.1-beta.1",
-      latestVersion: "2026.9.2",
-      selectedVersion: "2026.9.2",
-      refresh: false,
-      registryUnavailable: true,
-    },
-    {
-      name: "registry outage cannot hide broken package diagnostics",
-      installedVersion: "2026.9.1-beta.1",
-      betaVersion: "2026.9.1-beta.1",
-      latestVersion: "2026.9.2",
-      selectedVersion: "2026.9.2",
-      refresh: false,
-      registryUnavailable: true,
-      brokenPayload: true,
-    },
-  ])(
-    "converges managed Codex startup: $name",
-    async ({
+  it.each(
+    // prettier-ignore
+    [
+    ["stale beta follows newer latest", "2026.9.1-beta.1", "2026.9.1-beta.1", "2026.9.2", "2026.9.2", true, undefined, undefined],
+    ["same-base beta follows newer latest", "2026.9.2-beta.1", "2026.9.2-beta.1", "2026.9.2", "2026.9.2", true, undefined, undefined],
+    ["newer beta stays ahead of latest", "2026.9.1-beta.1", "2026.9.3-beta.1", "2026.9.2", "2026.9.3-beta.1", true, undefined, undefined],
+    ["already-current beta older than the host is a no-op", "2026.9.1-beta.1", "2026.9.1-beta.1", "2026.8.31", "2026.9.1-beta.1", false, undefined, undefined],
+    ["already-current same-base beta is a no-op", "2026.9.2-beta.4", "2026.9.2-beta.4", "2026.9.1", "2026.9.2-beta.4", false, undefined, undefined],
+    ["registry tags behind the installed beta are a no-op", "2026.9.1-beta.2", "2026.9.1-beta.1", "2026.8.31", "2026.9.1-beta.1", false, undefined, undefined],
+    ["registry outage retains a healthy installed beta", "2026.9.1-beta.1", "2026.9.1-beta.1", "2026.9.2", "2026.9.2", false, true, undefined],
+    ["registry outage cannot hide broken package diagnostics", "2026.9.1-beta.1", "2026.9.1-beta.1", "2026.9.2", "2026.9.2", false, true, true],
+  ] as const,
+  )(
+    "converges managed Codex startup: %s",
+    async (
+      _name,
       installedVersion,
       betaVersion,
       latestVersion,
       selectedVersion,
       refresh,
-      registryUnavailable = false,
-      brokenPayload = false,
-    }) => {
+      registryUnavailable: boolean | undefined = false,
+      brokenPayload: boolean | undefined = false,
+    ) => {
       mockNpmRegistryTags({ beta: betaVersion, latest: latestVersion });
       if (registryUnavailable) {
         mocks.resolveNpmSpecMetadata.mockResolvedValue({
@@ -4072,27 +4017,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: true,
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "@openclaw/plugin-demo@1.0.0",
-              installPath: "/tmp/openclaw-plugins/demo",
-            },
-          },
+    mocks.updateNpmInstalledPlugins.mockResolvedValue(
+      successfulUpdate("demo", {
+        demo: {
+          source: "npm",
+          spec: "@openclaw/plugin-demo@1.0.0",
+          installPath: "/tmp/openclaw-plugins/demo",
         },
-      },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "updated",
-          message: "Updated demo.",
-        },
-      ],
-    });
+      }),
+    );
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -4136,27 +4069,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       reviewToken: review.reviewToken,
     });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: true,
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "clawhub",
-              spec: "clawhub:@openclaw/plugin-demo@1.0.0",
-              installPath: "/tmp/openclaw-plugins/demo",
-            },
-          },
+    mocks.updateNpmInstalledPlugins.mockResolvedValue(
+      successfulUpdate("demo", {
+        demo: {
+          source: "clawhub",
+          spec: "clawhub:@openclaw/plugin-demo@1.0.0",
+          installPath: "/tmp/openclaw-plugins/demo",
         },
-      },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "updated",
-          message: "Updated demo.",
-        },
-      ],
-    });
+      }),
+    );
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -4198,27 +4119,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         config: Record<string, unknown>;
       }) => {
         params.logger?.warn?.(repairWarning);
-        return {
-          changed: true,
-          config: {
-            plugins: {
-              installs: {
-                demo: {
-                  source: "npm",
-                  spec: "@openclaw/plugin-demo@1.0.0",
-                  installPath: "/tmp/openclaw-plugins/demo",
-                },
-              },
-            },
+        return successfulUpdate("demo", {
+          demo: {
+            source: "npm",
+            spec: "@openclaw/plugin-demo@1.0.0",
+            installPath: "/tmp/openclaw-plugins/demo",
           },
-          outcomes: [
-            {
-              pluginId: "demo",
-              status: "updated",
-              message: "Updated demo.",
-            },
-          ],
-        };
+        });
       },
     );
 
@@ -4260,27 +4167,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         config: Record<string, unknown>;
       }) => {
         params.logger?.warn?.(coloredReviewNotice);
-        return {
-          changed: true,
-          config: {
-            plugins: {
-              installs: {
-                demo: {
-                  source: "clawhub",
-                  spec: "clawhub:@openclaw/plugin-demo@1.0.0",
-                  installPath: "/tmp/openclaw-plugins/demo",
-                },
-              },
-            },
+        return successfulUpdate("demo", {
+          demo: {
+            source: "clawhub",
+            spec: "clawhub:@openclaw/plugin-demo@1.0.0",
+            installPath: "/tmp/openclaw-plugins/demo",
           },
-          outcomes: [
-            {
-              pluginId: "demo",
-              status: "updated",
-              message: "Updated demo.",
-            },
-          ],
-        };
+        });
       },
     );
 
@@ -4326,27 +4219,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       ],
     });
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: true,
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "@openclaw/plugin-demo@1.0.0",
-              installPath: "/tmp/openclaw-plugins/demo",
-            },
-          },
+    mocks.updateNpmInstalledPlugins.mockResolvedValue(
+      successfulUpdate("demo", {
+        demo: {
+          source: "npm",
+          spec: "@openclaw/plugin-demo@1.0.0",
+          installPath: "/tmp/openclaw-plugins/demo",
         },
-      },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "updated",
-          message: "Updated demo.",
-        },
-      ],
-    });
+      }),
+    );
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -4970,13 +4851,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     );
   });
 
-  it.each([
-    {
-      name: "installs missing configured non-channel plugins from the official external catalog",
-      pluginId: "diagnostics-otel",
-      npmSpec: "@openclaw/diagnostics-otel",
-      version: "2026.5.2",
-      entry: {
+  it.each(
+    // prettier-ignore
+    [
+    ["installs missing configured non-channel plugins from the official external catalog", "diagnostics-otel", "@openclaw/diagnostics-otel", "2026.5.2", {
         id: "diagnostics-otel",
         label: "Diagnostics OpenTelemetry",
         install: {
@@ -4984,16 +4862,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           npmSpec: "@openclaw/diagnostics-otel",
           defaultChoice: "npm" as const,
         },
-      },
-      cfg: { plugins: { entries: { "diagnostics-otel": { enabled: true } } } },
-      useManifestResolvers: false,
-    },
-    {
-      name: "installs the official llama.cpp plugin for configured local memory embeddings",
-      pluginId: "llama-cpp",
-      npmSpec: "@openclaw/llama-cpp-provider",
-      version: "2026.6.2",
-      entry: {
+      }, { plugins: { entries: { "diagnostics-otel": { enabled: true } } } }, false],
+    ["installs the official llama.cpp plugin for configured local memory embeddings", "llama-cpp", "@openclaw/llama-cpp-provider", "2026.6.2", {
         id: "llama-cpp",
         label: "llama.cpp Provider",
         openclaw: {
@@ -5008,29 +4878,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           npmSpec: "@openclaw/llama-cpp-provider",
           defaultChoice: "npm" as const,
         },
-      },
-      cfg: { memory: { search: { provider: "local" } }, agents: { defaults: {} } },
-      useManifestResolvers: false,
-    },
-    {
-      name: "does not let runtime fallback metadata override official catalog install specs",
-      pluginId: "acpx",
-      npmSpec: "@openclaw/acpx",
-      version: "2026.5.2-beta.2",
-      entry: {
+      }, { memory: { search: { provider: "local" } }, agents: { defaults: {} } }, false],
+    ["does not let runtime fallback metadata override official catalog install specs", "acpx", "@openclaw/acpx", "2026.5.2-beta.2", {
         id: "acpx",
         label: "ACPX Runtime",
         install: { npmSpec: "@openclaw/acpx", defaultChoice: "npm" as const },
-      },
-      cfg: { acp: { backend: "acpx" } },
-      useManifestResolvers: false,
-    },
-    {
-      name: "installs a configured external web search plugin from provider-only config",
-      pluginId: "brave",
-      npmSpec: "@openclaw/brave-plugin",
-      version: "2026.5.2",
-      entry: officialWebSearchPluginEntry({
+      }, { acp: { backend: "acpx" } }, false],
+    ["installs a configured external web search plugin from provider-only config", "brave", "@openclaw/brave-plugin", "2026.5.2", officialWebSearchPluginEntry({
         id: "brave",
         npmSpec: "@openclaw/brave-plugin",
         envVar: "BRAVE_API_KEY",
@@ -5038,36 +4892,21 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         providerLabel: "Brave Search",
         credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
         includeManifestInstall: true,
-      }),
-      cfg: { tools: { web: { search: { provider: "brave" } } } },
-      useManifestResolvers: true,
-    },
-    {
-      name: "installs a configured external model provider without an auth choice",
-      pluginId: "groq",
-      npmSpec: "@openclaw/groq-provider",
-      entry: officialPluginEntry({
+      }), { tools: { web: { search: { provider: "brave" } } } }, true],
+    ["installs a configured external model provider without an auth choice", "groq", "@openclaw/groq-provider", undefined, officialPluginEntry({
         id: "groq",
         npmSpec: "@openclaw/groq-provider",
         label: "Groq",
         manifest: { providers: [{ id: "groq" }] },
-      }),
-      cfg: {
+      }), {
         agents: { defaults: { model: "groq/llama-3.3-70b-versatile" } },
-      } satisfies OpenClawConfig,
-      useManifestResolvers: false,
-    },
-    {
-      name: "installs an external media-understanding provider selected only by media config",
-      pluginId: "groq",
-      npmSpec: "@openclaw/groq-provider",
-      entry: officialPluginEntry({
+      } satisfies OpenClawConfig, false],
+    ["installs an external media-understanding provider selected only by media config", "groq", "@openclaw/groq-provider", undefined, officialPluginEntry({
         id: "groq",
         npmSpec: "@openclaw/groq-provider",
         label: "Groq",
         manifest: { contracts: { mediaUnderstandingProviders: ["groq"] } },
-      }),
-      cfg: {
+      }), {
         tools: {
           media: {
             models: [
@@ -5079,25 +4918,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             ],
           },
         },
-      } satisfies OpenClawConfig,
-      useManifestResolvers: false,
-    },
-    {
-      name: "installs an external speech provider selected only by voiceModel",
-      pluginId: "gradium",
-      npmSpec: "@openclaw/gradium-speech",
-      entry: officialPluginEntry({
+      } satisfies OpenClawConfig, false],
+    ["installs an external speech provider selected only by voiceModel", "gradium", "@openclaw/gradium-speech", undefined, officialPluginEntry({
         id: "gradium",
         npmSpec: "@openclaw/gradium-speech",
         label: "Gradium",
         manifest: { contracts: { speechProviders: ["gradium"] } },
-      }),
-      cfg: {
+      }), {
         agents: { defaults: { voiceModel: { primary: "gradium/tts-default" } } },
-      } satisfies OpenClawConfig,
-      useManifestResolvers: false,
-    },
-  ])("$name", async ({ pluginId, npmSpec, version, entry, cfg, useManifestResolvers }) => {
+      } satisfies OpenClawConfig, false],
+  ] as const,
+  )("%s", async (_name, pluginId, npmSpec, version, entry, cfg, useManifestResolvers) => {
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([entry]);
     if (useManifestResolvers) {
       useManifestCatalogResolvers();
@@ -5119,10 +4950,76 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
   });
 
-  it("installs env-only web provider plugins before auto-detection", async () => {
+  it.each([
+    {
+      name: "installs env-only providers before auto-detection",
+      cfg: {},
+      env: { BRAVE_API_KEY: "brave-key", PERPLEXITY_API_KEY: "perplexity-key" },
+      installedIds: ["brave", "perplexity"],
+    },
+    {
+      name: "auto-detects providers for a whitespace-only selection",
+      cfg: { tools: { web: { search: { provider: " \t " } } } },
+      env: { BRAVE_API_KEY: "brave-key", PERPLEXITY_API_KEY: "perplexity-key" },
+      installedIds: ["brave", "perplexity"],
+    },
+    {
+      name: "installs only the selected provider despite another provider's env key",
+      cfg: { tools: { web: { search: { provider: "perplexity" } } } },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: ["perplexity"],
+    },
+    {
+      name: "normalizes a padded mixed-case explicit provider",
+      cfg: { tools: { web: { search: { provider: " PeRpLeXiTy " } } } },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: ["perplexity"],
+    },
+    {
+      name: "does not auto-detect providers for an unknown explicit selection",
+      cfg: { tools: { web: { search: { provider: "custom-search" } } } },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: [],
+    },
+    {
+      name: "retains independently configured plugins with an explicit search provider",
+      cfg: {
+        tools: { web: { search: { provider: "perplexity" } } },
+        plugins: { entries: { brave: { enabled: true } } },
+      },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: ["brave", "perplexity"],
+    },
+    {
+      name: "does not install an env-selected disabled plugin",
+      cfg: { plugins: { entries: { brave: { enabled: false } } } },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: [],
+    },
+    {
+      name: "does not install an env-selected denied plugin",
+      cfg: { plugins: { deny: ["brave"] } },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: [],
+    },
+    {
+      name: "does not install search providers when plugins are globally disabled",
+      cfg: {
+        tools: { web: { search: { provider: "perplexity" } } },
+        plugins: { enabled: false, entries: { brave: { enabled: true } } },
+      },
+      env: { BRAVE_API_KEY: "brave-key" },
+      installedIds: [],
+    },
+  ] satisfies Array<{
+    name: string;
+    cfg: OpenClawConfig;
+    env: Record<string, string>;
+    installedIds: string[];
+  }>)("search plugin installation intent: $name", async ({ cfg, env, installedIds }) => {
     const packages = [
-      ["exa", "@openclaw/exa-plugin", "EXA_API_KEY"],
-      ["firecrawl", "@openclaw/firecrawl-plugin", "FIRECRAWL_API_KEY"],
+      ["brave", "@openclaw/brave-plugin", "BRAVE_API_KEY"],
+      ["perplexity", "@openclaw/perplexity-plugin", "PERPLEXITY_API_KEY"],
     ] as const;
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue(
       packages.map(([id, npmSpec, envVar]) =>
@@ -5134,31 +5031,38 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         }),
       ),
     );
-    for (const [pluginId, npmSpec] of packages) {
-      mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
-        successfulInstall({ pluginId, npmSpec }),
-      );
-    }
-
-    const result = await repairConfiguredPlugins(
-      {},
-      {
-        EXA_API_KEY: "exa-key",
-        FIRECRAWL_API_KEY: "firecrawl-key",
-      },
+    mocks.installPluginFromNpmSpec.mockImplementation(
+      async ({ expectedPluginId }: { expectedPluginId: string }) =>
+        successfulInstall({
+          pluginId: expectedPluginId,
+          npmSpec: expectDefined(
+            packages.find(([id]) => id === expectedPluginId),
+            "expected search plugin package",
+          )[1],
+        }),
     );
+
+    const result = await repairConfiguredPlugins(cfg, env);
 
     expect(
       mocks.installPluginFromNpmSpec.mock.calls.map(
         ([params]) => (params as { expectedPluginId?: string }).expectedPluginId,
       ),
-    ).toEqual(["exa", "firecrawl"]);
+    ).toEqual(installedIds);
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(Object.keys(result.records)).toEqual(installedIds);
     expect(result.changes).toEqual(
-      packages.map(
-        ([pluginId, npmSpec]) =>
-          `Installed missing configured plugin "${pluginId}" from ${expectedNpmInstallSpec(npmSpec)}.`,
-      ),
+      packages
+        .filter(([pluginId]) => installedIds.some((id) => id === pluginId))
+        .map(
+          ([pluginId, npmSpec]) =>
+            `Installed missing configured plugin "${pluginId}" from ${expectedNpmInstallSpec(npmSpec)}.`,
+        ),
     );
+    expect(result.warnings).toEqual([]);
+    if (installedIds.length === 0) {
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    }
   });
 
   it("installs env-only provider plugins before model discovery", async () => {

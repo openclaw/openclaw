@@ -621,6 +621,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       inspectLegacySkillWorkshopMigration({ config: {}, env: testState.env }),
     ).resolves.toMatchObject({
       externalProposalCount: 2,
+      externalProposalDetails: expect.any(Array),
       externalProposalCountsByAgent: { main: 2 },
     });
 

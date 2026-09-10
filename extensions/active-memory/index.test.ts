@@ -487,6 +487,10 @@ describe("active-memory plugin", () => {
     vi
       .mocked(api.logger.warn)
       .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
+  const hasInfoLine = (needle: string) =>
+    vi
+      .mocked(api.logger.info)
+      .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
   const expectPrependContextResult = (result: unknown) => {
     expect(typeof (result as { prependContext?: unknown } | undefined)?.prependContext).toBe(
       "string",
@@ -787,6 +791,7 @@ describe("active-memory plugin", () => {
     expect(assertActive).toHaveBeenCalled();
     expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(hasInfoLine("active-memory: recall skipped reason=policy-disabled")).toBe(true);
   });
 
   it("does not inject recall that completes after the turn authority closes", async () => {
@@ -1710,6 +1715,7 @@ describe("active-memory plugin", () => {
     expectPrependContextContains(result, skippedRecallContext);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
     expect(hasDebugLine("active-memory: recall skipped reason=no-recall-intent")).toBe(true);
+    expect(hasInfoLine("active-memory: recall skipped reason=no-recall-intent")).toBe(false);
   });
 
   it("does not run deep recall when the live active-memory plugin entry is removed", async () => {
@@ -1795,277 +1801,148 @@ describe("active-memory plugin", () => {
     expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "does not run for non-interactive contexts",
-      context: { trigger: "heartbeat" },
-      expected: "skip",
-    },
-    {
-      name: "does not run for dreaming-narrative cron session keys",
-      context: { sessionKey: "agent:main:dreaming-narrative-light-abc123" },
-      expected: "skip",
-    },
-    {
-      name: "does not run when a session id resolves to a dreaming-narrative cron session key",
-      context: { sessionId: "dreaming-session" },
-      sessionEntry: {
+  it.each(
+    // prettier-ignore
+    [
+    ["does not run for non-interactive contexts", undefined, { trigger: "heartbeat" }, "skip", undefined, undefined, undefined, undefined],
+    ["does not run for dreaming-narrative cron session keys", undefined, { sessionKey: "agent:main:dreaming-narrative-light-abc123" }, "skip", undefined, undefined, undefined, undefined],
+    ["does not run when a session id resolves to a dreaming-narrative cron session key", undefined, { sessionId: "dreaming-session" }, "skip", undefined, undefined, undefined, {
         sessionKey: "agent:main:dreaming-narrative-light-abc123",
         entry: { sessionId: "dreaming-session", updatedAt: 1 },
-      },
-      expected: "skip",
-    },
-    {
-      name: "allows non-canonical session keys that merely contain the dreaming-narrative substring",
-      context: { sessionKey: "agent:main:webchat:dreaming-narrative-room" },
-      expected: "defined",
-    },
-    {
-      name: "allows real webchat session keys whose peer id starts with a phased dreaming-narrative prefix",
-      context: { sessionKey: "agent:main:webchat:dreaming-narrative-light-room" },
-      expected: "defined",
-    },
-    {
-      name: "defaults to direct-style sessions only",
-      prompt: "what wings should we order?",
-      context: {
+      }],
+    ["allows non-canonical session keys that merely contain the dreaming-narrative substring", undefined, { sessionKey: "agent:main:webchat:dreaming-narrative-room" }, "defined", undefined, undefined, undefined, undefined],
+    ["allows real webchat session keys whose peer id starts with a phased dreaming-narrative prefix", undefined, { sessionKey: "agent:main:webchat:dreaming-narrative-light-room" }, "defined", undefined, undefined, undefined, undefined],
+    ["defaults to direct-style sessions only", undefined, {
         sessionKey: "agent:main:telegram:group:-100123",
         messageProvider: "telegram",
         channelId: "telegram",
-      },
-      expected: "skip",
-    },
-    {
-      name: "treats non-webchat main sessions as direct chats under the default dmScope",
-      context: { messageProvider: "telegram", channelId: "telegram" },
-      expected: "untrusted",
-    },
-    {
-      name: "treats non-default main session keys as direct chats",
-      apiConfig: {
+      }, "skip", undefined, undefined, "what wings should we order?", undefined],
+    ["treats non-webchat main sessions as direct chats under the default dmScope", undefined, { messageProvider: "telegram", channelId: "telegram" }, "untrusted", undefined, undefined, undefined, undefined],
+    ["treats non-default main session keys as direct chats", {
         agents: { defaults: { model: { primary: "github-copilot/gpt-5.4-mini" } } },
         session: { mainKey: "home" },
-      },
-      context: {
+      }, {
         sessionKey: "agent:main:home",
         messageProvider: "telegram",
         channelId: "telegram",
-      },
-      expected: "untrusted",
-    },
-    {
-      name: "treats topic-threaded Telegram main session keys as direct chats",
-      context: {
+      }, "untrusted", undefined, undefined, undefined, undefined],
+    ["treats topic-threaded Telegram main session keys as direct chats", undefined, {
         sessionKey: "agent:main:main:thread:488228716:531403",
         messageProvider: "telegram",
         channelId: "telegram",
-      },
-      expected: "untrusted",
-    },
-    {
-      name: "does not treat unknown topic-threaded session keys as direct chats",
-      context: {
+      }, "untrusted", undefined, undefined, undefined, undefined],
+    ["does not treat unknown topic-threaded session keys as direct chats", undefined, {
         sessionKey: "agent:main:future:thread:488228716:531403",
         messageProvider: "telegram",
         channelId: "telegram",
-      },
-      expected: "skip",
-    },
-    {
-      name: "runs for group sessions when group chat types are explicitly allowed",
-      prompt: "what wings should we order?",
-      pluginConfig: { allowedChatTypes: ["direct", "group"] },
-      context: {
+      }, "skip", undefined, undefined, undefined, undefined],
+    ["runs for group sessions when group chat types are explicitly allowed", undefined, {
         sessionKey: "agent:main:telegram:group:-100123",
         messageProvider: "telegram",
         channelId: "telegram",
-      },
-      expected: "untrusted",
-    },
-    {
-      name: "uses messageProvider not topic channelId for embedded recall in Telegram forum topics (#76704)",
-      prompt: "what wings should we order?",
-      pluginConfig: { allowedChatTypes: ["direct", "group"] },
-      context: {
+      }, "untrusted", undefined, { allowedChatTypes: ["direct", "group"] }, "what wings should we order?", undefined],
+    ["uses messageProvider not topic channelId for embedded recall in Telegram forum topics (#76704)", undefined, {
         sessionKey: "agent:main:telegram:group:-100123:topic:77",
         messageProvider: "telegram",
         channelId: "-100123:topic:77",
-      },
-      expected: "untrusted",
-      expectedChannel: "telegram",
-    },
-    {
-      name: "uses messageProvider not raw Telegram direct channelId for embedded recall (#82177)",
-      context: { messageProvider: "telegram", channelId: "12345" },
-      expected: "untrusted",
-      expectedChannel: "telegram",
-    },
-    {
-      name: "uses messageProvider not Google Chat space id for embedded recall (#78918)",
-      prompt: "what did we decide?",
-      pluginConfig: { allowedChatTypes: ["direct"] },
-      context: {
+      }, "untrusted", "telegram", { allowedChatTypes: ["direct", "group"] }, "what wings should we order?", undefined],
+    ["uses messageProvider not raw Telegram direct channelId for embedded recall (#82177)", undefined, { messageProvider: "telegram", channelId: "12345" }, "untrusted", "telegram", undefined, undefined, undefined],
+    ["uses messageProvider not Google Chat space id for embedded recall (#78918)", undefined, {
         sessionKey: "agent:main:googlechat:default:direct:spaces/khfx4yaaaae",
         messageProvider: "googlechat",
         channelId: "spaces/khfx4yaaaae",
-      },
-      expected: "untrusted",
-      expectedChannel: "googlechat",
-    },
-    {
-      name: "runs for explicit sessions when explicit chat types are explicitly allowed",
-      prompt: "what should i work on next?",
-      pluginConfig: { allowedChatTypes: ["explicit"] },
-      context: { sessionKey: "agent:main:explicit:portal-123", channelId: "webchat" },
-      expected: "active-memory",
-    },
-    {
-      name: "keeps explicit session classification when the opaque session id contains chat-type tokens",
-      prompt: "what should i work on next?",
-      pluginConfig: { allowedChatTypes: ["explicit"] },
-      context: {
+      }, "untrusted", "googlechat", { allowedChatTypes: ["direct"] }, "what did we decide?", undefined],
+    ["runs for explicit sessions when explicit chat types are explicitly allowed", undefined, { sessionKey: "agent:main:explicit:portal-123", channelId: "webchat" }, "active-memory", undefined, { allowedChatTypes: ["explicit"] }, "what should i work on next?", undefined],
+    ["keeps explicit session classification when the opaque session id contains chat-type tokens", undefined, {
         sessionKey: "agent:main:explicit:portal-123:group:shadow",
         channelId: "webchat",
-      },
-      expected: "active-memory",
-    },
-    {
-      name: "skips group sessions whose conversation id is not in allowedChatIds",
-      pluginConfig: {
-        allowedChatTypes: ["direct", "group"],
-        allowedChatIds: ["oc_allowed_group"],
-      },
-      context: {
+      }, "active-memory", undefined, { allowedChatTypes: ["explicit"] }, "what should i work on next?", undefined],
+    ["skips group sessions whose conversation id is not in allowedChatIds", undefined, {
         sessionKey: "agent:main:feishu:group:oc_blocked_group",
         messageProvider: "feishu",
         channelId: "feishu",
-      },
-      expected: "skip",
-    },
-    {
-      name: "runs for group sessions whose conversation id is in allowedChatIds",
-      pluginConfig: {
+      }, "skip", undefined, {
         allowedChatTypes: ["direct", "group"],
-        allowedChatIds: ["oc_allowed_group", "OC_OTHER"],
-      },
-      context: {
+        allowedChatIds: ["oc_allowed_group"],
+      }, undefined, undefined],
+    ["runs for group sessions whose conversation id is in allowedChatIds", undefined, {
         sessionKey: "agent:main:feishu:group:oc_allowed_group",
         messageProvider: "feishu",
         channelId: "feishu",
-      },
-      expected: "untrusted",
-    },
-    {
-      name: "treats allowedChatIds matching as case-insensitive",
-      pluginConfig: { allowedChatTypes: ["group"], allowedChatIds: ["OC_MIXED_Case"] },
-      context: {
+      }, "untrusted", undefined, {
+        allowedChatTypes: ["direct", "group"],
+        allowedChatIds: ["oc_allowed_group", "OC_OTHER"],
+      }, undefined, undefined],
+    ["treats allowedChatIds matching as case-insensitive", undefined, {
         sessionKey: "agent:main:feishu:group:oc_mixed_case",
         messageProvider: "feishu",
         channelId: "feishu",
-      },
-      expected: "prepend-context",
-    },
-    {
-      name: "skips sessions whose conversation id is in deniedChatIds even when chat type is allowed",
-      pluginConfig: {
-        allowedChatTypes: ["direct", "group"],
-        deniedChatIds: ["oc_blocked_group"],
-      },
-      context: {
+      }, "prepend-context", undefined, { allowedChatTypes: ["group"], allowedChatIds: ["OC_MIXED_Case"] }, undefined, undefined],
+    ["skips sessions whose conversation id is in deniedChatIds even when chat type is allowed", undefined, {
         sessionKey: "agent:main:feishu:group:oc_blocked_group",
         messageProvider: "feishu",
         channelId: "feishu",
-      },
-      expected: "skip",
-    },
-    {
-      name: "skips sessions whose session key has no conversation id when allowedChatIds is non-empty",
-      pluginConfig: { allowedChatTypes: ["direct"], allowedChatIds: ["oc_some_group"] },
-      expected: "skip",
-    },
-    {
-      name: "skips direct-chat sessions whose conversation id is not in allowedChatIds",
-      pluginConfig: {
+      }, "skip", undefined, {
         allowedChatTypes: ["direct", "group"],
-        allowedChatIds: ["oc_allowed_group"],
-      },
-      context: {
+        deniedChatIds: ["oc_blocked_group"],
+      }, undefined, undefined],
+    ["skips sessions whose session key has no conversation id when allowedChatIds is non-empty", undefined, undefined, "skip", undefined, { allowedChatTypes: ["direct"], allowedChatIds: ["oc_some_group"] }, undefined, undefined],
+    ["skips direct-chat sessions whose conversation id is not in allowedChatIds", undefined, {
         sessionKey: "agent:main:feishu:direct:ou_some_direct_user",
         messageProvider: "feishu",
         channelId: "feishu",
-      },
-      expected: "skip",
-    },
-    {
-      name: "runs for direct-chat sessions whose conversation id is explicitly in allowedChatIds",
-      pluginConfig: {
+      }, "skip", undefined, {
         allowedChatTypes: ["direct", "group"],
-        allowedChatIds: ["oc_allowed_group", "ou_allowed_direct_user"],
-      },
-      context: {
+        allowedChatIds: ["oc_allowed_group"],
+      }, undefined, undefined],
+    ["runs for direct-chat sessions whose conversation id is explicitly in allowedChatIds", undefined, {
         sessionKey: "agent:main:feishu:direct:ou_allowed_direct_user",
         messageProvider: "feishu",
         channelId: "feishu",
-      },
-      expected: "prepend-context",
-    },
-    {
-      name: "matches per-peer direct session keys (agent:<id>:direct:<peer>)",
-      pluginConfig: { allowedChatTypes: ["direct"], allowedChatIds: ["ou_per_peer_user"] },
-      context: {
+      }, "prepend-context", undefined, {
+        allowedChatTypes: ["direct", "group"],
+        allowedChatIds: ["oc_allowed_group", "ou_allowed_direct_user"],
+      }, undefined, undefined],
+    ["matches per-peer direct session keys (agent:<id>:direct:<peer>)", undefined, {
         sessionKey: "agent:main:direct:ou_per_peer_user",
         messageProvider: "feishu",
         channelId: "feishu",
-      },
-      expected: "prepend-context",
-    },
-    {
-      name: "matches per-account-channel-peer direct session keys (agent:<id>:<channel>:<account>:direct:<peer>)",
-      pluginConfig: {
-        allowedChatTypes: ["direct"],
-        allowedChatIds: ["ou_per_account_user"],
-      },
-      context: {
+      }, "prepend-context", undefined, { allowedChatTypes: ["direct"], allowedChatIds: ["ou_per_peer_user"] }, undefined, undefined],
+    ["matches per-account-channel-peer direct session keys (agent:<id>:<channel>:<account>:direct:<peer>)", undefined, {
         sessionKey: "agent:main:feishu:acct123:direct:ou_per_account_user",
         messageProvider: "feishu",
         channelId: "feishu",
-      },
-      expected: "prepend-context",
-    },
-    {
-      name: "strips :thread:<id> suffix before matching allowedChatIds (group)",
-      pluginConfig: { allowedChatTypes: ["group"], allowedChatIds: ["oc_threaded_group"] },
-      context: {
+      }, "prepend-context", undefined, {
+        allowedChatTypes: ["direct"],
+        allowedChatIds: ["ou_per_account_user"],
+      }, undefined, undefined],
+    ["strips :thread:<id> suffix before matching allowedChatIds (group)", undefined, {
         sessionKey: "agent:main:feishu:group:oc_threaded_group:thread:topic42",
         messageProvider: "feishu",
         channelId: "feishu",
-      },
-      expected: "prepend-context",
-    },
-    {
-      name: "strips :thread:<id> suffix before matching deniedChatIds (direct)",
-      pluginConfig: {
-        allowedChatTypes: ["direct"],
-        deniedChatIds: ["ou_threaded_blocked_user"],
-      },
-      context: {
+      }, "prepend-context", undefined, { allowedChatTypes: ["group"], allowedChatIds: ["oc_threaded_group"] }, undefined, undefined],
+    ["strips :thread:<id> suffix before matching deniedChatIds (direct)", undefined, {
         sessionKey: "agent:main:feishu:direct:ou_threaded_blocked_user:thread:topic7",
         messageProvider: "feishu",
         channelId: "feishu",
-      },
-      expected: "skip",
-    },
-  ])(
-    "$name",
-    async ({
-      apiConfig: testApiConfig,
+      }, "skip", undefined, {
+        allowedChatTypes: ["direct"],
+        deniedChatIds: ["ou_threaded_blocked_user"],
+      }, undefined, undefined],
+  ] as const,
+  )(
+    "%s",
+    async (
+      _name,
+      testApiConfig,
       context,
       expected,
       expectedChannel,
-      pluginConfig: testPluginConfig,
-      prompt = "what wings should i order?",
+      testPluginConfig,
+      prompt: string | undefined,
       sessionEntry,
-    }) => {
+    ) => {
+      const promptText = prompt ?? "what wings should i order?";
       if (testApiConfig) {
         api.config = testApiConfig;
       }
@@ -2076,7 +1953,7 @@ describe("active-memory plugin", () => {
         hoisted.sessionStore[sessionEntry.sessionKey] = sessionEntry.entry;
       }
 
-      const result = await runPromptBuild({ prompt }, context);
+      const result = await runPromptBuild({ prompt: promptText }, context);
 
       if (expected === "skip") {
         expect(result).toBeUndefined();
@@ -2195,6 +2072,113 @@ describe("active-memory plugin", () => {
       true,
     );
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, -1_000])(
+    "continues model recall after trigger timeout with a %d ms wall-clock change",
+    async (wallClockChangeMs) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const elapsedNow = performance.now.bind(performance);
+      let elapsedFractionMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsedNow() + elapsedFractionMs);
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((delayMs: number) => {
+        expect(Number.isInteger(delayMs)).toBe(true);
+        const controller = new AbortController();
+        setTimeout(() => {
+          controller.abort(new DOMException("trigger lookup timed out", "TimeoutError"));
+        }, delayMs);
+        return controller.signal;
+      });
+      // Preflight setup consumes most of the budget before lane one starts, so a
+      // fresh or fixed-offset trigger timeout would still lose to the watchdog.
+      vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
+        lookup: async () =>
+          await new Promise<undefined>((resolve) => {
+            setTimeout(() => {
+              elapsedFractionMs = 0.25;
+              const elapsedBeforeCorrection = performance.now();
+              vi.setSystemTime(Date.now() + wallClockChangeMs);
+              expect(performance.now()).toBe(elapsedBeforeCorrection);
+              resolve(undefined);
+            }, 1_000);
+          }),
+      });
+      hoisted.getActiveMemorySearchManager.mockImplementationOnce(
+        () => new Promise<never>(() => {}),
+      );
+
+      let settled = false;
+      const isSettled = () => settled;
+      const resultPromise = runPromptBuild(
+        { prompt: "what did we decide?" },
+        {
+          sessionKey: "agent:main:telegram:direct:owner",
+          messageProvider: "telegram",
+          channelId: "owner",
+        },
+      ).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      for (let attempt = 0; attempt < 40 && !isSettled(); attempt += 1) {
+        await vi.advanceTimersByTimeAsync(25);
+      }
+
+      const result = await resultPromise;
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+      expect(typeof result?.prependContext).toBe("string");
+      expect(
+        hasDebugLine("active-memory: lane-1 trigger recall failed: trigger lookup timed out"),
+      ).toBe(true);
+      expect(
+        vi
+          .mocked(api.logger.warn)
+          .mock.calls.some((call: unknown[]) => String(call[0]).includes("preflight timed out")),
+      ).toBe(false);
+    },
+  );
+
+  it("skips trigger lookup outright when the remaining preflight budget cannot cover its settle reserve", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    // Setup consumes all but 10 ms of the 1500 ms preflight budget, less than
+    // the reserve lane one needs to abort before the watchdog.
+    vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
+      lookup: async () =>
+        await new Promise<undefined>((resolve) => {
+          setTimeout(() => resolve(undefined), 1_490);
+        }),
+    });
+    hoisted.getActiveMemorySearchManager.mockImplementationOnce(() => new Promise<never>(() => {}));
+
+    let settled = false;
+    const isSettled = () => settled;
+    const resultPromise = runPromptBuild(
+      { prompt: "what did we decide?" },
+      {
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    ).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_490);
+    for (let attempt = 0; attempt < 40 && !isSettled(); attempt += 1) {
+      await vi.advanceTimersByTimeAsync(25);
+    }
+
+    const result = await resultPromise;
+    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(
+      hasDebugLine("active-memory: lane-1 trigger recall skipped: preflight budget exhausted"),
+    ).toBe(true);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(typeof result?.prependContext).toBe("string");
+    expect(
+      vi
+        .mocked(api.logger.warn)
+        .mock.calls.some((call: unknown[]) => String(call[0]).includes("preflight timed out")),
+    ).toBe(false);
   });
 
   it("frames the blocking memory subagent as a memory search agent for another model", async () => {
@@ -4710,7 +4694,7 @@ describe("active-memory plugin", () => {
   });
 
   it("preserves recall settlement time after near-limit preflight latency", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     testing.setTimeoutPartialDataGraceMsForTests(100);

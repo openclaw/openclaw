@@ -40,7 +40,7 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     return;
   }
   const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
-  const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
+  const { readPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
   const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
     await import("../agents/model-selection.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
@@ -54,7 +54,7 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await readPreparedModelCatalog({
     config: ctx.cfg,
     readOnly: true,
     providerDiscoveryProviderIds: [],
@@ -127,6 +127,19 @@ export async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Pr
       ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
       : {}),
   });
+}
+
+export async function runWorkspaceAliasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { collectRepointedWorkspaceAliasFindings } =
+    await import("../commands/doctor-workspace-alias.js");
+  const findings = collectRepointedWorkspaceAliasFindings(ctx.cfg);
+  if (findings.length > 0) {
+    const { note } = await import("../../packages/terminal-core/src/note.js");
+    note(
+      findings.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),
+      "Workspace",
+    );
+  }
 }
 
 export async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {

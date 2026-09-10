@@ -17,9 +17,21 @@ node -v
 
 `v26.1.0` or newer is the recommended default. `v24.16.0` or newer 24.x is also supported and is the LTS line used by CI. Node 22, 23, 25, Node 24 before 24.16.0, and Node 26 before 26.1.0 are unsupported. If Node is missing or outside this range, pick an install method below.
 
-These floors preserve embedded NUL characters when `node:sqlite` reads TEXT values. Node 22.23.x, 24.15.0, 25.9.0, and 26.0.0 contain a broken TEXT decoder that silently truncates values at embedded NUL characters, even when the linked SQLite version is WAL-reset-safe. Node 24.16.0 and 26.1.0 are the first fixed releases on their respective lines. Upgrade Node before updating OpenClaw. The rootless installer already provisions Node 24.19.0 on supported platforms.
+Upgrade Node before updating OpenClaw to avoid SQLite TEXT truncation. See [Node.js compatibility](/install/node-compatibility) for the SQLite safety floors and macOS/ARMv7 support limits.
 
-This drops supported Node-based CLI/Gateway installations on macOS 11 through 13.4 and official Linux ARMv7 provisioning: Node 24+ binaries require macOS 13.5 or newer and do not provide Linux ARMv7 builds. On compatible ARM hardware, use a 64-bit operating system; otherwise use another supported host. The macOS companion app has its own [platform requirements](/platforms/macos).
+### Update from the CLI
+
+If you run `openclaw` with an incompatible Node.js in an interactive terminal, the CLI offers:
+
+```text
+Update NodeJS: Y/N [N]:
+```
+
+Enter **Y** to download a compatible Node.js for OpenClaw and retry the same command. The download is checksum-verified and stored under `~/.openclaw/tools/cli-node` (or the home selected by `OPENCLAW_HOME`). The Node.js installation does not replace system Node.js, change shell settings, reinstall OpenClaw, or repair/restart Gateway services. The retried command keeps its normal behavior.
+
+Later CLI invocations reuse that runtime when the active Node.js is incompatible. A supported active Node.js still takes precedence. Enter **N**, press Enter, or cancel to leave your installation unchanged and see manual upgrade instructions.
+
+Automatic installation supports macOS, Windows, and glibc-based Linux on x64/ARM64. Alpine/musl and other architectures need manual installation. Non-interactive, CI, JSON, and `--yes` invocations never prompt or install Node.js. Commands that require an exact process identity, such as `hooks relay` and `webhooks gmail run`, also require a compatible Node.js on their existing execution path.
 
 ## Install Node
 

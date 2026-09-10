@@ -2196,6 +2196,112 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it.each([
+    { label: "default scopes", password: "shared-password", scopes: undefined, token: undefined }, // pragma: allowlist secret
+    {
+      label: "normalized credentials",
+      password: " shared-password ",
+      scopes: ["operator.read"],
+      token: "  ",
+    }, // pragma: allowlist secret
+  ])(
+    "connects read-only password auth without reading unused device credentials ($label)",
+    async ({ password, scopes, token }) => {
+      loadDeviceAuthTokenReadOnlyMock.mockImplementation(() => {
+        throw new Error("SQLite source did not stabilize for read-only inspection");
+      });
+      const onHello = vi.fn();
+      const onConnectError = vi.fn();
+      const client = createClientWithIdentity("device-1", () => {}, {
+        password,
+        token,
+        sharedStateMode: "read-only",
+        scopes,
+        onHelloOk: onHello,
+        onConnectError,
+      });
+
+      try {
+        client.start();
+        const ws = getLatestWs();
+        ws.emitOpen();
+        emitConnectChallenge(ws);
+        expect(onConnectError).not.toHaveBeenCalled();
+        const connect = connectRequestFrom(ws);
+        expect(connect.params).toMatchObject({
+          auth: { password: "shared-password" }, // pragma: allowlist secret
+          scopes: scopes ?? ["operator.admin"],
+          device: { id: "device-1", signature: expect.any(String), nonce: "nonce-1" },
+        });
+        expect(connect.params?.auth).toEqual({ password: "shared-password" }); // pragma: allowlist secret
+        expect(loadDeviceAuthTokenReadOnlyMock).not.toHaveBeenCalled();
+        ws.emitMessage(
+          JSON.stringify({
+            type: "res",
+            id: connect.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              auth: { role: "operator", scopes: ["operator.read"], deviceToken: "issued-token" },
+            },
+          }),
+        );
+        await waitForFast(() => expect(onHello).toHaveBeenCalledOnce());
+        const request = client.request("system.info");
+        const frame = JSON.parse(ws.sent.at(-1) ?? "null");
+        expect(frame.method).toBe("system.info");
+        ws.emitMessage(
+          JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { pid: 123 } }),
+        );
+        await expect(request).resolves.toEqual({ pid: 123 });
+        expect(storeDeviceAuthTokenMock).not.toHaveBeenCalled();
+        expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
+  it.each([
+    { label: "shared token", options: { token: "shared-token" } },
+    { label: "bootstrap token", options: { bootstrapToken: "bootstrap-token" } },
+    { label: "explicit device token", options: { deviceToken: "device-token" } },
+    { label: "bootstrap preference", options: { preferBootstrapToken: true } },
+    { label: "approval runtime token", options: { approvalRuntimeToken: "approval-token" } },
+    {
+      label: "agent runtime identity token",
+      options: { agentRuntimeIdentityToken: "runtime-token" },
+    },
+    { label: "blank password", options: { password: "  " } },
+    { label: "writable client", options: { sharedStateMode: undefined } },
+  ])("retains stored-device auth failure for $label", ({ options }) => {
+    const failure = new Error("stored device credentials unavailable");
+    loadDeviceAuthTokenReadOnlyMock.mockImplementation(() => {
+      throw failure;
+    });
+    loadDeviceAuthTokenMock.mockImplementation(() => {
+      throw failure;
+    });
+    const onConnectError = vi.fn();
+    const client = createClientWithIdentity("device-1", () => {}, {
+      sharedStateMode: "read-only",
+      password: "shared-password", // pragma: allowlist secret
+      onConnectError,
+      ...options,
+    });
+    try {
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+      emitConnectChallenge(ws);
+      expect(onConnectError).toHaveBeenCalledWith(failure);
+      expect(ws.sent).toEqual([]);
+      expect(ws.lastClose).toEqual({ code: 1008, reason: "connect failed" });
+    } finally {
+      client.stop();
+    }
+  });
+
   it("keeps explicit shared auth ahead of origin-scoped auth across reconnects", async () => {
     loadOriginDeviceTokenMock.mockReturnValue({ token: "origin-token" });
     const onReconnectPaused = vi.fn();

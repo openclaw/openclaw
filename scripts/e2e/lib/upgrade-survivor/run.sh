@@ -115,6 +115,7 @@ baseline_spec=""
 baseline_version=""
 baseline_version_expected="0"
 candidate_version=""
+candidate_contract=""
 candidate_tarball=""
 restart_fixture_version=""
 restart_fixture_evidence=""
@@ -1238,17 +1239,28 @@ resolve_candidate_version() {
     echo "missing OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC" >&2
     return 1
   fi
+  candidate_contract=""
   case "$CANDIDATE_KIND" in
     tarball)
-      candidate_version="$(
+      candidate_contract="$(
         node -e '
+          const assert = require("node:assert/strict");
           const { execFileSync } = require("node:child_process");
           const packageJson = execFileSync("tar", ["-xOf", process.argv[1], "package/package.json"], {
             encoding: "utf8",
           });
-          process.stdout.write(JSON.parse(packageJson).version);
-        ' "$CANDIDATE_SPEC"
-      )"
+          const manifest = JSON.parse(packageJson);
+          assert(typeof manifest.version === "string" && manifest.version.length > 0, "candidate package version is missing");
+          const contract = { version: manifest.version };
+          if (process.argv[2] === "2026.9.2" && manifest.version === "2026.9.3") {
+            const stateVersion = manifest.openclaw?.schemaVersions?.state;
+            assert(Number.isSafeInteger(stateVersion) && stateVersion >= 0, "invalid candidate state schema version");
+            contract.stateSchemaVersion = stateVersion;
+          }
+          process.stdout.write(JSON.stringify(contract));
+        ' "$CANDIDATE_SPEC" "$baseline_version"
+      )" || return "$?"
+      candidate_version="$(node -p 'JSON.parse(process.argv[1]).version' "$candidate_contract")" || return "$?"
       ;;
     npm)
       candidate_version="$(npm view "$CANDIDATE_SPEC" version --silent)"
@@ -1707,7 +1719,20 @@ assert_survival() {
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state || return "$?"
   installed_version="$(read_installed_version)" || return "$?"
   if [ "$baseline_version" = "2026.9.2" ] && [ "$candidate_version" = "2026.9.3" ]; then
-    node scripts/e2e/lib/external-package-transition.mjs schema 16 \
+    local expected_state_schema
+    if [ "$CANDIDATE_KIND" = "tarball" ]; then
+      expected_state_schema="$(node --input-type=module - "$candidate_contract" "$candidate_version" <<'NODE'
+import assert from "node:assert/strict";
+const contract = JSON.parse(process.argv[2]);
+assert.equal(contract.version, process.argv[3], "schema contract belongs to another candidate");
+process.stdout.write(String(contract.stateSchemaVersion));
+NODE
+)" || return "$?"
+    else
+      # Published openclaw@2026.9.3 declares state schema 16.
+      expected_state_schema=16
+    fi
+    node scripts/e2e/lib/external-package-transition.mjs schema "$expected_state_schema" \
       >"$ARTIFACT_ROOT/schema-after-update.json" || return "$?"
   fi
   local expected_version="${restart_fixture_version:-$candidate_version}"

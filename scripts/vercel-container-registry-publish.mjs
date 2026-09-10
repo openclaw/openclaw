@@ -10,6 +10,14 @@ import { compareReleaseVersions } from "./lib/release-version.mjs";
 import { verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
 const IMAGETOOLS_TIMEOUT_MS = 20 * 60_000;
+// Conservative decimal client caps, not independently verified server byte thresholds.
+// https://vercel.com/docs/container-registry/limits-and-pricing (September 9, 2026).
+const VCR_BYTE_CAPS = Object.freeze({
+  layer: 500_000_000,
+  total: 15_000_000_000,
+  manifest: 4_000_000,
+  config: 1_000_000,
+});
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const IMAGE_INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json";
 const IMAGE_MANIFEST_MEDIA_TYPES = new Set([
@@ -144,6 +152,66 @@ function inspectRawManifest(imageRef, execFileSyncImpl) {
     return JSON.parse(raw);
   } catch {
     throw new Error(`${imageRef} did not return valid manifest JSON.`);
+  }
+}
+
+function verifyPlatformSizeAdmission(imageRef, selection, execFileSyncImpl) {
+  const context = `VCR preflight: ${selection} ${imageRef}`;
+  const failure = (message, cause) =>
+    new Error(`${context}: ${message} No images copied.`, { cause });
+  const checkCap = (size, cap, resource) => {
+    if (size > cap) {
+      throw failure(
+        `${resource} is ${size} bytes; client cap ${cap} bytes (conservative decimal policy).`,
+      );
+    }
+  };
+  let raw;
+  try {
+    raw = String(runImagetools(["inspect", imageRef, "--raw"], execFileSyncImpl));
+  } catch (error) {
+    throw failure("Could not inspect platform manifest.", error);
+  }
+  checkCap(Buffer.byteLength(raw, "utf8"), VCR_BYTE_CAPS.manifest, "manifest body");
+  let manifest;
+  try {
+    manifest = JSON.parse(raw);
+  } catch (error) {
+    throw failure("Invalid platform manifest JSON.", error);
+  }
+  if (manifest?.schemaVersion !== 2 || !IMAGE_MANIFEST_MEDIA_TYPES.has(manifest.mediaType)) {
+    throw failure("Expected a supported image manifest.");
+  }
+  if (!Array.isArray(manifest.layers)) {
+    throw failure("layers must be an array.");
+  }
+  const descriptorSize = (descriptor, field) => {
+    if (
+      typeof descriptor?.digest !== "string" ||
+      !DIGEST_PATTERN.test(descriptor.digest) ||
+      typeof descriptor.mediaType !== "string" ||
+      descriptor.mediaType.trim().length === 0
+    ) {
+      throw failure(`${field} must have a valid sha256 digest and mediaType.`);
+    }
+    if (!Number.isSafeInteger(descriptor.size) || descriptor.size < 0) {
+      throw failure(`${field}.size must be a nonnegative safe integer byte count.`);
+    }
+    return descriptor.size;
+  };
+  const configSize = descriptorSize(manifest.config, "config");
+  checkCap(configSize, VCR_BYTE_CAPS.config, `config ${manifest.config.digest}`);
+  let total = configSize;
+  for (const [index, layer] of manifest.layers.entries()) {
+    const size = descriptorSize(layer, `layer[${index}]`);
+    checkCap(size, VCR_BYTE_CAPS.layer, `layer[${index}] ${layer.digest}`);
+    // Each admitted prefix is <= the total cap, so the next addition stays exact.
+    total += size;
+    checkCap(
+      total,
+      VCR_BYTE_CAPS.total,
+      `total (compressed layers plus config, through layer[${index}])`,
+    );
   }
 }
 
@@ -294,6 +362,13 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
       execFileSyncImpl,
       ARCHITECTURES,
     );
+    for (const architecture of ARCHITECTURES) {
+      verifyPlatformSizeAdmission(
+        `${plan.sourceImage}@${platformDigests[architecture]}`,
+        `${aliasKey}/${manifestTag} linux/${architecture}`,
+        execFileSyncImpl,
+      );
+    }
     return { manifestTag, platformDigests };
   });
 

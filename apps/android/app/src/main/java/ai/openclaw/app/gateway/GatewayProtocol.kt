@@ -87,6 +87,7 @@ data class Question(
   val questionId: String,
   val header: String,
   val question: String,
+  val url: String? = null,
   val options: List<QuestionOption>,
   val multiSelect: Boolean? = null,
   val isOther: Boolean? = null,
@@ -927,6 +928,9 @@ enum class GatewayMethod(
   SkillsWorkshopRead("skills.workshop.read"),
   SessionPublicShareSet("session.publicShare.set"),
   ClawsMonitors("claws.monitors"),
+  PluginsCatalogBrowse("plugins.catalog.browse"),
+  PluginsCatalogCategories("plugins.catalog.categories"),
+  PluginsCatalogGet("plugins.catalog.get"),
 }
 
 enum class GatewayEvent(

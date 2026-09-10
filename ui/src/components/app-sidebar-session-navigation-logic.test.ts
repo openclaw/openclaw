@@ -346,6 +346,7 @@ describe("sidebar navigation lineage ownership", () => {
       expect(known).toHaveLength(2);
       const request = vi.fn();
       const lineage = await fetchSessionLineage({
+        captureReconcile: () => vi.fn(),
         client: createTestGatewayClient(request),
         sessionKey: cached.key,
         knownRows: known,
@@ -506,6 +507,7 @@ describe("sidebar navigation lineage ownership", () => {
       [navigationParent, controlParent, child].map((row) => [row.key, row]),
     );
     const lineage = await fetchSessionLineage({
+      captureReconcile: () => vi.fn(),
       client: {} as Parameters<typeof fetchSessionLineage>[0]["client"],
       sessionKey: child.key,
       knownRows,
@@ -542,6 +544,7 @@ describe("sidebar navigation lineage ownership", () => {
     expect(projected[0]?.children.map((row) => row.key)).toEqual([child.key]);
 
     const lineage = await fetchSessionLineage({
+      captureReconcile: () => vi.fn(),
       client: {} as Parameters<typeof fetchSessionLineage>[0]["client"],
       sessionKey: child.key,
       knownRows: new Map([controlParent, childWithBlankParent].map((row) => [row.key, row])),

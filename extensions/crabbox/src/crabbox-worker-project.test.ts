@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   createNodeBootstrapFixture,
@@ -10,80 +11,223 @@ import { operationLeaseId } from "./crabbox-worker-profile.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   CHECKPOINT_ID,
+  PROJECT_KEY,
+  BASE_COMMIT,
+  createProjectOptions as projectOptions,
   CLASSLESS_PROFILE,
   PROFILE,
   commandResult,
   checkpointResult,
   createWarmProvider,
+  openWarmImageStore,
   type CommandCall,
 } from "./crabbox-worker-warm-image.test-support.js";
 
 type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
-const PROJECT_KEY = "a".repeat(64);
-const BASE_COMMIT = "b".repeat(40);
 
-function projectOptions(events: string[], controller = new AbortController()) {
-  let enrollmentStarted = false;
-  const observe = ({ argv }: CommandCall) => {
-    if (argv[1] === "run" && argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")) {
-      events.push(enrollmentStarted ? "enrollment-install" : "runtime-install");
-    }
-    if (argv[1] === "checkpoint" && argv[2] === "create") {
-      events.push("capture");
-    }
-    return undefined;
+function notSubmittedReceipt(leaseId: string) {
+  return {
+    schema: "crabbox.checkpoint.create.failure.v1",
+    outcome: "not_submitted",
+    provider: "aws",
+    leaseId,
+    checkpointId: "chk_not_submitted",
+    localReservation: "removed",
   };
-  const options = {
-    nodeRuntimeIdentity: {
-      nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
-      executionMode: "worker-turn" as const,
-      workerBundleSha256: createWorkerArchiveFixture().sha256,
-    },
-    project: {
-      key: PROJECT_KEY,
-      baseCommit: BASE_COMMIT,
-      signal: controller.signal,
-      assertCurrent: () => controller.signal.throwIfAborted(),
-      prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
-        await transport.runScript("project-checkout", controller.signal);
-        events.push("project-prepared");
-        return { seedKey: PROJECT_KEY, cacheHit: false };
-      }),
-    },
-    prepareNodeRuntime: vi.fn(async () => {
-      events.push("runtime-granted");
-      return {
-        nodeBootstrap: createNodeBootstrapFixture(),
-        workerBundle: createWorkerArchiveFixture(),
-        signal: controller.signal,
-      };
-    }),
-    beginNodeEnrollment: vi.fn(async () => {
-      events.push("enrollment-begun");
-      enrollmentStarted = true;
-      return {
-        mode: "connect" as const,
-        setupCode: "synthetic-setup-code",
-        setupId: "project-setup",
-        openclawVersion: "2026.8.1",
-        nodeBootstrap: createNodeBootstrapFixture(),
-        displayName: "Project worker",
-        signal: controller.signal,
-        waitForDeviceId: async () => "project-node",
-      };
-    }),
-  } satisfies ProvisionOptions;
-  return { options, observe };
 }
 
 describe("Crabbox project snapshot provisioning", () => {
+  it.each([false, true])(
+    "clears only its own rejected capture and still stops the source (replaced=%s)",
+    async (replaced) => {
+      const events: string[] = [];
+      const { options, observe } = projectOptions(events);
+      const leaseId = operationLeaseId("not-submitted");
+      const { provider, calls } = createWarmProvider((call) => {
+        observe(call);
+        if (call.argv[2] !== "create") {
+          return undefined;
+        }
+        if (replaced) {
+          const store = openWarmImageStore();
+          const entry = store.entries()[0]!;
+          store.register(entry.key, {
+            ...entry.value,
+            operation: {
+              type: "capture",
+              id: "replacement-capture",
+              leaseId: "cbx_replacement",
+              provider: "aws",
+              startedAtMs: Date.now(),
+              phase: "creating",
+            },
+          });
+        }
+        return commandResult({
+          code: 2,
+          stdout: JSON.stringify(notSubmittedReceipt(leaseId)),
+          stderr: "image submission rejected; source rollback failed",
+        });
+      });
+
+      await expect(provider.provision(PROFILE, "not-submitted", options)).rejects.toThrow(
+        "image submission rejected; source rollback failed",
+      );
+      expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+      expect(calls.find(({ argv }) => argv[1] === "stop")?.argv).toContain(leaseId);
+      if (replaced) {
+        expect(listCrabboxWarmImages()[0]?.capture).toMatchObject({
+          selector: "replacement-capture",
+          leaseId: "cbx_replacement",
+          phase: "creating",
+        });
+        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]).toBeUndefined();
+      } else {
+        expect(listCrabboxWarmImages()).toEqual([]);
+      }
+    },
+  );
+
+  it("recovers enrolled preparation facts without rerunning setup or capture", async () => {
+    const events: string[] = [];
+    const current = projectOptions(events);
+    const { provider, calls } = createWarmProvider(current.observe);
+    const inspected = vi.fn(async () => {});
+    const options: ProvisionOptions = {
+      ...current.options,
+      project: {
+        ...current.options.project,
+        preparation: {
+          key: "c".repeat(64),
+          cacheKey: "d".repeat(64),
+          purpose: "session",
+          demandAtMs: Date.now(),
+        },
+        inspectPreparedWorkspace: inspected,
+      },
+    };
+    await provider.provision(PROFILE, "enrolled-project-replay", options);
+    const before = calls.length;
+    current.options.project.prepare.mockClear();
+    current.options.prepareNodeRuntime.mockClear();
+    await provider.provision(PROFILE, "enrolled-project-replay", options);
+    expect(inspected).toHaveBeenCalledOnce();
+    expect(current.options.project.prepare).not.toHaveBeenCalled();
+    expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
+    expect(calls.slice(before).some(({ argv }) => argv[2] === "create")).toBe(false);
+  });
+
+  it.each([
+    { crash: "pending", alreadyComplete: false, replayCaptures: 1 },
+    { crash: "prepared", alreadyComplete: false, replayCaptures: 1 },
+    { crash: "published", alreadyComplete: false, replayCaptures: 0 },
+    { crash: "pending", alreadyComplete: true, replayCaptures: 1 },
+    { crash: "none", alreadyComplete: true, replayCaptures: 0 },
+  ])(
+    "preserves reserve capture on $crash replay (image complete=$alreadyComplete)",
+    async ({ crash, alreadyComplete, replayCaptures }) => {
+      const preparation = {
+        key: "c".repeat(64),
+        cacheKey: "d".repeat(64),
+        purpose: "reserve" as const,
+        demandAtMs: Date.now(),
+      };
+      let captures = 0;
+      const command = ({ argv }: CommandCall) =>
+        argv[2] === "create"
+          ? checkpointResult(
+              `${CHECKPOINT_ID}_${++captures}`,
+              argv[argv.indexOf("--id") + 1]!,
+              "completed",
+            )
+          : undefined;
+      const initial = createWarmProvider(command);
+      const baseline = await initial.provider.provision(
+        PROFILE,
+        "replay-baseline",
+        projectOptions([], new AbortController(), preparation).options,
+      );
+      await initial.provider.destroy({ ...baseline, profile: PROFILE });
+      await initial.provider.dispose();
+      const operation = "prepared-capture-replay";
+      const leaseId = operationLeaseId(operation);
+      let completionPublished = alreadyComplete;
+      const optionsFor = (interrupt: boolean) => {
+        const controller = new AbortController();
+        const { options } = projectOptions([], controller);
+        const prepare = options.project.prepare;
+        const project: NonNullable<ProvisionOptions["project"]> = {
+          ...options.project,
+          preparation,
+          inspectPreparedWorkspace: vi.fn(async () => {}),
+          prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
+            const result = await prepare(transport);
+            const captureRequired: true | undefined = completionPublished ? undefined : true;
+            completionPublished = true;
+            if (interrupt && crash === "pending") {
+              controller.abort();
+            }
+            return { ...result, captureRequired };
+          }),
+          assertCurrent: () => {
+            if (
+              interrupt &&
+              crash === "prepared" &&
+              listCrabboxWarmImages()[0]?.allocations[leaseId]?.phase === "prepared"
+            ) {
+              controller.abort();
+            }
+            controller.signal.throwIfAborted();
+          },
+        };
+        const begin = options.beginNodeEnrollment;
+        return {
+          ...options,
+          project,
+          beginNodeEnrollment: vi.fn(async () => {
+            if (interrupt && crash === "published") {
+              controller.abort();
+              controller.signal.throwIfAborted();
+            }
+            return await begin();
+          }),
+        };
+      };
+      const first = createWarmProvider(command, initial.stateDir);
+      if (crash === "none") {
+        await first.provider.provision(PROFILE, operation, optionsFor(false));
+        expect(captures).toBe(1);
+      } else {
+        await expect(
+          first.provider.provision(PROFILE, operation, optionsFor(true)),
+        ).rejects.toThrow();
+        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]?.phase).toBe(
+          crash === "pending" ? "pending" : "prepared",
+        );
+        expect(listCrabboxWarmImages()[0]?.capture).toBeUndefined();
+      }
+      await first.provider.dispose();
+      const before = captures;
+      const resumed = createWarmProvider(command, initial.stateDir);
+      await resumed.provider.provision(PROFILE, operation, optionsFor(false));
+      expect(captures - before).toBe(replayCaptures);
+      const enrolled = optionsFor(false);
+      await resumed.provider.provision(PROFILE, operation, enrolled);
+      expect(enrolled.project.prepare).not.toHaveBeenCalled();
+      expect(enrolled.project.inspectPreparedWorkspace).toHaveBeenCalledOnce();
+      expect(captures - before).toBe(replayCaptures);
+    },
+  );
+
   it.each(["aws", "azure", "gcp"])(
-    "settles a retained %s checkpoint before enrollment without repeating capture",
+    "waits beyond the submission deadline for a retained %s checkpoint before enrollment",
     async (backend) => {
       const events: string[] = [];
       const { options, observe } = projectOptions(events);
       const entered = createDeferred<void>();
       const available = createDeferred<void>();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const { provider, calls } = createWarmProvider(async (call) => {
         observe(call);
         if (call.argv[2] !== "create") {
@@ -94,19 +238,49 @@ describe("Crabbox project snapshot provisioning", () => {
         if (call.argv.includes("--wait=false")) {
           return commandResult({ code: 1, stderr: "http 503: checkpoint_pending" });
         }
-        await available.promise;
-        return checkpointResult(CHECKPOINT_ID, operationLeaseId("retained-capture"), "available");
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            available.promise.then(() =>
+              checkpointResult(CHECKPOINT_ID, operationLeaseId("retained-capture"), "available"),
+            ),
+            new Promise<ReturnType<typeof commandResult>>((resolve) => {
+              timer = setTimeout(
+                () => resolve(commandResult({ code: null, killed: true, termination: "timeout" })),
+                call.options.timeoutMs,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
       });
-      const provision = expect(
-        provider.provision({ ...PROFILE, provider: backend }, "retained-capture", options),
-      ).resolves.toMatchObject({ node: { deviceId: "project-node" } });
-      await entered.promise;
+      const profile = { ...PROFILE, provider: backend };
+      const provision = provider.provision(profile, "retained-capture", options).then(
+        (lease) => ({ lease }),
+        (error: unknown) => ({ error }),
+      );
       try {
+        await entered.promise;
+        // A provider can still be preparing its snapshot after the old 3m submission cap.
+        await vi.advanceTimersByTimeAsync(4 * 60_000);
         expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+        available.resolve();
+        await expect(provision).resolves.toMatchObject({
+          lease: { node: { deviceId: "project-node" } },
+        });
+        const capture = calls.find(({ argv }) => argv[2] === "create")!;
+        expect(capture.argv).toEqual(
+          expect.arrayContaining(["--wait", "--wait-timeout", "2700000ms"]),
+        );
+        expect(provider.resolveProvisionTimeoutMs?.(profile)).toBeGreaterThan(
+          calls.reduce((total, call) => total + call.options.timeoutMs, 0),
+        );
       } finally {
         available.resolve();
+        await provision;
+        vi.useRealTimers();
       }
-      await provision;
       expect(listCrabboxWarmImages()[0]).toMatchObject({
         checkpointId: CHECKPOINT_ID,
         state: "available",
@@ -356,9 +530,25 @@ describe("Crabbox project snapshot provisioning", () => {
     },
   );
 
-  it.each(["aborted", "uncertain", "timed out"] as const)(
-    "does not enroll after an %s native capture",
-    async (failure) => {
+  it.each<{
+    failure: string;
+    result?: Partial<SpawnResult>;
+    receipt?: Partial<ReturnType<typeof notSubmittedReceipt>>;
+  }>([
+    { failure: "aborted" },
+    { failure: "response lost", result: { stdout: "" } },
+    { failure: "timed out", result: { code: null, killed: true, termination: "timeout" } },
+    { failure: "different lease", receipt: { leaseId: "cbx_other" } },
+    { failure: "different provider", receipt: { provider: "machine0" } },
+    { failure: "retained reservation", receipt: { localReservation: "retained" } },
+    { failure: "unknown schema", receipt: { schema: "crabbox.checkpoint.create.failure.v2" } },
+    { failure: "malformed output", result: { stdout: '{"schema":' } },
+    { failure: "truncated output", result: { stdoutTruncatedBytes: 1 } },
+    { failure: "output limit", result: { outputLimitExceeded: true } },
+    { failure: "failed process cleanup", result: { cleanup: "uncertain" } },
+  ])(
+    "retains uncertainty and prevents enrollment after native capture: $failure",
+    async ({ failure, result, receipt }) => {
       const events: string[] = [];
       const controller = new AbortController();
       const { options, observe } = projectOptions(events, controller);
@@ -371,9 +561,15 @@ describe("Crabbox project snapshot provisioning", () => {
           controller.abort();
         }
         expect(call.options.signal).toBe(controller.signal);
-        return failure === "timed out"
-          ? commandResult({ code: null, killed: true, termination: "timeout" })
-          : commandResult({ code: 7, stderr: "capture response lost" });
+        return commandResult({
+          code: 7,
+          stderr: "capture failed",
+          stdout: JSON.stringify({
+            ...notSubmittedReceipt(operationLeaseId(`project-${failure}`)),
+            ...receipt,
+          }),
+          ...result,
+        });
       });
 
       await expect(provider.provision(PROFILE, `project-${failure}`, options)).rejects.toThrow();
@@ -383,6 +579,52 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(events).not.toContain("enrollment-install");
       expect(listCrabboxWarmImages()[0]?.capture?.phase).toBe("uncertain");
       expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(failure !== "aborted");
+    },
+  );
+
+  it.each([false, true])(
+    "preserves capture uncertainty but reports the source cleanup result after cancellation (stopFails=%s)",
+    async (stopFails) => {
+      const controller = new AbortController();
+      const { options } = projectOptions([], controller);
+      const leaseId = operationLeaseId("cancelled-project-capture");
+      const { provider, calls, warn } = createWarmProvider(({ argv }) => {
+        if (argv[2] === "create") {
+          controller.abort();
+          return commandResult({ code: 2, stderr: "capture interrupted" });
+        }
+        if (argv[1] === "stop" && stopFails) {
+          return commandResult({ code: 5, stderr: "source cleanup still pending" });
+        }
+        return undefined;
+      });
+
+      await expect(
+        provider.provision(PROFILE, "cancelled-project-capture", options),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      const capture = listCrabboxWarmImages()[0]?.capture;
+      expect(capture).toMatchObject({ leaseId, phase: "uncertain" });
+      expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+      calls.length = 0;
+      warn.mockClear();
+
+      const cleanup = provider.destroy({ leaseId, profile: PROFILE });
+      if (stopFails) {
+        await expect(cleanup).rejects.toThrow("source cleanup still pending");
+        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]).toBeDefined();
+      } else {
+        await expect(cleanup).resolves.toBeUndefined();
+        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(capture!.selector));
+      }
+      expect(calls.map(({ argv }) => argv[1])).toEqual(["stop"]);
+      expect(listCrabboxWarmImages()[0]?.capture).toMatchObject({
+        selector: capture!.selector,
+        leaseId,
+        phase: "uncertain",
+      });
+      expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
     },
   );
 

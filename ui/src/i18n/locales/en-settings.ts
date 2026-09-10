@@ -56,6 +56,7 @@ const enSettings = {
     providerFact: "Provider: {provider}",
     backendFact: "Crabbox backend: {backend}",
     classFact: "Class: {value}",
+    operatingSystemFact: "Operating system: {value}",
     ttlFact: "Max lifetime: {value}",
     idleFact: "Idle stop: {value}",
     desktopFact: "Desktop: {value}",
@@ -64,8 +65,12 @@ const enSettings = {
       profileId: "Profile ID",
       profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
       backend: "Crabbox backend",
-      backendHelp: "The backend passed to Crabbox, such as AWS or Hetzner.",
+      backendHelp: "The backend passed to Crabbox, such as AWS, Azure, or Hetzner.",
       backendPlaceholder: "hetzner",
+      operatingSystem: "Operating system",
+      operatingSystemHelp:
+        "Options come from this profile's advertised operating systems. Choose Provider default to clear a saved target, including one no longer advertised.",
+      providerDefault: "Provider default",
       machineClass: "Machine class",
       machineClassHelp:
         "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
@@ -80,7 +85,7 @@ const enSettings = {
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
-        "Warm a direct or coordinator-backed AWS worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+        "Linux only. Warm a direct or coordinator-backed AWS or Azure worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
@@ -93,7 +98,9 @@ const enSettings = {
         "Use a profile ID that starts with a letter or number and contains only letters, numbers, hyphens, or underscores.",
       profileExists: "Choose another profile ID; this one already exists.",
       profileMissing: "This profile changed or was removed. Reload the page and try again.",
-      backend: "Enter a Crabbox backend, such as aws or hetzner.",
+      backend: "Enter a Crabbox backend, such as aws, azure, or hetzner.",
+      target:
+        "Use an operating system ID of up to 64 characters without surrounding spaces, or choose Provider default.",
       machineClass: "Enter a machine class of 1 to 128 characters.",
       ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
       idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
@@ -105,7 +112,7 @@ const enSettings = {
   modelProviders: {
     title: "Configured providers",
     configureModels: "Configure Models",
-    subtitle: "Model providers with auth, plan, quota, and cost data.",
+    subtitle: "Providers and credentials for the selected agent.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
     disconnected: "Connect to the gateway to see configured model providers.",
@@ -221,8 +228,9 @@ const enSettings = {
       saved: "Provider {provider} added.",
     },
     defaults: {
-      title: "Defaults",
-      subtitle: "Applies across all providers and models where applicable.",
+      title: "Global defaults",
+      subtitle:
+        "Model and behavior defaults for all agents. Agent-specific settings override these defaults. View each agent's model in Agents → Overview.",
       primary: "Model",
       utility: "Utility Model",
       utilityHelpLabel: "About the utility model",
@@ -236,14 +244,17 @@ const enSettings = {
       noFallback: "No fallback model",
       selectModel: "Select a model",
       noModels: "Configure a provider before selecting default models.",
+      discoveringMore: "Discovering more models…",
+      discoverFailed: "More models could not be discovered.",
+      retryDiscover: "Retry",
       thinkingHelpLabel: "About thinking defaults",
       thinkingHelp:
-        "Sets the default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
+        "Sets the global default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
       thinkingDefaultHelp:
         "Uses the selected model's thinking policy instead of saving a global thinking override.",
       fastModeHelpLabel: "About fast mode defaults",
       fastModeHelp:
-        "Sets the default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
+        "Sets the global default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
       fastModeDefaultHelp:
         "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
       saved: "Defaults saved.",

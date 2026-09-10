@@ -1,21 +1,16 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
-FROZEN_CONTEXT=0
-openclaw_prepare_frozen_target_context "$SOURCE_ROOT" && FROZEN_CONTEXT=1 || {
-  context_status=$?
-  [ "$context_status" -eq 1 ] || exit "$context_status"
-}
-LEGACY_GATEWAY_LIB=""
-if [[ "$FROZEN_CONTEXT" == "1" ]] &&
-  openclaw_frozen_target_source_has_path "$SOURCE_ROOT" scripts/e2e/lib/gateway-network/client.mjs &&
-  ! openclaw_frozen_target_source_has_path "$SOURCE_ROOT" scripts/e2e/lib/gateway-network/client.mts; then
-  LEGACY_GATEWAY_LIB="$SOURCE_ROOT/scripts/e2e/lib"
-fi
+openclaw_resolve_frozen_gateway_network_layout "$SOURCE_ROOT"
+LEGACY_GATEWAY_LIB="$OPENCLAW_FROZEN_TARGET_GATEWAY_NETWORK_LEGACY_LIB"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-gateway-network-e2e" OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD:-0}"
 
@@ -59,7 +54,7 @@ run_suspension_phase() {
   local stage="$1"
   DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged_print "gateway-network-suspension-$stage" \
     docker_e2e_docker_cmd exec \
-    "${CLIENT_LIMIT_ENV_ARGS[@]}" \
+    ${CLIENT_LIMIT_ENV_ARGS[@]+"${CLIENT_LIMIT_ENV_ARGS[@]}"} \
     -e "GW_URL=ws://127.0.0.1:$PORT" \
     -e "GW_TOKEN=$TOKEN" \
     -e "GW_MODE=suspension-$stage-restart" \
@@ -105,12 +100,12 @@ if [[ -n "$LEGACY_GATEWAY_LIB" ]]; then
   DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docker_e2e_docker_run_cmd run --rm \
     "${DOCKER_E2E_HARNESS_ARGS[@]}" \
     --network "$NET_NAME" \
-    "${CLIENT_LIMIT_ENV_ARGS[@]}" \
-    -v "$LEGACY_GATEWAY_LIB:/tmp/openclaw-selected-e2e-lib:ro" \
+    ${CLIENT_LIMIT_ENV_ARGS[@]+"${CLIENT_LIMIT_ENV_ARGS[@]}"} \
+    -v "$LEGACY_GATEWAY_LIB:/app/scripts/e2e/lib:ro" \
     -e "GW_URL=ws://$GW_NAME:$PORT" \
     -e "GW_TOKEN=$TOKEN" \
     "$IMAGE_NAME" \
-    node /tmp/openclaw-selected-e2e-lib/gateway-network/client.mjs
+    node /app/scripts/e2e/lib/gateway-network/client.mjs
   echo "OK"
   exit 0
 fi
@@ -124,7 +119,7 @@ DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docke
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --user "$CAPABILITIES_HOST_USER:$CAPABILITIES_HOST_GROUP" \
   --network "$NET_NAME" \
-  "${CLIENT_LIMIT_ENV_ARGS[@]}" \
+  ${CLIENT_LIMIT_ENV_ARGS[@]+"${CLIENT_LIMIT_ENV_ARGS[@]}"} \
   -v "$CAPABILITIES_DIR:/tmp/gateway-network-output" \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \

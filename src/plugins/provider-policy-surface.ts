@@ -2,6 +2,7 @@
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  ProviderFastModePolicyContext,
   ProviderModelRouteResolution,
   ProviderNormalizeModelCatalogIdContext,
   ProviderResponseModelEquivalenceContext,
@@ -19,7 +20,7 @@ import type {
   ProviderThinkingProfile,
 } from "./provider-thinking.types.js";
 import {
-  loadBundledPluginPublicArtifactModuleSync,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync,
   loadPluginPublicArtifactModuleSync,
 } from "./public-surface-loader.js";
 
@@ -65,6 +66,7 @@ export type InspectEmbeddingProviderSetup = (params: {
 
 /** Provider policy hooks supported by bundled and trusted official plugins. */
 export type ProviderPolicySurface = {
+  resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
   deprecatedProfileIds?: readonly string[];
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
@@ -99,6 +101,7 @@ export type BundledProviderPolicySurface = ProviderPolicySurface & {
 };
 
 const PROVIDER_POLICY_HOOK_KEYS = [
+  "resolveFastModeSupport",
   "normalizeConfig",
   "applyConfigDefaults",
   "resolveConfigApiKey",
@@ -180,15 +183,11 @@ export function resolveDirectBundledProviderPolicySurface(
   ) {
     return null;
   }
-  return resolveProviderPolicySurface({
-    loadModule: (artifactBasename) =>
-      loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: pluginId,
-        artifactBasename,
-      }),
-    missingSurfacePrefix: "Unable to resolve bundled plugin public surface ",
-    extractSurface: extractBundledProviderPolicySurface,
+  const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+    dirName: pluginId,
+    artifactCandidates: PROVIDER_POLICY_ARTIFACT_CANDIDATES,
   });
+  return mod ? extractBundledProviderPolicySurface(mod) : null;
 }
 
 /** Loads policy hooks from a host-verified official external plugin install. */

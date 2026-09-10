@@ -182,7 +182,7 @@ const APP_SECTIONS: readonly AppSection[] = [
       {
         id: "plugins",
         gradient: ["#fb7185", "#9f1239"],
-        icon: icons.puzzle,
+        icon: icons.plug,
         title: () => t("appsPage.cards.plugins.title"),
         desc: () => t("appsPage.cards.plugins.desc"),
         ctas: [

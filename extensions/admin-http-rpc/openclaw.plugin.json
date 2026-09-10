@@ -1,5 +1,6 @@
 {
   "id": "admin-http-rpc",
+  "categories": ["gateway"],
   "activation": {
     "onStartup": false,
     "onConfigPaths": ["plugins.entries.admin-http-rpc"]

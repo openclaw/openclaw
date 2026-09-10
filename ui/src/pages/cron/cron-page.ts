@@ -1,12 +1,7 @@
 import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type {
-  AgentsListResult,
-  CronJob,
-  CronScratchGetResult,
-  ModelCatalogResult,
-} from "../../api/types.ts";
+import type { AgentsListResult, CronJob, CronScratchGetResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
@@ -39,6 +34,7 @@ import {
   type CronState,
 } from "../../lib/cron/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import {
   resolveSessionNavigationAgentId,
   sessionNavigationTarget,
@@ -291,14 +287,10 @@ class CronPage extends OpenClawLightDomElement {
       this.modelSuggestionsRequest === request &&
       this.context.agentSelection.state.selectedId === agentId;
     try {
-      const result = await client.request<ModelCatalogResult>("models.list", {
-        agentId,
-        view: "configured",
-        preparedOnly: true,
-      });
+      const result = await loadModelCatalog(client, { agentId });
       if (isCurrent()) {
         this.cronModelSuggestions = result.models.map((entry) => entry.id);
-        this.modelSuggestionsError = null;
+        this.modelSuggestionsError = modelCatalogRefreshError(result);
       }
     } catch (error) {
       if (isCurrent()) {

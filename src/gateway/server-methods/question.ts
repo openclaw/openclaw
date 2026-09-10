@@ -1,4 +1,5 @@
 // Question gateway methods create, inspect, wait for, and resolve transient prompts.
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import {
   ErrorCodes,
   errorShape,
@@ -105,6 +106,14 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
       throw new QuestionRequestValidationError(`duplicate question id '${question.questionId}'`);
     }
     ids.add(question.questionId);
+    if (question.url !== undefined) {
+      const url = URL.parse(question.url);
+      if (!url || !hasHttpUrlPrefix(question.url) || url.username || url.password) {
+        throw new QuestionRequestValidationError(
+          `question '${question.questionId}' requires an absolute HTTP(S) URL without credentials`,
+        );
+      }
+    }
     if (question.options.length === 1) {
       throw new QuestionRequestValidationError(
         `question '${question.questionId}' must have either no options or 2 to 4 options`,

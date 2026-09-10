@@ -39,6 +39,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.19.0"
 
 jobs:
   preflight:
@@ -1160,6 +1161,7 @@ jobs:
       - name: Run installer update docker tests
         env:
           OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
+          OPENCLAW_INSTALL_SMOKE_NODE_VERSION: ${{ env.NODE_VERSION }}
           OPENCLAW_INSTALL_SMOKE_GROUP: update
           OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh
           OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh
@@ -1183,6 +1185,7 @@ jobs:
             --platform linux/amd64 \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
+            -e OPENCLAW_NODE_VERSION="${NODE_VERSION}" \
             -v "$PAYLOAD_DIR/install.sh:/tmp/install.sh:ro" \
             rockylinux:9@sha256:d644d203142cd5b54ad2a83a203e1dee68af2229f8fe32f52a30c6e1d3c3a9e0 \
             bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install.sh --install-method npm --version latest --no-onboard --no-prompt --verify && openclaw --version'
@@ -1195,6 +1198,7 @@ jobs:
             --platform linux/amd64 \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
+            -e OPENCLAW_NODE_VERSION="${NODE_VERSION}" \
             -v "$PAYLOAD_DIR/install-cli.sh:/tmp/install-cli.sh:ro" \
             rockylinux:9@sha256:d644d203142cd5b54ad2a83a203e1dee68af2229f8fe32f52a30c6e1d3c3a9e0 \
             bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli --version latest --no-onboard && /tmp/openclaw-cli/bin/openclaw --version'
@@ -1360,6 +1364,7 @@ jobs:
       - name: Run installer non-root docker tests
         env:
           OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
+          OPENCLAW_INSTALL_SMOKE_NODE_VERSION: ${{ env.NODE_VERSION }}
           OPENCLAW_INSTALL_SMOKE_GROUP: nonroot
           OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh
           OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh

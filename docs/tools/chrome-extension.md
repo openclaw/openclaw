@@ -194,7 +194,8 @@ releases only Gateway's connections, leaving the daemon, its direct extension
 connection, and other CDP clients running. Gateway-first automatic setup through
 `/browser/extension` remains supported.
 
-Both processes need an OpenClaw build that supports this owner-access protocol. A
+Both the daemon and the Gateway must run builds that implement the owner-access
+protocol; mixing versions is unsupported. A
 mismatched profile, port, key, or stricter authentication policy produces an
 error; Gateway never takes over the listener or falls back to legacy credentials.
 The daemon's stricter v2-only default is compatible with Gateway's default.
@@ -417,7 +418,8 @@ The output includes the loopback endpoint, protocol version, key ID, and fixed
 challenge/complete resources. It does not include the relay key or an
 authorization header.
 
-`cdp --legacy-bearer` is a temporary, warned compatibility escape hatch. It
+`cdp --legacy-bearer` is a warned compatibility escape hatch for clients that
+cannot use Browser Relay Authentication v2. It
 works only while `browser.extensionRelay.allowLegacyAuth=true` and prints the
 legacy credential on request.
 

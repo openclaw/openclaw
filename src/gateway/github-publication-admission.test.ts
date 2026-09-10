@@ -22,6 +22,7 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 const mocks = githubPublicationTestMocks();
 const publisher = { source: "system-configured" as const, accountId: 42, login: "roboclaw-bot" };
@@ -32,12 +33,18 @@ const rejection = (idempotencyKey: string) => ({
 });
 
 function sharedAdmission(surface: "local" | "deferred" | "claim") {
-  const db = openOpenClawStateDatabase().db;
-  const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+  const database = openOpenClawStateDatabase();
+  const db = database.db;
+  const placements = createWorkerSessionPlacementStore({ database });
   const coordinator = createTestGitHubPublicationCoordinator({ placements });
   const sessionId = surface === "local" ? SESSION_ID : REQUEST.sessionId;
   const sessionKey = surface === "local" ? SESSION_KEY : REQUEST.sessionKey;
   if (surface !== "local") {
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "publication-worker",
+      sessionId,
+      ownerEpoch: 2,
+    });
     seedActivePlacement(placements, { environmentId: "publication-worker", ownerEpoch: 2 });
   }
   const claim =

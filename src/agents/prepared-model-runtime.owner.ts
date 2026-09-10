@@ -484,6 +484,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
       inventoryOwner: owner,
       pluginGeneration: owner.pendingPluginGeneration,
       prepareInboundPluginRegistry: owner.provenance === "configured",
+      ownsEphemeralRegistries: owner.provenance === "ephemeral" && input.readOnly === true,
       isGenerationCurrent,
       isBuildCurrent: params.isBuildCurrent ?? isCurrent,
       isPreparationCurrent: params.isBuildCurrent,
@@ -512,6 +513,9 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
     }
   }
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
+  const unpublishedClaims = new Set<
+    NonNullable<PreparedModelRuntimeBuildResult["resourceClaim"]>
+  >();
   const publication = (async () => {
     try {
       while (true) {
@@ -556,7 +560,11 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
             }
             const built = await build.pending;
             for (const [index, candidate] of currentGroup.entries()) {
-              results.set(candidate.owner, built[index]!);
+              const result = built[index]!;
+              if (result.resourceClaim) {
+                unpublishedClaims.add(result.resourceClaim);
+              }
+              results.set(candidate.owner, result);
             }
           }
           break;
@@ -590,6 +598,12 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
         const snapshot = publishPreparedModelRuntimeOwnerSnapshot(candidate.owner, result.snapshot);
         results.set(candidate.owner, { ...result, snapshot });
         candidate.owner.pluginGeneration = result.pluginGeneration;
+        const previousClaim = candidate.owner.resourceClaim;
+        candidate.owner.resourceClaim = result.resourceClaim;
+        if (result.resourceClaim) {
+          unpublishedClaims.delete(result.resourceClaim);
+        }
+        previousClaim?.release();
         candidate.owner.needsRefresh = false;
       }
     } catch (error) {
@@ -605,6 +619,10 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
         candidate.owner.refreshError = refreshError;
       }
       throw refreshError;
+    } finally {
+      for (const claim of unpublishedClaims) {
+        claim.release();
+      }
     }
   })();
   await publication;
@@ -639,6 +657,7 @@ export async function publishModelRuntimeSnapshot(
         isGenerationCurrent,
         isBuildCurrent: isGenerationCurrent,
         prepareInboundPluginRegistry: provenance === "configured",
+        ownsEphemeralRegistries: provenance === "ephemeral" && input.readOnly === true,
         pluginGeneration: reusablePluginGeneration,
       },
     ],
@@ -656,8 +675,10 @@ export async function publishModelRuntimeSnapshot(
   });
   owners.set(key, owner);
   const publication = (async () => {
+    let result: PreparedModelRuntimeBuildResult | undefined;
+    let transferred = false;
     try {
-      const result = (await build.pending)[0]!;
+      result = (await build.pending)[0]!;
       if (!isGenerationCurrent()) {
         throw new PreparedModelRuntimePublicationSupersededError(
           `prepared model runtime publication was superseded for ${input.agentDir}`,
@@ -665,6 +686,10 @@ export async function publishModelRuntimeSnapshot(
       }
       const snapshot = publishPreparedModelRuntimeOwnerSnapshot(owner, result.snapshot);
       owner.pluginGeneration = result.pluginGeneration;
+      const previousClaim = owner.resourceClaim;
+      owner.resourceClaim = result.resourceClaim;
+      transferred = true;
+      previousClaim?.release();
       owner.pendingPluginGeneration = undefined;
       owner.pending = undefined;
       owner.needsRefresh = false;
@@ -683,6 +708,10 @@ export async function publishModelRuntimeSnapshot(
         }
       }
       throw refreshError;
+    } finally {
+      if (!transferred) {
+        result?.resourceClaim?.release();
+      }
     }
   })();
   // Every waiter observes the publication guard, not the underlying discovery result. This keeps

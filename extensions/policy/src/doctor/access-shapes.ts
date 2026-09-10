@@ -1,9 +1,5 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  agentWorkspacePolicyShapeFinding,
-  toolPosturePolicyShapeFinding,
-} from "./agent-tool-shapes.js";
 import { execApprovalAllowlistExpectedShapeFinding } from "./exec-approval-rules.js";
 import {
   SUPPORTED_DM_POLICIES,
@@ -267,45 +263,6 @@ export function execApprovalsPolicyShapeFinding(
   });
 }
 
-export function agentsPolicyShapeFinding(
-  value: unknown,
-  params: {
-    readonly policyDocName: string;
-    readonly policyPath: string;
-  },
-): HealthFinding | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!isRecord(value)) {
-    return policyShapeFinding(
-      params.policyPath,
-      `oc://${params.policyDocName}/agents`,
-      `${params.policyPath} agents must be an object.`,
-      `Fix ${params.policyPath} so agents is an object.`,
-    );
-  }
-  const unsupportedAgentsKey = unsupportedPolicyKey(value, ["workspace"]);
-  if (unsupportedAgentsKey !== undefined) {
-    return policyShapeFinding(
-      params.policyPath,
-      `oc://${params.policyDocName}/agents/${ocPathSegment(unsupportedAgentsKey)}`,
-      `${params.policyPath} agents.${unsupportedAgentsKey} is not supported in agents policy.`,
-      `Remove agents.${unsupportedAgentsKey} or use agents.workspace.`,
-    );
-  }
-  const workspaceFinding = agentWorkspacePolicyShapeFinding(value.workspace, {
-    policyDocName: params.policyDocName,
-    policyPath: params.policyPath,
-    targetPrefix: "agents/workspace",
-    propertyPrefix: "agents.workspace",
-  });
-  if (workspaceFinding !== undefined) {
-    return workspaceFinding;
-  }
-  return undefined;
-}
-
 export function scopedDataHandlingPolicyShapeFinding(
   dataHandling: Record<string, unknown>,
   params: {
@@ -358,48 +315,4 @@ export function scopedDataHandlingPolicyShapeFinding(
     );
   }
   return undefined;
-}
-
-export function scopedToolsPolicyShapeFinding(
-  value: Record<string, unknown>,
-  params: {
-    readonly policyDocName: string;
-    readonly policyPath: string;
-    readonly targetPrefix: string;
-    readonly propertyPrefix: string;
-  },
-): HealthFinding | undefined {
-  const allowedTopLevel = new Set(["profiles", "fs", "exec", "elevated", "alsoAllow", "denyTools"]);
-  const unsupportedTopLevel = Object.keys(value).find((key) => !allowedTopLevel.has(key));
-  if (unsupportedTopLevel !== undefined) {
-    return policyShapeFinding(
-      params.policyPath,
-      `oc://${params.policyDocName}/${params.targetPrefix}/${ocPathSegment(unsupportedTopLevel)}`,
-      `${params.policyPath} ${params.propertyPrefix}.${unsupportedTopLevel} is not supported in agent-scoped tools policy.`,
-      `Move ${params.propertyPrefix}.${unsupportedTopLevel} to top-level tools or use a supported scoped tools posture rule.`,
-    );
-  }
-  for (const [section, allowedKeys] of [
-    ["profiles", ["allow"]],
-    ["fs", ["requireWorkspaceOnly"]],
-    ["exec", ["allowSecurity", "requireAsk", "allowHosts"]],
-    ["elevated", ["allow"]],
-    ["alsoAllow", ["expected"]],
-  ] as const) {
-    const sectionValue = value[section];
-    if (!isRecord(sectionValue)) {
-      continue;
-    }
-    const allowed = new Set<string>(allowedKeys);
-    const unsupportedKey = Object.keys(sectionValue).find((key) => !allowed.has(key));
-    if (unsupportedKey !== undefined) {
-      return policyShapeFinding(
-        params.policyPath,
-        `oc://${params.policyDocName}/${params.targetPrefix}/${section}/${ocPathSegment(unsupportedKey)}`,
-        `${params.policyPath} ${params.propertyPrefix}.${section}.${unsupportedKey} is not supported in agent-scoped tools policy.`,
-        `Move ${params.propertyPrefix}.${section}.${unsupportedKey} to top-level tools or use a supported scoped tools posture rule.`,
-      );
-    }
-  }
-  return toolPosturePolicyShapeFinding(value, params);
 }

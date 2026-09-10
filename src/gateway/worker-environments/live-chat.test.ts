@@ -76,11 +76,26 @@ describe("worker live Gateway chat projection", () => {
   };
 
   it.each([
-    { prefix: "Before tool\n", final: "Revised", name: "corrected final" },
-    { prefix: "Before tool\n", final: "Draft", name: "shortened final" },
-    { prefix: "Before tool\n", final: "", name: "empty final after pre-tool text" },
-    { prefix: "", final: "", name: "empty final clears rendered draft" },
-  ])("projects a scoped worker $name", async ({ prefix, final }) => {
+    {
+      prefix: "Before tool\n",
+      final: "Revised",
+      expectedFinal: "Before tool\n\nRevised",
+      name: "corrected final",
+    },
+    {
+      prefix: "Before tool\n",
+      final: "Draft",
+      expectedFinal: "Before tool\n\nDraft",
+      name: "shortened final",
+    },
+    {
+      prefix: "Before tool\n",
+      final: "",
+      expectedFinal: "Before tool\n",
+      name: "empty final after pre-tool text",
+    },
+    { prefix: "", final: "", expectedFinal: "", name: "empty final clears rendered draft" },
+  ])("projects a scoped worker $name", async ({ prefix, final, expectedFinal }) => {
     const live = await liveProjection();
     if (prefix) {
       live.start();
@@ -94,13 +109,15 @@ describe("worker live Gateway chat projection", () => {
     }
     live.start();
     live.preview(message("Draft with stale suffix"));
-    await expectChatText(prefix + "Draft with stale suffix");
+    await expectChatText(
+      prefix ? "Before tool\n\nDraft with stale suffix" : "Draft with stale suffix",
+    );
     live.end(message(final));
     await live.finish();
-    await expectChatText(prefix + final);
+    await expectChatText(expectedFinal);
     expect(harness.chat.events.at(-1)).toMatchObject({
       state: "delta",
-      deltaText: prefix + final,
+      deltaText: expectedFinal,
       replace: true,
     });
   });
@@ -115,7 +132,7 @@ describe("worker live Gateway chat projection", () => {
         live.end(message(text));
       }
       await live.finish();
-      await expectChatText("Same" + second);
+      await expectChatText("Same\n\n" + second);
     },
   );
 
@@ -138,7 +155,7 @@ describe("worker live Gateway chat projection", () => {
       };
       if (phaseAt !== "explicit") {
         live.preview(message(commentary.text));
-        await expectChatText("Prior answer\nChecking...");
+        await expectChatText("Prior answer\n\nChecking...");
       }
       const authoritative = makeAgentAssistantMessage({
         content: phaseAt === "mixed" ? [commentary, final] : [commentary],
@@ -161,7 +178,7 @@ describe("worker live Gateway chat projection", () => {
       live.end(authoritative);
       live.end(authoritative);
       await live.finish();
-      await expectChatText("Prior answer\n" + (phaseAt === "mixed" ? "Answer" : ""));
+      await expectChatText(phaseAt === "mixed" ? "Prior answer\n\nAnswer" : "Prior answer\n");
     },
   );
 
@@ -174,7 +191,7 @@ describe("worker live Gateway chat projection", () => {
       live.preview(message("🚀".repeat(9_000) + suffix), 0, suffix ? suffix.slice(-1) : undefined);
     }
     live.end(message("🚀".repeat(9_000) + "ABC"));
-    const expected = "Before tool\n" + "🚀".repeat(1_023) + "…";
+    const expected = "Before tool\n\n" + "🚀".repeat(1_023) + "…";
     await expectChatText(expected);
     const snapshots = harness.requestParams("worker.live-event").flatMap((params) => {
       const { event } = params as WorkerLiveEventParams;
@@ -185,7 +202,7 @@ describe("worker live Gateway chat projection", () => {
     );
     expect(snapshots.every((snapshot) => !snapshot.text.includes("\uFFFD"))).toBe(true);
     live.end(message("Short"));
-    await expectChatText("Before tool\nShort");
+    await expectChatText("Before tool\n\nShort");
     await live.finish();
   });
 
@@ -238,11 +255,13 @@ describe("worker live Gateway chat projection", () => {
       live.start();
       live.end(message("x".repeat(16_000)));
     }
-    await expectChatText("x".repeat(500_000));
+    // The 31 paragraph separators leave 3,938 characters of the first item after capping.
+    const retainedPrefix = "x".repeat(3_938) + ("\n\n" + "x".repeat(16_000)).repeat(30);
+    await expectChatText(retainedPrefix + "\n\n" + "x".repeat(16_000));
     live.end(message("Short"));
-    await expectChatText("x".repeat(484_000) + "Short");
+    await expectChatText(retainedPrefix + "\n\nShort");
     live.end(message(""));
-    await expectChatText("x".repeat(484_000));
+    await expectChatText(retainedPrefix);
     await live.finish();
   });
 

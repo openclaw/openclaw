@@ -1,5 +1,6 @@
 // Legacy model-provider aliases that encoded runtime/backend selection in model refs.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStaticProviderModelId } from "../../../agents/model-ref-shared.js";
 
 type LegacyRuntimeModelProviderAlias = {
@@ -11,8 +12,6 @@ type LegacyRuntimeModelProviderAlias = {
   runtime: string;
   /** True when the runtime is a CLI backend rather than an embedded harness. */
   cli: boolean;
-  /** True when doctor must write a runtime policy even if the target runtime is the default. */
-  requiresRuntimePolicy: boolean;
 };
 
 const LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES = [
@@ -21,28 +20,24 @@ const LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES = [
     provider: "openai",
     runtime: "codex",
     cli: false,
-    requiresRuntimePolicy: true,
   },
   {
     legacyProvider: "codex-cli",
     provider: "openai",
     runtime: "codex",
     cli: false,
-    requiresRuntimePolicy: true,
   },
   {
     legacyProvider: "claude-cli",
     provider: "anthropic",
     runtime: "claude-cli",
     cli: true,
-    requiresRuntimePolicy: true,
   },
   {
     legacyProvider: "google-gemini-cli",
     provider: "google",
     runtime: "google-gemini-cli",
     cli: true,
-    requiresRuntimePolicy: true,
   },
 ] as const satisfies readonly LegacyRuntimeModelProviderAlias[];
 
@@ -58,17 +53,18 @@ const LEGACY_ALIAS_BY_PROVIDER = new Map(
   ]),
 );
 
-/** List legacy model-provider aliases that doctor can migrate to provider/runtime policy. */
-export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeModelProviderAlias[] {
-  return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
-}
-
-/** Return true when a legacy provider alias requires writing explicit runtime policy. */
-export function legacyRuntimeModelAliasRequiresRuntimePolicy(provider: string): boolean {
-  return (
-    LEGACY_ALIAS_BY_PROVIDER.get(normalizeLegacyRuntimeProviderId(provider))
-      ?.requiresRuntimePolicy === true
+/** Resolve the provider/runtime pair selected by a retired whole-agent CLI runtime. */
+export function resolveLegacyCliRuntimeAlias(
+  runtimeId: unknown,
+): { provider: string; runtime: string } | undefined {
+  const runtime = normalizeOptionalLowercaseString(runtimeId);
+  if (!runtime || runtime === "auto" || runtime === "openclaw") {
+    return undefined;
+  }
+  const alias = LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.find(
+    (entry) => entry.cli && normalizeProviderId(entry.runtime) === runtime,
   );
+  return alias ? { provider: alias.provider, runtime: alias.runtime } : undefined;
 }
 
 function resolveLegacyRuntimeModelProviderAlias(

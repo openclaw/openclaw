@@ -54,6 +54,8 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     { name: "model reset", patch: { model: null } },
     { name: "icon set", patch: { icon: "🦞" } },
     { name: "icon reset", patch: { icon: null } },
+    { name: "automatic device name", patch: { autoLabel: "OpenClaw App · Pixel" } },
+    { name: "automatic device name reset", patch: { autoLabel: null } },
     {
       name: "safe mixed patch",
       patch: { label: "Renamed", archived: true, model: "openai/gpt-5.6-luna" },

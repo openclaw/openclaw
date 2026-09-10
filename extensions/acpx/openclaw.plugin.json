@@ -1,5 +1,6 @@
 {
   "id": "acpx",
+  "categories": ["runtime", "tools"],
   "backupResources": [
     {
       "disposition": "regenerable",

@@ -21,6 +21,7 @@ import {
   readAssistantDisplayContent,
   retainAssistantModelContent,
 } from "../shared/assistant-display-content.js";
+import { readClawHubRecommendations } from "../shared/clawhub-recommendations.js";
 import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
@@ -114,9 +115,11 @@ async function completePersistedInternalSourceReply(params: {
 }
 
 function attachSourceReplyMedia(result: TranscriptMessageAppendResult<unknown>): void {
-  // This producer writes only text and managed-media blocks.
+  // Catalog cards are display content, not media custody; only media is promoted after commit.
   const message = result.message;
-  const blocks = readAssistantDisplayContent(message).filter((block) => block.type !== "text");
+  const blocks = readAssistantDisplayContent(message).filter(
+    (block) => block.type !== "text" && block.type !== "clawhub",
+  );
   if (
     blocks.length > 0 &&
     !attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks })
@@ -167,6 +170,7 @@ export async function persistInternalSourceReply(params: {
     let committed = false;
     try {
       const content: Array<Record<string, unknown>> = [
+        ...readClawHubRecommendations(params.payload.channelData),
         ...(params.payload.text ? [{ type: "text", text: params.payload.text }] : []),
         ...mediaBlocks,
       ];

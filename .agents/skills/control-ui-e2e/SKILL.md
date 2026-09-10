@@ -76,6 +76,11 @@ Extend `installMockGateway` with typed scenario options or method responses when
 
 ## Standalone Recording
 
+For narrated captions, eased target zooms, or fast-forwarded pauses, use the
+[proof-video dev skill](../proof-video/SKILL.md). Its standalone template records
+raw evidence plus a cue sidecar and renders a captioned MP4 with system ffmpeg;
+keep the raw capture and attach the inspected polished video.
+
 When recording an already-running mocked Control UI URL, use a temporary Playwright script or `playwright test` spec and keep the recording flow focused:
 
 - Open the mock URL, interact through stable `data-*` selectors or user-facing role selectors, and wait on asserted states instead of relying on fixed sleeps.

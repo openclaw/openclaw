@@ -345,9 +345,10 @@ export async function validateUpdateCandidateCanary(params: {
         }
       }
       if (code === 0 && phase === "runtime") {
-        candidateSchemaVersions = running.outputExceeded()
+        const contract: unknown = running.outputExceeded()
           ? undefined
-          : parseOpenClawSchemaVersions(JSON.parse(running.stdout()));
+          : JSON.parse(running.stdout());
+        candidateSchemaVersions = parseOpenClawSchemaVersions(contract);
         if (!candidateSchemaVersions) {
           code = 1;
           capture("Candidate migration continuation did not report its schema contract");

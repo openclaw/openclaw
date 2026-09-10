@@ -67,6 +67,7 @@ const SUPPORTED_FORM_SCHEMA_KEYS = new Set([
   "anyOf",
   "oneOf",
   "allOf",
+  "not",
 ]);
 const RENDERABLE_UNION_TYPES = new Set([
   "string",
@@ -158,7 +159,27 @@ function hasOnlySupportedConstraintKeywords(schema: JsonSchema): boolean {
 }
 
 function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
-  return hasOnlySupportedKeywords(schema, SUPPORTED_FORM_SCHEMA_KEYS);
+  if (!hasOnlySupportedKeywords(schema, SUPPORTED_FORM_SCHEMA_KEYS)) {
+    return false;
+  }
+  if (schema.not === undefined) {
+    return true;
+  }
+  if (
+    inferredSchemaType(schema) !== "object" ||
+    !schema.not ||
+    typeof schema.not !== "object" ||
+    Array.isArray(schema.not)
+  ) {
+    return false;
+  }
+  const required = schema.not.required;
+  return (
+    Array.isArray(required) &&
+    required.length > 0 &&
+    required.every((key) => typeof key === "string") &&
+    Object.keys(schema.not).every((key) => key === "required" || META_KEYS.has(key))
+  );
 }
 
 function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<string>): boolean {

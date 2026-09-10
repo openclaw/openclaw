@@ -91,6 +91,7 @@ setPhase("preparation");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
   const pidFile = path.join(stateDir, "node.pid");
+  const launchFile = path.join(stateDir, "node-launch.json");
   const setupFile = path.join(stateDir, "setup-code");
   const runtimeLink = path.join(stateDir, "runtime");
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
@@ -105,6 +106,11 @@ setPhase("preparation");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(stateDir, 0o700);
   }
+  const probeProcess = (binary, args) => {
+    const result = spawnSync(binary, args, { env: nodeEnv, encoding: "utf8", timeout: 2000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 });
+    return result.status === 0 && !result.error ? result.stdout.trim() : null;
+  };
+  const processStartTime = (pid) => probeProcess("ps", ["-o", "lstart=", "-p", String(pid)])?.replace(/\\s+/g, " ");
   if (mode && fs.existsSync(pidFile)) {
     const pidText = fs.readFileSync(pidFile, "utf8").trim();
     if (!/^[1-9][0-9]*$/.test(pidText)) throw new Error("Cloud worker node PID is invalid; release and reprovision the worker");
@@ -112,12 +118,30 @@ setPhase("preparation");
     let alive = true;
     try { process.kill(pid, 0); } catch (error) { if (error.code !== "ESRCH") throw error; alive = false; }
     if (alive) {
-      const args = fs.readFileSync(path.join("/proc", pidText, "cmdline"), "utf8").split("\\0");
-      const env = fs.readFileSync(path.join("/proc", pidText, "environ"), "utf8").split("\\0");
-      // OpenClaw changes process.title; the immutable install cwd survives that argv rewrite.
-      const title = args[0];
-      const nodeInvocation = args[1] === cli || ["openclaw", "openclaw-connect", "openclaw-node"].includes(title);
-      if (!nodeInvocation || fs.realpathSync(path.join("/proc", pidText, "cwd")) !== runtimeDir || !env.includes("OPENCLAW_STATE_DIR=" + stateDir)) {
+      let verified = false;
+      if (process.platform === "linux") {
+        const args = fs.readFileSync(path.join("/proc", pidText, "cmdline"), "utf8").split("\\0");
+        const env = fs.readFileSync(path.join("/proc", pidText, "environ"), "utf8").split("\\0");
+        // OpenClaw changes process.title; the immutable install cwd survives that argv rewrite.
+        const title = args[0];
+        const nodeInvocation = args[1] === cli || ["openclaw", "openclaw-connect", "openclaw-node"].includes(title);
+        verified = nodeInvocation && fs.realpathSync(path.join("/proc", pidText, "cwd")) === runtimeDir && env.includes("OPENCLAW_STATE_DIR=" + stateDir);
+      } else {
+        try {
+          // Darwin loses ps-visible environment when process.title changes. Bind the launch
+          // facts to this live process's start time, then independently verify argv and cwd.
+          const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));
+          const startTime = processStartTime(pid);
+          const command = probeProcess("ps", ["-ww", "-o", "command=", "-p", pidText]);
+          const invocation = process.execPath + " " + cli;
+          const nodeInvocation = command !== null && (["openclaw", "openclaw-connect", "openclaw-node"].includes(command) || command === invocation || command.startsWith(invocation + " "));
+          const cwdArgs = ["-a", "-p", pidText, "-d", "cwd", "-Fn"];
+          const cwdOutput = probeProcess("lsof", cwdArgs) ?? probeProcess("/usr/sbin/lsof", cwdArgs);
+          const cwd = cwdOutput?.split("\\n").filter((line) => line.startsWith("n"));
+          verified = launch.pid === pid && Boolean(startTime) && launch.startTime === startTime && launch.runtimeDir === runtimeDir && launch.stateDir === stateDir && launch.cli === cli && nodeInvocation && cwd?.length === 1 && fs.realpathSync(cwd[0].slice(1)) === runtimeDir;
+        } catch { /* Missing launch or process identity must never authorize replay. */ }
+      }
+      if (!verified) {
         throw new Error("Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker");
       }
       setPhase("complete");
@@ -290,7 +314,18 @@ setPhase("preparation");
   try {
     child = spawn(process.execPath, [cli, ...args, "--ephemeral", "--display-name", displayName], { cwd: runtimeDir, env: nodeEnv, detached: true, stdio: ["ignore", log, log] });
     await once(child, "spawn");
-    try { fs.writeFileSync(pidFile, String(child.pid) + "\\n", { mode: 0o600 }); }
+    try {
+      if (process.platform !== "linux") {
+        const startTime = processStartTime(child.pid);
+        if (!startTime) throw new Error("Cloud worker node start time is unavailable; release and reprovision the worker");
+        const temporary = launchFile + "." + crypto.randomUUID();
+        try {
+          fs.writeFileSync(temporary, JSON.stringify({ pid: child.pid, startTime, runtimeDir, stateDir, cli }), { mode: 0o600, flag: "wx" });
+          fs.renameSync(temporary, launchFile);
+        } finally { fs.rmSync(temporary, { force: true }); }
+      }
+      fs.writeFileSync(pidFile, String(child.pid) + "\\n", { mode: 0o600 });
+    }
     catch (error) { process.kill(-child.pid, "SIGTERM"); throw error; }
     child.unref();
   } finally { fs.closeSync(log); }

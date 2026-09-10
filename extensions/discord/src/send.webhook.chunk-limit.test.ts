@@ -76,7 +76,7 @@ describe("Discord webhook delivery", () => {
     {
       label: "configured table formatting",
       text: "| A | B |\n| - | - |\n| x | y |",
-      expected: "```\n| A | B |\n| --- | --- |\n| x | y |\n```",
+      expected: "```\n| A   | B   |\n| --- | --- |\n| x   | y   |\n```",
       tableMode: undefined,
     },
     {

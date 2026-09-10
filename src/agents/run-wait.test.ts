@@ -20,6 +20,7 @@ import {
   waitForAgentRunsToDrain,
   waitForAgentRunReply,
 } from "./run-wait.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 type AgentWaitGatewayRequest = {
   method?: string;
@@ -79,10 +80,7 @@ describe("readLatestAssistantReply", () => {
   it("returns the most recent assistant message when compaction markers trail history", async () => {
     callGatewayMock.mockResolvedValue({
       messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "All checks passed and changes were pushed." }],
-        },
+        textAssistant("All checks passed and changes were pushed."),
         { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
         { role: "system", content: [{ type: "text", text: "Compaction" }] },
       ],

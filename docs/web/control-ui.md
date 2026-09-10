@@ -154,3 +154,4 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Health Checks](/gateway/health) — gateway health monitoring
 - [TUI](/web/tui) — terminal user interface
 - [WebChat](/web/webchat) — browser-based chat interface
+- [Codex session catalog and supervision](/plugins/codex-supervision) — the Native Session Discovery settings surface

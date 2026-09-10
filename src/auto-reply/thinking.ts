@@ -258,14 +258,11 @@ export function resolveThinkingProfile(params: {
         })
       : undefined;
   const pluginProfile = providerProfile ?? anthropicMessagesProfile;
-  if (pluginProfile) {
-    const normalized = normalizeThinkingProfile(pluginProfile);
-    if (
-      normalized.levels.length > 0 &&
-      (context.reasoning !== false || pluginProfile.preserveWhenCatalogReasoningFalse === true)
-    ) {
-      return normalized;
-    }
+  if (
+    pluginProfile &&
+    (context.reasoning !== false || pluginProfile.preserveWhenCatalogReasoningFalse === true)
+  ) {
+    return normalizeThinkingProfile(pluginProfile);
   }
   if (context.reasoning === false) {
     return buildOffOnlyThinkingProfile();

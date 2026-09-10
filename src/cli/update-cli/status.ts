@@ -1,6 +1,7 @@
 // `openclaw update status`: combines install metadata, configured channel, and remote update checks.
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { collectNodeRuntimeFindings } from "../../commands/node-runtime-diagnostics.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
@@ -8,6 +9,7 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   normalizeUpdateChannel,
   resolveUpdateChannelDisplay,
@@ -23,6 +25,28 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 
+function readUpdateRunStatus() {
+  try {
+    const activeRun = findActiveUpdateRun();
+    const lastRun = listUpdateRuns({ limit: 1 })[0];
+    const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
+    const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
+    return {
+      ...(activeRun ? { activeRun } : {}),
+      ...(lastRun ? { lastRun } : {}),
+      ...(staleGuidance && activeRun
+        ? { staleRun: { runId: activeRun.runId, guidance: staleGuidance } }
+        : {}),
+      ...(abandonment && activeRun
+        ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
+        : {}),
+    };
+  } catch (error) {
+    // History is optional diagnostic context; an unavailable read is not an empty ledger.
+    return { runStatusError: formatErrorMessage(error) };
+  }
+}
+
 /** Print update status in JSON or table form for scripts and humans. */
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
@@ -30,7 +54,11 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     return;
   }
 
-  const [root, config] = await Promise.all([resolveUpdateRoot(), readSourceConfigBestEffort()]);
+  const [root, config, runtimeFindings] = await Promise.all([
+    resolveUpdateRoot(),
+    readSourceConfigBestEffort(),
+    collectNodeRuntimeFindings(),
+  ]);
   const configChannel = normalizeUpdateChannel(config.update?.channel);
 
   const update = await checkUpdateStatus({
@@ -58,10 +86,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const updateAvailability = resolveUpdateAvailability(update);
 
-  const activeRun = findActiveUpdateRun();
-  const lastRun = listUpdateRuns({ limit: 1 })[0];
-  const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
-  const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
+  const runStatus = readUpdateRunStatus();
 
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -73,14 +98,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
         config: configChannel,
       },
       availability: updateAvailability,
-      ...(activeRun ? { activeRun } : {}),
-      ...(lastRun ? { lastRun } : {}),
-      ...(staleGuidance && activeRun
-        ? { staleRun: { runId: activeRun.runId, guidance: staleGuidance } }
-        : {}),
-      ...(abandonment && activeRun
-        ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
-        : {}),
+      ...(runtimeFindings.length > 0 ? { runtimeFindings } : {}),
+      ...runStatus,
     });
     return;
   }
@@ -107,6 +126,19 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   defaultRuntime.log(theme.heading("OpenClaw update status"));
   defaultRuntime.log("");
+  for (const finding of runtimeFindings) {
+    const color =
+      finding.severity === "error"
+        ? theme.error
+        : finding.severity === "warning"
+          ? theme.warn
+          : theme.muted;
+    defaultRuntime.log(color(finding.message));
+    if (finding.fixHint) {
+      defaultRuntime.log(finding.fixHint);
+    }
+    defaultRuntime.log("");
+  }
   defaultRuntime.log(
     renderTable({
       width: tableWidth,
@@ -119,24 +151,30 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   );
   defaultRuntime.log("");
 
-  const run = activeRun ?? lastRun;
-  if (run) {
-    if (staleGuidance) {
-      defaultRuntime.log(`Update ${run.runId}: ${staleGuidance}`);
-    }
-    if (abandonment) {
-      defaultRuntime.log(
-        "Abandoned update detected; the Gateway will reconcile its recorded outcome. Run openclaw update repair to reconcile it now.",
-      );
-    }
-    const report = renderUpdateRunReport(run);
-    if (!abandonment && !staleGuidance) {
-      defaultRuntime.log(report.headline);
-    }
-    for (const line of report.lines) {
-      defaultRuntime.log(line);
-    }
+  if ("runStatusError" in runStatus) {
+    defaultRuntime.log(theme.warn(`Update run status unavailable: ${runStatus.runStatusError}`));
     defaultRuntime.log("");
+  } else {
+    const { activeRun, lastRun, staleRun, abandonedRun } = runStatus;
+    const run = activeRun ?? lastRun;
+    if (run) {
+      if (staleRun) {
+        defaultRuntime.log(`Update ${run.runId}: ${staleRun.guidance}`);
+      }
+      if (abandonedRun) {
+        defaultRuntime.log(
+          "Abandoned update detected; the Gateway will reconcile its recorded outcome. Run openclaw update repair to reconcile it now.",
+        );
+      }
+      const report = renderUpdateRunReport(run);
+      if (!abandonedRun && !staleRun) {
+        defaultRuntime.log(report.headline);
+      }
+      for (const line of report.lines) {
+        defaultRuntime.log(line);
+      }
+      defaultRuntime.log("");
+    }
   }
 
   const updateHint = formatUpdateAvailableHint(update);

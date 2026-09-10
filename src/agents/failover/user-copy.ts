@@ -6,6 +6,7 @@ import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
+  formatTransportErrorCopy,
   isCloudflareOrHtmlErrorPage,
   isGenericProviderInternalError,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
@@ -176,54 +177,6 @@ export function renderRateLimitOrOverloadedCopy(params: {
   );
 }
 
-export function formatTransportErrorCopy(raw: string): string | undefined {
-  if (!raw || isCloudflareOrHtmlErrorPage(raw)) {
-    return undefined;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (
-    /\beconnrefused\b/i.test(raw) ||
-    lower.includes("connection refused") ||
-    lower.includes("actively refused")
-  ) {
-    return "LLM request failed: connection refused by the provider endpoint.";
-  }
-  if (
-    /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i.test(raw) ||
-    lower.includes("socket hang up") ||
-    lower.includes("connection reset") ||
-    lower.includes("connection aborted")
-  ) {
-    return "LLM request failed: network connection was interrupted.";
-  }
-  if (
-    /\benotfound\b|\beai_again\b/i.test(raw) ||
-    lower.includes("getaddrinfo") ||
-    lower.includes("no such host") ||
-    lower.includes("dns")
-  ) {
-    return "LLM request failed: DNS lookup for the provider endpoint failed.";
-  }
-  if (
-    /\benetunreach\b|\behostunreach\b|\behostdown\b/i.test(raw) ||
-    lower.includes("network is unreachable") ||
-    lower.includes("host is unreachable")
-  ) {
-    return "LLM request failed: the provider endpoint is unreachable from this host.";
-  }
-  if (
-    lower.includes("fetch failed") ||
-    lower.includes("connection error") ||
-    lower.includes("network request failed")
-  ) {
-    return "LLM request failed: network connection error.";
-  }
-  if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
-    return "LLM request failed: provider reported a network error.";
-  }
-  return undefined;
-}
-
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
   const lower = normalizeLowercaseStringOrEmpty(raw);
   return /\benospc\b/i.test(raw) ||
@@ -331,6 +284,19 @@ export function renderSanitizedUserFacingText(
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
     return renderFailoverBaseCopy(reason, { raw: trimmed }) ?? trimmed;
+  }
+  // Reason-level provider copy is surface-independent: the channel reply path renders
+  // it from failover facts, while session transcripts, run status, and the TUI read
+  // this renderer. Facets stay null so the rate-limit/overload branches above keep
+  // provider retry detail; labeled statuses ("unexpected status 401 ...") never carry
+  // a leading code, so the status is re-read from the full error grammar here.
+  const providerRequestCopy = renderProviderRequestFailureCopy({
+    classification: reason ? { kind: "reason", reason } : null,
+    facet: null,
+    status: extractErrorHttpStatus(trimmed)?.code,
+  });
+  if (providerRequestCopy) {
+    return providerRequestCopy;
   }
   if (isGenericProviderInternalError(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);

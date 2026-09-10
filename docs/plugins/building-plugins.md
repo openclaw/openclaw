@@ -93,6 +93,7 @@ local proof.
   "id": "my-plugin",
   "name": "My Plugin",
   "description": "Adds a custom tool to OpenClaw",
+  "categories": ["tools"],
   "contracts": {
     "tools": ["my_tool"]
   },
@@ -420,3 +421,6 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 - [Plugin hooks](/plugins/hooks)
 - [Plugin architecture](/plugins/architecture)
+- [Plugin architecture internals](/plugins/architecture-internals)
+- [Plugin SDK subpaths](/plugins/sdk-subpaths)
+- [Manage plugins](/plugins/manage-plugins)

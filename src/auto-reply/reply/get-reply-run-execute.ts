@@ -141,8 +141,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   } = params;
 
   const runHasStoredSessionModelOverride = Boolean(
-    normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
-    normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
+    preparedSessionState.sessionEntry?.modelOverrideSource !== "default" &&
+    (normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
+      normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride)),
   );
   const runHasLegacyAutoFallbackWithoutOrigin =
     runHasStoredSessionModelOverride &&
@@ -150,7 +151,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const runHasSessionModelOverride =
     runHasStoredSessionModelOverride && !runHasLegacyAutoFallbackWithoutOrigin;
   const runModelOverrideSource = runHasSessionModelOverride
-    ? preparedSessionState.sessionEntry?.modelOverrideSource
+    ? preparedSessionState.sessionEntry?.modelOverrideSource === "default"
+      ? undefined
+      : preparedSessionState.sessionEntry?.modelOverrideSource
     : undefined;
   const runHasAutoFallbackProvenance =
     runHasSessionModelOverride &&
@@ -497,7 +500,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           : {}),
       },
       timeoutMs,
-      runTimeoutOverrideMs: opts?.timeoutOverrideSeconds !== undefined ? timeoutMs : undefined,
+      runTimeoutOverrideMs:
+        opts?.timeoutOverrideMs !== undefined || opts?.timeoutOverrideSeconds !== undefined
+          ? timeoutMs
+          : undefined,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: resolveOwnerPromptNumbers({
         ownerNumbers: command.ownerList,

@@ -26,4 +26,6 @@ export type SidebarLayout = {
   dock?: SidebarDock;
   open?: boolean;
   expanded?: boolean;
+  /** Focus the active side panel without swapping its saved main/side placement. */
+  expandedSide?: boolean;
 };

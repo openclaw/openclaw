@@ -136,7 +136,7 @@ if (
     loadCliDotEnv({ quiet: true });
     await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   }
-  assertSupportedRuntime();
+  await assertSupportedRuntime(undefined, undefined, process.argv, false);
   gatewayEntryStartupTrace.mark("bootstrap");
 
   const waitingForCompileCacheRespawn = await respawnWithoutOpenClawCompileCacheIfNeeded({
@@ -178,6 +178,8 @@ if (
     }
 
     if (!(await ensureCliRespawnReady())) {
+      // Only the final child emits the diagnostic warning; parents still enforce admission.
+      await assertSupportedRuntime(undefined, undefined, process.argv);
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
         await writeCapturedCliArgumentError(parsedContainer.error);
@@ -283,6 +285,9 @@ export async function runMainOrRootHelp(
   argv: string[],
   deps: RunMainOrRootHelpDeps = {},
 ): Promise<void> {
+  // Command-phase errors reach this handler too: runCommandWithRuntime rethrows in JSON
+  // mode so the envelope is written here. Only failures before runCli are startup failures.
+  let commandStarted = false;
   await runCliWithExitFinalization({
     run: async () => {
       if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
@@ -304,6 +309,7 @@ export async function runMainOrRootHelp(
         "run-main-import",
         deps.loadRunCli ?? (() => import("./cli/run-main.js")),
       );
+      commandStarted = true;
       await runCli(argv, {
         additionalStartupTrace: gatewayEntryStartupTrace,
         // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
@@ -322,7 +328,7 @@ export async function runMainOrRootHelp(
         defaultRuntime.writeJson(formatCliJsonFailure(error));
       }
       for (const line of formatCliFailureLines({
-        title: "Could not start the CLI.",
+        title: commandStarted ? "The CLI command failed." : "Could not start the CLI.",
         error,
         argv,
       })) {

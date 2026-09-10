@@ -346,32 +346,51 @@ export function generatePluginNpmPackageLockWithRetry(
   throw new Error(`package-lock generation retry loop exhausted for ${pluginDir}`);
 }
 
-function resolveInstalledPackageDir(packageDir: string, packageName: string) {
-  return path.join(packageDir, "node_modules", ...packageName.split("/"));
+function resolveInstalledPackageDir(
+  packageDir: string,
+  packageName: string,
+  fromDir = packageDir,
+): string | undefined {
+  const root = fs.realpathSync(packageDir);
+  let current = fs.realpathSync(fromDir);
+  while (true) {
+    const relative = path.relative(root, current);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      return undefined;
+    }
+    const candidate = path.join(current, "node_modules", ...packageName.split("/"));
+    if (fs.existsSync(path.join(candidate, "package.json"))) {
+      const resolved = fs.realpathSync(candidate);
+      const resolvedRelative = path.relative(root, resolved);
+      if (
+        resolvedRelative === ".." ||
+        resolvedRelative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(resolvedRelative)
+      ) {
+        return undefined;
+      }
+      return resolved;
+    }
+    if (current === root) {
+      return undefined;
+    }
+    current = path.dirname(current);
+  }
 }
 
-function readInstalledPackageJson(packageDir: string, packageName: string) {
-  const packageJsonPath = path.join(
-    resolveInstalledPackageDir(packageDir, packageName),
-    "package.json",
-  );
-  if (!fs.existsSync(packageJsonPath)) {
+function readInstalledPackageJson(packageDir: string, packageName: string, fromDir = packageDir) {
+  const installedDir = resolveInstalledPackageDir(packageDir, packageName, fromDir);
+  if (!installedDir) {
     return undefined;
   }
   try {
     return {
-      packageDir: path.dirname(packageJsonPath),
-      packageJson: readJsonFile(packageJsonPath),
+      packageDir: installedDir,
+      packageJson: readJsonFile(path.join(installedDir, "package.json")),
     };
   } catch {
     return undefined;
   }
-}
-
-function hasInstalledPackage(packageDir: string, packageName: string) {
-  return fs.existsSync(
-    path.join(resolveInstalledPackageDir(packageDir, packageName), "package.json"),
-  );
 }
 
 function normalizeOptionalDependencySpec(
@@ -399,31 +418,33 @@ function collectMissingOptionalBundledDependencySpecs(
   packageDir: string,
   packageJson: PluginPackageJson,
 ) {
-  const queue = listConfiguredBundledDependencyNames(packageJson);
+  const queue = listConfiguredBundledDependencyNames(packageJson).map((name) => ({
+    name,
+    fromDir: fs.realpathSync(packageDir),
+  }));
   const visited = new Set<string>();
   const missing = new Map<string, string>();
 
   while (queue.length > 0) {
-    const packageName = queue.shift();
-    if (!packageName || visited.has(packageName)) {
+    const dependency = queue.shift();
+    if (!dependency) {
       continue;
     }
-    visited.add(packageName);
-
-    const installed = readInstalledPackageJson(packageDir, packageName);
-    if (!installed) {
+    const installed = readInstalledPackageJson(packageDir, dependency.name, dependency.fromDir);
+    if (!installed || visited.has(installed.packageDir)) {
       continue;
     }
+    visited.add(installed.packageDir);
     const dependencyNames = [
       ...Object.keys(installed.packageJson.dependencies ?? {}),
       ...Object.keys(installed.packageJson.optionalDependencies ?? {}),
     ].toSorted((left, right) => left.localeCompare(right));
-    queue.push(...dependencyNames);
+    queue.push(...dependencyNames.map((name) => ({ name, fromDir: installed.packageDir })));
 
     for (const [optionalName, optionalSpec] of Object.entries(
       installed.packageJson.optionalDependencies ?? {},
     ).toSorted(([left], [right]) => left.localeCompare(right))) {
-      if (hasInstalledPackage(packageDir, optionalName)) {
+      if (resolveInstalledPackageDir(packageDir, optionalName, installed.packageDir)) {
         continue;
       }
       const normalizedSpec = normalizeOptionalDependencySpec(

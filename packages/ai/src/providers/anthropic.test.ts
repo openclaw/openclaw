@@ -24,6 +24,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
 
@@ -900,14 +901,7 @@ describe("Anthropic provider", () => {
             ],
             { stopReason: "toolUse" },
           ),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "42" }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("call_1", "lookup", "42", false, 0),
         ],
       },
     );
@@ -1011,14 +1005,7 @@ describe("Anthropic provider", () => {
             ],
             { model: model.id, stopReason: "toolUse" },
           ),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "42" }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("call_1", "lookup", "42", false, 0),
         ],
       },
     );
@@ -2415,7 +2402,7 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("anchors the message cache breakpoint on an append-only runtime-context carrier", async () => {
+  it("anchors the message cache breakpoint before transient runtime context", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
       {},
       { stopBeforeNetwork: true },
@@ -2425,7 +2412,7 @@ describe("Anthropic provider", () => {
           { role: "user", content: "stable question", timestamp: 0 },
           {
             role: "user",
-            content: "retained current-turn metadata",
+            content: "transient current-turn metadata",
             timestamp: 1,
             runtimeContextCarrier: true,
           },
@@ -2435,14 +2422,14 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    expect(messages[0]?.content).toBe("stable question");
-    expect(messages[1]?.content).toEqual([
+    expect(messages[0]?.content).toEqual([
       {
         type: "text",
-        text: "retained current-turn metadata",
+        text: "stable question",
         cache_control: { type: "ephemeral" },
       },
     ]);
+    expect(messages[1]?.content).toBe("transient current-turn metadata");
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

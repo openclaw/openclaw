@@ -62,6 +62,20 @@ const requiredSubpathExports: Record<string, string[]> = {
   ],
 };
 
+// This private runtime facade has declarations only in the private-QA profile.
+// Do not require its types from ordinary public-package builds.
+const privateSessionManagerConsumer = isPrivateQaPluginSdkBuild(process.env)
+  ? `import { SessionManager, type SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
+
+// Private facade declarations must preserve callable access to persist.
+declare const sessionManager: SessionManager;
+declare const sessionEntry: SessionEntry;
+sessionManager.persist(sessionEntry);
+sessionManager.persist(sessionEntry, {});
+// @ts-expect-error Persist still requires a complete session entry.
+sessionManager.persist({});`
+  : "";
+
 let missing = 0;
 
 {
@@ -89,6 +103,7 @@ import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sd
 import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import type { buildModelsProviderData as buildCommandAuthModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import { z } from "zod";
+${privateSessionManagerConsumer}
 
 // Stable v2026.7.1-2 consumers construct these results and supply typed adapters.
 const legacyModelsData = {

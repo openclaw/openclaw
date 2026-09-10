@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createEmptyTransportUsage } from "../transports/transport-stream-shared.js";
 import type { Context, Tool } from "../types.js";
 import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js";
@@ -200,14 +201,7 @@ describe("google-shared convertMessages", () => {
         usage: createEmptyTransportUsage(),
         timestamp: 0,
       };
-      const result = {
-        role: "toolResult" as const,
-        toolCallId: "call_1",
-        toolName: "lookup",
-        content: [{ type: "text" as const, text: "ok" }],
-        isError: false,
-        timestamp: 1,
-      };
+      const result = makeTextToolResult("call_1", "lookup", "ok", false, 1);
       const contents = projectGoogleMessages({
         model,
         replay,
@@ -374,14 +368,7 @@ describe("google-shared convertMessages", () => {
           makeGoogleAssistantMessage(model.id, [
             { ...toolCall, arguments: first, thoughtSignature: "c2lnbmVk" },
           ]),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "cats" }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("call_1", "lookup", "cats", false, 0),
           makeGoogleAssistantMessage(model.id, [{ ...toolCall, arguments: second }]),
         ],
       } as Context);
@@ -400,14 +387,7 @@ describe("google-shared convertMessages", () => {
     const contents = convertMessagesForTest(model, {
       messages: [
         makeGoogleAssistantMessage(model.id, [{ ...cachedCall, thoughtSignature: "c2lnbmVk" }]),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "lookup",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("call_1", "lookup", "ok", false, 0),
         makeGoogleAssistantMessage(model.id, [
           { type: "toolCall", id: "other", name: "different", arguments: {} },
           cachedCall,
@@ -628,14 +608,7 @@ describe("google-shared convertMessages", () => {
             arguments: { arg: "value" },
           },
         ]),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "myTool",
-          content: [{ type: "text", text: "Tool result" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("call_1", "myTool", "Tool result", false, 0),
         {
           role: "user",
           content: "Now do something else",
@@ -703,14 +676,7 @@ describe("google-shared convertMessages", () => {
             thoughtSignature: "dGVzdA==",
           },
         ]),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "myTool",
-          content: [{ type: "text", text: "Tool result" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("call_1", "myTool", "Tool result", false, 0),
       ],
     } as unknown as Context;
 
@@ -737,14 +703,7 @@ describe("google-shared convertMessages", () => {
         makeGoogleAssistantMessage(model.id, [
           { type: "toolCall", id: "provider_call_42", name: "lookup", arguments: {} },
         ]),
-        {
-          role: "toolResult",
-          toolCallId: "provider_call_42",
-          toolName: "lookup",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("provider_call_42", "lookup", "ok", false, 0),
       ],
     } as Context);
 

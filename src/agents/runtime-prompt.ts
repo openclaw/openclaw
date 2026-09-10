@@ -16,6 +16,7 @@ export async function resolveAgentRuntimePrompt(params: {
   workspaceDir?: string;
   cwd?: string;
   preparedRepoRoot?: string | null;
+  preparedGitCoauthorPrompt?: string | null;
   sessionKey?: string;
   sessionId?: string;
   model: string;
@@ -49,6 +50,9 @@ export async function resolveAgentRuntimePrompt(params: {
     cwd: params.cwd,
     ...(Object.hasOwn(params, "preparedRepoRoot")
       ? { preparedRepoRoot: params.preparedRepoRoot }
+      : {}),
+    ...(Object.hasOwn(params, "preparedGitCoauthorPrompt")
+      ? { preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt }
       : {}),
     runtime: {
       sessionKey: params.sessionKey,

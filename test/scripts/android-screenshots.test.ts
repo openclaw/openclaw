@@ -1,16 +1,26 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "scripts/android-screenshots.sh";
+const LINUX_SIPS_ADAPTER = "scripts/android-sips-linux.sh";
+const IMAGEMAGICK_CONVERT = "/usr/bin/convert";
+const IMAGEMAGICK_IDENTIFY = "/usr/bin/identify";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runAndroidScreenshots(args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync("bash", [SCRIPT, ...args], {
     encoding: "utf8",
     env: { ...process.env, ...env },
+  });
+}
+
+function runLinuxSipsAdapter(args: string[]) {
+  return spawnSync("bash", [LINUX_SIPS_ADAPTER, ...args], {
+    encoding: "utf8",
+    env: process.env,
   });
 }
 
@@ -147,4 +157,75 @@ exit 97
       "--keep-emulator requires --form-factor phone or --form-factor wear",
     );
   });
+
+  it("rejects unsupported Linux SIPS arguments", () => {
+    const wrongArguments = runLinuxSipsAdapter(["--help"]);
+    expect(wrongArguments.status).toBe(2);
+    expect(wrongArguments.stderr).toContain("unsupported arguments");
+  });
+
+  it.runIf(existsSync(IMAGEMAGICK_CONVERT) && existsSync(IMAGEMAGICK_IDENTIFY))(
+    "converts real phone and Wear PNGs to full-size true-color sRGB JPEGs",
+    () => {
+      const root = tempDirs.make("openclaw android sips real ");
+      const malformedInput = path.join(root, "malformed input.png");
+      const malformedOutput = path.join(root, "malformed output.jpg");
+      writeFileSync(malformedInput, "not an image", "utf8");
+      const malformed = runLinuxSipsAdapter([
+        "-s",
+        "format",
+        "jpeg",
+        "-s",
+        "formatOptions",
+        "best",
+        malformedInput,
+        "--out",
+        malformedOutput,
+      ]);
+      expect(malformed.status).not.toBe(0);
+      expect(malformed.stderr).toContain("input is not a readable image");
+      expect(existsSync(malformedOutput)).toBe(false);
+
+      for (const dimensions of ["1440x2560", "454x454"]) {
+        const input = path.join(root, `input ${dimensions}.png`);
+        const output = path.join(root, `output ${dimensions}.jpg`);
+        const fixture = spawnSync(
+          IMAGEMAGICK_CONVERT,
+          ["-size", dimensions, "xc:rgba(24,120,200,0.5)", input],
+          { encoding: "utf8" },
+        );
+        expect(fixture.status, fixture.stderr).toBe(0);
+
+        const result = runLinuxSipsAdapter([
+          "-s",
+          "format",
+          "jpeg",
+          "-s",
+          "formatOptions",
+          "best",
+          input,
+          "--out",
+          output,
+        ]);
+        expect(result.status, result.stderr).toBe(0);
+
+        const description = spawnSync(
+          IMAGEMAGICK_IDENTIFY,
+          ["-ping", "-format", "%m|%wx%h|%[colorspace]|%[type]|%[channels]|%Q", output],
+          { encoding: "utf8" },
+        );
+        expect(description.status, description.stderr).toBe(0);
+        const [format, size, colorspace, type, channels, quality] = description.stdout.split("|");
+        if (!colorspace || !channels) {
+          throw new Error("Expected JPEG colorspace and channel metadata");
+        }
+        expect(format).toBe("JPEG");
+        expect(size).toBe(dimensions);
+        expect(colorspace.toLowerCase()).toBe("srgb");
+        expect(type).toBe("TrueColor");
+        expect(channels.toLowerCase()).not.toContain("a");
+        expect(Number(quality)).toBeGreaterThanOrEqual(90);
+      }
+    },
+  );
 });

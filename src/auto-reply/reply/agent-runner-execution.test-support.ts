@@ -619,28 +619,34 @@ export function makeTestSessionStorePath(): string {
   );
 }
 
-export function createFailureRunAgentTurnParams(): AgentTurnParams {
+export function createAgentTurnExecutionDefaults() {
   return {
-    commandBody: "hello",
-    followupRun: createFollowupRun(),
-    sessionCtx: {
-      Provider: "whatsapp",
-      MessageSid: "msg",
-    },
-    opts: {},
-    typingSignals: createMockTypingSignaler(),
     blockReplyPipeline: null,
     blockStreamingEnabled: false,
     resolvedBlockStreamingBreak: "message_end",
     applyReplyToMode: (payload) => payload,
     shouldEmitToolResult: () => true,
     shouldEmitToolOutput: () => false,
-    pendingToolTasks: new Set(),
+    pendingToolTasks: new Set<Promise<void>>(),
     resetSessionAfterRoleOrderingConflict: async () => false,
     isHeartbeat: false,
     sessionKey: "main",
     getActiveSessionEntry: () => undefined,
     resolvedVerboseLevel: "off",
+  } satisfies Partial<AgentTurnParams>;
+}
+
+export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnParams {
+  return {
+    commandBody: "hello",
+    followupRun,
+    sessionCtx: {
+      Provider: "whatsapp",
+      MessageSid: "msg",
+    },
+    opts: {},
+    typingSignals: createMockTypingSignaler(),
+    ...createAgentTurnExecutionDefaults(),
   };
 }
 

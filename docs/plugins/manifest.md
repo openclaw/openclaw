@@ -237,7 +237,7 @@ The anchors from the single-page version still resolve here.
 | `commandAliases`                     | No       | `object[]`                   | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                                                                                                                                                                                                             |
 | `cliCommands`                        | No       | `object[]`                   | Root CLI commands shown in `openclaw --help` before plugin code loads. Each row requires `name`, `description`, and `hasSubcommands`.                                                                                                                                                                                                                                                            |
 | `providerUsageAuthEnvVars`           | No       | `Record<string, string[]>`   | Usage/billing-only provider credentials. OpenClaw uses these names for usage discovery and secret scrubbing but never for inference auth.                                                                                                                                                                                                                                                        |
-| `providerAuthAliases`                | No       | `Record<string, string>`     | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                                                                                                                                                                                       |
+| `providerAuthAliases`                | No       | `Record<string, AuthAlias>`  | Provider ids that reuse another provider for auth lookup. A `baseUrls` condition applies only when that provider's configured endpoint matches; stored credentials retain their provider identity.                                                                                                                                                                                               |
 | `providerAuthChoices`                | No       | `object[]`                   | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                                                                                                                                                                                    |
 | `activation`                         | No       | `object`                     | Cheap activation planner metadata for startup, provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                                                                                                                                                                                    |
 | `backupResources`                    | No       | `object[]`                   | Manifest-owned durable or regenerable state- or agent-relative backup resources. Applied only for effectively activated, loadable plugins without executing their runtime. See [backupResources reference](/plugins/manifest/surfaces#backupresources-reference).                                                                                                                                |
@@ -261,8 +261,41 @@ The anchors from the single-page version still resolve here.
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                      |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                          |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                     |
+| `categories`                         | No       | `string[]`                   | One to three controlled catalog category slugs, ordered with the primary category first. Bundled plugins must declare at least one category.                                                                                                                                                                                                                                                     |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                    |
 | `uiHints`                            | No       | `Record<string, object>`     | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                                                                                                                                                                                |
+
+An `AuthAlias` is either a provider id string or an object with `provider` and
+`baseUrls`. An object alias applies only to the configured model-provider
+endpoint after trimming whitespace and trailing slashes. It does not rename
+stored credential providers or contribute a new setup provider. Existing profile
+order, explicit bindings, and plugin trust checks still apply.
+
+## Catalog categories
+
+Declare `categories` in `openclaw.plugin.json` so every catalog consumer reads the same
+package-owned classification. The array accepts one to three unique slugs. Put the plugin's
+primary category first; catalog surfaces can group it there while still matching every declared
+category in search and filters.
+
+| Slug       | Use for                                                          |
+| ---------- | ---------------------------------------------------------------- |
+| `channels` | Messaging and channel transports                                 |
+| `models`   | Model providers, inference engines, and model routing            |
+| `memory`   | Long-term memory, retrieval, and memory stores                   |
+| `context`  | Context engines, extraction, and context management              |
+| `voice`    | Speech, transcription, and calling                               |
+| `media`    | Image, video, music, and other media generation or understanding |
+| `web`      | Web search, browsing, fetching, and research                     |
+| `tools`    | Agent tools, actions, and workflows                              |
+| `runtime`  | Agent runtimes, execution backends, and development integrations |
+| `gateway`  | Gateway discovery, administration, and observability             |
+| `security` | Authentication, policy, secrets, and sandboxing                  |
+| `other`    | Plugins that do not fit a more specific controlled category      |
+
+Omission remains valid for external plugin compatibility. When an external catalog supplies a
+derived fallback, an explicit package declaration takes precedence. Bundled OpenClaw plugins must
+declare at least one category.
 
 ## JSON Schema requirements
 
@@ -365,5 +398,20 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
   </Card>
   <Card title="Manifest vs package.json" href="/plugins/manifest/package-json" icon="list">
     Which pre-runtime metadata lives in package.json, and which duplicate plugin id wins.
+  </Card>
+  <Card title="Plugin setup and config" href="/plugins/sdk-setup" icon="sliders">
+    Packaging and config schemas that consume this manifest.
+  </Card>
+  <Card title="Plugin entry points" href="/plugins/sdk-entrypoints" icon="door-open">
+    `definePluginEntry` and the other entry helpers a plugin's code exports.
+  </Card>
+  <Card title="Tool plugins" href="/plugins/tool-plugins" icon="wrench">
+    Declaring `contracts.tools` for agent tools.
+  </Card>
+  <Card title="Manage plugins" href="/plugins/manage-plugins" icon="plug">
+    Installing and enabling the plugins this manifest describes.
+  </Card>
+  <Card title="Backup" href="/cli/backup" icon="box-archive">
+    The `backupResources` surface declared here.
   </Card>
 </CardGroup>

@@ -2,13 +2,12 @@
 import http from "node:http";
 import type { Agent as HttpAgent } from "node:http";
 import https from "node:https";
-import { HttpsProxyAgent } from "https-proxy-agent";
 import WebSocket from "ws";
 import { resolveProviderTransportSsrFPolicy } from "../../agents/provider-transport-fetch.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { racePromiseWithAbortSignal } from "../abort-signal.js";
 import { isManagedProxyActive } from "./fetch-guard.js";
-import { resolveEnvNodeProxyUrlForTarget } from "./node-proxy-agent.js";
+import { createNodeProxyAgent, resolveEnvNodeProxyUrlForTarget } from "./node-proxy-agent.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { resolveActiveManagedProxyTlsOptions } from "./proxy/active-managed-proxy-tls.js";
 import {
@@ -71,10 +70,10 @@ async function createProxyAgent(params: {
     policy: proxyPolicy(params.policy, params.allowPrivateProxy),
     signal: params.signal,
   });
-  return new HttpsProxyAgent(params.proxyUrl, {
-    ...params.proxyTls,
-    lookup: pinnedProxy.lookup,
-    signal: params.signal,
+  return createNodeProxyAgent({
+    mode: "explicit",
+    proxyUrl: params.proxyUrl,
+    proxyConnect: { ...params.proxyTls, lookup: pinnedProxy.lookup },
   });
 }
 
@@ -160,11 +159,10 @@ export async function openProviderWebSocket(
     allowPrivateNetwork: params.allowPrivateNetwork,
     trustConfiguredBaseUrlOrigin: params.trustConfiguredBaseUrlOrigin,
   });
-  // DNS, proxy CONNECT, and the handshake share one deadline. The proxy's
-  // pending socket must receive cancellation before the HTTP agent owns it.
-  const lifetime = new AbortController();
+  // DNS preparation and the opening handshake share one deadline. Proxyline
+  // owns pending proxy sockets and closes them when the request or agent ends.
   const { signal, cleanup } = buildTimeoutAbortSignal({
-    signal: params.signal ? AbortSignal.any([params.signal, lifetime.signal]) : lifetime.signal,
+    signal: params.signal,
     timeoutMs: Math.max(1, params.timeoutMs),
     operation: "Provider WebSocket connection",
   });
@@ -183,7 +181,6 @@ export async function openProviderWebSocket(
     );
     agent = await racePromiseWithAbortSignal(pending, signal);
   } catch (error) {
-    lifetime.abort();
     cleanup();
     throw error;
   }
@@ -198,7 +195,6 @@ export async function openProviderWebSocket(
       ...targetTlsOptions(params.dispatcherPolicy),
     });
   } catch (error) {
-    lifetime.abort();
     cleanup();
     agent.destroy();
     throw error;
@@ -208,7 +204,6 @@ export async function openProviderWebSocket(
   socket.once("open", cleanup);
   socket.once("close", () => {
     signal?.removeEventListener("abort", onAbort);
-    lifetime.abort();
     cleanup();
     agent.destroy();
   });

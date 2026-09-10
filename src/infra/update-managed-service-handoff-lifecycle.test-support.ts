@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
+import { buildRestartSentinelRow, parseRestartSentinelEnvelope } from "./restart-sentinel-store.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
@@ -75,6 +78,7 @@ export type ManagedServiceManagerBoundaryResult = {
   sentinel: unknown;
   log: string;
   commandTimings: ManagedServiceCommandTiming[];
+  triageDeadline?: { requestedMs: number; descendantPid: number };
   savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
   sensitiveFilesRemoved: boolean;
 };
@@ -198,7 +202,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
     expect(
       commands.filter((command) => command.includes("start openclaw-gateway.service")),
     ).toHaveLength(0);
-    expect(state).toEqual({});
+    expect(state).toEqual({ nativeRelease: {} });
     expect(sentinel).toMatchObject({
       payload: {
         status: "skipped",
@@ -385,6 +389,16 @@ export function createManagedServiceUpdaterFixtureScript(params: {
           meta: { root, handoffId: `${kind}-boundary` },
         })
       : null;
+  // Use the canonical row shape without moving publication ahead of the child.
+  const notificationEnvelope = notification
+    ? parseRestartSentinelEnvelope({ version: 1, payload: notification })
+    : null;
+  if (notification && !notificationEnvelope) {
+    throw new Error("Expected a valid updater notification fixture");
+  }
+  const notificationRow = notificationEnvelope
+    ? buildRestartSentinelRow(notificationEnvelope.payload, notificationEnvelope.payload.ts)
+    : null;
   return [
     `void (async () => {`,
     `const fs = require("node:fs");`,
@@ -395,11 +409,12 @@ export function createManagedServiceUpdaterFixtureScript(params: {
         ]
       : []),
     `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
-    ...(notification
+    ...(notificationEnvelope && notificationRow
       ? [
-          `const notification = ${JSON.stringify(notification)};`,
+          `const notification = ${JSON.stringify(notificationEnvelope.payload)};`,
+          `const row = ${JSON.stringify(notificationRow)};`,
           `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)});`,
-          `db.prepare("INSERT INTO gateway_restart_sentinel (sentinel_key, version, kind, status, ts, stats_json, payload_json, updated_at_ms) VALUES ('current', 1, ?, ?, ?, ?, ?, ?)").run(notification.kind, notification.status, notification.ts, JSON.stringify(notification.stats), JSON.stringify(notification), notification.ts); db.close();`,
+          `db.prepare("INSERT INTO gateway_restart_sentinel (" + Object.keys(row).join(", ") + ") VALUES (" + Object.keys(row).map(() => "?").join(", ") + ")").run(...Object.values(row)); db.close();`,
           `${managedServiceStateUpdateScript(statePath, "state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }")};`,
           ...(options?.updaterNotification === "consumed" &&
           (updaterResult?.status === "ok" ||
@@ -489,6 +504,63 @@ export function createManagedServiceCancellationPreload(params: {
       return child;
     };
   }`;
+}
+
+export async function prepareManagedServiceTriageClockPreload(
+  params: { root: string; scriptPath: string; statePath: string },
+  triageCommandArgv: string[],
+  triageInputPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv> {
+  const preloadPath = path.join(params.root, "triage-clock-preload.cjs");
+  const commandArgv = [...triageCommandArgv, "--update-result", triageInputPath];
+  // Only the generated helper advances its diagnostic timer. The installed
+  // command, its descendant, recovery, and lease clocks stay native.
+  const source = `if (process.argv[1] === ${JSON.stringify(params.scriptPath)}) {
+    const fs = require("node:fs");
+    const children = require("node:child_process");
+    const spawn = children.spawn;
+    const setTimeout = global.setTimeout;
+    const clearTimeout = global.clearTimeout;
+    const polls = new Map();
+    let diagnostic;
+    let captured = false;
+    children.spawn = (command, args, options) => {
+      const child = spawn(command, args, options);
+      if (command === ${JSON.stringify(commandArgv[0])} &&
+          (args.at(-1) === ${JSON.stringify(JSON.stringify(commandArgv))} ||
+           JSON.stringify(args.slice(-${commandArgv.length - 1})) === ${JSON.stringify(JSON.stringify(commandArgv.slice(1)))})) {
+        diagnostic = child;
+        child.once("close", () => { diagnostic = undefined; });
+      }
+      return child;
+    };
+    global.clearTimeout = (timer) => {
+      clearInterval(polls.get(timer));
+      polls.delete(timer);
+      return clearTimeout(timer);
+    };
+    global.setTimeout = (callback, delay, ...args) => {
+      const timer = setTimeout(callback, delay, ...args);
+      if (!diagnostic || delay !== 60_000) return timer;
+      if (captured) throw new Error("duplicate diagnostic deadline");
+      captured = true;
+      const poll = setInterval(() => {
+        if (!fs.existsSync(${JSON.stringify(path.join(params.root, "triage-descendant-ready"))})) return;
+        const descendantPid = Number(fs.readFileSync(${JSON.stringify(path.join(params.root, "triage-descendant-ready"))}, "utf8"));
+        const state = JSON.parse(fs.readFileSync(${JSON.stringify(params.statePath)}, "utf8"));
+        if (state.triageDescendantPid !== descendantPid) return;
+        process.kill(descendantPid, 0);
+        global.clearTimeout(timer);
+        fs.writeFileSync(${JSON.stringify(path.join(params.root, "triage-deadline.json"))}, JSON.stringify({ requestedMs: delay, descendantPid }));
+        callback.apply(timer, args);
+      }, 5);
+      polls.set(timer, poll);
+      return timer;
+    };
+  }`;
+  await fs.writeFile(preloadPath, source);
+  return { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
 }
 
 export function createManagedServiceLaunchdClockPreload(params: {
