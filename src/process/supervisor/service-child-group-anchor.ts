@@ -96,12 +96,6 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     state = "closed";
-    if (hardKill) {
-      // Killing the observer cannot confirm descendant death. Missing closure
-      // leaves the host's existing ownership receipt uncertain.
-      process.kill(0, "SIGKILL");
-      return;
-    }
     // Kernel acceptance is not host consumption. Keep the read side alive so a
     // crossing cancellation cannot destroy the host's unread closing receipt.
     const requiresAcknowledgement = start.acknowledgeClosing === true;
@@ -122,7 +116,8 @@ export function runServiceChildGroupAnchor(): void {
     if (
       remainingMs <= 0 ||
       !(await Promise.race([retirementReady.promise, delay(remainingMs).then(() => false)])) ||
-      Date.now() >= deadline
+      Date.now() >= deadline ||
+      hardKill
     ) {
       process.kill(0, "SIGKILL");
       return;
@@ -201,7 +196,9 @@ export function runServiceChildGroupAnchor(): void {
       }
       await Promise.race([delay(nextObservationMs), forceCleanupRequested.promise]);
     }
-    await closeAuthority(reason, true, cleanupDeadline);
+    // Forced retirement needs the same bounded receipt join, even after TERM
+    // grace expires. Only the outside-group host can certify extinction after KILL.
+    await closeAuthority(reason, true);
   };
 
   const onControlMessage = (message: ServiceChildControlMessage) => {
