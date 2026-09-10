@@ -659,7 +659,7 @@ function resolveAzureDeploymentName(model: Model): string {
   });
 }
 
-export function createAzureOpenAIClient(
+function createAzureOpenAIClient(
   model: Model,
   apiKey: string,
   defaultHeaders: Record<string, string>,

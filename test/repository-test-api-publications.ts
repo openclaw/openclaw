@@ -8,8 +8,6 @@ const publications: Record<string, string | symbol> = {
   "extensions/memory-lancedb/lancedb-runtime.ts": Symbol.for(
     "openclaw.memoryLanceDbRuntimeTestApi",
   ),
-  "packages/ai/src/transports/openai-responses-transport.ts":
-    "openclawOpenAIResponsesTransportTestApi",
   "src/agents/agent-hooks/compaction-safeguard.ts": Symbol.for(
     "openclaw.compactionSafeguardTestApi",
   ),
