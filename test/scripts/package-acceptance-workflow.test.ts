@@ -46,6 +46,8 @@ const MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW =
 const MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW =
   ".github/workflows/mantis-discord-thread-attachment.yml";
 const MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW = ".github/workflows/mantis-slack-desktop-smoke.yml";
+const MANTIS_TELEGRAM_BOT_E2E_PROOF_WORKFLOW =
+  ".github/workflows/mantis-telegram-bot-e2e-proof.yml";
 const MANTIS_WEB_UI_CHAT_PROOF_WORKFLOW = ".github/workflows/mantis-web-ui-chat-proof.yml";
 const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
@@ -9821,7 +9823,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     }
   });
 
-  it("pins Mantis installer and worktree ownership without changing retrieval or install contracts", () => {
+  it("pins Mantis worktree ownership and candidate dependency installation", () => {
     const cases = [
       [MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW, "run_status_reactions", 2],
       [MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW, "run_thread_attachment", 2],
@@ -9829,7 +9831,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       [MANTIS_WEB_UI_CHAT_PROOF_WORKFLOW, "run_web_ui_chat", 1],
     ] as const;
     const owner = 'python3 -I -S "$CI_GIT_OWNER"';
-    let clones = 0;
     let worktrees = 0;
 
     for (const [workflowPath, jobName, count] of cases) {
@@ -9880,46 +9881,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
           jobName === "run_slack_desktop",
         );
       }
-      if (jobName === "run_web_ui_chat") {
-        continue;
-      }
-      const install = workflowStep(job, "Install Crabbox CLI").run ?? "";
-      const gitCalls = install
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.includes("$CI_GIT_OWNER"));
-      const slack = jobName === "run_slack_desktop";
-      expect(gitCalls, workflowPath).toEqual(
-        slack
-          ? [
-              `${owner} --git 0 init "$install_dir/src"`,
-              `${owner} --checkout-git 0 remote add origin https://github.com/openclaw/crabbox.git`,
-              `${owner} --checkout-git 120 fetch --depth 1 origin "$CRABBOX_REF"`,
-              `${owner} --checkout-git 0 checkout --detach FETCH_HEAD`,
-            ]
-          : [
-              `${owner} --git 120 clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"`,
-            ],
-      );
-      clones += gitCalls.filter((line) => line.includes("--git 120 clone")).length;
-      expect(install.startsWith("set -euo pipefail\n")).toBe(true);
-      expect(install).not.toMatch(/\b(?:for|while|until|timeout)\b|\$\?|\|\|/u);
-      expect(install).toContain(
-        'go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox\necho "$HOME/.local/bin" >> "$GITHUB_PATH"\n"$HOME/.local/bin/crabbox" --version\n',
-      );
-      if (slack) {
-        expect(readWorkflow(workflowPath).env?.CRABBOX_REF).toBe("main");
-        expect(install).toContain('cd "$install_dir/src"');
-        expect(install).toContain(
-          '"$HOME/.local/bin/crabbox" warmup --help > "$install_dir/warmup-help.txt" 2>&1\ngrep -q -- "-desktop" "$install_dir/warmup-help.txt"\n"$HOME/.local/bin/crabbox" media preview --help >/dev/null',
-        );
-      } else {
-        expect(install).toContain(
-          '"$HOME/.local/bin/crabbox" warmup --help 2>&1 | grep -q -- "-desktop"',
-        );
-      }
     }
-    expect(clones).toBe(2);
     expect(worktrees).toBe(6);
     for (const workflowPath of workflowPaths().filter((file) => file.includes("/mantis-"))) {
       expect(readFileSync(workflowPath, "utf8"), workflowPath).not.toMatch(
@@ -9927,6 +9889,68 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       );
     }
   });
+
+  it.each([
+    {
+      workflowPath: MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW,
+      jobName: "run_status_reactions",
+      candidateStep: "Prepare baseline and candidate worktrees",
+    },
+    {
+      workflowPath: MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW,
+      jobName: "run_thread_attachment",
+      candidateStep: "Prepare baseline and candidate worktrees",
+    },
+    {
+      workflowPath: MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW,
+      jobName: "run_slack_desktop",
+      candidateStep: "Prepare candidate worktree",
+    },
+    {
+      workflowPath: MANTIS_TELEGRAM_BOT_E2E_PROOF_WORKFLOW,
+      jobName: "run_telegram_proof",
+      candidateStep: "Build exact candidate without credentials or network",
+    },
+  ])(
+    "sets up plugin-owned Crabbox before candidate execution in $jobName",
+    ({ workflowPath, jobName, candidateStep }) => {
+      const workflow = readWorkflow(workflowPath);
+      const job = workflowJob(workflowPath, jobName);
+      const telegram = jobName === "run_telegram_proof";
+      const checkout = workflowStep(
+        job,
+        telegram ? "Checkout trusted harness" : "Checkout harness ref",
+      );
+      const tooling = workflowStep(
+        job,
+        telegram ? "Setup trusted tooling" : "Setup Node environment",
+      );
+      const install = workflowStep(
+        job,
+        telegram ? "Install Crabbox for disposable candidate lifecycle" : "Install Crabbox CLI",
+      );
+      const steps = job.steps ?? [];
+
+      expect(checkout.with?.["persist-credentials"]).toBe(false);
+      expect(tooling.uses).toBe("./.github/actions/setup-node-env");
+      expect(String(tooling.with?.["install-deps"] ?? true)).toBe("true");
+      expect(steps.indexOf(tooling)).toBeGreaterThan(steps.indexOf(checkout));
+      expect(steps.indexOf(install)).toBeGreaterThan(steps.indexOf(tooling));
+      expect(steps.indexOf(install)).toBeLessThan(steps.indexOf(workflowStep(job, candidateStep)));
+      expect(install.run).toBe("node scripts/crabbox-setup.mjs");
+      expect(install.env).toEqual({
+        OPENCLAW_STATE_DIR: "${{ runner.temp }}/openclaw-crabbox-setup",
+      });
+      expect(job.env?.OPENCLAW_STATE_DIR).toBeUndefined();
+      expect(workflow.env?.OPENCLAW_STATE_DIR).toBeUndefined();
+      expect(install.if).toBe(
+        telegram ? "${{ inputs.scenario == 'telegram-bot-e2e-proof' }}" : undefined,
+      );
+      if (telegram) {
+        expect(checkout.with?.ref).toBe("${{ github.workflow_sha }}");
+      }
+    },
+  );
 
   it("maps every supported Slack approval checkpoint scenario family", () => {
     const workflow = readFileSync(MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW, "utf8");

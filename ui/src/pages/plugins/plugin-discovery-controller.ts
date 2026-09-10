@@ -10,14 +10,12 @@ import type {
   PluginDiscoveryResult,
 } from "../../lib/plugins/index.ts";
 import type { PluginDiscoveryIntent } from "./catalog-results.ts";
-import type { PluginCardAttribution } from "./plugin-card.ts";
 
 const CATALOG_PAGE_SIZE = 100;
 const CATALOG_SECTION_SIZE = 8;
 
 type CatalogPageLoad = {
   items: PluginDiscoveryEntry[];
-  observed: PluginDiscoveryEntry[];
   remoteError?: string;
 };
 
@@ -111,7 +109,6 @@ export class PluginDiscoveryController {
   private committedQuery = "";
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private overviewRequestEpoch = 0;
-  private readonly entriesById = new Map<string, PluginDiscoveryEntry>();
   private readonly browseTask: Task;
   private readonly categoriesTask: Task;
   private readonly featuredTask: Task;
@@ -138,7 +135,6 @@ export class PluginDiscoveryController {
       onComplete: (page) => {
         this.result = { items: page.items };
         this.remoteError = page.remoteError ?? null;
-        this.rememberEntries(page.observed);
         this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
@@ -177,7 +173,6 @@ export class PluginDiscoveryController {
       onComplete: (result) => {
         this.featured = result.items.slice(0, CATALOG_SECTION_SIZE);
         this.featuredError = result.remoteError ?? null;
-        this.rememberEntries(result.items);
         this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
@@ -198,7 +193,6 @@ export class PluginDiscoveryController {
       onComplete: (result) => {
         this.trending = result.items.slice(0, CATALOG_SECTION_SIZE);
         this.trendingError = result.remoteError ?? null;
-        this.rememberEntries(result.items);
         this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
@@ -217,26 +211,6 @@ export class PluginDiscoveryController {
 
   get trendingLoading(): boolean {
     return this.gateway.isConnected() && this.trendingTask.status === TaskStatus.PENDING;
-  }
-
-  get attributions(): ReadonlyMap<string, PluginCardAttribution> {
-    const attributions = new Map<string, PluginCardAttribution>();
-    for (const entry of this.entriesById.values()) {
-      if (!entry.local.pluginId) {
-        continue;
-      }
-      attributions.set(entry.local.pluginId, {
-        ...(entry.catalog.author ? { author: entry.catalog.author } : {}),
-        official: entry.catalog.official,
-      });
-    }
-    return attributions;
-  }
-
-  private rememberEntries(entries: readonly PluginDiscoveryEntry[]): void {
-    for (const entry of entries) {
-      this.entriesById.set(entry.id, entry);
-    }
   }
 
   private async fetchAvailablePage(params: {
@@ -294,7 +268,6 @@ export class PluginDiscoveryController {
         : [...items.values()];
     return {
       items: mergedItems,
-      observed: mergedItems,
       ...(remoteError ? { remoteError } : {}),
     };
   }
@@ -345,7 +318,6 @@ export class PluginDiscoveryController {
       this.remoteError ??= page.remoteError ?? null;
     }
     const mergedItems = [...items.values()].toSorted(compareOfficialDownloads);
-    this.rememberEntries(mergedItems);
     this.result = { items: mergedItems };
     this.gateway.onEntriesChanged?.();
     this.host.requestUpdate();
@@ -395,7 +367,6 @@ export class PluginDiscoveryController {
     this.featuredError = null;
     this.trending = [];
     this.trendingError = null;
-    this.entriesById.clear();
     this.overviewRequestEpoch += 1;
   }
 

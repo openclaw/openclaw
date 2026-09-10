@@ -2,9 +2,9 @@ import { createApiRegistry } from "@openclaw/ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
+import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
 const mocks = vi.hoisted(() => ({
   acquireRuntimeLease: vi.fn(),
@@ -61,7 +61,7 @@ import {
   acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 
-function createOllamaModelResolver(): typeof resolveModelAsync {
+function createOllamaModelResolver(): SimpleCompletionModelResolver {
   return vi.fn(async (provider, modelId, _agentDir, _cfg, options) => ({
     model: {
       provider,
@@ -115,7 +115,7 @@ beforeEach(() => {
 it("keeps route rematerialization and runtime auth on the supplied generation", async () => {
   const observedModelGenerations: string[] = [];
   const observedRuntimeAuthGenerations: string[] = [];
-  const modelResolver: typeof resolveModelAsync = vi.fn(
+  const modelResolver: SimpleCompletionModelResolver = vi.fn(
     async (provider, modelId, _agentDir, cfg, options) => {
       if (!options?.authStorage || !options.modelRegistry) {
         throw new Error("prepared stores were not bound");

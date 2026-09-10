@@ -33,6 +33,7 @@ import {
   type ModelManifestNormalizationContext,
   modelKey,
   normalizeModelRef,
+  normalizeProviderId,
 } from "./model-ref-shared.js";
 import {
   buildModelAliasIndex,
@@ -41,6 +42,7 @@ import {
   resolveModelAliasFromPair,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
+import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 
 const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
 const fallbackCandidateCache = new Map<string, ModelFallbackCandidate[]>();
@@ -72,7 +74,7 @@ function createModelCandidateCollector() {
     if (!candidate.provider || !candidate.model) {
       return;
     }
-    const key = modelKey(candidate.provider, candidate.model);
+    const key = JSON.stringify([candidate.provider, candidate.model]);
     if (seen.has(key)) {
       return;
     }
@@ -278,20 +280,22 @@ function resolveFallbackCandidatesUncached(
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
   const providerRaw = normalizeOptionalString(params.provider) || defaultProvider;
   const modelRaw = normalizeOptionalString(params.model) || defaultModel;
-  const normalizeCandidateRef = (provider: string, model: string) =>
-    normalizeModelRef(provider, model, {
-      allowPluginNormalization:
-        params.allowPluginNormalization !== false &&
-        allowsPluginModelNormalization({
-          cfg: params.cfg,
-          provider,
-          model,
-        }),
-      manifestPlugins: params.manifestPlugins,
-    });
   const allowPluginModelAliases =
     params.allowPluginNormalization !== false && params.cfg?.plugins?.enabled !== false;
-  const normalizedPrimary = normalizeCandidateRef(providerRaw, modelRaw);
+  const requestedRouteResolution = params.requestedRouteResolution ?? "raw";
+  const normalizedPrimary =
+    requestedRouteResolution === "resolved"
+      ? { provider: normalizeProviderId(providerRaw), model: modelRaw }
+      : normalizeModelRef(providerRaw, modelRaw, {
+          allowPluginNormalization:
+            params.allowPluginNormalization !== false &&
+            allowsPluginModelNormalization({
+              cfg: params.cfg,
+              provider: providerRaw,
+              model: modelRaw,
+            }),
+          manifestPlugins: params.manifestPlugins,
+        });
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     agentId: params.agentId,
@@ -300,7 +304,6 @@ function resolveFallbackCandidatesUncached(
     manifestPlugins: params.manifestPlugins,
   });
   const { candidates, addCandidate } = createModelCandidateCollector();
-  const requestedRouteResolution = params.requestedRouteResolution ?? "raw";
   let requestedCandidate = normalizedPrimary;
   const exactRequestedRouteConfigured =
     hasExactConfiguredProviderModel({
@@ -329,11 +332,7 @@ function resolveFallbackCandidatesUncached(
         manifestPlugins: params.manifestPlugins,
       }) ?? normalizedPrimary;
   }
-  addCandidate(
-    normalizeCandidateRef(requestedCandidate.provider, requestedCandidate.model),
-    "requested",
-    requestedRouteResolution,
-  );
+  addCandidate(requestedCandidate, "requested", requestedRouteResolution);
 
   const modelFallbacks =
     params.fallbacksOverride !== undefined
@@ -356,19 +355,23 @@ function resolveFallbackCandidatesUncached(
     }
     // Fallbacks are explicit user intent; do not silently filter them by the
     // model allowlist.
-    addCandidate(
-      normalizeCandidateRef(resolved.ref.provider, resolved.ref.model),
-      "configured-fallback",
-      "resolved",
-    );
+    addCandidate(resolved.ref, "configured-fallback", "resolved");
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
-    addCandidate(
-      normalizeCandidateRef(primary.provider, primary.model),
-      "configured-primary",
-      "resolved",
-    );
+    // Primary resolution owns static normalization; refine only through its runtime hook.
+    let model = primary.model;
+    if (
+      allowPluginModelAliases &&
+      allowsPluginModelNormalization({ cfg: params.cfg, ...primary })
+    ) {
+      model =
+        normalizeProviderModelIdWithRuntime({
+          provider: primary.provider,
+          context: { provider: primary.provider, modelId: model },
+        }) ?? model;
+    }
+    addCandidate({ ...primary, model }, "configured-primary", "resolved");
   }
   return candidates;
 }

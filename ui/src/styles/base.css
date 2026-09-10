@@ -870,7 +870,6 @@ a:where(
     .markdown a,
     .markdown-body a,
     .chat-session-rail__answer a,
-    .chat-position-rail__preview-copy a,
     .dreams-diary__para a
   ):not(:where(.btn, [role="button"])) {
   text-decoration: underline;

@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -143,6 +144,9 @@ describe("config io write", () => {
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
+    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      await suiteRootTracker.make("coordinator"),
+    );
 
     // Default: return an empty plugin list so existing tests that don't need
     // plugin-owned channel schemas keep working unchanged.
@@ -161,6 +165,7 @@ describe("config io write", () => {
   afterAll(async () => {
     closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
+    vi.mocked(tmpDirOwner.resolvePreferredOpenClawTmpDir).mockRestore();
     await suiteRootTracker.cleanup();
   });
 
@@ -410,7 +415,9 @@ describe("config io write", () => {
             });
           const beforePolicy = policyFor(before.config);
           expect(beforePolicy.allowAny).toBe(modelPolicy !== undefined);
-          expect(beforePolicy.allowsKey("demo/denied")).toBe(modelPolicy !== undefined);
+          expect(beforePolicy.allows({ provider: "demo", model: "denied" })).toBe(
+            modelPolicy !== undefined,
+          );
 
           await io.writeConfigFile({
             ...before.config,
@@ -427,7 +434,9 @@ describe("config io write", () => {
           expect([...afterPolicy.allowedKeys].toSorted()).toEqual(
             [...beforePolicy.allowedKeys].toSorted(),
           );
-          expect(afterPolicy.allowsKey("demo/denied")).toBe(beforePolicy.allowsKey("demo/denied"));
+          expect(afterPolicy.allows({ provider: "demo", model: "denied" })).toBe(
+            beforePolicy.allows({ provider: "demo", model: "denied" }),
+          );
           expect(after.sourceConfig.agents?.defaults?.models).toEqual(models);
           expect(after.sourceConfig.browser?.enabled).toBe(false);
           if (includeAt) {

@@ -58,41 +58,7 @@ internal data class WearUiState(
   val agentPulseFailure: WearConversationFailure? = null,
 )
 
-internal fun WearUiState.resetForPhoneChange(): WearUiState =
-  copy(
-    loading = true,
-    connected = false,
-    phoneNodeId = null,
-    agents = emptyList(),
-    activeAgentId = null,
-    selectedModelRef = null,
-    models = emptyList(),
-    proxyCapabilities = emptySet(),
-    sessions = emptyList(),
-    selectedSession = null,
-    phoneActiveSessionKey = null,
-    sessionSearchQuery = null,
-    sessionSearchResults = emptyList(),
-    sessionSearchHasMore = false,
-    sessionSearchNextOffset = null,
-    modelSearchQuery = null,
-    modelSearchResults = emptyList(),
-    messages = emptyList(),
-    streamText = null,
-    activeRunId = null,
-    sending = false,
-    realtimeTalk = WearRealtimeTalkSnapshot(),
-    realtimeCapturing = false,
-    realtimePlaying = false,
-    realtimeMouthLevel = 0f,
-    realtimePlaybackFailed = false,
-    talkBusy = false,
-    controlBusy = false,
-    failure = null,
-    agentPulse = null,
-    agentPulseLoading = false,
-    agentPulseFailure = null,
-  )
+internal fun WearUiState.resetForPhoneChange(): WearUiState = WearUiState()
 
 internal fun WearUiState.switchAgentContext(agentId: String): WearUiState =
   copy(

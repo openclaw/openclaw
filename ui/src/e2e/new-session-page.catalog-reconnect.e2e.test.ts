@@ -25,6 +25,30 @@ import {
 const suite = createNewSessionPageE2eSuite();
 const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
+function mainAndResearchAgents(mainWorkspace: string, researchWorkspace: string) {
+  return {
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Main" },
+        name: "Main",
+        workspace: mainWorkspace,
+        workspaceGit: true,
+      },
+      {
+        id: "research",
+        identity: { name: "Research" },
+        name: "Research",
+        workspace: researchWorkspace,
+        workspaceGit: true,
+      },
+    ],
+    defaultId: "main",
+    mainKey: "main",
+    scope: "agent",
+  };
+}
+
 function requestHasParam(request: { params?: unknown }, key: string, value: unknown): boolean {
   return Boolean(
     request.params &&
@@ -294,27 +318,7 @@ suite.define(() => {
           runtimeConfig: config,
           config,
         },
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-            {
-              id: "research",
-              identity: { name: "Research" },
-              name: "Research",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": mainAndResearchAgents(WORKSPACE, WORKSPACE),
         "sessions.catalog.list": { catalogs: [cliAgentCatalog(true)] },
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
@@ -755,27 +759,7 @@ suite.define(() => {
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-            {
-              id: "research",
-              identity: { name: "Research" },
-              name: "Research",
-              workspace: REFRESHED_RESEARCH_WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": mainAndResearchAgents(WORKSPACE, REFRESHED_RESEARCH_WORKSPACE),
       },
     });
 
@@ -848,27 +832,10 @@ suite.define(() => {
 
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
-      await gateway.setMethodResponse("agents.list", {
-        agents: [
-          {
-            id: "main",
-            identity: { name: "Main" },
-            name: "Main",
-            workspace: WORKSPACE,
-            workspaceGit: true,
-          },
-          {
-            id: "research",
-            identity: { name: "Research" },
-            name: "Research",
-            workspace: REFRESHED_RESEARCH_WORKSPACE,
-            workspaceGit: true,
-          },
-        ],
-        defaultId: "main",
-        mainKey: "main",
-        scope: "agent",
-      });
+      await gateway.setMethodResponse(
+        "agents.list",
+        mainAndResearchAgents(WORKSPACE, REFRESHED_RESEARCH_WORKSPACE),
+      );
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
 

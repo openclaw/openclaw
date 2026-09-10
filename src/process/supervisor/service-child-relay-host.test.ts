@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { Duplex } from "node:stream";
+import { Duplex, PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -37,7 +37,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function createRelay(platform: "linux" | "darwin" | "win32") {
+async function createRelay(platform: "linux" | "darwin" | "win32", retainLineage = false) {
   platformMock = mockProcessPlatform(platform);
   const groupProbe = vi.spyOn(process, "kill").mockImplementation(() => {
     throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
@@ -60,8 +60,9 @@ async function createRelay(platform: "linux" | "darwin" | "win32") {
       }
     },
   });
+  const lineage = new PassThrough();
   Object.defineProperty(stub.child, "stdio", {
-    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control],
+    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control, lineage],
     configurable: true,
   });
   if (platform === "win32") {
@@ -120,6 +121,9 @@ async function createRelay(platform: "linux" | "darwin" | "win32") {
   };
   const closeControl = () => control.destroy();
   const exitRelay = () => {
+    if (!retainLineage) {
+      lineage.end();
+    }
     stub.disconnectMock();
     stub.emitExit(0);
   };
@@ -132,7 +136,10 @@ async function createRelay(platform: "linux" | "darwin" | "win32") {
   };
   const controlEncoding = () => control.readableEncoding;
   const killSpy = vi.spyOn(stub.child, "kill");
-  cleanups.push(close);
+  cleanups.push(() => {
+    close();
+    lineage.destroy();
+  });
   return {
     adapter,
     start,
@@ -148,6 +155,7 @@ async function createRelay(platform: "linux" | "darwin" | "win32") {
     controlEncoding,
     killSpy,
     groupProbe,
+    lineage,
   };
 }
 
@@ -161,7 +169,7 @@ function createWritableRelayChild() {
     },
   });
   Object.defineProperty(stub.child, "stdio", {
-    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control],
+    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control, new PassThrough()],
     configurable: true,
   });
   mocks.spawn.mockReturnValue(stub.child);
@@ -471,6 +479,46 @@ it("drains output after losing cleanup authority without erasing the observed ro
   await expect(root).resolves.toEqual({ code: 23, signal: null });
 });
 
+it("keeps extinction pending after group retirement until lineage EOF", async () => {
+  const { adapter, completeRoot, emit, close, lineage } = await createRelay("linux", true);
+  completeRoot();
+  await adapter.wait();
+  emit({ type: "closing", reason: "cancel" });
+  await nextTurn();
+  const settled = vi.fn();
+  void adapter.waitForExtinction().then(settled, settled);
+  close();
+  await nextTurn();
+  expect(settled).not.toHaveBeenCalled();
+  lineage.end();
+  await expect(adapter.waitForExtinction()).resolves.toBeUndefined();
+});
+
+it.each(["error", "close", "timeout"])(
+  "rejects extinction when the outside-group lineage reader ends with %s",
+  async (failure) => {
+    const { adapter, completeRoot, emit, close, lineage } = await createRelay("linux", true);
+    completeRoot();
+    await adapter.wait();
+    emit({ type: "closing", reason: "cancel" });
+    await nextTurn();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const rejected = expect(adapter.waitForExtinction()).rejects.toThrow("cleanup identity lost");
+      close();
+      await nextTurn();
+      if (failure === "timeout") {
+        await vi.advanceTimersByTimeAsync(GRACEFUL_CANCEL_TIMEOUT_MS);
+      } else {
+        lineage.destroy(failure === "error" ? new Error("synthetic lineage failure") : undefined);
+      }
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
 it("waits for relay reaping before observing POSIX group extinction", async () => {
   const { adapter, completeRoot, emit, closeControl, exitRelay, groupProbe } =
     await createRelay("darwin");
@@ -499,12 +547,14 @@ it("waits for relay reaping before observing POSIX group extinction", async () =
 });
 
 it("does not renew the group disappearance deadline after joining the relay", async () => {
-  const { adapter, completeRoot, emit, closeControl, exitRelay, groupProbe } =
+  const { adapter, completeRoot, emit, closeControl, exitRelay, groupProbe, lineage } =
     await createRelay("darwin");
   const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
   groupProbe.mockReturnValue(true);
   completeRoot();
   await adapter.wait();
+  lineage.end();
+  await nextTurn();
   emit({ type: "closing", reason: "lineage-closed" });
   await nextTurn();
   const settled = vi.fn();
@@ -549,7 +599,7 @@ it("bounds relay reaping by the original graceful cleanup deadline", async () =>
 it.each(["EPERM", "EIO", "still present"])(
   "keeps graceful cleanup uncertain when the kernel group is %s",
   async (failure) => {
-    const { adapter, completeRoot, emit, close, groupProbe } = await createRelay("linux");
+    const { adapter, completeRoot, emit, close, groupProbe, lineage } = await createRelay("linux");
     const cause =
       failure === "still present"
         ? undefined
@@ -562,6 +612,8 @@ it.each(["EPERM", "EIO", "still present"])(
     });
     completeRoot();
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    lineage.end();
+    await nextTurn();
     emit({ type: "closing", reason: "lineage-closed" });
     await nextTurn();
     // Exhaust the bounded observation window without waiting on real process time.

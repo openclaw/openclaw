@@ -25,7 +25,6 @@ import {
 } from "./agent-scope.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
-import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
@@ -65,6 +64,7 @@ import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import {
   createPreparedSimpleCompletionResolverContext,
   type PreparedSimpleCompletionResolverContext,
+  type SimpleCompletionModelResolver,
 } from "./simple-completion-scope.js";
 import type {
   AgentSimpleCompletionSelection,
@@ -164,6 +164,7 @@ export type PrepareSimpleCompletionModelParams = {
   agentId?: string;
   provider: string;
   modelId: string;
+  modelIdSource?: "input" | "selected";
   agentDir?: string;
   profileId?: string;
   preferredProfile?: string;
@@ -171,7 +172,7 @@ export type PrepareSimpleCompletionModelParams = {
   allowBundledStaticCatalogFallback?: boolean;
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
-  modelResolver?: typeof resolveModelAsync;
+  modelResolver?: SimpleCompletionModelResolver;
   /** Internal caller-owned generation. Public plugin callers use the agent helper below. */
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   workspaceDir?: string;
@@ -214,6 +215,7 @@ async function prepareSimpleCompletionModelCore(
     params.agentDir,
     params.cfg,
     {
+      modelIdSource: params.modelIdSource,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.allowBundledStaticCatalogFallback !== undefined
         ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
@@ -453,7 +455,7 @@ async function acquirePreparedSimpleCompletionRuntime(
     cfg: OpenClawConfig | undefined;
     agentId?: string;
     agentDir?: string;
-    modelResolver?: typeof resolveModelAsync;
+    modelResolver?: SimpleCompletionModelResolver;
     workspaceDir?: string;
     agentRuntimeId?: string;
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -608,6 +610,7 @@ export async function acquireSimpleCompletionModelForAgent(
           agentId: params.agentId,
           provider: selection.provider,
           modelId: selection.modelId,
+          modelIdSource: "selected",
           agentDir: selection.agentDir,
           profileId: selection.profileId,
           preferredProfile: params.preferredProfile,

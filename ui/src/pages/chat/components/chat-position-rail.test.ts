@@ -323,7 +323,7 @@ describe("conversation position rail", () => {
     transcript.hostDisconnected();
   });
 
-  it("does not target a final-answer action owner folded behind dashboard work", () => {
+  it("targets the visible final answer before later dashboard commentary and tools", () => {
     const messages = [
       message("question", "user", "Inspect the design", 1),
       { ...message("final", "assistant", "Design ready", 2, "run-1"), phase: "final_answer" },
@@ -354,7 +354,7 @@ describe("conversation position rail", () => {
       landmarks = projectChatTranscript(props, session).positionMessages;
       return html``;
     });
-    expect(landmarks).toEqual([messages[0], messages[3]]);
+    expect(landmarks).toEqual([messages[0], messages[1]]);
     transcript.hostDisconnected();
   });
 });

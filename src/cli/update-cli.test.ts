@@ -8120,49 +8120,6 @@ describe("update-cli", () => {
     );
   });
 
-  it("runs package post-update doctor from the verified package root after a staged swap", async () => {
-    const tempDir = tempDirs.make("openclaw-update-staged-doctor-");
-    const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
-      path.join(tempDir, "lib", "node_modules"),
-    );
-    primeNpmChannelTag("latest", "2026.5.14");
-    mockFileBackedPathExists();
-    mockNpmGlobalCommands(nodeModules, async (argv) => {
-      if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
-        const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-        const stagePackageRoot = path.join(
-          requireValue(stagePrefix, "stage prefix"),
-          "lib",
-          "node_modules",
-          "openclaw",
-        );
-        await writeOpenClawPackageFixture(stagePackageRoot, "2026.5.14", {
-          entrySource: "export {};\n",
-          inventory: true,
-        });
-      }
-    });
-    readPackageVersion.mockImplementation(async (packageRoot: string) => {
-      const manifest = JSON.parse(
-        await fs.readFile(path.join(packageRoot, "package.json"), "utf-8"),
-      ) as { version?: string };
-      return manifest.version ?? "0.0.0";
-    });
-
-    await updateCommand({ yes: true });
-
-    const doctorCall = doctorCommandCall();
-    expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
-    expect(doctorCall?.[1].cwd).toBe(pkgRoot);
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_SERVICE_REPAIR_POLICY,
-    ).toBe("external");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_COMPATIBILITY_HOST_VERSION,
-    ).toBe("2026.5.14");
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-  });
-
   it.each([
     { json: true, handoff: "1", expectedExitCode: 79 },
     { json: false, handoff: undefined, expectedExitCode: 1 },
@@ -8491,7 +8448,7 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(["owned-running", "no-restart", "stopped", "legacy-target"] as const)(
+  it.each(["owned-running", "no-restart", "stopped"] as const)(
     "uses compatibility-checked package update without full-state startup (%s)",
     async (mode) => {
       const root = await mockPackageInstallAtCaseDir("openclaw-update-startup-admission");
@@ -8505,14 +8462,6 @@ describe("update-cli", () => {
       if (mode === "stopped") {
         serviceReadRuntime.mockResolvedValue({ status: "stopped" });
       }
-      const validate = requireValue(
-        candidateValidation.getMockImplementation(),
-        "candidate validation",
-      );
-      candidateValidation.mockImplementation(async (options) => ({
-        ...(await validate(options)),
-        checkpointContinuation: mode !== "legacy-target",
-      }));
       await invokeUpdateCli({
         yes: true,
         json: true,

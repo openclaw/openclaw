@@ -688,110 +688,6 @@ posixIt.each([
   55_000,
 );
 
-const mantisInstallers = [
-  { workflow: "discord-status-reactions", job: "run_status_reactions", fetch: false },
-  { workflow: "discord-thread-attachment", job: "run_thread_attachment", fetch: false },
-  { workflow: "slack-desktop-smoke", job: "run_slack_desktop", fetch: true },
-];
-
-posixIt.each([
-  ...mantisInstallers.map((profile) => ({ ...profile, failure: false })),
-  ...mantisInstallers
-    .filter(({ workflow }) => workflow !== "discord-thread-attachment")
-    .map((profile) => Object.assign({}, profile, { failure: true })),
-])(
-  "Mantis installer Git owner drains before checkout/build/probes: $workflow (cleanup failure=$failure)",
-  async ({ workflow, job, fetch, failure }) => {
-    const result = failure ? "cleanup-failure" : 0;
-    const report = await runCiGitStep({
-      workflow: {
-        file: `.github/workflows/mantis-${workflow}.yml`,
-        job,
-        step: "Install Crabbox CLI",
-      },
-      fetchResults: fetch ? [result] : [],
-      cloneResults: fetch ? [] : [result],
-      realClock: true,
-      realDrain: false,
-      poisonPython: true,
-      env: { CRABBOX_REF: "main" },
-    });
-    expect(report.code, report.output).toBe(failure ? 125 : 0);
-    expect(report.readyAttempts).toEqual([1]);
-    const source = path.join(report.runnerTemp, "crabbox/src");
-    const binary = path.join(report.runnerTemp, "home/.local/bin/crabbox");
-    const gitCommand = (cwd: string, args: string[]) => ({
-      tool: "git",
-      cwd,
-      args,
-      configuration: [],
-    });
-    expect(report.commands.filter(({ tool }) => tool === "git")).toEqual(
-      fetch
-        ? [
-            gitCommand(report.workspace, ["init", source]),
-            gitCommand(source, [
-              "remote",
-              "add",
-              "origin",
-              "https://github.com/openclaw/crabbox.git",
-            ]),
-            gitCommand(source, ["fetch", "--depth", "1", "origin", "main"]),
-            ...(failure ? [] : [gitCommand(source, ["checkout", "--detach", "FETCH_HEAD"])]),
-          ]
-        : [
-            gitCommand(report.workspace, [
-              "clone",
-              "--depth",
-              "1",
-              "https://github.com/openclaw/crabbox.git",
-              source,
-            ]),
-          ],
-    );
-    expect(report.clones).toHaveLength(fetch ? 0 : 1);
-    expect(report.fetches).toHaveLength(fetch ? 1 : 0);
-    expect(report.worktrees).toEqual([]);
-    expect(report.go).toEqual(
-      failure
-        ? []
-        : [
-            {
-              tool: "go",
-              cwd: report.workspace,
-              args: ["build", "-C", source, "-o", binary, "./cmd/crabbox"],
-            },
-          ],
-    );
-    const probes = [
-      ["--version"],
-      ["warmup", "--help"],
-      ...(fetch ? [["media", "preview", "--help"]] : []),
-    ];
-    expect(report.crabbox).toEqual(
-      failure ? [] : probes.map((args) => ({ tool: "crabbox", cwd: report.workspace, args })),
-    );
-    expect(report.commands.filter(({ tool }) => tool === "pnpm")).toEqual([]);
-    expect(report.boundaries.map(({ name }) => name)).toEqual([
-      ...(fetch ? ["init", "fetch:1"] : ["clone:1"]),
-      ...(failure
-        ? []
-        : [...(fetch ? ["checkout"] : []), "consumer:go", ...probes.map(() => "consumer:crabbox")]),
-      "exit",
-    ]);
-    expect(report.githubPath).toBe(failure ? "" : `${path.dirname(binary)}\n`);
-    expect(report.githubOutput).toBe("");
-    expect(report.githubEnv).toBe("");
-    expect(report.githubSummary).toBe("");
-    if (failure) {
-      expect(report.output).toContain("Git ownership/setup failed");
-    } else {
-      expect(report.output).toContain("crabbox fixture");
-    }
-  },
-  55_000,
-);
-
 const mantisWorktrees = [
   {
     workflow: "discord-status-reactions",
@@ -887,8 +783,6 @@ posixIt.each([
     );
     expect(report.clones).toEqual([]);
     expect(report.fetches).toEqual([]);
-    expect(report.go).toEqual([]);
-    expect(report.crabbox).toEqual([]);
     expect(report.boundaries.map(({ name }) => name)).toEqual([
       ...attempted.map((_, index) => `worktree:${index + 1}`),
       ...(failure
