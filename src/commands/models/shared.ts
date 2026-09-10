@@ -37,12 +37,7 @@ import {
 } from "./provider-aliases.js";
 
 export { formatTokenK } from "./list.format.js";
-/** Rejects conflicting machine-readable output modes. */
-export function ensureFlagCompatibility(opts: { json?: boolean; plain?: boolean }): void {
-  if (opts.json && opts.plain) {
-    throw new Error("Choose either --json or --plain, not both.");
-  }
-}
+export { ensureFlagCompatibility } from "./list.options.js";
 
 /** Formats millisecond durations for model command output. */
 export const formatMs = (value?: number | null) => {
