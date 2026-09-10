@@ -19,6 +19,7 @@ import {
 } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 import {
+  captureGatewayToolCallerContinuationAssertion,
   getGatewayToolCallerIdentity,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
@@ -277,6 +278,31 @@ describe("gateway caller context wrapper", () => {
     expect(outer).toHaveBeenCalledTimes(3);
     expect(inner).toHaveBeenCalledTimes(3);
     expect(approvalSignals).toEqual([outerSignal.signal, innerSignal.signal]);
+  });
+
+  it("retains continuation authority across foreground completion but not cancellation", async () => {
+    let foregroundActive = true;
+    const cancellation = new AbortController();
+    let assertContinuationCurrent: (() => void) | undefined;
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:session",
+        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+        receiptAuthority: () => foregroundActive,
+        continuationAuthorityCheck: () => undefined,
+        approvalSignals: [cancellation.signal],
+      },
+      () => {
+        assertContinuationCurrent = captureGatewayToolCallerContinuationAssertion();
+      },
+    );
+
+    foregroundActive = false;
+    expect(() => assertContinuationCurrent?.()).not.toThrow();
+    cancellation.abort();
+    expect(() => assertContinuationCurrent?.()).toThrow("continuation authority");
   });
 
   it("starts distinct admitted runs with a new receipt-authority root", async () => {

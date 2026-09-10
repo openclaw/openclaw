@@ -30,6 +30,7 @@ import type {
 import { commitMainSessionRecovery } from "./main-session-recovery/main-session-recovery-store.js";
 import type { MainSessionRecoveryCommand } from "./main-session-recovery/main-session-recovery-types.js";
 import { getRequesterToolCap } from "./requester-tool-cap.js";
+import { captureGatewayToolCallerContinuationAssertion } from "./tools/gateway-caller-context.js";
 import { captureGatewayToolCallerAssertion } from "./tools/in-process-gateway.js";
 
 export type AgentCommandAdmissionIngress = ExecutionIdentityAdmissionFacts["ingress"];
@@ -134,16 +135,22 @@ export function prepareAgentCommandExecutionIdentity(params: {
   const assertToolCallerCurrent = getRequesterToolCap()
     ? captureGatewayToolCallerAssertion()
     : undefined;
+  const assertToolCallerContinuation = getRequesterToolCap()
+    ? captureGatewayToolCallerContinuationAssertion()
+    : undefined;
   assertToolCallerCurrent?.();
-  // Direct announce ingress bypasses the Gateway's mutation guard. Retain its
-  // bounded follow-up owner through admission and the receiving run's effects.
-  const assertSourceCurrent =
-    opts.transcriptMessage !== undefined && assertToolCallerCurrent
-      ? () => {
-          opts.assertSourceCurrent?.();
-          assertToolCallerCurrent();
-        }
-      : opts.assertSourceCurrent;
+  // Direct announce ingress remains tied to the exact caller. Ordinary delegated
+  // runs may outlive foreground completion, but retain cancellation and lifecycle fences.
+  const assertDelegatedSourceCurrent =
+    opts.transcriptMessage !== undefined
+      ? assertToolCallerCurrent
+      : (assertToolCallerContinuation ?? assertToolCallerCurrent);
+  const assertSourceCurrent = assertDelegatedSourceCurrent
+    ? () => {
+        opts.assertSourceCurrent?.();
+        assertDelegatedSourceCurrent();
+      }
+    : opts.assertSourceCurrent;
   const operationalRunInstance =
     opts.operationalRunInstance ?? createOperationalRunInstanceRef(prepared.runId);
   const admissionFacts = getAgentCommandAdmissionFacts(params.opts.runContext ?? params.opts);

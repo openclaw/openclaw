@@ -187,6 +187,22 @@ export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | unde
   return gatewayToolCallerStorage.getStore();
 }
 
+/** Retains explicit cancellation and lifecycle fences without pinning foreground completion. */
+export function captureGatewayToolCallerContinuationAssertion(): (() => void) | undefined {
+  const caller = getGatewayToolCallerIdentity();
+  const assertContinuationCurrent = caller?.continuationAuthorityCheck;
+  if (!caller?.operationalRunInstance || !assertContinuationCurrent) {
+    return undefined;
+  }
+  const signals = caller.approvalSignals ?? [];
+  return () => {
+    if (signals.some((signal) => signal.aborted)) {
+      throw new Error("agent tool caller continuation authority is no longer active");
+    }
+    assertContinuationCurrent();
+  };
+}
+
 /** Process-owned work must not retain the turn that authorized its launch. */
 export function withoutGatewayToolCallerIdentity<T>(run: () => T): T {
   return gatewayToolCallerStorage.exit(run);
