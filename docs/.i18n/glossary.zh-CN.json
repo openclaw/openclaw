@@ -1600,6 +1600,22 @@
     "target": "插件入口点"
   },
   {
+    "source": "Plugin runtime helpers",
+    "target": "插件运行时辅助函数"
+  },
+  {
+    "source": "Plugin setup and config",
+    "target": "插件设置与配置"
+  },
+  {
+    "source": "Building channel plugins",
+    "target": "构建渠道插件"
+  },
+  {
+    "source": "Building provider plugins",
+    "target": "构建提供商插件"
+  },
+  {
     "source": "Plugin SDK tool policy and sandbox helpers",
     "target": "插件 SDK 工具策略与沙箱辅助方法"
   },
