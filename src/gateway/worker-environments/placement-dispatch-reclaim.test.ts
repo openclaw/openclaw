@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
@@ -21,9 +22,26 @@ import {
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { createWorkerEnvironmentService } from "./service.js";
+import { BUNDLE_ARTIFACT, createProvider, SSH_ENDPOINT } from "./service.test-support.js";
 import { prepareSessionWorkerPlacementStop } from "./session-placement-lifecycle.js";
+import { createWorkerEnvironmentStore } from "./store.js";
+import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import { createWorkerTunnelManager } from "./tunnel.js";
+import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
+import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function reclaimRequest() {
+  return {
+    sessionId: REQUEST.sessionId,
+    sessionKey: REQUEST.sessionKey,
+    agentId: REQUEST.agentId,
+  };
+}
 
 describe("worker placement dispatch reclaim", () => {
   let root: string;
@@ -41,51 +59,151 @@ describe("worker placement dispatch reclaim", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("releases a failed reclaim before an older provisioning recovery without losing accepted work", async () => {
-    const harness = createHarness(database, placementStore, {
-      workspacePath: root,
-      destroyFailureCount: 1,
-      reconcileChanged: false,
-      reconcileCommitsManifest: false,
-    });
-    const coordinated = coordinateWorkerPlacementDispatch(harness.service, (_request, run) =>
-      run(),
-    );
-    const provisionStarted = createDeferredCore();
-    const releaseProvision = createDeferredCore();
-    vi.mocked(harness.environments.create).mockImplementationOnce(async () => {
-      provisionStarted.resolve();
-      await releaseProvision.promise;
-      return harness.ready;
-    });
-    const dispatching = coordinated.dispatch(REQUEST);
-    await provisionStarted.promise;
-    const provisioning = placementStore.get(REQUEST.sessionId);
-    if (provisioning?.state !== "provisioning") {
-      throw new Error("expected in-flight provisioning owner");
-    }
-    const outcome = coordinated.reclaim(REQUEST).catch((error: unknown) => error);
-    const olderRecovery = coordinated.resumeProvisioning(provisioning, async () => {});
-    // The environment service joins the pass already waiting behind reclaim.
-    vi.mocked(harness.environments.reconcileOnce).mockImplementationOnce(async () => {
-      await olderRecovery;
-    });
-    releaseProvision.resolve();
-    try {
-      await dispatching;
-      expect(await outcome).toEqual(new Error("destroy pending"));
-      await olderRecovery;
-      expect(placementStore.get(REQUEST.sessionId)?.state).toBe("draining");
-      expect(placementStore.listPendingWorkspaceResults()).toEqual([
-        expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
-      ]);
-      expect(harness.log.filter((event) => event === "workspace:reconcile")).toHaveLength(1);
+  it.each([false, true])(
+    "releases a failed reclaim before targeted reconciliation without losing accepted work (changed=%s)",
+    async (changed) => {
+      const workspacePath = path.join(root, "workspace");
+      const payload = path.join(root, "worker-payload");
+      await fs.mkdir(workspacePath);
+      await fs.mkdir(payload);
+      await fs.writeFile(path.join(workspacePath, "result.txt"), "base\n");
+      await fs.writeFile(path.join(payload, "result.txt"), changed ? "worker\n" : "base\n");
+      const base = await readActualWorkspaceManifest({ root: workspacePath, baseCommit: null });
+      const current = await readActualWorkspaceManifest({ root: payload, baseCommit: null });
+      const publishAcceptedManifest = vi.fn(async () => {});
+      const fixture = createHarness(database, placementStore, { workspacePath });
+      const tunnels = createWorkerTunnelManager();
+      const reconcileWorkspace = vi.fn(async (request: WorkerWorkspaceReconcileRequest) => {
+        if (request.source.kind !== "local") {
+          throw new Error("expected a local workspace source");
+        }
+        // Use the producer's real prepared-ref/apply/publish flow, even for unchanged files.
+        // An accepted marker without its staged ref is not the normal transport contract.
+        const prepared = await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
+          request: {
+            journal: request.source.journal,
+            stagedResult: request.source.stagedResult,
+            localPath: request.source.path,
+            remoteWorkspaceDir: request.remoteWorkspaceDir,
+            baseManifestRef: request.baseManifestRef,
+          },
+          stagingRoot: payload,
+          currentManifestRef: current.manifestRef,
+          baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+          currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+          publishAcceptedManifest,
+        });
+        return {
+          ...prepared,
+          manifestRef: current.manifestRef,
+          changed,
+          verifyStable: async () => {},
+        };
+      });
+      vi.spyOn(tunnels, "start").mockImplementation(async (request) => ({
+        ...(await fixture.environments.startTunnel({
+          ...request,
+          ownerEpoch: fixture.ready.ownerEpoch,
+        })),
+        environmentId: request.environmentId,
+        ownerEpoch: request.ownerEpoch,
+        syncWorkspace: async () => ({
+          mode: "git" as const,
+          remoteWorkspaceDir: "/worker/workspace",
+          manifestRef: base.manifestRef,
+        }),
+        reconcileWorkspace,
+      }));
+      const provisionStarted = createDeferredCore();
+      const releaseProvision = createDeferredCore();
+      const destroy = vi.fn(async () => {}).mockRejectedValueOnce(new Error("destroy pending"));
+      const provider = createProvider({
+        provision: async () => {
+          provisionStarted.resolve();
+          await releaseProvision.promise;
+          return { leaseId: "lease-1", ssh: SSH_ENDPOINT };
+        },
+        destroy,
+      });
+      const environments = createWorkerEnvironmentService({
+        store: createWorkerEnvironmentStore({ database, now: () => 1_000 }),
+        getConfig: () => ({
+          cloudWorkers: { profiles: { development: { provider: "fake", settings: {} } } },
+        }),
+        resolveProvider: (id) => (id === provider.id ? provider : undefined),
+        prepareInstallation: async () => ({
+          ...BUNDLE_ARTIFACT,
+          protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        }),
+        bootstrapWorker: async ({ installation }) => ({
+          bundleHash: installation.bundleHash,
+          openclawVersion: installation.openclawVersion,
+          protocolFeatures: [...installation.protocolFeatures],
+        }),
+        executeInference: async () => ({ type: "error", reason: "cancelled", message: "unused" }),
+        tunnelManager: tunnels,
+        placementStore: createWorkerSessionPlacementGate(placementStore),
+        now: () => 1_000,
+      });
+      const harness = createHarness(database, placementStore, {
+        workspacePath,
+        environmentService: environments,
+      });
+      const coordinated = coordinateWorkerPlacementDispatch(harness.service, (_request, run) =>
+        run(),
+      );
+      const request = { ...REQUEST, executionMode: "remote-exec" as const };
+      const dispatching = coordinated.dispatch(request);
+      let outcome: Promise<unknown> | undefined;
+      try {
+        await Promise.race([provisionStarted.promise, dispatching]);
+        expect(placementStore.get(request.sessionId)?.state).toBe("provisioning");
+        outcome = coordinated.reclaim(request).catch((error: unknown) => error);
+        releaseProvision.resolve();
+        const active = await dispatching;
+        expect(await outcome).toMatchObject({ message: "destroy pending" });
+        expect(coordinated.isPlacementOperationInFlight(request.sessionId)).toBe(false);
+        expect(placementStore.get(request.sessionId)?.state).toBe("draining");
+        const [pending] = placementStore.listPendingWorkspaceResults();
+        expect(pending).toMatchObject({
+          workspaceAcceptedAtMs: 1_000,
+          recoveryRequestedAtMs: 1_000,
+          stagedResultRef: expect.stringMatching(/^refs\/openclaw\/worker-results\/reclaim-/u),
+        });
+        expect(environments.get(active.environmentId)).toMatchObject({
+          state: "destroying",
+          destroyRequestedAtMs: 1_000,
+        });
+        expect(destroy).toHaveBeenCalledOnce();
+        expect(reconcileWorkspace).toHaveBeenCalledOnce();
+        expect(publishAcceptedManifest).toHaveBeenCalledOnce();
+        await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+          changed ? "worker\n" : "base\n",
+        );
+        // Acceptance must not replay the old cloud result over subsequent local edits.
+        await fs.writeFile(path.join(workspacePath, "result.txt"), "local after acceptance\n");
 
-      expect(harness.environments.destroy).toHaveBeenCalledOnce();
-    } finally {
-      await Promise.allSettled([dispatching, outcome, olderRecovery]);
-    }
-  });
+        await coordinated.reconcileActive(active.environmentId);
+
+        expect(destroy).toHaveBeenCalledTimes(2);
+        expect(environments.get(active.environmentId)?.state).toBe("destroyed");
+        expect(placementStore.get(request.sessionId)).toMatchObject({
+          state: "reclaimed",
+          turnClaim: null,
+        });
+        expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+        expect(reconcileWorkspace).toHaveBeenCalledOnce();
+        expect(publishAcceptedManifest).toHaveBeenCalledOnce();
+        await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+          "local after acceptance\n",
+        );
+      } finally {
+        releaseProvision.resolve();
+        await Promise.allSettled([dispatching, outcome]);
+        await environments.stop();
+      }
+    },
+  );
 
   it("keeps the accepted placement draining when provider destruction is not proven", async () => {
     const harness = createHarness(database, placementStore, {
@@ -152,13 +270,7 @@ describe("worker placement dispatch reclaim", () => {
       workspaceBaseManifestRef: MANIFEST_REF,
     });
 
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).resolves.toMatchObject({
+    await expect(harness.service.reclaim(reclaimRequest())).resolves.toMatchObject({
       state: "reclaimed",
       turnClaim: null,
       workspaceBaseManifestRef: MANIFEST_REF,
@@ -428,16 +540,9 @@ describe("worker placement dispatch reclaim", () => {
       const authorizationError = new Error("session participation changed");
 
       await expect(
-        harness.service.reclaim(
-          {
-            sessionId: REQUEST.sessionId,
-            sessionKey: REQUEST.sessionKey,
-            agentId: REQUEST.agentId,
-          },
-          () => {
-            throw authorizationError;
-          },
-        ),
+        harness.service.reclaim(reclaimRequest(), () => {
+          throw authorizationError;
+        }),
       ).rejects.toBe(authorizationError);
 
       expect(harness.placements.current()).toMatchObject({ state });
@@ -451,13 +556,9 @@ describe("worker placement dispatch reclaim", () => {
     });
     await harness.service.dispatch(REQUEST);
 
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).resolves.toMatchObject({ state: "reclaimed" });
+    await expect(harness.service.reclaim(reclaimRequest())).resolves.toMatchObject({
+      state: "reclaimed",
+    });
 
     expect(harness.placements.current()).toMatchObject({
       state: "reclaimed",
@@ -492,13 +593,7 @@ describe("worker placement dispatch reclaim", () => {
     });
     await harness.service.dispatch(REQUEST);
 
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).resolves.toMatchObject({
+    await expect(harness.service.reclaim(reclaimRequest())).resolves.toMatchObject({
       state: "reclaimed",
       workspaceBaseManifestRef: MANIFEST_REF,
     });
@@ -638,13 +733,7 @@ describe("worker placement dispatch reclaim", () => {
     });
     await harness.service.dispatch(REQUEST);
 
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).resolves.toMatchObject({
+    await expect(harness.service.reclaim(reclaimRequest())).resolves.toMatchObject({
       state: "reclaimed",
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
@@ -692,11 +781,7 @@ describe("worker placement dispatch reclaim", () => {
       workspacePath,
     });
     await harness.service.dispatch(REQUEST);
-    const request = {
-      sessionId: REQUEST.sessionId,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-    };
+    const request = reclaimRequest();
 
     await expect(harness.service.reclaim(request)).rejects.toThrow("workspace conflict");
     expect(harness.placements.current()).toMatchObject({ state: "draining", turnClaim: null });
@@ -763,11 +848,7 @@ describe("worker placement dispatch reclaim", () => {
     });
     await harness.service.dispatch(REQUEST);
 
-    const request = {
-      sessionId: REQUEST.sessionId,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-    };
+    const request = reclaimRequest();
     const first = prepareSessionWorkerPlacementStop({
       ...request,
       action: "delete",
@@ -796,13 +877,7 @@ describe("worker placement dispatch reclaim", () => {
     });
     await harness.service.dispatch(REQUEST);
 
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).rejects.toThrow("credential rejected");
+    await expect(harness.service.reclaim(reclaimRequest())).rejects.toThrow("credential rejected");
     expect(harness.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
   });
 
@@ -817,11 +892,7 @@ describe("worker placement dispatch reclaim", () => {
       leaseFailureCount: 1,
     });
     await harness.service.dispatch(REQUEST);
-    const request = {
-      sessionId: REQUEST.sessionId,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-    };
+    const request = reclaimRequest();
 
     await expect(harness.service.reclaim(request)).rejects.toThrow("workspace quiescence expired");
     expect(harness.placements.current()).toMatchObject({
@@ -842,13 +913,9 @@ describe("worker placement dispatch reclaim", () => {
     const harness = createHarness(database, placementStore, { leaseFailureCount: 1 });
     await harness.service.dispatch(REQUEST);
 
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).rejects.toThrow("workspace quiescence expired");
+    await expect(harness.service.reclaim(reclaimRequest())).rejects.toThrow(
+      "workspace quiescence expired",
+    );
 
     expect(harness.placements.current()).toMatchObject({
       state: "draining",
@@ -872,11 +939,7 @@ describe("worker placement dispatch reclaim", () => {
         verifyFailureCall,
       });
       await harness.service.dispatch(REQUEST);
-      const request = {
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      };
+      const request = reclaimRequest();
 
       await expect(harness.service.reclaim(request)).rejects.toThrow(
         "workspace changed after reconciliation",
@@ -903,13 +966,9 @@ describe("worker placement dispatch reclaim", () => {
     });
     await harness.service.dispatch(REQUEST);
 
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).rejects.toThrow("workspace changed after reconciliation");
+    await expect(harness.service.reclaim(reclaimRequest())).rejects.toThrow(
+      "workspace changed after reconciliation",
+    );
 
     expect(harness.placements.current()).toMatchObject({
       state: "draining",

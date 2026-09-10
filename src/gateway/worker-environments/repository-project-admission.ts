@@ -93,7 +93,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     params.assertCurrent();
     assertAgent();
   };
-  const prepareIdentity = async () => {
+  const prepareIdentity = async (assertPreparing?: () => void) => {
     assertAgent();
     const config = getConfig();
     const identity = await prepareGitHubReadIdentity({
@@ -102,6 +102,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       agentId: agent.agentId,
       getCurrentConfig: getConfig,
       assertActive: assertAgent,
+      assertPreparing,
       refresh: () => requestCurrentGitHubOAuthRefresh(agent.agentId),
       allowAnonymous: true,
     }).catch((error: unknown) => {
@@ -113,7 +114,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     return identity;
   };
   assertAdmission();
-  let identity = await prepareIdentity();
+  let identity = await prepareIdentity(assertAdmission);
   assertAdmission();
   const owner = { agent, identity: identity.selection };
   if (expected && !isDeepStrictEqual(owner, expected.source.owner)) {

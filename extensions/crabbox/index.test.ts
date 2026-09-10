@@ -5,7 +5,6 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
-  WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createPluginStateSyncKeyedStoreForTests,
@@ -60,7 +59,7 @@ function inspectResult(leaseId: string): SpawnResult {
 }
 
 function registerCrabboxGeneration() {
-  const providers: WorkerProvider[] = [];
+  const providers: Parameters<OpenClawPluginApi["registerWorkerProvider"]>[0][] = [];
   const services: OpenClawPluginService[] = [];
   plugin.register(
     createTestPluginApi({
@@ -159,6 +158,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
         const waitForDeviceId = vi.fn(async () => "device-classless");
         const lease = await generation.provider.provision(profile, "classless-operation", {
+          assertCurrent: () => {},
           executionMode,
           beginNodeEnrollment: async () => ({
             ...(executionMode === "worker-turn"

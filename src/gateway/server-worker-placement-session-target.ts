@@ -31,7 +31,6 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   sessionKey: string;
   agentId: string;
   executionMode: WorkerPlacementExecutionMode;
-  action: "activation" | "recovery";
   signal?: AbortSignal;
   run: (workspace: WorkerSessionWorkspace) => T | Promise<T>;
 }): Promise<T> {
@@ -59,11 +58,11 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         expectedTarget: target,
-        errorMessage: `Session ${params.sessionKey} changed before cloud worker ${params.action}. Retry.`,
+        errorMessage: `Session ${params.sessionKey} changed before cloud worker activation. Retry.`,
       });
       if (entry.archivedAt !== undefined) {
         throw new WorkerDispatchTargetChangedError(
-          `Session ${params.sessionKey} was archived before cloud worker ${params.action}. Retry.`,
+          `Session ${params.sessionKey} was archived before cloud worker activation. Retry.`,
         );
       }
       const currentRuntime = params.sessionRuntime.resolveWorkerPlacementSessionRuntime({
@@ -77,7 +76,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
         params.executionMode
       ) {
         throw new WorkerDispatchTargetChangedError(
-          `Session ${params.sessionKey} runtime changed to ${currentRuntime} before cloud worker ${params.action}. Retry.`,
+          `Session ${params.sessionKey} runtime changed to ${currentRuntime} before cloud worker activation. Retry.`,
         );
       }
       return await params.run(workspace);

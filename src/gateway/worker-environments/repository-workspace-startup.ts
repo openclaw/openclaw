@@ -23,7 +23,6 @@ export async function syncSessionRepositoryWorkspace(params: {
   generation: number;
   gitAuthor?: { name?: string; email?: string };
   runSetupScript?: boolean;
-  recovery?: true;
   preparedRepository?: PreparedRepositoryWorkspace;
   assertCurrent: () => void;
 }) {
@@ -39,11 +38,6 @@ export async function syncSessionRepositoryWorkspace(params: {
     prepared.sourceManifestRef !== repository.baseManifestHash
   ) {
     throw new Error("Prepared repository does not match the pinned source manifest");
-  }
-  if (params.recovery && !prepared && !repository.checkpointRef && repository.runSetupScript) {
-    throw new Error(
-      "Repository setup was interrupted before its first checkpoint. Retry dispatch with an administrator to authorize setup again.",
-    );
   }
   if (
     !prepared &&
@@ -90,6 +84,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       generation: params.generation,
       gitAuthor: params.gitAuthor,
       source: { ...source, ...(checkpoint ? { checkpoint } : {}) },
+      authorize: params.assertCurrent,
     });
   };
   const synced = repository.checkpointRef
@@ -130,7 +125,10 @@ export async function syncSessionRepositoryWorkspace(params: {
     }
     return synced;
   }
-  const quiescence = await params.tunnel.quiesceWorkspace(synced.remoteWorkspaceDir);
+  const quiescence = await params.tunnel.quiesceWorkspace(
+    synced.remoteWorkspaceDir,
+    params.assertCurrent,
+  );
   let reconciliation: Awaited<ReturnType<WorkerTunnelHandle["reconcileWorkspace"]>> | undefined;
   try {
     params.assertCurrent();
@@ -139,6 +137,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       baseManifestRef: synced.baseManifestRef,
       source: {
         kind: "repository",
+        authorize: params.assertCurrent,
         referenceManifestRef: synced.manifestRef,
         prepareCheckpoint: (payload) =>
           stageSessionRepositoryCheckpoint({

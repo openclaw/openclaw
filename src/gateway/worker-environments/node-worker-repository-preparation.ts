@@ -102,7 +102,17 @@ function gitFailure(
  * Admission owns the validated repository source; the command owner fences
  * every operation to its remote session workspace. This owner never reads a Gateway checkout.
  */
-export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepositoryExec) {
+export function createNodeWorkerRepositoryPreparation(
+  run: NodeWorkerRepositoryExec,
+  authorize?: () => void,
+) {
+  // Invocation-owned preparation must not lend its authority to retained workspace custody.
+  const exec: NodeWorkerRepositoryExec = async (command) => {
+    authorize?.();
+    const result = await run({ ...command, assertCurrent: authorize });
+    authorize?.();
+    return result;
+  };
   let seedStoreFailureLogged = false;
   const git = (
     identity: RepositoryIdentity | undefined,
@@ -279,6 +289,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
             );
           }
         } catch (error) {
+          authorize?.();
           if (error instanceof Error && error.message.includes("INVALID_REQUEST")) {
             throw error;
           } else {
@@ -327,6 +338,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
             throw workspaceSyncError(stored);
           }
         } catch (error) {
+          authorize?.();
           if (error instanceof Error && error.message.includes("INVALID_REQUEST")) {
             throw error;
           }

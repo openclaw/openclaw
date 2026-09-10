@@ -92,6 +92,8 @@ export type WorkerSshIdentity =
 
 /** Durable context supplied when a worker provider resolves the identity it minted. */
 export type WorkerSshIdentityRequest = {
+  /** Live authority for this identity-resolution invocation. */
+  assertCurrent?: () => void;
   leaseId: string;
   profile: WorkerProfile;
   keyRef: SecretRef;
@@ -231,9 +233,73 @@ export class WorkerProviderError extends Error {
   }
 }
 
-/** Cloud-worker lifecycle capability shared by plugin and internal providers. */
+/** Legacy provisioning options retained for existing provider implementations. */
+export type WorkerProvisionOptions = {
+  /** Live invocation guard; required at use by providers declaring version 1. */
+  assertCurrent?: () => void;
+  /** Configured profile id for display; settings and operation id own allocation identity. */
+  profileId?: string;
+  /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
+  signal?: AbortSignal;
+  executionMode?: WorkerExecutionMode;
+  machineClass?: string;
+  os?: string;
+  nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
+  prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
+  beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
+  project?: {
+    key: string;
+    baseCommit: string;
+    label?: string;
+    /** Gateway-local checkout root for display and explicit rebuild requests. */
+    root?: string;
+    preparation?: {
+      key: string;
+      cacheKey: string;
+      purpose: "session" | "reserve";
+      demandAtMs: number;
+    };
+    signal: AbortSignal;
+    assertCurrent: () => void;
+    /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
+    inspectPreparedWorkspace?: (transport: {
+      runScript: (script: string, signal: AbortSignal) => Promise<string>;
+    }) => Promise<void>;
+    /** Bound to this provision attempt; retained callbacks reject after it closes. */
+    prepare: (transport: {
+      runScript: (script: string, signal: AbortSignal) => Promise<string>;
+      /** Render using this provider command's remaining budget before repository code runs. */
+      runScriptWithBudget?: (
+        createScript: (timeoutMs: number) => string,
+        signal: AbortSignal,
+      ) => Promise<string>;
+      upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
+    }) => Promise<{
+      seedKey: string;
+      cacheHit: boolean;
+      /** New completed setup must enter the reusable image before enrollment. */
+      captureRequired?: true;
+      preparedWorkspace?: {
+        preparationKey: string;
+        cacheKey: string;
+        workspaceDir: string;
+        homeDir: string;
+        sourceManifestRef: string;
+        preparedManifestRef: string;
+      };
+    }>;
+  };
+};
+
+/** Required live invocation contract for version 1 providers. */
+export type WorkerProvisionOptionsV1 = WorkerProvisionOptions & { assertCurrent: () => void };
+export type WorkerSshIdentityRequestV1 = WorkerSshIdentityRequest & { assertCurrent: () => void };
+
+/** Legacy cloud-worker provider contract; direct lifecycle remains supported. */
 export type WorkerProvider = {
   id: string;
+  /** Honors assertCurrent in provision, prepareProvision and provider-owned SSH identity effects. */
+  liveAuthorityVersion?: undefined;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
   listOperatingSystems?: (profile: WorkerProfile) => Promise<readonly WorkerOperatingSystem[]>;
@@ -283,60 +349,7 @@ export type WorkerProvider = {
   provision: (
     profile: WorkerProfile,
     operationId: string,
-    options?: {
-      /** Configured profile id for display; settings and operation id own allocation identity. */
-      profileId?: string;
-      /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
-      signal?: AbortSignal;
-      executionMode?: WorkerExecutionMode;
-      machineClass?: string;
-      os?: string;
-      nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
-      prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
-      beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
-      project?: {
-        key: string;
-        baseCommit: string;
-        label?: string;
-        /** Gateway-local checkout root for display and explicit rebuild requests. */
-        root?: string;
-        preparation?: {
-          key: string;
-          cacheKey: string;
-          purpose: "session" | "reserve";
-          demandAtMs: number;
-        };
-        signal: AbortSignal;
-        assertCurrent: () => void;
-        /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
-        inspectPreparedWorkspace?: (transport: {
-          runScript: (script: string, signal: AbortSignal) => Promise<string>;
-        }) => Promise<void>;
-        /** Bound to this provision attempt; retained callbacks reject after it closes. */
-        prepare: (transport: {
-          runScript: (script: string, signal: AbortSignal) => Promise<string>;
-          /** Render using this provider command's remaining budget before repository code runs. */
-          runScriptWithBudget?: (
-            createScript: (timeoutMs: number) => string,
-            signal: AbortSignal,
-          ) => Promise<string>;
-          upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
-        }) => Promise<{
-          seedKey: string;
-          cacheHit: boolean;
-          /** New completed setup must enter the reusable image before enrollment. */
-          captureRequired?: true;
-          preparedWorkspace?: {
-            preparationKey: string;
-            cacheKey: string;
-            workspaceDir: string;
-            homeDir: string;
-            sourceManifestRef: string;
-            preparedManifestRef: string;
-          };
-        }>;
-      };
-    },
+    options?: WorkerProvisionOptions,
   ) => Promise<WorkerLease>;
   /**
    * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
@@ -375,6 +388,26 @@ export type WorkerProvider = {
   /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };
+
+/** Explicit opt-in to the same operations with required live authority. */
+export type WorkerProviderV1 = Omit<
+  WorkerProvider,
+  "liveAuthorityVersion" | "provision" | "prepareProvision" | "resolveSshIdentity"
+> & {
+  liveAuthorityVersion: 1;
+  provision: (
+    profile: WorkerProfile,
+    operationId: string,
+    options: WorkerProvisionOptionsV1,
+  ) => Promise<WorkerLease>;
+  prepareProvision?: (
+    ...args: Parameters<WorkerProviderV1["provision"]>
+  ) => Promise<() => Promise<WorkerLease>>;
+  resolveSshIdentity?: (request: WorkerSshIdentityRequestV1) => Promise<WorkerSshIdentity>;
+};
+
+/** Registry readers handle both contracts; callers of v1 supply its required guard. */
+export type RegisteredWorkerProvider = WorkerProvider | WorkerProviderV1;
 
 /** Speech capability registered by a plugin. */
 export type SpeechProviderPlugin = {

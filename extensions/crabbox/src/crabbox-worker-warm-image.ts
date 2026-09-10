@@ -75,6 +75,7 @@ export function createCrabboxWarmImageManager(dependencies: {
   const warned = new Set<string>();
   const openStore = () => (store ??= openCrabboxWarmImageStore());
   const assertCurrent = (context: RetirementContext) => {
+    context.assertAuthorized?.();
     context.assertCurrent?.();
     context.signal?.throwIfAborted();
   };

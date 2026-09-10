@@ -96,6 +96,7 @@ export function createRepositoryWorkspaceMutationService(options: {
           const tunnel = await environments.startTunnel({
             environmentId: placement.environmentId,
             ownerEpoch: placement.activeOwnerEpoch,
+            authorize: assertCurrent,
           });
           assertCurrent();
           if (
@@ -104,7 +105,10 @@ export function createRepositoryWorkspaceMutationService(options: {
           ) {
             throw new Error("Repository workspace capture tunnel owner changed");
           }
-          const quiescence = await tunnel.quiesceWorkspace(placement.remoteWorkspaceDir);
+          const quiescence = await tunnel.quiesceWorkspace(
+            placement.remoteWorkspaceDir,
+            assertCurrent,
+          );
           let resumed = false;
           try {
             assertCurrent();

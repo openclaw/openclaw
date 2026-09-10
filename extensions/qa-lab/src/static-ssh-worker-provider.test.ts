@@ -26,8 +26,8 @@ describe("QA Lab static-SSH worker provider", () => {
       keyRef: KEY_REF,
     };
 
-    const first = await provider.provision(profile, "operation-123");
-    const replay = await provider.provision(profile, "operation-123");
+    const first = await provider.provision(profile, "operation-123", { assertCurrent: () => {} });
+    const replay = await provider.provision(profile, "operation-123", { assertCurrent: () => {} });
 
     expect(provider.id).toBe("static-ssh");
     expect(provider.supportedExecutionModes).toEqual(["remote-exec"]);
@@ -55,7 +55,7 @@ describe("QA Lab static-SSH worker provider", () => {
     const provider = createStaticSshWorkerProvider();
 
     await expect(
-      provider.provision({ ...PROFILE, port: 2222 }, "operation-456"),
+      provider.provision({ ...PROFILE, port: 2222 }, "operation-456", { assertCurrent: () => {} }),
     ).resolves.toMatchObject({ ssh: { port: 2222 } });
   });
 
@@ -147,8 +147,12 @@ describe("QA Lab static-SSH worker provider", () => {
   ])("rejects an invalid $label", async ({ label, profile }) => {
     const provider = createStaticSshWorkerProvider();
 
-    await expect(provider.provision(profile, "operation-invalid")).rejects.toThrow(label);
-    await expect(provider.provision(profile, "operation-invalid")).rejects.toMatchObject({
+    await expect(
+      provider.provision(profile, "operation-invalid", { assertCurrent: () => {} }),
+    ).rejects.toThrow(label);
+    await expect(
+      provider.provision(profile, "operation-invalid", { assertCurrent: () => {} }),
+    ).rejects.toMatchObject({
       code: "invalid_profile",
     });
   });

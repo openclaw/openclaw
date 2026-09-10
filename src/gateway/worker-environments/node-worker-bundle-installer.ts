@@ -21,6 +21,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     assertCurrent?: () => void;
   }) => {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const transport = options.getTransport();
     if (!transport) {
       throw new Error("Device worker node transport is unavailable");

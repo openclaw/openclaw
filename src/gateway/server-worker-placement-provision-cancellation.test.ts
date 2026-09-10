@@ -10,13 +10,7 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
 }));
 
 import {
-  GatewayDrainingError,
-  markGatewayRestartDraining,
-  resetGatewayWorkAdmission,
-} from "../process/gateway-work-admission.js";
-import {
   beginSessionWorkAdmission,
-  closeSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
@@ -31,7 +25,6 @@ import { createHarness } from "./worker-environments/placement-dispatch-test-har
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import * as support from "./worker-environments/service.test-support.js";
-import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
 const REQUEST = {
   ...FIXTURE_REQUEST,
@@ -416,7 +409,7 @@ describe("dispatch Stop before provider allocation", () => {
     }
   });
 
-  it.each(["local", "recovery", "activation", "move"] as const)(
+  it.each(["local", "activation", "move"] as const)(
     "releases admitted %s queued behind an interrupting lifecycle owner",
     async (phase) => {
       const actual = await vi.importActual<
@@ -457,16 +450,6 @@ describe("dispatch Stop before provider allocation", () => {
                   }),
                 )
               : options.runLocalBarrier(request),
-          runRecoveryBarrier: (request) =>
-            pause(() =>
-              options.runRecoveryBarrier({
-                ...request,
-                run: async (recoveryWorkspace: WorkerSessionWorkspace) => {
-                  events.push("phase-started");
-                  await request.run(recoveryWorkspace);
-                },
-              }),
-            ),
           runActivationBarrier: (request) =>
             phase === "activation"
               ? pause(() =>
@@ -507,25 +490,19 @@ describe("dispatch Stop before provider allocation", () => {
         revokeSessionAuthority: vi.fn(),
       });
       const initial =
-        phase === "recovery"
-          ? harness.placements.seedProvisioning("remote-exec")
-          : phase === "move"
-            ? harness.placements.seedActive(2, "remote-exec")
-            : undefined;
+        phase === "move" ? harness.placements.seedActive(2, "remote-exec") : undefined;
       const operation = (
-        phase === "recovery" && initial?.state === "provisioning"
-          ? runtime.dispatchService.resumeProvisioning(initial, async () => {})
-          : phase === "move" && initial?.state === "active"
-            ? runtime.dispatchService.move({
-                ...REQUEST,
-                source: {
-                  generation: initial.generation,
-                  environmentId: initial.environmentId,
-                  ownerEpoch: initial.activeOwnerEpoch,
-                },
-                target: { kind: "gateway" },
-              })
-            : runtime.dispatchService.dispatch(REQUEST)
+        phase === "move" && initial?.state === "active"
+          ? runtime.dispatchService.move({
+              ...REQUEST,
+              source: {
+                generation: initial.generation,
+                environmentId: initial.environmentId,
+                ownerEpoch: initial.activeOwnerEpoch,
+              },
+              target: { kind: "gateway" },
+            })
+          : runtime.dispatchService.dispatch(REQUEST)
       ).catch((error: unknown) => error);
       await Promise.race([
         beforeBarrier.promise,
@@ -571,341 +548,105 @@ describe("dispatch Stop before provider allocation", () => {
     },
   );
 
-  it.each([
-    "replaced",
-    "archived",
-    "archived-behind-exclusive",
-    "shutdown",
-    "closed-ingress",
-    "started-failure",
-  ] as const)(
-    "preserves the exact recovery cleanup owner after %s admission refusal",
-    async (reason) => {
-      const destroyEntered = createDeferredCore();
-      const releaseDestroy = createDeferredCore();
-      const exclusiveEntered = createDeferredCore();
-      const releaseExclusive = createDeferredCore();
-      const admissionChecked = createDeferredCore();
-      const invalidOwner = reason === "replaced" || reason.startsWith("archived");
-      const destroy = vi.fn(
-        async ({
-          leaseId,
-        }: Parameters<ReturnType<typeof support.createProvider>["destroy"]>[0]) => {
-          if (leaseId === "lease:environment-prior-exclusive") {
-            exclusiveEntered.resolve();
-            await releaseExclusive.promise;
-            return;
-          }
-          destroyEntered.resolve();
-          await releaseDestroy.promise;
-        },
-      );
-      const provision = vi.fn(async () => {
-        throw new Error("Refused recovery must not replay provisioning");
-      });
-      const environments = support.createService(support.createProvider({ provision, destroy }));
-      const environment = support.seedBootstrapping("environment-refused-recovery");
-      const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const requested = placements.startDispatch(REQUEST);
-      placements.transition({
-        sessionId: REQUEST.sessionId,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: requested.generation,
-        patch: { environmentId: environment.environmentId },
-      });
-      const entry = {
-        sessionId: reason === "replaced" ? "replacement-session" : REQUEST.sessionId,
-        lifecycleRevision: "original",
-        worktree: { id: "workspace" },
-        ...(reason.startsWith("archived") ? { archivedAt: 1 } : {}),
-      };
-      let admissionReads = 0;
-      moveDestinationMocks.resolveCanonicalSession.mockImplementation(() => {
-        if (++admissionReads >= 2) {
-          admissionChecked.resolve();
-        }
-        return entry;
-      });
-      if (reason === "started-failure") {
-        vi.mocked(support.testState.bootstrapWorker).mockRejectedValueOnce(
-          new Error("Bootstrap failed"),
-        );
-      }
-      const runtime = createGatewayWorkerPlacementRuntime({
-        placements,
-        environments,
-        gatewayNamespace: "gateway-test",
-        warn: vi.fn(),
-        cancelSessionWork: vi.fn(async () => {}),
-        revokeSessionAuthority: vi.fn(),
-      });
-      const uninstall = installWorkerPlacementReconcileGuard({
-        placements,
-        environments,
-        dispatch: runtime.dispatchService,
-        isStopping: () => false,
-      });
-      let exclusive: Promise<unknown> = Promise.resolve();
-      if (reason === "archived-behind-exclusive") {
-        support.seedReady("environment-prior-exclusive");
-        exclusive = runtime.dispatchService.forceDestroyEnvironment("environment-prior-exclusive");
-        await Promise.race([
-          exclusiveEntered.promise,
-          exclusive.then(() => {
-            throw new Error("Prior exclusive operation ended before its held provider");
-          }),
-        ]);
-      }
-      const releaseIngress =
-        reason === "closed-ingress"
-          ? closeSessionWorkAdmissions({
-              scope: `${support.testState.root}/sessions.sqlite`,
-              identities: [REQUEST.sessionKey, REQUEST.sessionId],
-              reason: new Error("session cancellation owns ingress"),
-            })
-          : () => {};
-      if (reason === "shutdown") {
-        markGatewayRestartDraining();
-      }
-      let settled = false;
-      const recovery = environments.reconcileEnvironment(environment.environmentId).then(
-        () => {
-          settled = true;
-          return "recovered";
-        },
-        (error: unknown) => {
-          settled = true;
-          return error;
-        },
-      );
+  async function createInterruptedProvision() {
+    const provision = vi.fn(async () => {
+      throw new Error("provider reply lost after allocation");
+    });
+    const destroy = vi.fn(async () => {});
+    const environments = support.createService(
+      support.createProvider({
+        provision,
+        destroy,
+        resolveAllocation: async () => ({ leaseId: "lease-retained", sharedHost: false }),
+      }),
+    );
+    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    const requested = placements.startDispatch(REQUEST);
+    const key = "session-dispatch:" + REQUEST.sessionId + ":" + requested.generation;
+    const intent = deriveEnvironmentIntent(key);
+    placements.transition({
+      sessionId: REQUEST.sessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: requested.generation,
+      patch: { environmentId: intent.environmentId },
+    });
+    await expect(
+      environments.create("development", key, undefined, REQUEST.executionMode),
+    ).rejects.toMatchObject({ code: "provider_failure" });
+    const runtime = createGatewayWorkerPlacementRuntime({
+      placements,
+      environments,
+      gatewayNamespace: "gateway-test",
+      warn: vi.fn(),
+      cancelSessionWork: vi.fn(async (request) => {
+        request.assertCurrent();
+        request.onCancellationStarted?.();
+      }),
+      revokeSessionAuthority: vi.fn(),
+    });
+    const uninstall = installWorkerPlacementReconcileGuard({
+      placements,
+      environments,
+      dispatch: runtime.dispatchService,
+      isStopping: () => false,
+    });
+    return { provision, destroy, environments, placements, intent, runtime, uninstall };
+  }
+
+  it.each(["targeted", "sweep"] as const)(
+    "retains interrupted provisioning without replay during %s recovery and permits explicit Stop",
+    async (mode) => {
+      const fixture = await createInterruptedProvision();
+      const { environments, placements, intent, provision, destroy, runtime, uninstall } = fixture;
       try {
-        if (reason === "archived-behind-exclusive") {
-          await admissionChecked.promise;
-          await setImmediate();
-          expect(destroy).toHaveBeenCalledExactlyOnceWith({
-            leaseId: "lease:environment-prior-exclusive",
-            profile: { region: "test" },
-          });
-          expect(settled).toBe(false);
-          releaseExclusive.resolve();
-          await exclusive;
+        for (let pass = 0; pass < 2; pass += 1) {
+          await (mode === "targeted"
+            ? environments.reconcileEnvironment(intent.environmentId)
+            : environments.reconcileOnce());
         }
-        const first = await Promise.race([
-          destroyEntered.promise.then(() => "destroy-started"),
-          recovery,
-        ]);
-        expect(provision).not.toHaveBeenCalled();
-        if (reason !== "started-failure") {
-          expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
-        }
-        if (invalidOwner || reason === "started-failure") {
-          expect(first).toBe("destroy-started");
-          expect(settled).toBe(false);
-          expect(
-            destroy.mock.calls.filter(([lease]) => lease.leaseId === environment.leaseId),
-          ).toEqual([[{ leaseId: environment.leaseId, profile: { region: "test" } }]]);
-          const interruption = startSessionWorkAdmissionInterruption({
-            scope: `${support.testState.root}/sessions.sqlite`,
-            identities: [REQUEST.sessionKey, REQUEST.sessionId],
-          });
-          const admissionReleased = vi.fn();
-          void interruption.released.then(admissionReleased);
-          if (reason === "started-failure") {
-            await setImmediate();
-            expect(admissionReleased).not.toHaveBeenCalled();
-          }
-          releaseDestroy.resolve();
-          await recovery;
-          await interruption.released;
-          expect(placements.get(REQUEST.sessionId)).toMatchObject({
-            state: "failed",
-            environmentId: environment.environmentId,
-          });
-          expect(support.testState.store.get(environment.environmentId)?.state).toBe(
-            reason === "started-failure" ? "failed" : "destroyed",
-          );
-        } else {
-          expect(first).toBeInstanceOf(reason === "shutdown" ? GatewayDrainingError : Error);
-          expect(destroy).not.toHaveBeenCalled();
-          expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
-          expect(support.testState.store.get(environment.environmentId)).toMatchObject({
-            state: "bootstrapping",
-            leaseId: environment.leaseId,
-            destroyRequestedAtMs: null,
-          });
-        }
+        expect(provision).toHaveBeenCalledOnce();
+        expect(destroy).not.toHaveBeenCalled();
+        expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+        expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
+        const retained = support.testState.store.get(intent.environmentId);
+        expect(retained).toMatchObject({ state: "provisioning", destroyRequestedAtMs: null });
+        expect(retained?.lastError).toContain("retry with fresh authority");
+        expect(retained?.lastError).toContain("provider reply lost after allocation");
+        await expect(runtime.dispatchService.reclaim(REQUEST)).resolves.toMatchObject({
+          state: "local",
+        });
+        expect(provision).toHaveBeenCalledOnce();
+        expect(destroy).toHaveBeenCalledOnce();
+        expect(support.testState.store.get(intent.environmentId)).toMatchObject({
+          state: "destroyed",
+          leaseId: "lease-retained",
+        });
       } finally {
-        releaseExclusive.resolve();
-        releaseDestroy.resolve();
-        releaseIngress();
-        resetGatewayWorkAdmission();
-        await Promise.allSettled([recovery, exclusive]);
         await uninstall();
       }
     },
   );
 
-  it.each(["targeted", "sweep", "idle", "late-sweep", "timeout"] as const)(
-    "Stop owns steady-state provisioning through %s recovery ordering",
-    async (mode) => {
-      const replayEntered = createDeferredCore();
-      const childClosed = createDeferredCore();
-      const stopPrepared = createDeferredCore();
-      const sweepEntered = createDeferredCore();
-      const enterSweep = createDeferredCore();
-      let providerSignal: AbortSignal | undefined;
-      let provisionCalls = 0;
-      const events: string[] = [];
-      const destroy = vi.fn(async () => {
-        events.push("destroy");
+  it("continues an already durable destroy obligation without source-less provisioning", async () => {
+    const { environments, intent, provision, destroy, uninstall } =
+      await createInterruptedProvision();
+    try {
+      support.testState.store.requestDestroy({
+        environmentId: intent.environmentId,
+        state: "provisioning",
       });
-      const environments = support.createService(
-        support.createProvider({
-          provision: async (_profile, _operation, options) => {
-            provisionCalls += 1;
-            if (provisionCalls <= 2) {
-              throw new Error("provider reply unavailable after allocation");
-            }
-            providerSignal = options?.signal;
-            events.push("replay");
-            replayEntered.resolve();
-            await childClosed.promise;
-            events.push("child-closed");
-            return { leaseId: "lease-recovery-stop", ssh: support.SSH_ENDPOINT, sharedHost: false };
-          },
-          resolveAllocation: async () => ({ leaseId: "lease-recovery-stop", sharedHost: false }),
-          destroy,
-        }),
-        mode === "timeout" ? { providerCallTimeoutMs: 20 } : {},
-      );
-      const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const requested = placements.startDispatch(REQUEST);
-      const key = `session-dispatch:${REQUEST.sessionId}:${requested.generation}`;
-      const intent = deriveEnvironmentIntent(key);
-      placements.transition({
-        sessionId: REQUEST.sessionId,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: requested.generation,
-        patch: { environmentId: intent.environmentId },
-      });
-      await expect(
-        environments.create("development", key, undefined, REQUEST.executionMode),
-      ).rejects.toMatchObject({ code: "provider_failure" });
-      const cancelSessionWork = vi.fn(
-        async (
-          request: Parameters<
-            Parameters<typeof createGatewayWorkerPlacementRuntime>[0]["cancelSessionWork"]
-          >[0],
-        ) => {
-          request.assertCurrent();
-          request.onCancellationStarted?.();
-        },
-      );
-      if (mode === "late-sweep") {
-        // Recovery captures service methods when its runtime is created.
-        const reconcileOnce = environments.reconcileOnce.bind(environments);
-        vi.spyOn(environments, "reconcileOnce").mockImplementationOnce(async () => {
-          sweepEntered.resolve();
-          await enterSweep.promise;
-          await reconcileOnce();
-        });
-      }
-      const runtime = createGatewayWorkerPlacementRuntime({
-        placements,
-        environments,
-        gatewayNamespace: "gateway-test",
-        warn: vi.fn(),
-        cancelSessionWork,
-        revokeSessionAuthority: vi.fn(),
-      });
-      const uninstallGuard = installWorkerPlacementReconcileGuard({
-        placements,
-        environments,
-        dispatch: runtime.dispatchService,
-        isStopping: () => false,
-      });
-      // A completed recovery pass leaves this durable operation retryable. This is the
-      // same installed guard used after startup unlocks, not an RPC through the startup gate.
       await environments.reconcileEnvironment(intent.environmentId);
-      expect(provisionCalls).toBe(2);
-      expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
-      const recovery =
-        mode === "idle"
-          ? Promise.resolve()
-          : mode === "targeted"
-            ? environments.reconcileEnvironment(intent.environmentId)
-            : runtime.dispatchService.reconcileActive();
-      if (mode !== "idle") {
-        await Promise.race([
-          mode === "late-sweep" ? sweepEntered.promise : replayEntered.promise,
-          recovery.then(() => {
-            throw new Error("Recovery returned before its held boundary");
-          }),
-        ]);
-      }
-      if (mode === "timeout") {
-        // Startup and sweep completion use the caller result, but Stop must still
-        // reach the actual provider that outlives that timeout.
-        await recovery;
-        expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
-        expect(events).toEqual(["replay"]);
-      }
-      const attach = vi.spyOn(environments, "attachSession");
-      let stopped = false;
-      const stopping = runtime.dispatchService
-        .reclaim(REQUEST, undefined, () => stopPrepared.resolve())
-        .then(
-          (value) => {
-            stopped = true;
-            return value;
-          },
-          (error: unknown) => {
-            stopped = true;
-            return error;
-          },
-        );
-      try {
-        await Promise.race([
-          stopPrepared.promise,
-          stopping.then(() => {
-            throw new Error("Stop ended before preparation");
-          }),
-        ]);
-        if (mode === "idle" || mode === "late-sweep") {
-          // Stop has closed ingress before the older sweep discovers its recovery.
-          // That recovery cannot wait for this Stop or allocate after it completes.
-          enterSweep.resolve();
-          await support.waitForFast(() => expect(stopped).toBe(true));
-          expect(await stopping).toMatchObject({ state: "local" });
-          expect(provisionCalls).toBe(2);
-        } else {
-          await support.waitForFast(() => expect(providerSignal?.aborted).toBe(true));
-          expect(cancelSessionWork).toHaveBeenCalledOnce();
-          expect(stopped).toBe(false);
-          expect(destroy).not.toHaveBeenCalled();
-          expect(
-            support.testState.store.get(intent.environmentId)?.destroyRequestedAtMs,
-          ).not.toBeNull();
-        }
-      } finally {
-        enterSweep.resolve();
-        childClosed.resolve();
-        await Promise.allSettled([recovery, stopping]);
-        await uninstallGuard();
-      }
-      expect(await stopping).toMatchObject({ state: "local" });
-      expect(events).toEqual(
-        mode === "idle" || mode === "late-sweep"
-          ? ["destroy"]
-          : ["replay", "child-closed", "destroy"],
-      );
-      expect(attach).not.toHaveBeenCalled();
+      await environments.reconcileEnvironment(intent.environmentId);
+      expect(provision).toHaveBeenCalledOnce();
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
       expect(support.testState.store.get(intent.environmentId)).toMatchObject({
         state: "destroyed",
-        leaseId: "lease-recovery-stop",
+        leaseId: "lease-retained",
       });
-    },
-  );
+    } finally {
+      await uninstall();
+    }
+  });
 });

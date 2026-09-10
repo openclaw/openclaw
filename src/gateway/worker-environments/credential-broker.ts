@@ -211,6 +211,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
     request: WorkerCredentialBinding & {
       sessionId: string;
       placementBinding?: PreparedEnvironmentPlacementBinding;
+      authorize?: () => void;
     },
   ): Promise<MintedWorkerCredential> => {
     let stopping = options.isStopping();
@@ -244,6 +245,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       ) {
         throw new StaleWorkerBuildError();
       }
+      request.authorize?.();
       const material = credentialMaterial();
       let attached: WorkerEnvironmentRecord;
       try {
@@ -289,6 +291,14 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       }
       pendingCredentials.delete(request.environmentId);
       await tunnels?.stop(request.environmentId, current.ownerEpoch);
+      try {
+        request.authorize?.();
+      } catch (error) {
+        // Attachment authority can close while tunnel teardown awaits. Demote the owner so the
+        // committed credential cannot outlive the turn that requested it.
+        move(attached, "idle");
+        throw error;
+      }
       return stageCredential(
         grantFrom({
           credential: material.credential,

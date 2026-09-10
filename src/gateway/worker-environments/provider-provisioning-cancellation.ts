@@ -1,6 +1,8 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { isWorkerSourceAuthorization } from "./service-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 export function createWorkerProvisionCancellation(
   store: WorkerEnvironmentStore,
@@ -62,4 +64,35 @@ export function createWorkerProvisionCancellation(
       };
     },
   };
+}
+
+/** Transfers lost initiating authority to the existing durable cleanup owner. */
+export function requestLostProvisionStop(
+  store: WorkerEnvironmentStore,
+  record: WorkerEnvironmentRecord,
+  context: { assertCurrent: () => void } | undefined,
+  error: unknown,
+): void {
+  if (!context || !isWorkerSourceAuthorization(context.assertCurrent)) {
+    return;
+  }
+  try {
+    context.assertCurrent();
+  } catch {
+    const current = store.get(record.environmentId);
+    if (
+      current?.provisionOperationId === record.provisionOperationId &&
+      current.ownerEpoch === record.ownerEpoch &&
+      (current.state === "requested" ||
+        current.state === "provisioning" ||
+        current.state === "bootstrapping")
+    ) {
+      store.requestDestroy({
+        environmentId: current.environmentId,
+        state: current.state,
+        terminalState: "failed",
+        lastError: boundedError(error),
+      });
+    }
+  }
 }

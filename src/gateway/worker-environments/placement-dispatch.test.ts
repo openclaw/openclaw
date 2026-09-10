@@ -113,6 +113,7 @@ describe("worker placement dispatch", () => {
         "os-a",
         runSetupScript,
         inheritedProfile,
+        { assertCurrent: expect.any(Function) },
       );
     },
   );

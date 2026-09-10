@@ -167,15 +167,18 @@ describe("device worker placement dispatch", () => {
       undefined,
       undefined,
       undefined,
+      { assertCurrent: expect.any(Function) },
     );
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
       ownerEpoch: expect.any(Number),
+      authorize: expect.any(Function),
     });
     expect(harness.environments.attachSession).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
       ownerEpoch: harness.ready.ownerEpoch,
       sessionId: REQUEST.sessionId,
+      authorize: expect.any(Function),
     });
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.placements.current()).toMatchObject({ state: "active" });
@@ -240,6 +243,7 @@ describe("device worker placement dispatch", () => {
       undefined,
       undefined,
       undefined,
+      { assertCurrent: expect.any(Function) },
     );
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
       ?.value;
@@ -279,6 +283,7 @@ describe("device worker placement dispatch", () => {
       undefined,
       undefined,
       { providerId: harness.ready.providerId, profileSnapshot: harness.ready.profileSnapshot },
+      { assertCurrent: expect.any(Function) },
     );
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
       ?.value;
@@ -625,65 +630,6 @@ describe("device worker placement dispatch", () => {
     if (!result.ok && "message" in scenario && scenario.message) {
       expect(result.error).toContain(scenario.message);
     }
-  });
-
-  it.each([
-    {
-      name: "saturated worker-turn node",
-      executionMode: "worker-turn" as const,
-      node: deviceProof(0),
-      providerId: "device",
-      expectedMessage: "at capacity",
-    },
-    {
-      name: "remote-exec node missing its required command",
-      executionMode: "remote-exec" as const,
-      node: deviceProof(0, ["system.run"]),
-      providerId: "device",
-      expectedMessage: "not enabled or approved",
-    },
-    {
-      name: "non-device remote-exec cloud node missing its required command",
-      executionMode: "remote-exec" as const,
-      node: deviceProof(0, ["system.run"]),
-      providerId: "generic-cloud-node",
-      expectedMessage: "not enabled or approved",
-    },
-    {
-      name: "saturated non-device worker-turn cloud node",
-      executionMode: "worker-turn" as const,
-      node: deviceProof(0),
-      providerId: "generic-cloud-node",
-      expectedMessage: "at capacity",
-    },
-  ])("fences recovery of a $name before workspace sync", async (scenario) => {
-    const harness = createHarness(database, placementStore);
-    const provisioning = harness.placements.seedProvisioning(scenario.executionMode);
-    if (provisioning.state !== "provisioning") {
-      throw new Error("paired-device recovery fixture did not enter provisioning");
-    }
-    const environment = {
-      ...harness.ready,
-      providerId: scenario.providerId,
-      nodeDeviceId: "device-1",
-      sshEndpoint: null,
-    };
-    vi.mocked(harness.environments.get).mockImplementation((environmentId) =>
-      environmentId === environment.environmentId ? environment : undefined,
-    );
-    bindDeviceWorkerAvailability(harness.environments, async () => ({
-      available: true,
-      node: scenario.node,
-    }));
-
-    await harness.service.resumeProvisioning(provisioning, async () => {});
-
-    expect(harness.environments.attachSession).not.toHaveBeenCalled();
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      recoveryError: expect.stringContaining(scenario.expectedMessage),
-    });
   });
 
   it("adopts an offline paired-device placement without eagerly starting its tunnel", async () => {

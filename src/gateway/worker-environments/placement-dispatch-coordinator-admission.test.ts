@@ -4,7 +4,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   ACTIVE_PLACEMENT,
-  admittedRecovery,
   createCoordinatorTestService,
   LOCAL_PLACEMENT,
   MOVE_REQUEST,
@@ -14,8 +13,8 @@ import {
 import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
 describe("worker placement maintenance admission", () => {
-  it.each(["active", "incomplete", "stale-generation"] as const)(
-    "holds input for its exact recovery owner (%s)",
+  it.each(["active", "rejected", "stale-generation"] as const)(
+    "holds input for its exact foreground dispatch owner (%s)",
     async (outcome) => {
       const entered = createDeferredCore();
       const finish = createDeferredCore();
@@ -26,24 +25,24 @@ describe("worker placement maintenance admission", () => {
       };
       const coordinated = coordinateWorkerPlacementDispatch(
         createCoordinatorTestService({
-          resumeProvisioning: async (_placement, _core, report, admit) => {
-            if (!admit) {
-              throw new Error("Recovery fixture requires admission");
+          dispatch: async (_request, report) => {
+            report?.(PROVISIONING_PLACEMENT);
+            entered.resolve();
+            await finish.promise;
+            if (outcome === "rejected") {
+              throw new Error("dispatch failed");
             }
-            return await admit(async () => {
-              entered.resolve();
-              await finish.promise;
-              if (outcome === "incomplete") {
-                return undefined;
-              }
-              report?.(active);
-              return active;
-            });
+            report?.(active);
+            return active;
           },
         }),
         (_request, run) => run(),
       );
-      const recovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
+      const dispatch = coordinated.dispatch({
+        ...REQUEST,
+        sessionId: PROVISIONING_PLACEMENT.sessionId,
+      });
+      void dispatch.catch(() => undefined);
       await entered.promise;
       const waiting = coordinated.waitForInitialPlacement({
         ...PROVISIONING_PLACEMENT,
@@ -55,16 +54,16 @@ describe("worker placement maintenance admission", () => {
           await expect(waiting).rejects.toThrow("no matching live dispatch owner");
         }
         finish.resolve();
-        await recovery;
+        await dispatch.catch(() => undefined);
         if (outcome === "active") {
           await expect(waiting).resolves.toEqual(active);
         }
-        if (outcome === "incomplete") {
-          await expect(waiting).rejects.toThrow("did not publish a ready placement");
+        if (outcome === "rejected") {
+          await expect(waiting).rejects.toThrow("dispatch failed");
         }
       } finally {
         finish.resolve();
-        await Promise.allSettled([waiting, recovery]);
+        await Promise.allSettled([waiting, dispatch]);
       }
     },
   );
@@ -119,7 +118,7 @@ describe("worker placement maintenance admission", () => {
     expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(["cloud", "later"]);
   });
 
-  it.each(["full", "targeted", "recovery"] as const)(
+  it.each(["full", "targeted"] as const)(
     "bounds dispatch joins to the original provider cohort before %s maintenance",
     async (kind) => {
       const cloudStarted = createDeferredCore();
@@ -143,15 +142,13 @@ describe("worker placement maintenance admission", () => {
       const service = createCoordinatorTestService({
         dispatch,
         reconcileActive: maintain,
-        resumeProvisioning: admittedRecovery(maintain),
       });
       const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
       const cloud = coordinated.dispatch({ ...REQUEST, sessionId: "cloud" });
       await cloudStarted.promise;
-      const maintenance =
-        kind === "recovery"
-          ? coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {})
-          : coordinated.reconcileActive(kind === "targeted" ? "worker-target" : undefined);
+      const maintenance = coordinated.reconcileActive(
+        kind === "targeted" ? "worker-target" : undefined,
+      );
       const mac = coordinated.dispatch(REQUEST);
       let callsBeforeCloudSettled: string[];
       let late: Promise<unknown> | undefined;
@@ -190,7 +187,7 @@ describe("worker placement maintenance admission", () => {
       { kind: "destroy", order: "before" },
       { kind: "destroy", order: "after" },
     ].flatMap(({ kind, order }) =>
-      ["sweep", "recovery"].map((maintenanceKind) => ({ kind, order, maintenanceKind })),
+      ["full", "targeted"].map((maintenanceKind) => ({ kind, order, maintenanceKind })),
     ),
   )(
     "a queued $kind closes dispatch admission $order pending $maintenanceKind",
@@ -226,13 +223,10 @@ describe("worker placement maintenance admission", () => {
           throw destroyError;
         },
         reconcileActive: async () => {},
-        resumeProvisioning: admittedRecovery(async () => {}),
       });
       const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
       const maintain = () =>
-        maintenanceKind === "sweep"
-          ? coordinated.reconcileActive()
-          : coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
+        coordinated.reconcileActive(maintenanceKind === "targeted" ? "worker-target" : undefined);
       const cloud = coordinated.dispatch({ ...REQUEST, sessionId: "cloud" });
       await cloudStarted.promise;
       let maintenance = order === "after" ? maintain() : undefined;

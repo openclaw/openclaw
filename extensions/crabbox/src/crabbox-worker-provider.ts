@@ -4,18 +4,20 @@ import {
   WorkerProviderError,
   type WorkerLeaseStatus,
   type WorkerProfile,
-  type WorkerProvider,
+  type WorkerProviderV1 as WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import {
   type CrabboxCommandRunner,
   runCrabboxCommand,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
+import {
+  assertAwsWorkerHasNoInstanceProfile,
+  assertHetznerDesktopHasManagedCoordinator,
+} from "./crabbox-worker-config-validation.js";
 import {
   createCrabboxWorkerDesktopEndpoint,
   createCrabboxWorkerDesktopSetup,
@@ -30,7 +32,6 @@ import {
 } from "./crabbox-worker-node-enrollment.js";
 import {
   CRABBOX_WORKER_PROVIDER_ID,
-  nonEmptyString,
   operationLeaseId,
   operationSlug,
   parseCrabboxOperatingSystem,
@@ -60,7 +61,6 @@ import {
   countCrabboxProvisionSetupPhases,
   CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS,
-  CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
   CRABBOX_STOP_TIMEOUT_MS,
@@ -103,60 +103,6 @@ type CrabboxWorkerProviderDependencies = {
   warn?: (message: string) => void;
   warmImagePolicy?: CrabboxWarmImagePolicy;
 };
-
-async function loadCrabboxConfigShow(params: {
-  binary: string;
-  runCommand: CrabboxCommandRunner;
-  signal?: AbortSignal;
-}): Promise<unknown> {
-  const result = await runCrabboxCommand({
-    action: "config show",
-    args: ["config", "show", "--json"],
-    binary: params.binary,
-    runCommand: params.runCommand,
-    signal: params.signal,
-    timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw crabboxCommandError("config show", result);
-  }
-  try {
-    return JSON.parse(result.stdout) as unknown;
-  } catch {
-    throw new Error("Crabbox config show returned invalid JSON");
-  }
-}
-
-async function assertAwsWorkerHasNoInstanceProfile(params: {
-  binary: string;
-  runCommand: CrabboxCommandRunner;
-  signal?: AbortSignal;
-}): Promise<void> {
-  const config = await loadCrabboxConfigShow(params);
-  const instanceProfile =
-    config && typeof config === "object" && !Array.isArray(config)
-      ? (config as { aws?: { instanceProfile?: unknown } }).aws?.instanceProfile
-      : undefined;
-  if (typeof instanceProfile !== "string") {
-    throw new WorkerProviderError("Crabbox config show returned an invalid AWS instance profile");
-  }
-  if (nonEmptyString(instanceProfile)) {
-    throw new WorkerProviderError("Crabbox AWS instance profile must be empty for cloud workers");
-  }
-}
-
-async function assertHetznerDesktopHasManagedCoordinator(params: {
-  binary: string;
-  runCommand: CrabboxCommandRunner;
-  signal?: AbortSignal;
-}): Promise<void> {
-  const config = await loadCrabboxConfigShow(params);
-  const view = isRecord(config) ? config : undefined;
-  if (nonEmptyString(view?.coordinator) && view?.brokerMode === "managed") {
-    return;
-  }
-  throw new Error("Crabbox Hetzner desktop profiles require a managed coordinator");
-}
 
 export function createCrabboxWorkerProvider(
   dependencies: CrabboxWorkerProviderDependencies,
@@ -267,8 +213,10 @@ export function createCrabboxWorkerProvider(
     operationId: string,
     options: Parameters<WorkerProvider["provision"]>[2],
   ) => {
-    const signal = options?.signal;
+    const signal = options.signal;
+    const assertCurrent = options.assertCurrent;
     signal?.throwIfAborted();
+    assertCurrent();
     const executionMode: unknown = options?.executionMode;
     if (
       executionMode !== undefined &&
@@ -299,6 +247,7 @@ export function createCrabboxWorkerProvider(
       signal && project ? AbortSignal.any([signal, project.signal]) : (signal ?? project?.signal);
     const allocation = await resolveAllocation(profile, operationId);
     signal?.throwIfAborted();
+    assertCurrent();
     const binary = await resolveBinary(parsed.binary, preparationSignal);
     preparationSignal?.throwIfAborted();
     const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
@@ -313,14 +262,20 @@ export function createCrabboxWorkerProvider(
     const context = { binary, provider: parsed.provider };
     const leaseId = allocation.leaseId;
     if (parsed.desktop && parsed.provider === "hetzner") {
-      await assertHetznerDesktopHasManagedCoordinator({ binary, runCommand, signal });
+      await assertHetznerDesktopHasManagedCoordinator({
+        binary,
+        runCommand,
+        signal,
+        assertCurrent,
+      });
     }
     if (parsed.provider === "aws") {
-      await assertAwsWorkerHasNoInstanceProfile({ binary, runCommand, signal });
+      await assertAwsWorkerHasNoInstanceProfile({ binary, runCommand, signal, assertCurrent });
     }
 
     return async () => {
       signal?.throwIfAborted();
+      assertCurrent();
       // Completed setup can survive a crash before its capture requirement returns.
       // Sample before allocate creates the first-call record; enrolled replay stays closed.
       const priorAllocation = project?.preparation ? warmImages.lookupLease(leaseId) : undefined;
@@ -343,6 +298,7 @@ export function createCrabboxWorkerProvider(
       let inspected: InspectCommandResult;
       try {
         inspected = await inspectWithContext({
+          assertAuthorized: assertCurrent,
           context,
           expectedLeaseId: leaseId,
           id: leaseId,
@@ -355,8 +311,14 @@ export function createCrabboxWorkerProvider(
           signal: preparationSignal,
         });
         signal?.throwIfAborted();
+        assertCurrent();
       } catch (error) {
         signal?.throwIfAborted();
+        try {
+          assertCurrent();
+        } catch (closed) {
+          return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, closed);
+        }
         // Transport failure after warmup is indeterminate; preserve the lease for durable replay.
         if (error instanceof WorkerProviderError) {
           return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
@@ -368,6 +330,7 @@ export function createCrabboxWorkerProvider(
       }
       const inspectedParams = {
         ...context,
+        assertAuthorized: assertCurrent,
         deadline,
         inspect: inspected.inspect,
         profile: parsed,
@@ -432,6 +395,7 @@ export function createCrabboxWorkerProvider(
             signal: preparationSignal,
             timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
           });
+          assertCurrent();
           project.assertCurrent();
           warmImages.markPrepared(leaseId, project.baseCommit);
           captured = await warmImages.capture(
@@ -443,6 +407,7 @@ export function createCrabboxWorkerProvider(
               assertCurrent: project.assertCurrent,
               projectCaptureRequired:
                 preparedProject?.captureRequired || preparedReplay ? true : undefined,
+              assertAuthorized: assertCurrent,
               ...(allocationChoice.kind === "checkpoint"
                 ? { forkedCheckpointId: allocationChoice.checkpointId }
                 : {}),
@@ -453,6 +418,7 @@ export function createCrabboxWorkerProvider(
               }
               const runtime = await options.prepareNodeRuntime();
               signal?.throwIfAborted();
+              assertCurrent();
               project.assertCurrent();
               const setup = createCrabboxNodeRuntimeSetup({
                 nodeBootstrap: runtime.nodeBootstrap,
@@ -479,12 +445,17 @@ export function createCrabboxWorkerProvider(
             },
           );
         } catch (error) {
-          // The runtime grant has a separate abort signal; revalidate the project owner.
           signal?.throwIfAborted();
-          project.assertCurrent();
           if (preparationFailed) {
             throw error;
           }
+          try {
+            assertCurrent();
+          } catch (closed) {
+            return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, closed);
+          }
+          // A project grant can retire independently of the initiating authority.
+          project.assertCurrent();
           return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
         }
         // Only native capture can have restarted the source since preparation returned.
@@ -497,6 +468,7 @@ export function createCrabboxWorkerProvider(
         }
       }
       signal?.throwIfAborted();
+      assertCurrent();
       const beginNodeEnrollment = options?.beginNodeEnrollment;
       if (!beginNodeEnrollment) {
         return await failProvisionAfterCleanup(
@@ -508,8 +480,14 @@ export function createCrabboxWorkerProvider(
       try {
         enrollment = await beginNodeEnrollment();
         signal?.throwIfAborted();
+        assertCurrent();
       } catch (error) {
         signal?.throwIfAborted();
+        try {
+          assertCurrent();
+        } catch (closed) {
+          return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, closed);
+        }
         if (error instanceof Error && error.name === "AbortError") {
           throw error;
         }
@@ -540,8 +518,14 @@ export function createCrabboxWorkerProvider(
       try {
         deviceId = await enrollment.waitForDeviceId();
         signal?.throwIfAborted();
+        assertCurrent();
       } catch (error) {
         signal?.throwIfAborted();
+        try {
+          assertCurrent();
+        } catch (closed) {
+          return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, closed);
+        }
         // Gateway shutdown cancels its wait, not the fixed operation-owned provider lease.
         if (enrollment.signal?.aborted) {
           throw error;
@@ -555,13 +539,16 @@ export function createCrabboxWorkerProvider(
           ...(enrollmentSignal ? { signal: enrollmentSignal } : {}),
         });
         signal?.throwIfAborted();
+        assertCurrent();
         enrollment.signal?.throwIfAborted();
+        assertCurrent();
         const message = error instanceof Error ? error.message : "Worker node enrollment failed";
         return await failProvisionAfterCleanup(
           leaseContext,
           new Error(`${message}; ${evidence}`, { cause: error }),
         );
       }
+      assertCurrent();
       if (parsed.warmImage) {
         warmImages.markEnrolled(leaseId);
       }
@@ -583,6 +570,7 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
+    liveAuthorityVersion: 1,
     async dispose() {
       maintenanceAbort.abort();
       await Promise.all([

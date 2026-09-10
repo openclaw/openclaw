@@ -1,24 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
-import {
-  MANIFEST_REF,
-  REQUEST,
-  seedProvisioningPlacement,
-} from "./placement-dispatch-test-fixtures.js";
-import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
+import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import { MANIFEST_REF, REQUEST } from "./placement-dispatch-test-fixtures.js";
+import { createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import {
-  deriveEnvironmentIntent,
-  WorkerPlacementAdmissionTargetError,
-} from "./service-contract.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 
 describe("worker placement shutdown replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("retains interrupted fresh provisioning and activates the same operation after restart", async () => {
+  it("retains interrupted provisioning after database reopen until explicit Stop and fresh dispatch", async () => {
     support.testState.prepareInstallation = async () => ({
       ...support.BUNDLE_ARTIFACT,
       protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
@@ -78,7 +72,7 @@ describe("worker placement shutdown replay", () => {
       remoteWorkspaceDir: "/worker/workspace",
       manifestRef: MANIFEST_REF,
     }));
-    vi.spyOn(restarted, "startTunnel").mockImplementation(async (owner) => ({
+    const startTunnel = vi.spyOn(restarted, "startTunnel").mockImplementation(async (owner) => ({
       ...owner,
       syncWorkspace,
       runWorkspaceCommand: vi.fn(),
@@ -87,104 +81,69 @@ describe("worker placement shutdown replay", () => {
       stop: vi.fn(),
     }));
     const attach = vi.spyOn(restarted, "attachSession");
-    const recovery = createRecoveryService(placements, restarted);
+    const recovery = coordinateWorkerPlacementDispatch(
+      createRecoveryService(placements, restarted),
+      (_request, run, authorize) => {
+        authorize?.();
+        return run();
+      },
+    );
+    expect(recovery).not.toHaveProperty("resumeProvisioning");
+    const uninstall = installWorkerPlacementReconcileGuard({
+      placements,
+      environments: restarted,
+      dispatch: recovery,
+      isStopping: () => false,
+    });
     const owner = placements.get(REQUEST.sessionId)!;
     if (owner.state !== "provisioning") {
       throw new Error("restart lost its provisioning owner");
     }
-    await recovery.resumeProvisioning(owner, () => restarted.reconcileEnvironment(environmentId));
-
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", environmentId });
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "attached",
-      provisionOperationId: operationId,
-      leaseId: "lease-shutdown-replay",
-      attachedSessionIds: [REQUEST.sessionId],
-    });
-    expect(operationIds).toEqual([operationId, operationId]);
-    expect(support.testState.store.list().map((record) => record.environmentId)).toEqual([
-      environmentId,
-    ]);
-    expect(attach).toHaveBeenCalledOnce();
-    expect(syncWorkspace).toHaveBeenCalledOnce();
-    expect(destroy).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "retains admitted recovery with shutdown=%s and only rethrows shutdown interruptions",
-    async (shutdown) => {
-      const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const environments = support.createService(support.createProvider());
-      const intent = deriveEnvironmentIntent(`session-dispatch:${REQUEST.sessionId}:1`);
-      support.testState.store.createIntent({
-        ...intent,
-        providerId: "fake",
-        profileId: "development",
-        profileSnapshot: { settings: { region: "test" } },
-      });
-      const owner = seedProvisioningPlacement(placements, intent.environmentId, "remote-exec");
-      if (owner.state !== "provisioning") {
-        throw new Error("recovery fixture requires provisioning");
-      }
-      const dispatch = createRecoveryService(placements, environments, () => shutdown);
-      const interrupted = new Error(`recovery interrupted ${"x".repeat(2_000)}`);
-      const report = vi.fn();
-      const recordError = vi.spyOn(environments, "recordError");
-      const recovery = dispatch.resumeProvisioning(
-        owner,
-        async () => {
-          throw interrupted;
-        },
-        report,
-      );
-      if (shutdown) {
-        await expect(recovery).rejects.toBe(interrupted);
-        expect(recordError).toHaveBeenCalledOnce();
-        expect(report).toHaveBeenCalledTimes(2);
-        const lastError = support.testState.store.get(intent.environmentId)?.lastError;
-        expect(lastError).toMatch(/^recovery interrupted /);
-        expect(lastError?.length).toBeLessThanOrEqual(1_024);
-      } else {
-        await expect(recovery).resolves.toBeUndefined();
-        expect(recordError).not.toHaveBeenCalled();
-        expect(report).toHaveBeenCalledOnce();
-      }
+    try {
+      await recovery.reconcile("startup");
+      await recovery.reconcileActive(environmentId);
       expect(placements.get(REQUEST.sessionId)).toEqual(owner);
-      expect(support.testState.store.get(intent.environmentId)).toMatchObject({
-        state: "requested",
-        provisionOperationId: intent.provisionOperationId,
+      expect(restarted.get(environmentId)).toMatchObject({
+        state: "provisioning",
         destroyRequestedAtMs: null,
+        provisionOperationId: operationId,
+        lastError: expect.stringContaining(
+          "Stop the unfinished worker and retry with fresh authority",
+        ),
       });
-    },
-  );
+      expect(restarted.get(environmentId)?.lastError).toContain("provider interrupted");
+      expect(operationIds).toEqual([operationId]);
+      expect(attach).not.toHaveBeenCalled();
+      expect(startTunnel).not.toHaveBeenCalled();
+      expect(syncWorkspace).not.toHaveBeenCalled();
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
 
-  it.each([
-    new WorkerPlacementAdmissionTargetError("session admission revoked"),
-    new WorkerDispatchTargetChangedError("session runtime changed"),
-  ])("tears down an invalid recovery owner during shutdown: %s", async (error) => {
-    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const harness = createHarness(support.testState.stateDb, placements, {
-      isShuttingDown: () => true,
-      recoveryBarrierError: error,
-    });
-    const owner = harness.placements.seedProvisioning();
-    if (owner.state !== "provisioning") {
-      throw new Error("recovery fixture requires provisioning");
+      await expect(recovery.reclaim(request)).resolves.toMatchObject({ state: "local" });
+      expect(restarted.get(environmentId)?.state).toBe("destroyed");
+      expect(destroy).toHaveBeenCalledOnce();
+      const authorize = vi.fn();
+      const active = await recovery.dispatch(request, undefined, authorize);
+      expect(active.state).toBe("active");
+      expect(active.environmentId).not.toBe(environmentId);
+      expect(active.generation).toBeGreaterThan(owner.generation);
+      expect(authorize).toHaveBeenCalled();
+      expect(operationIds).toHaveLength(2);
+      expect(operationIds[1]).not.toBe(operationId);
+      expect(attach).toHaveBeenCalledOnce();
+      expect(syncWorkspace).toHaveBeenCalledOnce();
+      await recovery.reconcile("startup");
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "active",
+        environmentId: active.environmentId,
+        activeOwnerEpoch: active.activeOwnerEpoch,
+      });
+      expect(operationIds).toHaveLength(2);
+      expect(attach).toHaveBeenCalledOnce();
+      expect(syncWorkspace).toHaveBeenCalledOnce();
+    } finally {
+      await uninstall();
     }
-    vi.mocked(harness.environments.get).mockReturnValue({
-      ...harness.ready,
-      state: "provisioning",
-      leaseId: null,
-      sshEndpoint: null,
-      bootstrapReceipt: null,
-      sharedHost: null,
-    });
-
-    await harness.service.resumeProvisioning(owner, async () => {});
-
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
-    expect(harness.environments.destroy).toHaveBeenCalledOnce();
-    expect(harness.environments.recordError).not.toHaveBeenCalled();
   });
 
   it.each([

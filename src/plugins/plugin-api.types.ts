@@ -20,7 +20,7 @@ import type {
   SpeechProviderPlugin,
   TranscriptSourceProvider,
   VideoGenerationProviderPlugin,
-  WorkerProvider,
+  RegisteredWorkerProvider,
 } from "./capability-provider.types.js";
 import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
@@ -278,7 +278,7 @@ export type OpenClawPluginApi = {
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register a cloud-worker lifecycle provider. */
-  registerWorkerProvider: (provider: WorkerProvider) => void;
+  registerWorkerProvider: (provider: RegisteredWorkerProvider) => void;
   /** Register provider-owned model catalog rows for text and media generation. */
   registerModelCatalogProvider: (provider: UnifiedModelCatalogProviderPlugin) => void;
   /** Register a general embedding provider (embedding capability). */

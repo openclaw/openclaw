@@ -213,10 +213,16 @@ export async function reconcileWorkspaceAfterTurn(params: {
   let workspaceConflict: WorkspaceConflictReport | undefined;
   try {
     await params.workspaceOperations.run(currentPlacement.environmentId, async () => {
-      if (!params.placements.validateTurnClaim(params.turnClaim)) {
-        throw new Error("Cloud worker workspace result lost its turn claim");
-      }
-      const quiescence = await params.tunnel.quiesceWorkspace(currentPlacement.remoteWorkspaceDir);
+      const assertCurrent = () => {
+        if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+          throw new Error("Cloud worker workspace result lost its placement owner");
+        }
+      };
+      assertCurrent();
+      const quiescence = await params.tunnel.quiesceWorkspace(
+        currentPlacement.remoteWorkspaceDir,
+        assertCurrent,
+      );
       let resumed = false;
       try {
         const stagedResultRef = workerWorkspaceResultRef(params.turnClaim.claimId);
@@ -237,11 +243,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
                     : undefined,
                 ),
             },
-            assertCurrent: () => {
-              if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
-                throw new Error("Cloud worker workspace result lost its placement owner");
-              }
-            },
+            assertCurrent,
           }),
         );
         const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
@@ -372,11 +374,19 @@ export async function executeRemoteExecTurn(params: {
     throw new Error("Active remote-exec placement does not match its attached environment");
   }
   await recoverWorkspaceBeforeTurn(params);
-  params.assertRunCurrent?.();
+  const assertTurnClaimCurrent = () => {
+    params.assertRunCurrent?.();
+    params.turn.abortSignal?.throwIfAborted();
+    if (!params.placements.validateTurnClaim(params.turnClaim)) {
+      throw new Error("Remote-exec turn authority changed during tunnel startup");
+    }
+  };
+  assertTurnClaimCurrent();
   const tunnel = await waitForTurnOperation({
     operation: params.environments.startTunnel({
       environmentId: params.placement.environmentId,
       ownerEpoch: params.placement.activeOwnerEpoch,
+      authorize: assertTurnClaimCurrent,
     }),
     ...(params.turn.abortSignal ? { signal: params.turn.abortSignal } : {}),
     timeoutMs: params.turn.timeoutMs,

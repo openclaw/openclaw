@@ -9,6 +9,7 @@ import { CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS } from "./crabbox-worker-
 const MAX_NODE_ENROLLMENT_EVIDENCE_BYTES = 2_048;
 
 export async function collectCrabboxNodeEnrollmentEvidence(params: {
+  assertAuthorized?: () => void;
   args: string[];
   binary: string;
   id: string;
@@ -19,6 +20,7 @@ export async function collectCrabboxNodeEnrollmentEvidence(params: {
   let label = "box evidence";
   let detail: string;
   try {
+    params.assertAuthorized?.();
     const result = await runCrabboxCommand({
       action: "enrollment diagnostics",
       args: params.args,

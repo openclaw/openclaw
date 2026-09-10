@@ -162,6 +162,39 @@ export type WorkerPlacementMoveRequest = WorkerPlacementReclaimRequest & {
 /** Closure-bound request authority; in-process only and never part of durable placement intent. */
 export type WorkerPlacementAuthorization = () => void;
 
+// In-process provenance only, never authority by itself or a model/RPC argument.
+// Only trusted run/worker ingress marks a source; every use still calls its live guard.
+const workerSourceAuthorizations = new WeakSet<WorkerPlacementAuthorization>();
+
+export function bindWorkerSourceAuthorization(
+  assertCurrent: WorkerPlacementAuthorization,
+): WorkerPlacementAuthorization {
+  const bound = () => assertCurrent();
+  workerSourceAuthorizations.add(bound);
+  return bound;
+}
+
+export function isWorkerSourceAuthorization(
+  authorize: WorkerPlacementAuthorization | undefined,
+): boolean {
+  return authorize !== undefined && workerSourceAuthorizations.has(authorize);
+}
+
+/** Compose existing guards without losing trusted source provenance at a wrapper. */
+export function composeWorkerPlacementAuthorization(
+  ...checks: Array<WorkerPlacementAuthorization | undefined>
+): WorkerPlacementAuthorization {
+  const assertCurrent = () => {
+    for (const check of checks) {
+      check?.();
+    }
+  };
+  if (checks.some(isWorkerSourceAuthorization)) {
+    workerSourceAuthorizations.add(assertCurrent);
+  }
+  return assertCurrent;
+}
+
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).
 export type WorkerPlacementDispatchContract = {

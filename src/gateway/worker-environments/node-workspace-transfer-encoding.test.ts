@@ -102,7 +102,9 @@ describe("workspace manifest HTTP negotiation", () => {
       const snapshotFor = service.snapshot.bind(service);
       vi.spyOn(service, "snapshot").mockImplementation((authorization) => {
         const captured = snapshotFor(authorization);
-        queueMicrotask(() => service.revoke("environment", token));
+        queueMicrotask(() => {
+          void service.revoke("environment", token);
+        });
         return captured;
       });
       const revoked = await openNodeWorkerTransferHttpRequest({

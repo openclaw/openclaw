@@ -94,7 +94,6 @@ export function createHarness(
     environmentGeneration?: number;
     failMoveAfterBegin?: boolean;
     runMoveBarrier?: Parameters<typeof createWorkerPlacementDispatchService>[0]["runMoveBarrier"];
-    recoveryBarrierError?: Error;
     isShuttingDown?: () => boolean;
     prepareAcceptedWorkspacePublication?: Parameters<
       typeof createWorkerPlacementDispatchService
@@ -493,13 +492,6 @@ export function createHarness(
       }
       return placement;
     },
-    runRecoveryBarrier: async ({ run }) => {
-      log.push("recovery-barrier");
-      if (options.recoveryBarrierError) {
-        throw options.recoveryBarrierError;
-      }
-      await run({ kind: "local", path: options.workspacePath ?? "/gateway/workspace" });
-    },
     runActivationBarrier: async ({ authorize, activate }) => {
       authorize?.();
       fail("activation");
@@ -680,7 +672,6 @@ export const createRecoveryService = (
     runnerAvailability: { read: () => undefined, version: () => 0 },
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-    runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: "/gateway/workspace" }),
     runActivationBarrier: async ({ activate }) => activate(),
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,

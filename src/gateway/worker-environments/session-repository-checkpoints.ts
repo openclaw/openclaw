@@ -177,12 +177,14 @@ export async function withSessionRepositoryCheckpoint<T>(
 
 async function stagePublication(params: {
   root: string;
+  assertCurrent: () => void;
   candidateRef: string;
   publicationStagingRoot: string;
   publicationDigest: string;
   currentManifestRef: string;
   baseCommit: string;
 }) {
+  params.assertCurrent();
   const { raw: metadata, snapshot } = await readGitHubRepositoryPublicationMetadata(
     params.publicationStagingRoot,
     params.publicationDigest,
@@ -190,10 +192,14 @@ async function stagePublication(params: {
   if (snapshot.baseCommit !== params.baseCommit) {
     throw new Error("Repository publication checkpoint base changed");
   }
+  params.assertCurrent();
   const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-publication-payload-"));
   try {
+    params.assertCurrent();
     await fs.mkdir(path.join(stagingRoot, "blobs"), { mode: 0o700 });
+    params.assertCurrent();
     await fs.writeFile(path.join(stagingRoot, "snapshot.json"), metadata, { mode: 0o600 });
+    params.assertCurrent();
     await fs.writeFile(
       path.join(stagingRoot, "binding.json"),
       JSON.stringify({
@@ -209,11 +215,13 @@ async function stagePublication(params: {
         .map((entry) => entry.sha!),
     );
     for (const sha of blobs) {
+      params.assertCurrent();
       const content = await readGitHubRepositoryPublicationBlob(params.publicationStagingRoot, sha);
       bytes += content.byteLength;
       if (bytes > MAX_RECONCILIATION_TOTAL_BYTES) {
         throw new Error("Repository publication checkpoint exceeds its byte budget");
       }
+      params.assertCurrent();
       await fs.writeFile(path.join(stagingRoot, "blobs", sha), content, { mode: 0o600 });
     }
     const baseManifestRaw = serializeWorkerWorkspaceManifest({
@@ -221,9 +229,12 @@ async function stagePublication(params: {
       baseCommit: null,
       entries: [],
     });
+    params.assertCurrent();
     const current = await readActualWorkspaceManifest({ root: stagingRoot, baseCommit: null });
     const currentManifestRaw = serializeWorkerWorkspaceManifest(current.manifest);
+    params.assertCurrent();
     await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+      assertCurrent: params.assertCurrent,
       root: params.root,
       stagingRoot,
       stagedResultRef: params.candidateRef,
@@ -310,7 +321,10 @@ export async function stageSessionRepositoryCheckpoint(
   };
   assertRevision();
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
-  await requireWorkspaceResultGit(root, ["init", "--quiet", "--bare", "--object-format=sha1"]);
+  assertRevision();
+  await requireWorkspaceResultGit(root, ["init", "--quiet", "--bare", "--object-format=sha1"], {
+    assertCurrent: assertRevision,
+  });
   const discard = async () => {
     await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef: candidateRef });
     await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef: companionCandidate });
@@ -320,7 +334,9 @@ export async function stageSessionRepositoryCheckpoint(
       ...params,
       root,
       stagedResultRef: candidateRef,
+      assertCurrent: assertRevision,
     });
+    assertRevision();
     let companionId: string | undefined;
     if (params.publicationStagingRoot || params.publicationDigest) {
       try {
@@ -329,6 +345,7 @@ export async function stageSessionRepositoryCheckpoint(
         }
         await stagePublication({
           root,
+          assertCurrent: assertRevision,
           candidateRef: companionCandidate,
           publicationStagingRoot: params.publicationStagingRoot,
           publicationDigest: params.publicationDigest,

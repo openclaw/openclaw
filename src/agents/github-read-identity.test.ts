@@ -358,6 +358,56 @@ describe("prepared GitHub read authority", () => {
     expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
   });
 
+  it("fences credential preparation after its initiating admission closes during refresh", async () => {
+    let preparing = true;
+    await expect(
+      prepareGitHubReadIdentity({
+        config: {},
+        agentId: "main",
+        env: { GH_TOKEN: "native-fixture" },
+        getCurrentConfig: () => ({}),
+        assertActive: () => {},
+        assertPreparing: () => {
+          if (!preparing) {
+            throw new Error("initiating admission closed");
+          }
+        },
+        refresh: async () => {
+          preparing = false;
+        },
+      }),
+    ).rejects.toThrow("initiating admission closed");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+  });
+
+  it("retains identity selection facts without retaining the completed preparation caller", async () => {
+    let preparing = true;
+    let selected = true;
+    const identity = await prepareGitHubReadIdentity({
+      config: {},
+      agentId: "main",
+      env: { GH_TOKEN: "native-fixture" },
+      getCurrentConfig: () => ({}),
+      assertActive: () => {
+        if (!selected) {
+          throw new Error("identity owner closed");
+        }
+      },
+      assertPreparing: () => {
+        if (!preparing) {
+          throw new Error("admission closed");
+        }
+      },
+      refresh: async () => {},
+    });
+    preparing = false;
+    expect(() => identity.assertSelected()).not.toThrow();
+    await expect(identity.revalidate()).resolves.toBeUndefined();
+    selected = false;
+    expect(() => identity.assertSelected()).toThrow("identity owner closed");
+  });
+
   it.each(["system", "agent"] as const)(
     "binds %s read authority to its selected profile and verified account",
     async (scope) => {

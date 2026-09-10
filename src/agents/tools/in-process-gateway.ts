@@ -17,6 +17,10 @@ import {
   runWithOperatorToolGatewayCleanupContext,
 } from "../../gateway/server-plugins.js";
 import {
+  bindWorkerSourceAuthorization,
+  composeWorkerPlacementAuthorization,
+} from "../../gateway/worker-environments/service-contract.js";
+import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
@@ -92,11 +96,11 @@ function captureGatewayToolCallerAssertion(): (() => void) | undefined {
   // when audit collection is disabled. Never infer fresh authority from run ids.
   const isCurrent = caller.receiptAuthority;
   const signals = caller.approvalSignals ?? [];
-  return () => {
+  return bindWorkerSourceAuthorization(() => {
     if (!isCurrent || signals.some((signal) => signal.aborted) || isCurrent() === false) {
       throw new Error("agent tool caller authority is no longer active");
     }
-  };
+  });
 }
 
 /** Transfer already-owned cleanup to its Gateway, without retaining the finished turn. */
@@ -282,10 +286,7 @@ async function callInProcessGatewayToolBound<T>(
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   assertCallerCurrent?.();
   const sessionMutationCommitGuard = assertCallerCurrent
-    ? () => {
-        assertCallerCurrent();
-        options.sessionMutationCommitGuard?.();
-      }
+    ? composeWorkerPlacementAuthorization(assertCallerCurrent, options.sessionMutationCommitGuard)
     : options.sessionMutationCommitGuard;
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
   const resolveGatewayContext = callerGatewayContextResolver(options.resolveGatewayContext);

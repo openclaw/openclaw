@@ -30,6 +30,7 @@ import {
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
 import {
+  readWorkspaceResultGitBlob as readGitBlob,
   requireWorkspaceResultGit as requireGit,
   updateWorkspaceResultRefs,
   withWorkspaceResultRefMutation,
@@ -151,16 +152,22 @@ async function hasGitAdminPath(root: string): Promise<boolean> {
   }
 }
 
-async function ensureWorkerWorkspaceResultRepository(root: string): Promise<string> {
+async function ensureWorkerWorkspaceResultRepository(
+  root: string,
+  assertCurrent?: () => void,
+): Promise<string> {
+  assertCurrent?.();
   const resolved = await fs.realpath(root);
+  assertCurrent?.();
   const probe = await runCommandWithTimeout(gitCommand(resolved, ["rev-parse", "--git-dir"]), {
     timeoutMs: PATCH_TIMEOUT_MS,
     maxOutputBytes: 1024 * 1024,
   });
+  assertCurrent?.();
   if (probe.termination === "exit" && probe.code === 0) {
     return resolved;
   }
-  await requireGit(resolved, ["init", "--quiet", "--object-format=sha1"]);
+  await requireGit(resolved, ["init", "--quiet", "--object-format=sha1"], { assertCurrent });
   return resolved;
 }
 
@@ -239,26 +246,9 @@ function quoteFastImportPath(entryPath: string): string {
   return `${quoted}"`;
 }
 
-async function readGitBlob(params: {
-  root: string;
-  objectId: string;
-  maxBytes: number;
-}): Promise<Buffer> {
-  const result = await runCommandBuffered(
-    gitCommand(params.root, ["cat-file", "blob", params.objectId]),
-    { timeoutMs: PATCH_TIMEOUT_MS, maxOutputBytes: params.maxBytes + 1 },
-  );
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error(result.stderr.toString("utf8").trim() || "git cat-file failed");
-  }
-  if (result.stdout.byteLength > params.maxBytes) {
-    throw new Error("Cloud workspace staged result exceeds its byte limit");
-  }
-  return result.stdout;
-}
-
 async function stageWorkerWorkspaceResult(params: {
   root: string;
+  assertCurrent?: () => void;
   stagingRoot: string;
   stagedResultRef: string;
   baseManifestRef: string;
@@ -266,7 +256,7 @@ async function stageWorkerWorkspaceResult(params: {
   baseManifestRaw: string;
   currentManifestRaw: string;
 }): Promise<void> {
-  const root = await ensureWorkerWorkspaceResultRepository(params.root);
+  const root = await ensureWorkerWorkspaceResultRepository(params.root, params.assertCurrent);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
   const base = parseWorkerWorkspaceManifest(params.baseManifestRaw, params.baseManifestRef);
   const current = parseWorkerWorkspaceManifest(
@@ -280,10 +270,12 @@ async function stageWorkerWorkspaceResult(params: {
   );
   const blobs: Array<{ entry: WorkerWorkspaceManifestEntry; mark: number; content: Buffer }> = [];
   for (const [index, entry] of entries.entries()) {
+    params.assertCurrent?.();
     const source = localPath(params.stagingRoot, entry.path);
     if (!(await absoluteEntryMatches(source, entry))) {
       throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`);
     }
+    params.assertCurrent?.();
     const content =
       entry.type === "symlink" ? Buffer.from(entry.target) : await fs.readFile(source);
     if (
@@ -318,18 +310,23 @@ async function stageWorkerWorkspaceResult(params: {
     chunks.push(Buffer.from(`M ${mode} :${blob.mark} ${quoteFastImportPath(blob.entry.path)}\n`));
   }
   chunks.push(Buffer.from("done\n"));
-  const imported = await withWorkspaceResultRefMutation(root, (baseEnv) =>
-    runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
+  params.assertCurrent?.();
+  const imported = await withWorkspaceResultRefMutation(root, (baseEnv) => {
+    params.assertCurrent?.();
+    return runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
       baseEnv,
       input: Buffer.concat(chunks),
       timeoutMs: PATCH_TIMEOUT_MS,
       maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
-    }),
-  );
+    });
+  });
+  params.assertCurrent?.();
   if (imported.termination !== "exit" || imported.code !== 0) {
     throw new Error(imported.stderr.toString("utf8").trim() || "git fast-import failed");
   }
-  await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
+  await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`], {
+    assertCurrent: params.assertCurrent,
+  });
 }
 
 type LoadedStagedWorkerWorkspace = {

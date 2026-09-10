@@ -311,6 +311,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
   const events = runner.events;
   const provider: WorkerProvider = {
     id: "ordered-fallback",
+    liveAuthorityVersion: 1,
     resolveAllocation: async () => ({ leaseId: "lease-original-order", sharedHost: false }),
     supportedExecutionModes: ["remote-exec"],
     provision: async () => {
@@ -414,7 +415,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     runnerAvailability: { read: () => undefined, version: () => 0 },
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-    runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: localWorkspace }),
+
     runActivationBarrier: async ({ activate }) => activate(),
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,

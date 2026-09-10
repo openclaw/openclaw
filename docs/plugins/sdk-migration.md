@@ -145,6 +145,7 @@ The anchors from the single-page version still resolve here.
 
 - <a id="compatibility-policy"></a>[Compatibility policy](/plugins/sdk-migration/compatibility-policy#compatibility-policy)
 - <a id="retained-helper-contracts"></a>[Retained helper contracts](/plugins/sdk-migration/compatibility-policy#retained-helper-contracts)
+- <a id="worker-provider-live-authority"></a>[Worker provider live authority](/plugins/sdk-migration/compatibility-policy#worker-provider-live-authority)
 - <a id="harness-attempt-result-migration"></a>[Harness attempt result migration](/plugins/sdk-migration/compatibility-policy#harness-attempt-result-migration)
 - <a id="model-provider-result-compatibility"></a>[Model-provider result compatibility](/plugins/sdk-migration/compatibility-policy#model-provider-result-compatibility)
 - <a id="memory-read-missing-results"></a>[Memory read missing results](/plugins/sdk-migration/compatibility-policy#memory-read-missing-results)

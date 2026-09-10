@@ -167,7 +167,7 @@ function createBuildRecoveryHarness(
     environments,
     runnerAvailability: { read: () => undefined, version: () => 0 },
     runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-    runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: root }),
+
     runActivationBarrier: async ({ activate }) => activate(),
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,
