@@ -1,15 +1,19 @@
 // Tests for planning Claw adds that adopt an existing workspace directory.
 import { createHash } from "node:crypto";
-import { link, mkdir, rmdir, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rmdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
+import { ClawPackageInstallError } from "./packages.js";
 import { makeProvenancePlan, readInstallRow, stateEnv } from "./provenance.test-helpers.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawManifest, ClawSourceIdentity } from "./types.js";
+import { readClawWorkspaceAdoption } from "./workspace-origin.js";
+import { readClawWorkspaceFiles } from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -219,6 +223,72 @@ describe("applyClawAddPlan workspace adoption", () => {
     expect(installPackages).not.toHaveBeenCalled();
     expect(readInstallRow("worker", root)).toBeUndefined();
   });
+
+  it("preserves the recorded workspace_ready phase when shared package install fails on first adoption", async () => {
+    const root = tempDirs.make("openclaw-claw-adopt-package-failure-");
+    const workspace = join(root, "existing-workspace");
+    await mkdir(workspace);
+    const { plan } = await makeProvenancePlan(
+      root,
+      {
+        schemaVersion: 1,
+        agent: { id: "worker" },
+        packages: [{ kind: "plugin", source: "clawhub", ref: "@acme/audit", version: "1.0.0" }],
+      },
+      {
+        workspace,
+        adoptExistingWorkspace: true,
+        packagePreflight: async () => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${"a".repeat(64)}`,
+          installId: "audit",
+        }),
+      },
+    );
+    expect(plan.blockers).toEqual([]);
+    const env = stateEnv(root);
+
+    const first = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      installPackages: async () => {
+        throw new ClawPackageInstallError("package_install_failed", "install failed", []);
+      },
+    });
+
+    // Adoption records workspace_ready before packages run; the phase must be reflected
+    // locally so a package failure preserves it instead of re-marking a stale "pending" row.
+    expect(first).toMatchObject({
+      status: "partial",
+      installRecord: { status: "workspace_ready" },
+      error: { code: "package_install_failed", message: "install failed" },
+    });
+    expect(readInstallRow("worker", root)?.status).toBe("workspace_ready");
+    if (!first.installRecord) {
+      throw new Error("expected a partial install record");
+    }
+
+    let config: OpenClawConfig = {};
+    const second = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      resumeRecord: first.installRecord,
+      resumePlan: plan,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+      seedPackageBootstrap: async () => undefined,
+      createWorkspaceFiles: async () => [],
+      installPackages: async () => [],
+      installMcpServers: async () => [],
+      installCronJobs: async () => [],
+    });
+
+    expect(second.status).toBe("complete");
+    expect(config.agents?.entries?.worker).toBeDefined();
+    expect(readInstallRow("worker", root)?.status).toBe("complete");
+  });
 });
 
 describe("buildClawAddPlan workspace inspection", () => {
@@ -244,5 +314,157 @@ describe("buildClawAddPlan workspace inspection", () => {
       }),
     ).rejects.toMatchObject({ code: "plan_blocked" });
     expect(readInstallRow("worker", root)).toBeUndefined();
+  });
+});
+
+describe("planWorkspaceAdoptionTargets resume ownership", () => {
+  async function buildResumeManifestAndSource() {
+    const root = tempDirs.make("openclaw-claw-adopt-resume-");
+    await mkdir(join(root, "content"), { recursive: true });
+    await writeFile(join(root, "content", "SOUL.md"), "# Soul\n", "utf8");
+    await writeFile(join(root, "content", "HEARTBEAT.md"), "# Heartbeat\n", "utf8");
+    const bootstrapContent = Buffer.from("Package bootstrap\n");
+    const bootstrapPath = join(root, "BOOTSTRAP.md");
+    await writeFile(bootstrapPath, bootstrapContent);
+    const parsed = parseClawManifest({
+      schemaVersion: 1,
+      agent: { id: "worker" },
+      workspace: {
+        bootstrapFiles: {
+          "SOUL.md": { source: "content/SOUL.md" },
+          "HEARTBEAT.md": { source: "content/HEARTBEAT.md" },
+        },
+      },
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+    const source: ClawSourceIdentity = {
+      kind: "package",
+      name: "@acme/worker",
+      version: "1.0.0",
+      packageRoot: root,
+      manifestPath: join(root, "openclaw.claw.json"),
+      integrityKind: "development-snapshot",
+      integrity: "sha256:test",
+      byteLength: 0,
+    };
+    const packageBootstrap = {
+      sourcePath: "BOOTSTRAP.md",
+      realPath: bootstrapPath,
+      byteLength: bootstrapContent.byteLength,
+      digest: `sha256:${createHash("sha256").update(bootstrapContent).digest("hex")}`,
+    };
+    const workspace = join(root, "existing-workspace");
+    return {
+      root,
+      source,
+      manifest: parsed.manifest,
+      packageBootstrap,
+      workspace,
+      bootstrapContent,
+    };
+  }
+
+  it("rebuilds an identical plan on resume after a config-commit failure leaves files written", async () => {
+    const { root, source, manifest, packageBootstrap, workspace, bootstrapContent } =
+      await buildResumeManifestAndSource();
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "SOUL.md"), "# Soul\n", "utf8");
+
+    const plan = await buildClawAddPlan({
+      manifest,
+      source,
+      packageBootstrap,
+      context: { workspace, adoptExistingWorkspace: true },
+    });
+    expect(plan.blockers).toEqual([]);
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspaceFile", id: "SOUL.md", action: "adopt" }),
+    );
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspaceFile", id: "HEARTBEAT.md", action: "write" }),
+    );
+
+    const env = stateEnv(root);
+    const first = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      commitConfig: async () => {
+        throw new Error("config unavailable");
+      },
+    });
+
+    expect(first).toMatchObject({
+      status: "partial",
+      installRecord: { status: "workspace_ready" },
+      error: { code: "config_commit_failed" },
+    });
+    if (!first.installRecord) {
+      throw new Error("expected a partial install record");
+    }
+    expect(readInstallRow("worker", root)?.status).toBe("workspace_ready");
+    await expect(readFile(join(workspace, "HEARTBEAT.md"), "utf8")).resolves.toBe("# Heartbeat\n");
+    await expect(readFile(join(workspace, "BOOTSTRAP.md"))).resolves.toEqual(bootstrapContent);
+
+    const workspaceOrigin = readClawWorkspaceAdoption("worker", workspace, { env });
+    expect(workspaceOrigin).toEqual({ adopted: true, adoptedFiles: ["SOUL.md"] });
+    if (!workspaceOrigin.adopted) {
+      throw new Error("expected the workspace to be recorded as adopted");
+    }
+    const ownedFiles = readClawWorkspaceFiles("worker", { env });
+
+    // The CLI resume rebuilds the plan with the consented adopted set and this install's owned
+    // files; the previously-missing HEARTBEAT.md and the seeded BOOTSTRAP.md now exist on disk,
+    // but the rebuilt plan must still match the original.
+    const resumedPlan = await buildClawAddPlan({
+      manifest,
+      source,
+      packageBootstrap,
+      context: {
+        workspace,
+        adoptExistingWorkspace: true,
+        resumableWorkspace: workspace,
+        resumableWorkspaceOwnership: {
+          adoptedFiles: workspaceOrigin.adoptedFiles,
+          ownedFiles,
+          bootstrapDigest: first.installRecord.bootstrap?.contentDigest,
+        },
+      },
+    });
+
+    expect(resumedPlan.blockers).toEqual([]);
+    expect(resumedPlan.planIntegrity).toBe(plan.planIntegrity);
+    expect(resumedPlan.actions).toContainEqual(
+      expect.objectContaining({ kind: "bootstrap", id: "BOOTSTRAP.md", blocked: false }),
+    );
+    expect(resumedPlan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspaceFile", id: "HEARTBEAT.md", action: "write" }),
+    );
+
+    // A declared file that merely looks identical, with no ownership row for it, was never
+    // consented or written by this install; adoption must still block it, even mid-resume.
+    const unownedFiles = ownedFiles.filter((file) => file.path !== "HEARTBEAT.md");
+    const collisionPlan = await buildClawAddPlan({
+      manifest,
+      source,
+      packageBootstrap,
+      context: {
+        workspace,
+        adoptExistingWorkspace: true,
+        resumableWorkspace: workspace,
+        resumableWorkspaceOwnership: {
+          adoptedFiles: workspaceOrigin.adoptedFiles,
+          ownedFiles: unownedFiles,
+          bootstrapDigest: first.installRecord.bootstrap?.contentDigest,
+        },
+      },
+    });
+    expect(collisionPlan.blockers).toContainEqual(
+      expect.objectContaining({ code: "workspace_file_conflict" }),
+    );
+    expect(collisionPlan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspaceFile", id: "HEARTBEAT.md", blocked: true }),
+    );
   });
 });

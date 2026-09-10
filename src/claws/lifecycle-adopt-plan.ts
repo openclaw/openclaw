@@ -4,6 +4,7 @@ import { lstat } from "node:fs/promises";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 import type { ClawAddCapabilityChange, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
+import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 type AdoptionPendingFile = {
   action: ClawAddPlanAction;
@@ -160,6 +161,15 @@ async function readAdoptableTarget(
   }
 }
 
+/** Ownership evidence from a prior attempt of the same resumed adoption, used to re-plan by
+ * consent instead of disk presence: everything the operator already consented to adopt or that
+ * this install already wrote must round-trip to the same action, even though both now exist. */
+export type WorkspaceAdoptionOwnership = {
+  adoptedFiles: readonly string[];
+  ownedFiles: readonly PersistedClawWorkspaceFile[];
+  bootstrapDigest?: string;
+};
+
 /**
  * Marks every declared file that already exists with identical content as an `adopt` action and
  * blocks the rest. Mutates the passed actions in place and returns the plan blockers to record.
@@ -168,12 +178,19 @@ export async function planWorkspaceAdoptionTargets(params: {
   workspace: string;
   pendingFiles: readonly AdoptionPendingFile[];
   packageBootstrap?: ClawAddPlanAction;
+  ownership?: WorkspaceAdoptionOwnership;
 }): Promise<ClawDiagnostic[]> {
   const workspaceRoot = await fsSafeRoot(params.workspace);
   const blockers: ClawDiagnostic[] = [];
+
   if (params.packageBootstrap && !params.packageBootstrap.blocked) {
     const existing = await readAdoptableTarget(workspaceRoot, params.packageBootstrap.id);
-    if (existing.state !== "absent") {
+    // A prior attempt of this same adoption seeds BOOTSTRAP.md before later phases can fail; a
+    // resume sees the identical digest it already wrote and must not read its own seed as a
+    // fresh operator conflict (seedWorkspaceBootstrap treats it as "already-seeded").
+    const alreadySeeded =
+      existing.state === "adoptable" && existing.digest === params.ownership?.bootstrapDigest;
+    if (existing.state !== "absent" && !alreadySeeded) {
       const diagnostic = adoptionBlocker(
         "$packageBootstrap",
         existing.state === "unsafe"
@@ -185,28 +202,68 @@ export async function planWorkspaceAdoptionTargets(params: {
       blockers.push(diagnostic);
     }
   }
+
+  const consentedAdopted = params.ownership ? new Set(params.ownership.adoptedFiles) : undefined;
+  const ownedByPath = params.ownership
+    ? new Map(params.ownership.ownedFiles.map((file) => [file.path, file] as const))
+    : undefined;
+  const block = (pending: AdoptionPendingFile, message: string): void => {
+    const diagnostic = adoptionBlocker(pending.manifestPath, message);
+    pending.action.blocked = true;
+    pending.action.reason = diagnostic.message;
+    blockers.push(diagnostic);
+  };
+  const unsafeMessage = (target: string): string =>
+    `Adoptable workspace destination ${JSON.stringify(target)} must be a readable regular file inside the workspace, with no symlink or hardlink, within managed size limits.`;
+
   for (const pending of params.pendingFiles) {
     if (pending.action.blocked || !pending.action.digest) {
       continue;
     }
     const existing = await readAdoptableTarget(workspaceRoot, pending.action.id);
+    const identical = existing.state === "adoptable" && existing.digest === pending.action.digest;
+
+    // No resume in progress, or this id was itself consented to adopt on the plan the operator
+    // already approved: identical content adopts, anything else blocks as a first attempt would.
+    if (!consentedAdopted || consentedAdopted.has(pending.action.id)) {
+      if (existing.state === "absent") {
+        continue;
+      }
+      if (identical) {
+        pending.action.action = "adopt";
+        pending.action.details = { ...pending.action.details, expectedState: "existing-identical" };
+        continue;
+      }
+      block(
+        pending,
+        existing.state === "unsafe"
+          ? unsafeMessage(pending.action.target)
+          : `Workspace destination ${JSON.stringify(pending.action.target)} exists with different content; adoption never overwrites existing files.`,
+      );
+      continue;
+    }
+
+    // Not consented to adopt: this destination stays a `write`. It may already exist because a
+    // prior attempt of this same resumed install wrote it; the writer (workspace.ts) re-verifies
+    // the recorded digest and completes it. Anything else here is genuinely unowned or drifted.
     if (existing.state === "absent") {
       continue;
     }
-    if (existing.state === "adoptable" && existing.digest === pending.action.digest) {
-      pending.action.action = "adopt";
-      pending.action.details = { ...pending.action.details, expectedState: "existing-identical" };
+    const owned = ownedByPath?.get(pending.action.id);
+    if (
+      identical &&
+      owned &&
+      owned.contentDigest === pending.action.digest &&
+      owned.status !== "failed"
+    ) {
       continue;
     }
-    const diagnostic = adoptionBlocker(
-      pending.manifestPath,
+    block(
+      pending,
       existing.state === "unsafe"
-        ? `Adoptable workspace destination ${JSON.stringify(pending.action.target)} must be a readable regular file inside the workspace, with no symlink or hardlink, within managed size limits.`
-        : `Workspace destination ${JSON.stringify(pending.action.target)} exists with different content; adoption never overwrites existing files.`,
+        ? unsafeMessage(pending.action.target)
+        : `Workspace destination ${JSON.stringify(pending.action.target)} exists but is not owned by this install; adoption never claims content it was not consented to adopt.`,
     );
-    pending.action.blocked = true;
-    pending.action.reason = diagnostic.message;
-    blockers.push(diagnostic);
   }
   return blockers;
 }
