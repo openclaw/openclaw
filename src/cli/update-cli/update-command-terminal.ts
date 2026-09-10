@@ -44,18 +44,28 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
 
 /** Enclose the real executor so its final checks and release precede terminal output. */
 export async function withUpdateCommandTerminalResult<T>(
-  run: Run,
-  operation: () => Promise<T>,
+  operation: (registerRun: (run: Run) => void) => Promise<T>,
 ): Promise<T> {
   const owner: { publish?: Publisher } = {};
-  terminalOwners.set(run, owner);
+  let run: Run | undefined;
+  let registrationOpen = true;
+  const registerRun = (admitted: Run) => {
+    if (!registrationOpen || run || terminalOwners.has(admitted)) {
+      throw new Error("Update terminal publication already has an owner or has settled.");
+    }
+    run = admitted;
+    terminalOwners.set(admitted, owner);
+  };
   let outcome: { value: T } | { error: unknown };
   try {
-    outcome = { value: await operation() };
+    outcome = { value: await operation(registerRun) };
   } catch (error) {
     outcome = { error };
   } finally {
-    terminalOwners.delete(run);
+    registrationOpen = false;
+    if (run) {
+      terminalOwners.delete(run);
+    }
   }
   if (owner.publish) {
     const result = await owner.publish("error" in outcome ? outcome.error : undefined);

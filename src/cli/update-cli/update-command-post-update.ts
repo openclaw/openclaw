@@ -468,6 +468,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       postUpdateConfigSnapshot ??
       (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
         readConfigFileSnapshot({
+          observe: false,
           skipPluginValidation: true,
           suppressFutureVersionWarning: true,
         }),
@@ -662,10 +663,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       await tryWriteCompletionCache(postUpdateRoot, Boolean(params.opts.json));
     } catch (err) {
       if (!params.opts.json) {
-        const completionCacheRefreshCommand = formatCliCommand("openclaw completion --write-state");
         defaultRuntime.log(
           theme.warn(
-            `Completion cache update failed: ${formatErrorMessage(err)}. Update will continue; retry with: ${completionCacheRefreshCommand}`,
+            `Completion cache update failed: ${formatErrorMessage(err)}. Update will continue; retry with: ${formatCliCommand("openclaw completion --write-state")}`,
           ),
         );
       }

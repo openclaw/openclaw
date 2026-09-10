@@ -93,7 +93,10 @@ export async function captureOwnedManagedUpdateContext(params: {
   // normalized owned environment before I/O so even capture failure recovery targets its owner.
   stopState.serviceEnv = env;
   return await withOwnedManagedUpdateEnv(env, async () => {
-    const configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+    const configSnapshot = await readConfigFileSnapshot({
+      observe: false,
+      skipPluginValidation: true,
+    });
     const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords({ env });
     return { env, configSnapshot, pluginInstallRecords };
   });

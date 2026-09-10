@@ -261,7 +261,11 @@ export async function completePostCorePluginUpdate(params: {
     }
   }
 
-  const configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());
+  // Only the target runtime may write state after a version switch: observing
+  // config here could migrate its database back to the parent's newer schema.
+  const configSnapshot = await withNormalConfigValidation(() =>
+    readConfigFileSnapshot({ observe: false }),
+  );
   if (entryPath) {
     const checkTimeoutMs = params.timeoutMs ?? POST_PLUGIN_CHECK_TIMEOUT_MS;
     // No authored file is a valid unconfigured install, not an invalid config.

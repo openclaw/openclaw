@@ -143,8 +143,9 @@ it.each([
     let pendingAtPublication = false;
     let exit: unknown;
     await withUpdateFailureTriage(opts, target, () =>
-      withUpdateCommandTerminalResult(run, () =>
-        withUpdateCommandExecutor(run.runId, async (executor) => {
+      withUpdateCommandTerminalResult((registerRun) => {
+        registerRun(run);
+        return withUpdateCommandExecutor(run.runId, async (executor) => {
           run.executorFence = await executor.enter(root);
           await withUpdateCommandRecoveryUnwind(opts, { triageTarget: target }, async () => {
             expect(
@@ -174,8 +175,8 @@ it.each([
             }
             throw new UpdateCommandFailure(result, 7, "fixture package failure");
           });
-        }),
-      ),
+        });
+      }),
     ).catch((error: unknown) => {
       exit = error;
     });

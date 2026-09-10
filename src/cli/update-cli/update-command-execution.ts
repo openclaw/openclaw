@@ -126,7 +126,7 @@ export async function executeMutableUpdate(
     admittedTargetSchemaVersions = versions;
   };
   const preflightPlugins = async (targetVersion: string | null) => {
-    await recheckSchemas(params.packageTargetSchemaVersions);
+    await recheckSchemas(admittedTargetSchemaVersions);
     const { preflightConfiguredNpmPluginTargets } =
       await import("./update-command-plugin-preflight.js");
     const context = admission!.contexts.at(-1)!;
@@ -137,7 +137,7 @@ export async function executeMutableUpdate(
       channel: params.channel,
       timeoutMs: params.updateStepTimeoutMs,
     });
-    await recheckSchemas(params.packageTargetSchemaVersions);
+    await recheckSchemas(admittedTargetSchemaVersions);
   };
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
@@ -326,10 +326,19 @@ export async function executeMutableUpdate(
       assertCurrent?: () => void,
     ) => {
       signal?.throwIfAborted();
-      if (stagedPluginAdmission) {
-        // Explicit artifacts acquire their version from the private staged package,
-        // before rehearsal or activation can mutate any serving state.
-        try {
+      try {
+        if (params.updateInstallKind === "package") {
+          // The staged manifest owns schema support, including artifacts without registry metadata.
+          await recheckSchemas(
+            parsePackageOpenClawSchemaVersions(
+              await tryReadJson<unknown>(path.join(root, "package.json")),
+            ) ?? admittedTargetSchemaVersions,
+          );
+          signal?.throwIfAborted();
+          assertCurrent?.();
+        }
+        if (stagedPluginAdmission) {
+          // Explicit artifacts acquire their version before rehearsal or activation.
           await preflightPlugins(await readPackageVersion(root));
           signal?.throwIfAborted();
           assertCurrent?.();
@@ -338,12 +347,12 @@ export async function executeMutableUpdate(
           );
           signal?.throwIfAborted();
           assertCurrent?.();
-        } catch (error) {
-          if (error instanceof UpdatePreMutationError) {
-            candidateFailureReason = error.reason;
-          }
-          throw error;
         }
+      } catch (error) {
+        if (error instanceof UpdatePreMutationError) {
+          candidateFailureReason = error.reason;
+        }
+        throw error;
       }
       if (
         params.shouldRestart &&
@@ -589,7 +598,9 @@ export async function executeMutableUpdate(
         onConfigSnapshot,
       };
       await recheckSchemas(params.packageTargetSchemaVersions);
-      result = await runPackageInstallUpdate(packageUpdate);
+      result = params.stagedPackage
+        ? await params.stagedPackage.run(packageUpdate)
+        : await runPackageInstallUpdate(packageUpdate);
     } else {
       result = await updateGitInstall({
         root: params.root,
