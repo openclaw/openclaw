@@ -396,71 +396,120 @@ describe("SQLite transcript history events", () => {
     expect(() => readSessionTranscriptHistoryEvents(scope)).toThrow(/malformed JSON/i);
   });
 
-  it("does not read an inactive boundary between active sequence bounds", async () => {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],
-      touchSessionEntry: false,
-    });
-    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-    const boundaryEvents = [
-      {
-        seq: 2,
-        id: "active-boundary-2",
-        eventJson: JSON.stringify({
-          type: "compaction",
+  it.each([
+    ["compaction", "malformed", false, false],
+    ["compaction", "malformed", false, true],
+    ["custom_message", "malformed", false, false],
+    ["custom_message", "malformed", false, true],
+    ["custom_message", "deep", false, false],
+    ["custom_message", "deep", false, true],
+    ["custom_message", "malformed", true, false],
+    ["custom_message", "malformed", true, true],
+    ["custom_message", "deep", true, false],
+    ["custom_message", "deep", true, true],
+  ] as const)(
+    "respects active membership for %s with %s JSON (active=%s, analyzed=%s)",
+    async (eventType, payloadKind, active, analyzed) => {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],
+        touchSessionEntry: false,
+      });
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+      const boundaryEvents = [
+        {
+          seq: 2,
           id: "active-boundary-2",
-          parentId: "seed",
-          timestamp: "2026-08-15T00:00:01.000Z",
-          summary: "active",
-        }),
-        activePosition: 1,
-      },
-      { seq: 3, id: "inactive-boundary", eventJson: "{", activePosition: undefined },
-      {
-        seq: 4,
-        id: "active-boundary-4",
-        eventJson: JSON.stringify({
-          type: "compaction",
+          eventType: "compaction",
+          eventJson: JSON.stringify({
+            type: "compaction",
+            id: "active-boundary-2",
+            parentId: "seed",
+            timestamp: "2026-08-15T00:00:01.000Z",
+            summary: "active",
+          }),
+          activePosition: 1,
+        },
+        {
+          seq: 3,
+          id: "candidate-boundary",
+          eventType,
+          eventJson:
+            payloadKind === "malformed"
+              ? "{"
+              : JSON.stringify({
+                  type: "custom_message",
+                  id: "candidate-boundary",
+                  parentId: "seed",
+                  timestamp: "2026-08-15T00:00:01.000Z",
+                  customType: "boundary-notice",
+                  content: "boundary",
+                  display: true,
+                  // SQLite rejects valid JSON beyond its nesting limit.
+                  details: JSON.parse("[".repeat(1001) + "0" + "]".repeat(1001)),
+                }),
+          activePosition: active ? 2 : undefined,
+        },
+        {
+          seq: 4,
           id: "active-boundary-4",
-          parentId: "active-boundary-2",
-          timestamp: "2026-08-15T00:00:02.000Z",
-          summary: "active",
-        }),
-        activePosition: 2,
-      },
-    ];
-    const insertEvent = database.db.prepare(
-      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-    );
-    const insertIdentity = database.db.prepare(
-      `INSERT INTO transcript_event_identities
+          eventType: "compaction",
+          eventJson: JSON.stringify({
+            type: "compaction",
+            id: "active-boundary-4",
+            parentId: "active-boundary-2",
+            timestamp: "2026-08-15T00:00:02.000Z",
+            summary: "active",
+          }),
+          activePosition: active ? 3 : 2,
+        },
+      ];
+      const insertEvent = database.db.prepare(
+        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+      );
+      const insertIdentity = database.db.prepare(
+        `INSERT INTO transcript_event_identities
          (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
-       VALUES (?, ?, ?, 'compaction', NULL, NULL, ?)`,
-    );
-    const insertActive = database.db.prepare(
-      `INSERT INTO session_transcript_active_events
+       VALUES (?, ?, ?, ?, NULL, NULL, ?)`,
+      );
+      const insertActive = database.db.prepare(
+        `INSERT INTO session_transcript_active_events
          (session_id, active_position, event_seq, message_position, context_eligible)
        VALUES (?, ?, ?, NULL, 1)`,
-    );
-    for (const event of boundaryEvents) {
-      insertEvent.run(scope.sessionId, event.seq, event.eventJson, event.seq);
-      insertIdentity.run(scope.sessionId, event.id, event.seq, event.seq);
-      if (event.activePosition !== undefined) {
-        insertActive.run(scope.sessionId, event.activePosition, event.seq);
+      );
+      for (const event of boundaryEvents) {
+        insertEvent.run(scope.sessionId, event.seq, event.eventJson, event.seq);
+        insertIdentity.run(scope.sessionId, event.id, event.seq, event.eventType, event.seq);
+        if (event.activePosition !== undefined) {
+          insertActive.run(scope.sessionId, event.activePosition, event.seq);
+        }
       }
-    }
-    database.db
-      .prepare(
-        `UPDATE session_transcript_index_state
-         SET indexed_seq = 4, leaf_event_id = 'active-boundary-4', active_event_count = 3
+      database.db
+        .prepare(
+          `UPDATE session_transcript_index_state
+         SET indexed_seq = 4, leaf_event_id = 'active-boundary-4', active_event_count = ?
          WHERE session_id = ?`,
-      )
-      .run(scope.sessionId);
+        )
+        .run(active ? 4 : 3, scope.sessionId);
+      if (analyzed) {
+        database.db.exec("ANALYZE");
+      }
 
-    const events = readSessionTranscriptHistoryEvents(scope);
+      if (active) {
+        expect(() => readSessionTranscriptHistoryEventCount(scope)).toThrow(/malformed JSON/i);
+        expect(() => readSessionTranscriptHistoryEvents(scope)).toThrow(/malformed JSON/i);
+        return;
+      }
 
-    expect(events.map(historyEventId)).toEqual(["seed", "active-boundary-2", "active-boundary-4"]);
-  });
+      expect(readSessionTranscriptHistoryEventCount(scope)).toBe(3);
+      const events = readSessionTranscriptHistoryEvents(scope);
+
+      expect(events.map(historyEventId)).toEqual([
+        "seed",
+        "active-boundary-2",
+        "active-boundary-4",
+      ]);
+    },
+  );
 
   it.each([REGRESSION_MAX_MESSAGES, REGRESSION_SQLITE_VARIABLE_LIMIT + 1])(
     "reads %s recent messages with bounded metadata bindings",
@@ -707,6 +756,7 @@ describe("SQLite transcript history events", () => {
                 content: "This turn ended before a reply.",
                 display: true,
                 timestamp: "2026-09-07T00:00:00.000Z",
+                details: JSON.parse("[".repeat(1001) + "0" + "]".repeat(1001)),
               }
             : { message: { role: "assistant", content: "stale answer" } }),
         },
@@ -736,6 +786,12 @@ describe("SQLite transcript history events", () => {
         "fresh",
       ]);
       expect(historyEventId(readSessionTranscriptHistoryEventById(scope, "root"))).toBe("root");
+      expect(
+        readSessionTranscriptHistoryAnchorPage(scope, {
+          maxMessages: 10,
+          messageId: "root",
+        }).events.map(historyEventId),
+      ).toEqual(["root", "active", "reset"]);
       expect(readSessionTranscriptHistoryEventById(scope, "inactive")).toBeUndefined();
       expect(
         readSessionTranscriptHistoryAnchorPage(scope, {

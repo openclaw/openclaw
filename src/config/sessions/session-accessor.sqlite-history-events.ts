@@ -104,8 +104,10 @@ function resolveVisibleHistoryProjection(
       .where((eb) => {
         const type = eb.ref("identity.event_type");
         const event = eb.ref("event.event_json");
+        const activeEventSeq = eb.ref("active.event_seq");
+        const eventSeq = eb.ref("event.seq");
         if (visibleMessages.boundaryActivePosition === undefined) {
-          return isVisibleHistoryNonMessageEventSql(type, event);
+          return isVisibleHistoryNonMessageEventSql(type, event, activeEventSeq, eventSeq);
         }
         const inWindow = eb("active.active_position", ">=", visibleMessages.boundaryActivePosition);
         // Fence the JSON argument while leaving type/range predicates visible to the planner.
@@ -114,6 +116,8 @@ function resolveVisibleHistoryProjection(
           isVisibleHistoryNonMessageEventSql(
             type,
             eb.case().when(inWindow).then(event).else(null).end(),
+            activeEventSeq,
+            eventSeq,
           ),
         ]);
       })
@@ -193,6 +197,8 @@ function readBoundaryEvents(
           isVisibleHistoryNonMessageEventSql(
             eb.ref("identity.event_type"),
             eb.ref("event.event_json"),
+            eb.ref("active.event_seq"),
+            eb.ref("event.seq"),
           ),
         )
         .where("identity.seq", ">=", firstSeq)
