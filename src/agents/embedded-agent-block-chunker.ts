@@ -486,7 +486,11 @@ export class EmbeddedBlockChunker {
       }
     }
 
-    if (preference === "newline" && buffer.length < maxChars) {
+    // Only reachable once paragraph, newline, and sentence boundaries have all
+    // failed. More buffered text can only add candidates, so every preference
+    // benefits from waiting until maxChars instead of falling through to the
+    // whitespace scan and cutting mid-sentence.
+    if (buffer.length < maxChars) {
       return { index: -1 };
     }
 
@@ -503,36 +507,43 @@ export class EmbeddedBlockChunker {
         0,
         Math.max(maxChars, firstCodePointWidth),
       ).length;
-      if (isSafeFenceBreak(fenceSpans, offset + forcedBreakIndex)) {
+      // A cut at the end of the source lands exactly on a still-streaming
+      // fence's span.end, which the exclusive fence lookup treats as outside
+      // the fence; probe the last included character there instead. A span
+      // whose final line is a genuine closing marker is already balanced, so
+      // cutting after it needs no synthetic close/reopen pair.
+      const atSourceEnd = forcedBreakIndex >= buffer.length;
+      const fenceProbe = atSourceEnd ? forcedBreakIndex - 1 : forcedBreakIndex;
+      const fence = findFenceSpanAt(fenceSpans, offset + fenceProbe);
+      if (!fence) {
         return { index: forcedBreakIndex };
       }
-      const fence = findFenceSpanAt(fenceSpans, offset + forcedBreakIndex);
-      if (fence) {
-        const reopenFenceLine = resolveFenceReopenLine(fence, chunking.maxChars);
-        if (!reopenFenceLine) {
-          return { index: forcedBreakIndex };
-        }
-        // Synthetic fence wrappers consume the same transport budget as source
-        // text; reserving them here keeps every emitted payload deliverable.
-        const closeFenceLine = `${fence.indent}${fence.marker}`;
-        const fenceBreakIndex = sliceUtf16Safe(
-          buffer,
-          0,
-          Math.max(1, maxChars - closeFenceLine.length - 1),
-        ).length;
-        if (fenceBreakIndex <= 0) {
-          return { index: forcedBreakIndex };
-        }
-        const closeFenceStart = findFenceCloseLineStart(buffer, fence, offset);
-        return {
-          index:
-            closeFenceStart >= minChars && closeFenceStart <= fenceBreakIndex
-              ? closeFenceStart
-              : fenceBreakIndex,
-          fenceSplit: { closeFenceLine, reopenFenceLine, fence },
-        };
+      if (atSourceEnd && findFenceCloseLineStart(buffer, fence, offset) !== -1) {
+        return { index: forcedBreakIndex };
       }
-      return { index: forcedBreakIndex };
+      const reopenFenceLine = resolveFenceReopenLine(fence, chunking.maxChars);
+      if (!reopenFenceLine) {
+        return { index: forcedBreakIndex };
+      }
+      // Synthetic fence wrappers consume the same transport budget as source
+      // text; reserving them here keeps every emitted payload deliverable.
+      const closeFenceLine = `${fence.indent}${fence.marker}`;
+      const fenceBreakIndex = sliceUtf16Safe(
+        buffer,
+        0,
+        Math.max(1, maxChars - closeFenceLine.length - 1),
+      ).length;
+      if (fenceBreakIndex <= 0) {
+        return { index: forcedBreakIndex };
+      }
+      const closeFenceStart = findFenceCloseLineStart(buffer, fence, offset);
+      return {
+        index:
+          closeFenceStart >= minChars && closeFenceStart <= fenceBreakIndex
+            ? closeFenceStart
+            : fenceBreakIndex,
+        fenceSplit: { closeFenceLine, reopenFenceLine, fence },
+      };
     }
 
     return { index: -1 };

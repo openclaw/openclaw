@@ -447,4 +447,90 @@ describe("EmbeddedBlockChunker", () => {
       expect(chunks.every((chunk) => chunk.trimEnd() !== `${marker}\n${marker}`)).toBe(true);
     },
   );
+
+  it.each([1, 3, 10])(
+    "waits for maxChars before a forced paragraph break so the cut lands on a line boundary (delta %i)",
+    (delta) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 800,
+        maxChars: 1200,
+        breakPreference: "paragraph",
+        flushOnParagraph: false,
+      });
+      const bullets =
+        "Here is a summary of the proposed changes to the schema.\n\n" +
+        Array.from(
+          { length: 40 },
+          (_, i) => `- Item ${i}: the field must be set to a verified value\n`,
+        ).join("");
+
+      const chunks: string[] = [];
+      for (let i = 0; i < bullets.length; i += delta) {
+        chunker.append(bullets.slice(i, i + delta));
+        chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+      }
+      chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+      expect(chunks.length).toBeGreaterThan(1);
+      // The drain that crosses minChars holds only a few characters past it,
+      // so the cut must wait for real boundaries instead of scanning the
+      // whitespace inside the current sentence.
+      expect(chunks[0].length).toBeGreaterThanOrEqual(800);
+      expect(bullets.charAt(chunks[0].length)).toBe("\n");
+    },
+  );
+
+  it.each([1, 50])(
+    "closes and reopens a still-streaming fence cut exactly at the buffer boundary (delta %i)",
+    (delta) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 800,
+        maxChars: 1200,
+        breakPreference: "paragraph",
+        flushOnParagraph: false,
+      });
+      const code =
+        "Intro paragraph before the block.\n\n```ts\n" +
+        "const x = compute(1);\n".repeat(120) +
+        "```\n\nTrailing text.\n";
+
+      const chunks: string[] = [];
+      for (let i = 0; i < code.length; i += delta) {
+        chunker.append(code.slice(i, i + delta));
+        chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+      }
+      chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+      expect(chunks.length).toBeGreaterThan(1);
+      // An unterminated fence's span ends at the buffer boundary, so the cut
+      // at that boundary must carry the synthetic close/reopen pair instead of
+      // emitting an odd number of fence markers.
+      for (const chunk of chunks) {
+        expect((chunk.match(/```/g) ?? []).length % 2).toBe(0);
+      }
+    },
+  );
+
+  it("cuts cleanly after a balanced fence that ends exactly at the source boundary", () => {
+    // The closing marker is the buffer's final bytes, so the fence span ends
+    // exactly at the cut; probing inside that span must still recognize the
+    // balanced fence and emit it without a synthetic close/reopen pair.
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 100,
+      maxChars: 200,
+      breakPreference: "paragraph",
+    });
+    const body = "const x = 1;\n".repeat(14);
+    const text = `Intro.\n\n\`\`\`ts\n${body}\n\`\`\``;
+    expect(text.length).toBe(200);
+
+    const chunks: string[] = [];
+    for (let i = 0; i < text.length; i += 1) {
+      chunker.append(text.slice(i, i + 1));
+      chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+    }
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    expect(chunks).toEqual([text]);
+  });
 });
