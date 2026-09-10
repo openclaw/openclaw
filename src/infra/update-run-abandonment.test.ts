@@ -154,6 +154,37 @@ describe("abandoned update runs", () => {
     },
   );
 
+  it.each([
+    { first: "startup reconciliation", reason: "legacy-driver-expired" },
+    { first: "new update admission", reason: "superseded" },
+  ])(
+    "preserves the terminal reason when $first handles a legacy admission first",
+    ({ first, reason }) => {
+      const options = isolatedOptions();
+      const old = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
+      vi.advanceTimersByTime(25 * 60 * 60_000);
+
+      if (first === "startup reconciliation") {
+        expect(reconcileAbandonedUpdateRuns({}, options)).toMatchObject([
+          { runId: old.runId, status: "failed", reason },
+        ]);
+      }
+      createUpdateRun(
+        { trigger: "cli", origin: { driver: currentDriver() }, supersedeStaleIdentityless: true },
+        options,
+      );
+      const terminal = getUpdateRun(old.runId, options);
+      expect(terminal).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason,
+        finishedAtMs: Date.now(),
+      });
+      expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+      expect(getUpdateRun(old.runId, options)).toEqual(terminal);
+    },
+  );
+
   it.each(["automatic", "explicit", "supersede"] as const)(
     "preserves a durable run and its descriptor during %s stale-run cleanup",
     (mode) => {
