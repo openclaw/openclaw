@@ -122,7 +122,7 @@ describe("tool descriptions", () => {
       label: "write",
       description: "Write/overwrite file; creates parent directories.",
       parameters: {},
-      execute: async () => "",
+      execute: async () => ({ content: [{ type: "text" as const, text: "" }], details: undefined }),
     };
     const withWrite = finalizeAgentTools({
       tools: [createExecTool({ ...execDefaults }), writeStub],
