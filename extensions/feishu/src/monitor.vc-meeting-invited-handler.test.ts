@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { monitorSingleAccount } from "./monitor.account.js";
@@ -127,11 +128,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
   });
 
   it("ignores invitations unless VC auto-join is enabled", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
     const handler = createFeishuVcMeetingInvitedHandler({
       cfg: buildConfig(),
       accountId: "default",
@@ -150,11 +147,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
   });
 
   it("adapts the VC invite into the normal Feishu DM message ingress", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
     const channelRuntime = {} as PluginRuntime["channel"];
     const handler = createFeishuVcMeetingInvitedHandler({
       cfg: buildConfig(),

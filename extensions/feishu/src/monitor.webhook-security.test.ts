@@ -39,6 +39,7 @@ vi.mock("./monitor.state.js", async (importOriginal) => {
   };
 });
 
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import { resolveRequestClientIp } from "./monitor-transport-runtime-api.js";
@@ -235,11 +236,7 @@ describe("Feishu webhook security hardening", () => {
       monitorWebhook({
         account,
         accountId: account.accountId,
-        runtime: {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn(),
-        } as RuntimeEnv,
+        runtime: createRuntimeSpies() as RuntimeEnv,
         abortSignal: new AbortController().signal,
         eventDispatcher: {} as never,
       }),
