@@ -364,9 +364,6 @@ vi.mock("../auto-reply/reply/queue.js", () => ({
   getFollowupQueueDepth: () => 0,
   resolveQueueSettings: resolveQueueSettingsMock,
 }));
-vi.mock("../auto-reply/status.js", () => ({
-  buildStatusMessage: buildStatusMessageMock,
-}));
 vi.mock("../tasks/task-owner-access.js", () => ({
   listTasksForRelatedSessionKeyForOwner: (params: {
     relatedSessionKey: string;

@@ -61,6 +61,7 @@ import {
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { readSessionFallbackModel } from "./session-fallback-model.js";
 import type { StatusMessageParts } from "./status-message.js";
 import { createStatusModelAuthResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
@@ -320,11 +321,15 @@ export async function buildStatusReplyParts(
   const parseSelectedProvider = Boolean(
     sessionEntry?.modelOverride?.trim() && !sessionEntry?.providerOverride?.trim(),
   );
+  const modelParams = { selectedProvider, selectedModel, sessionEntry, parseSelectedProvider };
+  const activeModel = readSessionFallbackModel({
+    ...modelParams,
+    config: cfg,
+    sessionScope: { agentId: statusAgentId, sessionKey, storePath },
+  });
   const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider,
-    selectedModel,
-    sessionEntry,
-    parseSelectedProvider,
+    ...modelParams,
+    sessionEntry: activeModel ?? sessionEntry,
   });
   const selectedLookupProvider = modelRefs.selected.provider || selectedProvider || provider;
   const selectedLookupModel = modelRefs.selected.model || selectedModel || model;
@@ -645,6 +650,8 @@ export async function buildStatusReplyParts(
     },
     agentId: statusAgentId,
     configuredDefaultModelLabel,
+    modelRefs,
+    activeModel,
     selectedContextWindow: selectedCatalogEntry?.contextWindow,
     selectedContextTokens:
       selectedCatalogEntry?.contextTokens ??
@@ -652,7 +659,9 @@ export async function buildStatusReplyParts(
     thinkingCatalog,
     runtimeContextProvider: activeRuntimeIsAuthoritative ? activeStatusProvider : undefined,
     runtimeContextTokens:
-      activeRuntimeIsAuthoritative && (initialActiveCatalogEntry || fallbackState.active)
+      activeRuntimeIsAuthoritative &&
+      (initialActiveCatalogEntry || fallbackState.active) &&
+      (!activeModel || (activeModel.modelProvider === provider && activeModel.model === model))
         ? preparedContextTokens
         : undefined,
     sessionEntry,
