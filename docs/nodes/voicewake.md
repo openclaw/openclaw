@@ -8,6 +8,7 @@ title: "Voice wake"
 
 Wake words are **one global list owned by the Gateway** — there are no per-node custom lists. Any node or app UI can edit the list; the Gateway persists the change and broadcasts it to every connected client.
 
+- **Control UI**: wake-word editor under **Settings → Talk**.
 - **macOS**: local Voice Wake enable/disable toggle. Requires macOS 26+; see [Voice wake (macOS)](/platforms/mac/voicewake) for runtime/PTT details.
 - **iOS**: local Voice Wake enable/disable toggle in Settings.
 - **Android**: local Voice Wake enable/disable toggle and wake-word editor in Settings → Voice. Requires Android on-device speech recognition.

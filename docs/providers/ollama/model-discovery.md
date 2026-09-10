@@ -93,7 +93,9 @@ provider and `/api/tags` is unreachable, OpenClaw records that run as
 5 minutes per host, so repeated cron jobs against a stopped daemon do not all
 launch failing requests.
 
-Live verification:
+Live verification. These are contributor commands: run them from a checkout of
+the `openclaw/openclaw` repository with `pnpm install` already done, not from a
+packaged CLI install.
 
 ```bash
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=0 \

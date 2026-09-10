@@ -130,7 +130,17 @@ Happens on the free tier (no persistent disk). Upgrade to a paid plan, or regula
 If builds succeed but deploys fail, the service may be taking too long to start or `/startupz` may not be reachable. Check:
 
 - Build logs for errors
-- Whether the container runs locally with `docker build && docker run`
+- Whether the container runs locally with the same image and command Render uses
+
+Reproduce the Render container locally from a checkout of the repository:
+
+```bash
+docker build -t openclaw:local -f Dockerfile .
+docker run --rm -p 8080:8080 -e OPENCLAW_GATEWAY_PORT=8080 openclaw:local \
+  node openclaw.mjs gateway --allow-unconfigured
+```
+
+See [Docker](/install/docker) for the full local container workflow.
 
 ## Next steps
 

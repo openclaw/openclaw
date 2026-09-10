@@ -100,9 +100,11 @@ the CLI fallback on the Gateway host.
 - `deps-install-failed`, `build-failed`, `ui-build-failed`: inspect the failing
   step, fix the dependency or build error, then retry.
 - `global-install-failed`: retry after checking package-manager ownership and
-  permissions. Re-run the installer if the package install is incomplete.
-- `doctor-failed`: run Doctor on the Gateway host, resolve its findings, then
-  retry.
+  permissions. Re-run the [installer](/install/installer) if the package
+  install is incomplete.
+- `doctor-failed`: run `openclaw doctor` on the Gateway host, resolve its
+  findings, then retry. See [Doctor](/cli/doctor) for the check list and
+  `--fix` behavior.
 - `restart-disabled`, `restart-unavailable`: restore a supported supervisor or
   enable Gateway restarts before retrying.
 - `restart-unhealthy`, `restart-revision-mismatch`,

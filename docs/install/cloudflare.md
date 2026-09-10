@@ -17,7 +17,8 @@ Run one OpenClaw installation behind a Cloudflare Worker and a named Durable Obj
 
 - A Cloudflare account with Workers, Containers, and R2 available
 - Docker Buildx with `linux/amd64` support
-- A public Docker Hub repository for the derived image
+- A public Docker Hub repository for the derived image, and a `docker login` session that can push to it
+- An S3-compatible CLI such as the AWS CLI, used later to verify Litestream replication
 - Node.js and npm
 - Provider and channel credentials for your OpenClaw setup
 

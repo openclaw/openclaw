@@ -99,9 +99,16 @@ sidebarTitle: "Setup"
         For hybrid cloud access, run `ollama signin` on the same host.
       </Step>
       <Step title="Set a credential">
+        For a local or LAN host, any value works:
+
         ```bash
-        export OLLAMA_API_KEY="ollama-local"    # local/LAN host, any value works
-        export OLLAMA_API_KEY="your-real-key"   # https://ollama.com only
+        export OLLAMA_API_KEY="ollama-local"
+        ```
+
+        For `https://ollama.com`, use the real key instead:
+
+        ```bash
+        export OLLAMA_API_KEY="your-real-key"
         ```
 
         Or in config: `openclaw config set models.providers.ollama.apiKey "OLLAMA_API_KEY"`.

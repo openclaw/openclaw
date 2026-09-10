@@ -19,7 +19,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 
 1. Start the gateway.
 2. Open the WebChat UI (macOS/iOS app) or the Control UI chat tab.
-3. Ensure a valid gateway auth path is configured (shared-secret by default, even on loopback).
+3. Ensure a valid gateway auth path is configured (shared-secret by default, even on loopback). See [Auth basics (local vs remote)](/web/dashboard#auth-basics-local-vs-remote).
 
 ## How it works
 
