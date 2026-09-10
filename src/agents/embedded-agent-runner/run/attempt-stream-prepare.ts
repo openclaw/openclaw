@@ -515,14 +515,13 @@ export function prepareEmbeddedAttemptStream(input: {
     }
     externalAbortAccepted = true;
     input.markExternalAbort();
-    if (reason !== "cron_timeout") {
-      attempt.onDeferredLifecycleAbort?.(reason);
-    }
-    attempt.onAttemptAbort?.();
     if (reason === "cron_timeout") {
       input.abortRun(true, createTimeoutAbortReason());
+      attempt.onAttemptAbort?.();
       return;
     }
+    attempt.onDeferredLifecycleAbort?.(reason);
+    attempt.onAttemptAbort?.();
     const abortReason =
       reason === "restart"
         ? createAgentRunRestartAbortError()
