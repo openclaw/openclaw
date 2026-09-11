@@ -296,6 +296,7 @@ type StartupExternalAuthHydrationDeps = {
 
 async function hydrateConfiguredExternalCliAuth(params: {
   getConfig: () => OpenClawConfig;
+  isCurrent?: () => boolean;
   log: { warn: (msg: string) => void };
   deps?: StartupExternalAuthHydrationDeps | Promise<StartupExternalAuthHydrationDeps>;
 }): Promise<OpenClawConfig> {
@@ -327,6 +328,9 @@ async function hydrateConfiguredExternalCliAuth(params: {
   const cfg = params.getConfig();
   const hydratedDirs = new Set<string>();
   for (const agentId of deps.listAgentIds(cfg)) {
+    if (params.isCurrent?.() === false) {
+      break;
+    }
     const providers = deps.collectConfiguredRefs(cfg, agentId).flatMap(({ value }) => {
       const separator = value.indexOf("/");
       return separator > 0 ? [value.slice(0, separator)] : [];
@@ -398,6 +402,65 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
             ]),
         }
       : {}),
+  });
+}
+
+function scheduleStartupModelCatalogs(params: {
+  getConfig: () => OpenClawConfig;
+  isCurrent: () => boolean;
+  waitForPostReadyWork?: () => Promise<void>;
+  startupTrace?: GatewayStartupTrace;
+  log: { warn: (msg: string) => void };
+}): GatewayPostReadySidecarHandle {
+  return schedulePostReadySidecarTask({
+    ...params,
+    name: "sidecars.model-catalog",
+    shouldRun: params.isCurrent,
+    run: async (isStopped) => {
+      const config = await hydrateConfiguredExternalCliAuth({
+        getConfig: params.getConfig,
+        isCurrent: () => !isStopped(),
+        log: params.log,
+      });
+      const [
+        { listAgentIds },
+        { loadPreparedModelCatalogSnapshot, getPublishedPreparedModelCatalogOwnerSnapshot },
+        { PreparedModelRuntimeOwnerNotPublishedError },
+        { PreparedModelCatalogConfigReplacedError },
+        { isAbortError },
+      ] = await Promise.all([
+        import("../agents/agent-scope.js"),
+        import("../agents/prepared-model-catalog.js"),
+        import("../agents/prepared-model-runtime.errors.js"),
+        import("../agents/prepared-model-catalog.errors.js"),
+        import("../infra/abort-signal.js"),
+      ]);
+      for (const agentId of listAgentIds(config)) {
+        if (isStopped()) {
+          return;
+        }
+        const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId });
+        try {
+          await loadPreparedModelCatalogSnapshot({
+            config,
+            agentId,
+            readOnly: false,
+            refreshFullCatalog: true,
+          });
+        } catch (error) {
+          if (
+            isStopped() ||
+            !owner?.isCurrent() ||
+            error instanceof PreparedModelRuntimeOwnerNotPublishedError ||
+            error instanceof PreparedModelCatalogConfigReplacedError ||
+            isAbortError(error)
+          ) {
+            throw error;
+          }
+          params.log.warn(`Model catalog acquisition failed for ${agentId}: ${String(error)}`);
+        }
+      }
+    },
   });
 }
 
@@ -524,21 +587,14 @@ export async function startGatewaySidecars(params: {
     }
   });
   const getModelRuntimeConfig = params.getModelRuntimeConfig ?? (() => params.cfg);
-  // Agent RPC remains available when transports are disabled. Publish configured/static facts before
-  // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
+  // Readiness publishes captured static facts; catalog acquisition runs after the ready barrier.
   if ((await params.pluginRuntimeClaim?.waitForUnblocked()) !== false) {
     await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
       withPluginRuntimeRegistryScope(params.pluginRegistry, () =>
         publishStartupModelRuntime(
           {
             cfg: params.cfg,
-            getConfig: async () =>
-              await measureStartup(params.startupTrace, "sidecars.model-auth", () =>
-                hydrateConfiguredExternalCliAuth({
-                  getConfig: getModelRuntimeConfig,
-                  log: params.log,
-                }),
-              ),
+            getConfig: getModelRuntimeConfig,
             isCurrent: params.pluginRuntimeClaim?.isCurrent,
             ...(params.pluginMetadataSnapshot
               ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
@@ -1416,6 +1472,14 @@ export async function startGatewayPostAttachRuntime(
           }
           const postReadySidecars = [...result.postReadySidecars];
           const newGatewayLifetimeSidecars = [
+            scheduleStartupModelCatalogs({
+              getConfig: params.getConfig,
+              isCurrent: () =>
+                params.isClosing?.() !== true && params.pluginRuntimeClaim?.isCurrent() !== false,
+              waitForPostReadyWork: params.waitForPostReadyWork,
+              startupTrace: params.startupTrace,
+              log: params.log,
+            }),
             scheduleContextCachePrewarm(params),
             scheduleGatewayHandlerPrewarm(params),
             ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),

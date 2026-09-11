@@ -1619,15 +1619,21 @@ export function createModelVisibilityPolicyWithFallbacks(
     raw: string | undefined,
     retained: boolean,
     aliasIndex: ModelAliasIndex,
+    knownProvider?: string,
   ): ModelRef | undefined => {
     if (!raw?.trim() || parseModelPolicyWildcardRef(raw)) {
       return undefined;
     }
+    const defaultProvider =
+      knownProvider ??
+      (!raw.includes("/")
+        ? resolveBareModelDefaultProvider({ ...params, model: raw.trim() })
+        : params.defaultProvider);
     const resolved = resolveModelRefFromString({
       cfg: params.cfg,
       agentId: params.agentId,
       raw,
-      defaultProvider: params.defaultProvider,
+      defaultProvider,
       aliasIndex,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
@@ -1656,7 +1662,7 @@ export function createModelVisibilityPolicyWithFallbacks(
   for (const raw of params.additionalConfiguredModelRefs ?? []) {
     addConfiguredRef(raw, false, selectionAliasIndex);
   }
-  addConfiguredRef(params.defaultModel, true, selectionAliasIndex);
+  addConfiguredRef(params.defaultModel, true, selectionAliasIndex, params.defaultProvider);
   for (const fallback of params.fallbackModels) {
     // Configured fallbacks remain available for automatic failover and catalog
     // retention, but are not user-selectable overrides unless policy also allows them.

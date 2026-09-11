@@ -381,7 +381,6 @@ async function buildSnapshotBatch(
   agentBuildCompletions: Map<string, Promise<void>>,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
-  includeCredentialProviders = catalogMode === "live",
   onStage?: (stage: string) => void,
   registryResources?: PreparedModelRuntimeBuildResources,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
@@ -452,7 +451,6 @@ async function buildSnapshotBatch(
       catalogMode,
       {
         preferBuiltPluginArtifacts,
-        includeCredentialProviders,
         getConfiguredHarnessRuntimes,
         onStage,
         ...(groupCandidates.some((candidate) => candidate.ownsRegistryResources)
@@ -634,7 +632,6 @@ export function startSerializedSnapshotBuildBatch(
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
-  includeCredentialProviders = catalogMode === "live",
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -661,7 +658,6 @@ export function startSerializedSnapshotBuildBatch(
         agentBuildCompletions,
         pluginMetadataSnapshot,
         onBuildStats,
-        includeCredentialProviders,
         (nextStage) => {
           stage = nextStage;
         },

@@ -252,7 +252,7 @@ async function prepareSnapshot(
       },
     ],
     "static",
-    { includeCredentialProviders: false },
+    {},
     () => registry,
   );
   const facts = prepared.agentFacts[0]!;

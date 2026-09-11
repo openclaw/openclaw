@@ -94,6 +94,60 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       routePolicy: openAIModelCatalogRoutePolicy,
     });
 
+  it("retains a bare fallback under its unique catalog provider", async () => {
+    const catalog = [
+      { provider: "openai", id: "primary", name: "Primary" },
+      { provider: "deepseek", id: "fallback", name: "Fallback" },
+    ];
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/primary", fallbacks: ["fallback"] },
+            modelPolicy: { allow: ["openai/primary"] },
+          },
+        },
+      },
+      catalog,
+      defaultProvider: "openai",
+      defaultModel: "primary",
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: evaluateAvailableEntry,
+    });
+    expect(result.map(({ provider, id }) => `${provider}/${id}`)).toEqual([
+      "deepseek/fallback",
+      "openai/primary",
+    ]);
+  });
+
+  it.each(["default", "configured"] as const)(
+    "keeps unverified local models without admitting failed or OpenAI auth in %s browse",
+    async (view) => {
+      const catalog = [
+        { provider: "ollama", id: "local", name: "Local" },
+        { provider: "ollama", id: "offline", name: "Offline" },
+        { provider: "openai", id: "remote", name: "Remote" },
+      ];
+      const result = await resolveLogicalVisibleModelCatalog({
+        cfg: {},
+        catalog,
+        defaultProvider: "example",
+        view,
+        routePolicy: openAIModelCatalogRoutePolicy,
+        evaluateEntry: async (entry) =>
+          resolveLogicalModelCatalogEntryState({
+            evaluation: {
+              availability: entry.id === "offline" ? false : undefined,
+              evidence: "synthetic",
+              routeResolution: null,
+            },
+            routePolicy: openAIModelCatalogRoutePolicy,
+          }),
+      });
+      expect(result).toEqual([catalog[0]]);
+    },
+  );
+
   it.each(["default", "configured"] as const)(
     "hides deprecated and disabled rows from the %s picker view",
     async (view) => {

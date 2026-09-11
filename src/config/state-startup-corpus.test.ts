@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
@@ -22,6 +22,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getUserPreferences } from "../state/user-preferences.js";
+import { captureFullEnv } from "../test-utils/env.js";
 import { createConfigIO } from "./io.js";
 import {
   readRecentUserAssistantTextForSession,
@@ -67,7 +68,14 @@ const cases = releases.flatMap((release) =>
   configNames.map((configName) => [release, configName] as const),
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllEnvs());
+let environment: ReturnType<typeof captureFullEnv>;
+beforeEach(() => {
+  environment = captureFullEnv();
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  environment.restore();
+});
 
 function prepareState(release: string, configName: string) {
   const home = tempDirs.make("openclaw-state-corpus-");
@@ -236,22 +244,29 @@ describe("prior-release state startup corpus", () => {
               { catalogMode: "static" },
             );
             try {
+              const entries = lease.snapshot.modelCatalog.entries;
               if (configName === "provider-admission-selected-plan.json") {
-                expect(lease.snapshot.modelCatalog.entries).toEqual([
+                expect(entries).toContainEqual(
                   expect.objectContaining({ provider: "byteplus-plan", id: "ark-code-latest" }),
+                );
+                expect([...new Set(entries.map(({ provider }) => provider))].toSorted()).toEqual([
+                  "byteplus",
+                  "byteplus-plan",
                 ]);
+              } else if (configName === "provider-admission-family.json") {
+                expect(entries.length).toBeGreaterThan(0);
+                expect([...new Set(entries.map(({ provider }) => provider))]).toEqual(["byteplus"]);
               } else if (
                 [
                   "generic-github-token.json",
                   "provider-admission-bedrock.json",
-                  "provider-admission-family.json",
                   "provider-admission-generic.json",
                   "provider-admission-openai.json",
                 ].includes(configName)
               ) {
-                expect(lease.snapshot.modelCatalog.entries).toEqual([]);
+                expect(entries).toEqual([]);
               } else {
-                expect(lease.snapshot.modelCatalog.entries.length).toBeGreaterThan(0);
+                expect(entries.length).toBeGreaterThan(0);
               }
             } finally {
               lease.release();

@@ -658,13 +658,12 @@ function enqueuePreparedModelRuntimePublication(task: () => Promise<void>): Prom
 async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
   await authPublication.drain({
     owners,
-    publish: async (entries, includeCredentialProviders) =>
+    publish: async (entries) =>
       await publishPreparedModelRuntimeOwnerBatch({
         entries,
         owners,
         agentBuildCompletions,
         buildTimeoutMs: modelRuntimeBuildTimeoutMs,
-        ...(includeCredentialProviders ? { includeCredentialProviders: true } : {}),
         reusePluginGenerations: true,
       }),
     publishOwners: (publishedOwners) => replyDispatchPublication.replace(publishedOwners),
@@ -690,7 +689,7 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
     return;
   }
   replyDispatchPublication.remove(invalidatedConfiguredAgentIds);
-  const transaction = authPublication.enqueue(invalidatedOwners, normalizedEvent.profileSetChanged);
+  const transaction = authPublication.enqueue(invalidatedOwners);
   if (pendingModelRuntimeReplacement) {
     // The active config transaction drains this event before its atomic dispatch commit. Retire
     // the superseded build gate; queuing another task would make this commit depend on future work.

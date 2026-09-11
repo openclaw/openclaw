@@ -10,8 +10,11 @@ import {
   createInfoWarnErrorLogger,
 } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import * as configPaths from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type { PluginHookGatewayContext, PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
@@ -91,6 +94,11 @@ const hoisted = vi.hoisted(() => {
     throw new Error("full model catalog should not materialize");
   });
   const loadModelCatalog = vi.fn(async (_options?: unknown): Promise<unknown> => ({}));
+  const catalogOwnerIsCurrent = vi.fn(() => true);
+  const acquireModelCatalog = vi.fn(async (_options: { agentId?: string }) => ({
+    entries: [],
+    routeVariants: [],
+  }));
   const getModelRefStatus = vi.fn(() => ({
     key: "openai/gpt-5.4",
     allowed: true,
@@ -132,6 +140,8 @@ const hoisted = vi.hoisted(() => {
     resolveHooksGmailModel,
     loadFullModelCatalog,
     loadModelCatalog,
+    catalogOwnerIsCurrent,
+    acquireModelCatalog,
     getModelRefStatus,
     prepareModelRuntimeSnapshot,
     refreshPreparedModelRuntimeSnapshots,
@@ -223,6 +233,10 @@ vi.mock("../infra/update-startup.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  getPublishedPreparedModelCatalogOwnerSnapshot: () => ({
+    isCurrent: hoisted.catalogOwnerIsCurrent,
+  }),
+  loadPreparedModelCatalogSnapshot: hoisted.acquireModelCatalog,
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: hoisted.loadModelCatalog,
 }));
@@ -497,6 +511,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.loadFullModelCatalog.mockClear();
     hoisted.loadModelCatalog.mockReset();
     hoisted.loadModelCatalog.mockResolvedValue({});
+    hoisted.catalogOwnerIsCurrent.mockReturnValue(true);
+    hoisted.acquireModelCatalog.mockReset().mockResolvedValue({ entries: [], routeVariants: [] });
     hoisted.getModelRefStatus.mockReset();
     hoisted.getModelRefStatus.mockReturnValue({
       key: "openai/gpt-5.4",
@@ -1850,6 +1866,80 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(returned).toBe(true);
   });
 
+  it.each(["complete", "before readiness", "between agents"] as const)(
+    "keeps catalog acquisition after readiness and stops at %s",
+    async (stopAt) => {
+      const ready = createDeferred();
+      const firstCatalog = createDeferred<{ entries: []; routeVariants: [] }>();
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, second: {} } } };
+      hoisted.acquireModelCatalog.mockImplementationOnce(() => firstCatalog.promise);
+      const params = createPostAttachParams({
+        getConfig: () => cfg,
+        waitForPostReadyWork: () => ready.promise,
+      });
+      const runtime = await startGatewayPostAttachRuntime(params, createPostAttachRuntimeDeps());
+      try {
+        await runtime.startupSettled;
+        expect(params.unlockStartupMethods).toHaveBeenCalledOnce();
+        expect(hoisted.acquireModelCatalog).not.toHaveBeenCalled();
+        if (stopAt === "before readiness") {
+          await stopTrackedSidecars(publishedGatewayLifetimeSidecars);
+        }
+        ready.resolve();
+        if (stopAt !== "before readiness") {
+          await waitForGatewayTestState(() =>
+            expect(hoisted.acquireModelCatalog).toHaveBeenCalledTimes(1),
+          );
+          if (stopAt === "between agents") {
+            await stopTrackedSidecars(publishedGatewayLifetimeSidecars);
+          }
+        }
+        firstCatalog.resolve({ entries: [], routeVariants: [] });
+        await vi.dynamicImportSettled();
+        await waitForGatewayTestState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        expect(hoisted.acquireModelCatalog.mock.calls.map(([input]) => input.agentId)).toEqual(
+          stopAt === "before readiness"
+            ? []
+            : stopAt === "between agents"
+              ? ["main"]
+              : ["main", "second"],
+        );
+      } finally {
+        ready.resolve();
+        firstCatalog.resolve({ entries: [], routeVariants: [] });
+        await stopTrackedSidecars(publishedGatewayLifetimeSidecars);
+      }
+    },
+  );
+
+  it.each([
+    ["ordinary", new Error("catalog unavailable"), 2],
+    ["abort", createAbortError("cancelled"), 1],
+    ["superseded", new PreparedModelRuntimePublicationSupersededError("superseded"), 1],
+    ["config replaced", new PreparedModelCatalogConfigReplacedError("/tmp/agent"), 1],
+    ["retired owner", new Error("lifetime closed"), 1],
+  ] as const)("contains %s catalog failure after readiness", async (kind, error, calls) => {
+    const ready = createDeferred();
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, second: {} } } };
+    hoisted.catalogOwnerIsCurrent.mockReturnValue(kind !== "retired owner");
+    hoisted.acquireModelCatalog.mockRejectedValueOnce(error);
+    const params = createPostAttachParams({
+      getConfig: () => cfg,
+      waitForPostReadyWork: () => ready.promise,
+    });
+    await startGatewayPostAttachRuntime(params, createPostAttachRuntimeDeps());
+    ready.resolve();
+    await waitForGatewayTestState(() =>
+      expect(hoisted.acquireModelCatalog).toHaveBeenCalledTimes(calls),
+    );
+    await waitForGatewayTestState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(params.log.warn).toHaveBeenCalledWith(
+      kind === "ordinary"
+        ? `Model catalog acquisition failed for main: ${String(error)}`
+        : `sidecars.model-catalog failed after gateway ready: ${String(error)}`,
+    );
+  });
+
   it("defers context-window cache prewarm to a post-ready sidecar", async () => {
     vi.useFakeTimers();
     const startupConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
@@ -1927,7 +2017,7 @@ describe("startGatewayPostAttachRuntime", () => {
       | undefined;
     const lifetimeSidecars = [...publishedGatewayLifetimeSidecars];
     expect(gmailSidecars).toHaveLength(2);
-    expect(lifetimeSidecars).toHaveLength(4);
+    expect(lifetimeSidecars).toHaveLength(5);
 
     await waitForGatewayTestState(() => {
       expect(hoisted.transcriptsAutoStartService.start).toHaveBeenCalledTimes(1);
@@ -3154,7 +3244,7 @@ describe("startGatewayPostAttachRuntime", () => {
       name: "sidecars.ready",
       metrics: [
         ["loadedPluginCount", 2],
-        ["postReadySidecarCount", 3],
+        ["postReadySidecarCount", 4],
       ],
     });
   });

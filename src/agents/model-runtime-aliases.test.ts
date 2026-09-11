@@ -9,7 +9,6 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   createModelPickerVisibleProviderPredicate,
-  isRetiredModelPickerProvider,
   areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
   resolveCliRuntimeExecutionProvider as resolveCliRuntimeExecutionProviderBase,
@@ -388,20 +387,9 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     expect(isVisibleProvider("claude-cli")).toBe(false);
     expect(isCliRuntimeProvider("acme-cli")).toBe(false);
     expect(isVisibleProvider("acme-cli")).toBe(true);
-  });
-
-  it("recognizes retired picker providers without loading CLI backend metadata", () => {
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => {
-        throw new Error("retired provider checks should not load setup metadata");
-      },
-      resolveRuntimeCliBackends: () => {
-        throw new Error("retired provider checks should not load runtime metadata");
-      },
-    });
-
-    expect(isRetiredModelPickerProvider("CODEX-CLI")).toBe(true);
-    expect(isRetiredModelPickerProvider("anthropic")).toBe(false);
+    expect(isVisibleProvider("CODEX")).toBe(false);
+    expect(isVisibleProvider("CODEX-CLI")).toBe(false);
+    expect(isVisibleProvider("anthropic")).toBe(true);
   });
 });
 

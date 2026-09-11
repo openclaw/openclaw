@@ -452,7 +452,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
   owners: Map<string, PreparedModelRuntimeOwner>;
   agentBuildCompletions: Map<string, Promise<void>>;
   buildTimeoutMs: number;
-  includeCredentialProviders?: boolean;
   isPublicationCurrent?: () => boolean;
   isBuildCurrent?: () => boolean;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
@@ -543,7 +542,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
               catalogMode,
               params.onBuildStats,
               params.pluginMetadataSnapshot,
-              params.includeCredentialProviders,
             );
             for (const candidate of currentGroup) {
               if (params.registerEntriesAfterBuildStart === true) {

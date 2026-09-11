@@ -142,6 +142,11 @@ agent on that Gateway. Provider filtering, model visibility and availability use
 the Gateway's captured config and auth facts. The command does not resolve local
 model-provider secrets for that request.
 
+Gateway startup publishes admitted static models and stored account data before
+accepting agent requests. Live discovery and native CLI sync run after readiness
+and update the same published inventory used by `--refresh`. Ordinary list
+requests reuse that inventory.
+
 A selected Gateway must advertise `published-model-catalog`. If it does not,
 update or restart it and retry. Connection, authorization and capability errors
 are reported directly; they do not switch the command to a different local list.

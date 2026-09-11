@@ -25,11 +25,6 @@ import {
 
 const RETIRED_MODEL_PICKER_PROVIDERS = new Set(["codex", "codex-cli"]);
 
-/** True for retired provider ids that should stay out of model selection surfaces. */
-export function isRetiredModelPickerProvider(provider: string): boolean {
-  return RETIRED_MODEL_PICKER_PROVIDERS.has(normalizeProviderId(provider));
-}
-
 /** Creates a provider visibility predicate for model picker rendering. */
 export function createModelPickerVisibleProviderPredicate(
   params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv; includeSetupRegistry?: boolean } = {},
@@ -43,7 +38,7 @@ export function createModelPickerVisibleProviderPredicate(
   );
   return (provider: string): boolean => {
     const normalized = normalizeProviderId(provider);
-    return !isRetiredModelPickerProvider(normalized) && !cliRuntimeProviders.has(normalized);
+    return !RETIRED_MODEL_PICKER_PROVIDERS.has(normalized) && !cliRuntimeProviders.has(normalized);
   };
 }
 

@@ -252,6 +252,57 @@ describe("prepared catalog source composition", () => {
     ).toBeUndefined();
   });
 
+  it("isolates admitted static scopes while sharing equal scopes and retaining authored rows", () => {
+    const { facts, generation, staticConfig, modelsJsonContents } = fixture();
+    generation.preparedStaticProviderCatalog = {
+      entries: [
+        ...generation.preparedStaticProviderCatalog.entries,
+        {
+          provider: { id: "sibling-static", label: "Sibling static", auth: [] },
+          result: { provider: { ...staticConfig, models: [model("sibling-only")] } },
+        },
+      ],
+    };
+    const sibling = (agentId: string, providerIds: string[]): PreparedModelRuntimeAgentFacts => {
+      const agentDir = tempDirs.make("openclaw-prepared-scope-");
+      fs.writeFileSync(path.join(agentDir, "models.json"), modelsJsonContents);
+      return { ...facts, input: { ...facts.input, agentId, agentDir }, providerIds };
+    };
+    const wider = sibling("wider", [providerId, "sibling-static"]);
+    const equal = sibling("equal", [providerId]);
+    const result = prepareConfiguredRuntimeFactsBatch({
+      agentFacts: [facts, wider, equal],
+      pluginGeneration: generation,
+    });
+    const narrowCatalog = result.catalogs.get(facts.input)!;
+    const widerCatalog = result.catalogs.get(wider.input)!;
+    const equalCatalog = result.catalogs.get(equal.input)!;
+    const authoredAndStatic = ["authored-only", "configured-only", "curated-only", "shared"];
+    expect(narrowCatalog.modelCatalog.entries.map((row) => row.id).toSorted()).toEqual(
+      authoredAndStatic,
+    );
+    expect(
+      narrowCatalog.templateModelRegistry
+        .getAll()
+        .map((row) => row.id)
+        .toSorted(),
+    ).toEqual(authoredAndStatic);
+    expect(widerCatalog.modelCatalog.entries.map((row) => row.id).toSorted()).toEqual([
+      "authored-only",
+      "configured-only",
+      "curated-only",
+      "shared",
+      "sibling-only",
+    ]);
+    expect(widerCatalog.templateModelRegistry.find("sibling-static", "sibling-only")).toBeDefined();
+    expect(equalCatalog.modelCatalog.entries.map((row) => row.id).toSorted()).toEqual(
+      authoredAndStatic,
+    );
+    expect(equalCatalog.templateModelRegistry).toBe(narrowCatalog.templateModelRegistry);
+    expect(widerCatalog.templateModelRegistry).not.toBe(narrowCatalog.templateModelRegistry);
+    expect(result.registryCount).toBe(2);
+  });
+
   it("keeps an authored route when the prepared static catalog is empty", () => {
     const { facts, generation, configured } = fixture();
     const authoredEndpoint = "https://authored.example.invalid/v1";

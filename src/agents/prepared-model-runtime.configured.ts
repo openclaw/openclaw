@@ -62,8 +62,7 @@ export function collectPreparedModelRuntimeConfiguredRefs(
 
 export function collectPreparedModelRuntimeProviderIds(
   config: OpenClawConfig,
-  admittedProviderIds: Iterable<string>,
-  includeCredentialProviders: boolean,
+  admittedProviders: Iterable<string>,
   configuredModelRefs: readonly ConfiguredModelRef[] = collectConfiguredModelRefs(config),
   agentId?: string,
 ): string[] {
@@ -74,10 +73,8 @@ export function collectPreparedModelRuntimeProviderIds(
       providerIds.add(providerId);
     }
   };
-  if (includeCredentialProviders) {
-    for (const providerId of admittedProviderIds) {
-      addProviderId(providerId);
-    }
+  for (const providerId of admittedProviders) {
+    addProviderId(providerId);
   }
   for (const ref of configuredModelRefs) {
     const separator = ref.value.indexOf("/");

@@ -190,7 +190,7 @@ module.exports = { id: '${id}', register(api) {
               },
             ],
             "static",
-            { includeCredentialProviders: false, registryResources: construction },
+            { registryResources: construction },
           );
           if (mode === "rollback") {
             const source = getPluginRegistryInspectionResources(

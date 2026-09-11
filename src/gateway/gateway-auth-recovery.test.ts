@@ -383,6 +383,7 @@ describe("Gateway configured catalog authentication", () => {
               OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
               OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
               OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+              OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
             },
           });
           const gateway = instance;
@@ -428,6 +429,8 @@ describe("Gateway configured catalog authentication", () => {
           const startupStarted = performance.now();
           await gateway.startGateway();
           const startupMs = performance.now() - startupStarted;
+          const startupRssMb = readProcessRssMb(gateway.child?.pid);
+          expect(startupRssMb).toBeGreaterThan(0);
           client = await acquireGatewayTestClient(
             {
               url: gateway.url,
@@ -444,24 +447,40 @@ describe("Gateway configured catalog authentication", () => {
             },
           );
           const expectedIds = new Set(models.map((model) => model.id));
+          const postReadyModels = new Map<string, ModelChoice[]>();
           let returnedRows = 0;
           const rpcStarted = performance.now();
-          for (const agentId of agentIds) {
-            const result = await client.request<{ models: ModelChoice[] }>(
-              "models.list",
-              { agentId, view: "configured" },
-              { timeoutMs: 30_000 },
-            );
-            const configured = result.models.filter(
-              (model) => model.provider === provider.providerId,
-            );
-            expect(configured, agentId).toHaveLength(models.length);
-            expect(new Set(configured.map((model) => model.id)), agentId).toEqual(expectedIds);
-            expect(
-              configured.every((model) => model.available === true),
-              agentId,
-            ).toBe(true);
-            returnedRows += configured.length;
+          for (const phase of ["startup", "background", "refresh"] as const) {
+            if (phase === "background") {
+              await expect
+                .poll(() => gateway.logs(), { timeout: 60_000 })
+                .toContain("startup trace: sidecars.model-catalog ");
+            }
+            returnedRows = 0;
+            for (const agentId of agentIds) {
+              const result = await client.request<{ models: ModelChoice[] }>(
+                "models.list",
+                { agentId, view: "configured", ...(phase === "refresh" ? { refresh: true } : {}) },
+                { timeoutMs: 30_000 },
+              );
+              expect(result).not.toHaveProperty("refreshFailed", true);
+              if (phase === "background") {
+                postReadyModels.set(agentId, result.models);
+              } else if (phase === "refresh") {
+                expect(result.models, agentId).toEqual(postReadyModels.get(agentId));
+              }
+              const configured = result.models.filter(
+                (model) => model.provider === provider.providerId,
+              );
+              expect(configured, agentId).toHaveLength(models.length);
+              expect(new Set(configured.map((model) => model.id)), agentId).toEqual(expectedIds);
+              expect(
+                configured.every((model) => model.available === true),
+                agentId,
+              ).toBe(true);
+              returnedRows += configured.length;
+            }
+            expect(returnedRows, phase).toBe(4_400);
           }
           const rpcElapsedMs = performance.now() - rpcStarted;
           const gatewayRssMb = readProcessRssMb(gateway.child?.pid);
@@ -473,10 +492,12 @@ describe("Gateway configured catalog authentication", () => {
               head,
               configuredModels: models.length,
               agents: agentIds.length,
-              rpcRequests: agentIds.length,
+              rpcRequests: agentIds.length * 3,
+              verifiedPhases: ["startup", "background", "refresh"],
               returnedRows,
               allAvailable: true,
               startupMs,
+              startupRssMb,
               rpcElapsedMs,
               gatewayRssMb,
               upstreamRequests,

@@ -87,6 +87,7 @@ export async function prepareFullCatalogFacts(
         (await loadBundledProviderStaticCatalogContextModels({
           cfg: input.config,
           env,
+          providerIds: agentFacts.providerIds,
           metadataSnapshot: pluginMetadataSnapshot,
           registeredProviders: pluginGeneration.pluginRegistry?.providers,
           ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),

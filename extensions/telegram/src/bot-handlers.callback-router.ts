@@ -524,7 +524,9 @@ async function handleTelegramModelCallback(params: {
       senderId,
       runtimeCfg,
     });
-    const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId);
+    const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId, {
+      sessionEntry: session.sessionEntry,
+    });
     return { sessionState: session, modelData: providerData };
   });
   const { byProvider, providers, modelNames, resolvedDefault: activeResolvedDefault } = modelData;

@@ -379,17 +379,20 @@ describe("prepared model runtime reload auth adoption", () => {
     });
     mocks.runPreparedModelCatalogWorker.mockClear();
     mocks.createPreparedModelCatalogWorker.mockClear();
+    mocks.authStorage.getAll.mockReturnValue({
+      custom: { type: "api_key", key: "rotated-key" },
+    });
     mocks.mutationListener?.({
       agentDir: input.agentDir,
       affectsInheritedStores: false,
       profileSetChanged: false,
     });
 
-    await prepareModelRuntimeSnapshot(input);
+    const rotated = await prepareModelRuntimeSnapshot(input);
     expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
-    expect(
-      mocks.createPreparedModelCatalogWorker.mock.calls.at(-1)?.[0].agentFacts.providerIds,
-    ).toEqual([]);
+    expect(rotated.createStores().authStorage.getAll()).toMatchObject({
+      custom: { type: "api_key", key: "rotated-key" },
+    });
   });
 
   it("shares one live rebuild across concurrent stale catalog reads", async () => {

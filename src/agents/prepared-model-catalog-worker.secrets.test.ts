@@ -5,14 +5,18 @@ import { createConfigIoContext } from "../config/io.context.js";
 import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import {
   getAuthoredConfigSecretRef,
+  getConfigProviderUseBindings,
   getConfigResolutionFacts,
   getResolvedConfigEnvSecretRef,
+  serializeConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -33,7 +37,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   parentPort: null,
 }));
 
-const provider = "worker-secret-fixture";
+const defaultProvider = "worker-secret-fixture";
 let state: OpenClawTestState;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "catalog-worker-secrets" });
@@ -51,12 +55,14 @@ describe("serialized catalog credential provenance", () => {
     owner: "config" | "profile";
     label: string;
     value: string;
+    migrated?: boolean;
     loader?: { authored: string; env?: NodeJS.ProcessEnv; pending?: boolean; resolved?: boolean };
   }>([
     { owner: "config", label: "literal bytes", value: "synthetic-worker-config-key" },
     { owner: "config", label: "marker bytes", value: NON_ENV_SECRETREF_MARKER },
     { owner: "config", label: "env-template bytes", value: "${OPAQUE_WORKER_KEY}" },
     { owner: "profile", label: "profile-only sibling", value: "synthetic-worker-profile-key" },
+    { owner: "config", label: "migrated binding", value: "synthetic-migrated-key", migrated: true },
     {
       owner: "config",
       label: "loader-substituted literal",
@@ -81,7 +87,8 @@ describe("serialized catalog credential provenance", () => {
     },
   ])(
     "preserves $owner $label through discovery and the writable plan",
-    async ({ owner, value, loader }) => {
+    async ({ owner, value, loader, migrated }) => {
+      const provider = migrated ? "mistral" : defaultProvider;
       const requests: boolean[] = [];
       const server = createServer((request, response) => {
         requests.push(
@@ -124,12 +131,51 @@ module.exports = {
         );
         await state.writeJson("catalog-plugin/openclaw.plugin.json", {
           id: provider,
-          providers: [provider],
+          providers: migrated ? [provider, `${provider}-base`] : [provider],
+          ...(migrated
+            ? {
+                setup: {
+                  providers: [{ id: `${provider}-base`, envVars: ["WORKER_MIGRATION_KEY"] }],
+                },
+                providerAuthAliases: { [provider]: `${provider}-base` },
+              }
+            : {}),
           providerCatalogEntry: "./index.cjs",
           modelCatalog: { discovery: { [provider]: "runtime" } },
           configSchema: { type: "object", additionalProperties: false, properties: {} },
         });
         const ref = { source: "store", provider: "default", id: "WORKER_CONFIG_KEY" } as const;
+        const providerConfig: ModelProviderConfig = {
+          baseUrl,
+          api: "openai-completions",
+          models: [],
+        };
+        const providers: Record<string, ModelProviderConfig> = {
+          "healthy-fixture": {
+            baseUrl: "https://healthy.example/v1",
+            api: "openai-completions",
+            apiKey: "synthetic-healthy-key",
+            models: [
+              {
+                id: "model",
+                name: "Model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 4096,
+                maxTokens: 512,
+              },
+            ],
+          },
+          ...(migrated
+            ? {}
+            : {
+                [provider]: {
+                  ...providerConfig,
+                  ...(owner === "config" ? { apiKey: loader?.authored ?? ref } : {}),
+                },
+              }),
+        };
         const source = {
           plugins: {
             allow: [provider],
@@ -140,36 +186,14 @@ module.exports = {
           agents: {
             defaults: {
               workspace: state.workspaceDir,
-              model: { primary: "healthy-fixture/model" },
+              model: {
+                primary: "healthy-fixture/model",
+                ...(migrated ? { fallbacks: [`${provider}/discovered-model`] } : {}),
+              },
               modelPolicy: { allow: ["healthy-fixture/model", `${provider}/*`] },
             },
           },
-          models: {
-            providers: {
-              "healthy-fixture": {
-                baseUrl: "https://healthy.example/v1",
-                api: "openai-completions",
-                apiKey: "synthetic-healthy-key",
-                models: [
-                  {
-                    id: "model",
-                    name: "Model",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 4096,
-                    maxTokens: 512,
-                  },
-                ],
-              },
-              [provider]: {
-                baseUrl,
-                api: "openai-completions",
-                models: [],
-                ...(owner === "config" ? { apiKey: loader?.authored ?? ref } : {}),
-              },
-            },
-          },
+          models: { providers },
         } satisfies OpenClawConfig;
         let runtime: OpenClawConfig = {
           ...source,
@@ -177,7 +201,7 @@ module.exports = {
             providers: {
               ...source.models.providers,
               [provider]: {
-                ...source.models.providers[provider],
+                ...providerConfig,
                 ...(owner === "config" ? { apiKey: value } : {}),
               },
             },
@@ -187,10 +211,11 @@ module.exports = {
           ...state.env,
           LITERAL_KEY: undefined,
           PENDING_KEY: undefined,
+          WORKER_MIGRATION_KEY: migrated ? value : undefined,
           ...loader?.env,
         };
         let runtimeSource: OpenClawConfig = source;
-        if (loader) {
+        if (loader || migrated) {
           await state.writeConfig(source);
           const snapshot = await readConfigFileSnapshotFromContext(
             createConfigIoContext({
@@ -204,6 +229,22 @@ module.exports = {
           runtime = snapshot.config;
           runtimeSource = snapshot.sourceConfig;
           expect(getConfigResolutionFacts(runtime)).not.toBeNull();
+        }
+        if (migrated) {
+          expect(runtimeSource.models?.providers?.[provider]).toBeUndefined();
+          expect(getConfigProviderUseBindings(runtimeSource)[provider]).toEqual({
+            apiKey: { source: "env", provider: "default", id: "WORKER_MIGRATION_KEY" },
+          });
+          runtime = (
+            await prepareSecretsRuntimeSnapshot({
+              config: runtime,
+              env,
+              agentDirs: [state.agentDir()],
+              includeAuthStoreRefs: false,
+            })
+          ).config;
+          expect(getConfigProviderUseBindings(runtime)[provider]).toBeUndefined();
+          expect(getConfigResolutionFacts(runtime)).toBe(getConfigResolutionFacts(runtimeSource));
         }
         setRuntimeConfigSnapshot(runtime, runtimeSource);
         const prepared = await prepareWorkspaceBuildGroup(
@@ -235,11 +276,12 @@ module.exports = {
         };
         expect(params.agentFacts.providerIds).toContain(provider);
         const expectedAuth = loader?.pending ? undefined : value;
-        const nativeAuth = loader
-          ? resolveUsableCustomProviderApiKey({ cfg: runtime, provider, env })?.apiKey
-          : undefined;
+        const nativeAuth =
+          loader || migrated
+            ? resolveUsableCustomProviderApiKey({ cfg: runtime, provider, env })?.apiKey
+            : undefined;
         let nativeRequests: boolean[] | undefined;
-        if (loader) {
+        if (loader || migrated) {
           await prepareAgentCatalogSource(
             params.agentFacts,
             prepared.pluginGeneration,
@@ -249,18 +291,18 @@ module.exports = {
           );
           nativeRequests = requests.splice(0);
         }
-        const nativeRuntimeFacts = getConfigResolutionFacts(runtime);
-        const nativeSourceFacts = getConfigResolutionFacts(runtimeSource);
+        const nativeRuntimeFacts = serializeConfigResolutionFacts(runtime);
+        const nativeSourceFacts = serializeConfigResolutionFacts(runtimeSource);
         const serialized = structuredClone(createPreparedModelCatalogWorkerInput(params));
         let alternativeFingerprint: string | undefined;
-        if (owner === "config" && !loader?.pending) {
+        if (owner === "config" && !loader?.pending && !migrated) {
           const alternativeSource: OpenClawConfig = {
             ...source,
             models: {
               providers: {
                 ...source.models.providers,
                 [provider]: {
-                  ...source.models.providers[provider],
+                  ...providerConfig,
                   apiKey: loader ? value : { ...ref, id: "OTHER_WORKER_KEY" },
                 },
               },
@@ -312,13 +354,12 @@ module.exports = {
           syntheticAuth: [],
         });
         expect(result.status).toBe("ok");
-        const runtimeFacts = getConfigResolutionFacts(serialized.input.config);
-        const sourceFacts = getConfigResolutionFacts(serialized.sourceConfigForSecrets);
-        expect(runtimeFacts === null).toBe(nativeRuntimeFacts === null);
-        expect(sourceFacts === null).toBe(nativeSourceFacts === null);
-        expect(runtimeFacts === sourceFacts).toBe(nativeRuntimeFacts === nativeSourceFacts);
-        if (loader) {
-          const expectedRef = loader.pending
+        expect(serializeConfigResolutionFacts(serialized.input.config)).toEqual(nativeRuntimeFacts);
+        expect(serializeConfigResolutionFacts(serialized.sourceConfigForSecrets)).toEqual(
+          nativeSourceFacts,
+        );
+        if (loader || migrated) {
+          const expectedRef = loader?.pending
             ? { source: "env", provider: "default", id: "PENDING_KEY" }
             : null;
           const workerAuth = resolveUsableCustomProviderApiKey({
@@ -341,15 +382,15 @@ module.exports = {
             ),
           }).toEqual({
             nativeAuthMatches: true,
-            nativeRequests: loader.pending ? [] : [true],
+            nativeRequests: loader?.pending ? [] : [true],
             workerAuthMatches: true,
-            workerRequests: loader.pending ? [] : [true],
+            workerRequests: loader?.pending ? [] : [true],
             authoredRef: expectedRef,
-            resolvedEnvRef: loader.resolved
+            resolvedEnvRef: loader?.resolved
               ? { source: "env", provider: "default", id: "SOURCE_KEY" }
               : null,
           });
-          if (loader.pending) {
+          if (loader?.pending) {
             return;
           }
         }
@@ -366,8 +407,13 @@ module.exports = {
         if (!catalog) {
           throw new Error("Expected the provider-owned writable catalog");
         }
+        const expectedApiKey = migrated
+          ? "WORKER_MIGRATION_KEY"
+          : loader
+            ? value
+            : NON_ENV_SECRETREF_MARKER;
         expect(JSON.parse(catalog.contents)).toMatchObject({
-          providers: { [provider]: { apiKey: loader ? value : NON_ENV_SECRETREF_MARKER } },
+          providers: { [provider]: { apiKey: expectedApiKey } },
         });
         expect(JSON.stringify(plans)).not.toContain("discoveryApiKey");
         if (!loader && value !== NON_ENV_SECRETREF_MARKER) {

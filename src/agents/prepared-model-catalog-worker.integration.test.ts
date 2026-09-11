@@ -434,7 +434,9 @@ describe("prepared model catalog worker boundary", () => {
       const syntheticAuthProbePath = path.join(fixture.root, "synthetic-auth-probes.txt");
       const nativeMode = { source: "native", mode: "oauth" };
 
-      expect(fixture.snapshot.authModes[HARNESS_ID]).toEqual(nativeMode);
+      expect(fixture.snapshot.authModes[HARNESS_ID]).toEqual(
+        asyncSyntheticAuth ? undefined : nativeMode,
+      );
       expect(fixture.snapshot.authModes[DISCOVERED_HARNESS_ID]).toBeUndefined();
       expect(fixture.snapshot.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
       expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();

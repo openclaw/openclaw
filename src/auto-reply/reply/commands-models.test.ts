@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -283,6 +284,26 @@ describe("handleModelsCommand", () => {
     expect(params).not.toHaveProperty("metadataSnapshot");
   });
 
+  it.each([false, true])(
+    "retains an unauthenticated default only when configured=%s",
+    async (configured) => {
+      modelProviderAuthMocks.authenticatedProviders.clear();
+      modelCatalogMocks.loadModelCatalog.mockReturnValue([
+        { provider: DEFAULT_PROVIDER, id: DEFAULT_MODEL, name: "Default model" },
+      ]);
+      const data = await buildPreparedModelsProviderData(
+        configured
+          ? {
+              agents: { defaults: { model: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}` } },
+            }
+          : {},
+      );
+      expect([...(data.byProvider.get(DEFAULT_PROVIDER) ?? [])]).toEqual(
+        configured ? [DEFAULT_MODEL] : [],
+      );
+    },
+  );
+
   it("loads the selected agent lifecycle catalog", async () => {
     const cfg = {
       agents: {
@@ -434,7 +455,7 @@ describe("handleModelsCommand", () => {
     expect(pluginMetadataMocks.getCurrent).toHaveBeenCalledTimes(1);
   });
 
-  it("does not re-add the default provider when provider visibility is restricted", async () => {
+  it("retains the published default alongside allowed provider models", async () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
       { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
@@ -464,7 +485,7 @@ describe("handleModelsCommand", () => {
     );
     expect(result?.reply?.text).toContain("- openai (2)");
     expect(result?.reply?.text).toContain("- vllm (2)");
-    expect(result?.reply?.text).not.toContain("- anthropic");
+    expect(result?.reply?.text).toContain("- anthropic (1)");
   });
 
   it("hides bare backwards-compat aliases but surfaces supported CLI runtime providers in /models lists", async () => {
@@ -500,7 +521,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toMatch(/^- codex-cli \(/m);
   });
 
-  it("sources CLI runtime provider model lists from the catalog", async () => {
+  it("applies the same configured model restriction to CLI runtime providers", async () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
       { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
@@ -515,8 +536,6 @@ describe("handleModelsCommand", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
-          // User only declared 2 of claude-cli's 6 supported models.
-          // For claude-cli this narrowing must be ignored.
           models: {
             "claude-cli/claude-opus-4-6": {},
             "claude-cli/claude-sonnet-4-6": {},
@@ -526,11 +545,7 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect([...(data.byProvider.get("claude-cli") ?? [])].toSorted()).toEqual([
-      "claude-haiku-4-5",
-      "claude-opus-4-5",
       "claude-opus-4-6",
-      "claude-opus-4-7",
-      "claude-sonnet-4-5",
       "claude-sonnet-4-6",
     ]);
   });
@@ -563,16 +578,16 @@ describe("handleModelsCommand", () => {
       expected: ["claude-opus-4-6"],
     },
     {
-      name: "an excluded CLI primary",
+      name: "configured CLI primary retention under provider wildcards",
       allow: ["anthropic/*"],
       primary: "claude-cli/claude-sonnet-4-6",
-      expected: [],
+      expected: ["claude-sonnet-4-6"],
     },
     {
-      name: "an excluded CLI fallback under provider wildcards",
+      name: "configured CLI fallback retention under provider wildcards",
       allow: ["anthropic/*"],
       fallbacks: ["claude-cli/claude-sonnet-4-6"],
-      expected: [],
+      expected: ["claude-sonnet-4-6"],
     },
     {
       name: "configured CLI fallback retention under exact refs",
@@ -585,17 +600,17 @@ describe("handleModelsCommand", () => {
       name: "an unrestricted agent override",
       allow: ["anthropic/*"],
       agentAllow: [],
-      expected: ["claude-opus-4-6", "claude-sonnet-4-6"],
+      expected: ["claude-sonnet-4-6"],
     },
     {
       name: "an empty explicit allowlist",
       allow: [],
-      expected: ["claude-opus-4-6", "claude-sonnet-4-6"],
+      expected: ["claude-sonnet-4-6"],
     },
     {
       name: "legacy provider wildcards",
       legacyAllow: ["anthropic/*"],
-      expected: ["claude-opus-4-6", "claude-sonnet-4-6"],
+      expected: [],
     },
     {
       name: "explicit all browse",
