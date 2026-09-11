@@ -116,7 +116,9 @@ Unarchiving, or an authorized human message that reopens the archived session, r
 
 An explicit session base must resolve to a commit. Local refs are checked before the session is saved; remote-project refs are checked after cloning. A missing remote ref is refreshed from the recorded project URL and retried only in a Gateway-managed clone, never an operator-registered checkout. Once accepted, the commit stays pinned across setup failures and retries while the original ref remains publication metadata. Invalid explicit refs never silently switch to the repository default. Managed-clone refresh uses an isolated Git repository for network transport, so checkout-local URL rewrites and hooks cannot redirect or execute during the fetch.
 
-Accepted child sessions retain their saved repository choice across parent archive, replacement, or worktree changes. A retry must still be authorized for the current child session and uses the current caller's setup permissions.
+For a same-agent `sessions_spawn` with `worktree: true`, omitting `cwd` uses the parent's live managed repository or its directly selected registered project. The child gets its own managed worktree. An explicit source selection takes precedence; other spawns use the target agent workspace. A parent working directory alone does not authorize inheritance outside that workspace.
+
+The parent session and its managed-worktree or registered-project binding must remain current until the child is accepted. Accepted child sessions retain their saved repository choice across parent archive, replacement, or worktree changes. A retry must still be authorized for the current child session and uses the current caller's setup permissions.
 
 ## Troubleshoot creation
 

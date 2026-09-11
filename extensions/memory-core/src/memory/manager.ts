@@ -422,7 +422,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             this.endSyncProviderGeneration();
           }
         } finally {
-          lock.release();
+          await lock.release();
         }
       };
       try {

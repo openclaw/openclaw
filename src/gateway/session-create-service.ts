@@ -334,6 +334,8 @@ export async function createGatewaySession(params: {
   clearSpawnedCwd?: boolean;
   fork?: boolean;
   forkFrom?: "last-completed";
+  /** Live requester capability for an agent's current-transcript fork; never a wire parameter. */
+  activeParentFork?: { requesterSessionKey: string; assertCurrent: () => void };
   /**
    * Controls whether a distinct child terminates its parent. Omission preserves
    * the legacy rollover; callers use `false` for a parallel child.
@@ -393,9 +395,10 @@ export async function createGatewaySession(params: {
   // not just the final row. An inherited parent pin is not a new selection.
   let selectedDefaultProfile: string | undefined;
   const commitGuard =
-    personalModelSelection || personalAccountDefaults
+    personalModelSelection || personalAccountDefaults || params.activeParentFork
       ? () => {
           params.commitGuard?.();
+          params.activeParentFork?.assertCurrent();
           personalModelSelection?.assertCurrent();
           personalAccountDefaults?.assertCurrent();
           if (
@@ -656,6 +659,24 @@ export async function createGatewaySession(params: {
       ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
     });
   }
+  if (
+    params.activeParentFork &&
+    (params.fork !== true ||
+      parentSelectedAgentId !== agentId ||
+      resolveGatewaySessionStoreTarget({
+        cfg: params.cfg,
+        key: params.activeParentFork.requesterSessionKey,
+        agentId,
+      }).canonicalKey !== canonicalParentSessionKey)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "active fork parent must match the same-agent requester",
+      ),
+    };
+  }
   const parentIncognito =
     parentSessionEntry?.incognito === true || isIncognitoSessionKey(canonicalParentSessionKey);
   const incognito = params.incognito === true || parentIncognito;
@@ -894,7 +915,8 @@ export async function createGatewaySession(params: {
           ]));
       if (
         parentHasActiveWork &&
-        (params.forkFrom !== "last-completed" || params.emitCommandHooks === true)
+        (params.emitCommandHooks === true ||
+          (params.forkFrom !== "last-completed" && !params.activeParentFork))
       ) {
         return {
           ok: false,

@@ -322,15 +322,17 @@ function loadLocalSkillTiers(
 function loadSkillEntries(workspaceDir: string, opts?: WorkspaceSkillLoadOptions): SkillEntry[] {
   const tiers = loadLocalSkillTiers(workspaceDir, opts);
   const entries = mergeRemoteNodeSkillEntries(tiers.agent, opts?.eligibility?.nodeSkills);
-  const agentByName = new Map(entries.map((entry) => [entry.skill.name, entry]));
-  // Include node skills in the agent tier before admitting execution-local names.
-  // Agent entries also stay first when the prompt budget truncates the catalog.
-  for (const entry of tiers.execution) {
-    const agentEntry = agentByName.get(entry.skill.name);
-    if (agentEntry) {
-      warnSkillPrecedenceCollision(agentEntry.skill, entry.skill, workspaceDir);
-    } else {
-      entries.push(entry);
+  if (tiers.execution.length > 0) {
+    const agentByName = new Map(entries.map((entry) => [entry.skill.name, entry]));
+    // Include node skills in the agent tier before admitting execution-local names.
+    // Agent entries also stay first when the prompt budget truncates the catalog.
+    for (const entry of tiers.execution) {
+      const agentEntry = agentByName.get(entry.skill.name);
+      if (agentEntry) {
+        warnSkillPrecedenceCollision(agentEntry.skill, entry.skill, workspaceDir);
+      } else {
+        entries.push(entry);
+      }
     }
   }
   if (opts?.librarySelections?.length) {

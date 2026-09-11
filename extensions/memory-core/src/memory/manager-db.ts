@@ -170,7 +170,7 @@ export async function resetMemoryDatabase(params: {
       }),
     );
   } finally {
-    lock.release();
+    await lock.release();
   }
 }
 

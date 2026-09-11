@@ -81,16 +81,16 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
   const budget =
     goal.tokenBudget === undefined
       ? ""
-      : `\nToken budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
-  const note = goal.lastStatusNote ? `\nNote: ${goal.lastStatusNote}` : "";
+      : `Token budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
+  const note = goal.lastStatusNote ? `Note: ${goal.lastStatusNote}` : "";
   const commands = resolveGoalCommandHint(goal.status);
   return [
     "Goal",
     `Status: ${goal.status}`,
     `Objective: ${goal.objective}`,
     `Tokens used: ${formatTokenCount(goal.tokensUsed)}`,
-    ...(budget ? [budget.slice(1)] : []),
-    ...(note ? [note.slice(1)] : []),
+    ...(budget ? [budget] : []),
+    ...(note ? [note] : []),
     "",
     `Commands: ${commands}`,
   ].join("\n");

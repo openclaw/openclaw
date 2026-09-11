@@ -15,7 +15,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { withTimeout } from "../infra/fs-safe.js";
-import { registerProjectRegistry } from "../projects/project-registry.js";
+import { registerProjectRegistry, removeProjectRegistry } from "../projects/project-registry.js";
 import {
   getSessionWorkAdmissionRelease,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
@@ -96,7 +96,7 @@ async function createRepository(name: string): Promise<string> {
   return await fs.realpath(root);
 }
 
-function spawnClient(admin = false) {
+function spawnClient(admin = false, requesterSessionKey = parentKey) {
   return {
     connect: { scopes: [admin ? "operator.admin" : "operator.write"] },
     internal: {
@@ -104,26 +104,47 @@ function spawnClient(admin = false) {
       sessionCreation: {
         via: "spawn" as const,
         actor: { type: "agent" as const, id: "main" },
-        requesterSessionKey: parentKey,
+        requesterSessionKey,
         inheritedToolPolicy: { version: 1 as const, allow: ["read"], deny: [] },
       },
     },
   };
 }
 
-async function createChild(params: Record<string, unknown> = {}, admin = false) {
+async function createChild(
+  params: Record<string, unknown> = {},
+  admin = false,
+  requesterSessionKey = parentKey,
+) {
   return await directSessionReq<CreatedWorktreeSession>(
     "sessions.create",
     {
       agentId: "main",
       label: "Project child",
-      parentSessionKey: parentKey,
+      parentSessionKey: requesterSessionKey,
       spawnDepth: 1,
       worktree: true,
       ...params,
     },
-    { client: spawnClient(admin) as never },
+    { client: spawnClient(admin, requesterSessionKey) as never },
   );
+}
+
+async function createDirectProjectParent() {
+  const project = await registerProjectRegistry({ path: repository });
+  const created = await directSessionReq<{ key: string; entry: SessionEntry }>(
+    "sessions.create",
+    { agentId: "main", projectId: project.id },
+    adminRequest,
+  );
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry).toMatchObject({
+    projectId: project.id,
+    spawnedCwd: repository,
+    sessionRoot: repository,
+  });
+  expect(created.payload?.entry.worktree).toBeUndefined();
+  return { ...created.payload!, project };
 }
 
 beforeEach(async () => {
@@ -151,15 +172,67 @@ afterEach(async () => {
   await state?.cleanup();
 });
 
-test("trusted same-agent worktree spawns inherit the parent's selected project", async () => {
-  const created = await createChild();
+test.each(["managed", "direct"])(
+  "trusted same-agent worktree spawns inherit the parent's %s project",
+  async (source) => {
+    const selectedParent =
+      source === "direct" ? await createDirectProjectParent() : { key: parentKey, entry: parent };
+    const created = await createChild({}, false, selectedParent.key);
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.entry.worktree?.repoRoot).toBe(repository);
+    expect(created.payload?.entry.parentSessionId).toBe(selectedParent.entry.sessionId);
+    expect(created.payload?.worktree.id).not.toBe(selectedParent.entry.worktree?.id);
+    const childPath = created.payload!.worktree.path;
+    expect(await fs.readFile(path.join(childPath, "README.md"), "utf8")).toBe("selected-project\n");
+    await expect(fs.stat(path.join(childPath, "setup-marker.txt"))).rejects.toThrow();
+  },
+);
+
+test.each(["archive", "replace", "rebind", "unregister"] as const)(
+  "direct-project worktree spawns roll back after parent %s during preparation",
+  async (change) => {
+    const selectedParent = await createDirectProjectParent();
+    const createWorktree = managedWorktrees.create.bind(managedWorktrees);
+    vi.spyOn(managedWorktrees, "create").mockImplementation(async (params) => {
+      const created = await createWorktree(params);
+      if (change === "unregister") {
+        expect(await removeProjectRegistry(selectedParent.project)).toBe(true);
+      } else {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: selectedParent.key, storePath },
+          {
+            ...selectedParent.entry,
+            ...(change === "archive"
+              ? { archivedAt: Date.now() }
+              : change === "replace"
+                ? { sessionId: "replaced-parent" }
+                : { projectId: "another-project" }),
+          },
+        );
+      }
+      return created;
+    });
+    const key = `agent:main:dashboard:direct-parent-${change}-child`;
+    await expect(createChild({ key }, false, selectedParent.key)).rejects.toThrow(
+      "Spawn parent project changed",
+    );
+    expect(managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+  },
+);
+
+test("worktree spawns do not inherit an unregistered parent working directory", async () => {
+  const created = await directSessionReq<{ key: string }>(
+    "sessions.create",
+    { agentId: "main", cwd: repository },
+    adminRequest,
+  );
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry.worktree?.repoRoot).toBe(repository);
-  expect(created.payload?.entry.parentSessionId).toBe(parent.sessionId);
-  expect(created.payload?.worktree.id).not.toBe(parent.worktree?.id);
-  const childPath = created.payload!.worktree.path;
-  expect(await fs.readFile(path.join(childPath, "README.md"), "utf8")).toBe("selected-project\n");
-  await expect(fs.stat(path.join(childPath, "setup-marker.txt"))).rejects.toThrow();
+  const child = await createChild({}, false, created.payload!.key);
+  expect(child).toMatchObject({
+    ok: false,
+    error: { message: "agent workspace is not a git checkout" },
+  });
 });
 
 test("keyed worktree creation reuses its recorded base after reopening the registry", async () => {
@@ -219,9 +292,18 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
   expect(managedWorktrees.findLiveByOwner("session", parentKey)).toEqual(recorded);
 });
 
-test.each(["cwd", "project", "cross-agent"] as const)(
-  "trusted worktree spawns preserve %s source selection",
-  async (selection) => {
+test.each([
+  ["managed", "cwd"],
+  ["managed", "project"],
+  ["managed", "cross-agent"],
+  ["direct", "cwd"],
+  ["direct", "project"],
+  ["direct", "cross-agent"],
+] as const)(
+  "trusted worktree spawns from %s parents preserve %s source selection",
+  async (source, selection) => {
+    const requesterSessionKey =
+      source === "direct" ? (await createDirectProjectParent()).key : parentKey;
     const otherRepository = await createRepository("other-project");
     let params: Record<string, unknown>;
     if (selection === "project") {
@@ -241,7 +323,7 @@ test.each(["cwd", "project", "cross-agent"] as const)(
     } else {
       params = { cwd: otherRepository };
     }
-    const created = await createChild(params, selection === "cwd");
+    const created = await createChild(params, selection === "cwd", requesterSessionKey);
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.entry.worktree?.repoRoot).toBe(otherRepository);
   },

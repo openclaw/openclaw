@@ -49,19 +49,7 @@ const mockState = vi.hoisted(() => ({
     resolve: () => void;
     promise: Promise<void>;
   } | null,
-  resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
-    url: "ws://127.0.0.1:18789",
-    urlSource: "local loopback",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-    auth: {
-      token: undefined,
-      password: undefined,
-    },
-  })),
+  resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(),
 }));
 
 vi.mock("node:stream", async (importOriginal) => {

@@ -174,6 +174,7 @@ export function createTranscriptsAutoStartService(
       | "rawParams"
       | "abortSignal"
       | "existingSession"
+      | "existingSessionCondition"
       | "onCaptureEnded"
       | "sessionIdOrigin"
     >,
@@ -181,12 +182,12 @@ export function createTranscriptsAutoStartService(
     diagnostics?.record(index, capture.lifecycleToken, "starting");
     try {
       const retry = retries.get(index);
-      // Both modes validate the exact failed attempt immediately before the
-      // configured start's synchronous existing-tuple write.
-      retry?.assertCurrent(params.store);
       const result = await startTranscripts({
         ...params,
         existingSession: retry?.session ?? params.existingSession,
+        existingSessionCondition: retry
+          ? { expectedInputRevision: retry.revision, assertCurrent: retry.assertCurrent }
+          : params.existingSessionCondition,
         ctx,
         startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
         configuredLifecycle: true,
@@ -337,25 +338,29 @@ export function createTranscriptsAutoStartService(
             return;
           }
           const now = Date.now();
-          const recent =
-            retries.get(index)?.session ??
-            store.readRecentStoppedSession(
-              sanitizeTranscriptSourceLocator(source),
-              new Date(now - AUTO_START_OCCUPANCY_REOPEN_WINDOW_MS).toISOString(),
-              new Date(now).toISOString(),
-            );
+          const retained = retries.get(index);
+          const recent = retained
+            ? { session: retained.session, inputRevision: retained.revision }
+            : await store.readRecentStoppedSession(
+                sanitizeTranscriptSourceLocator(source),
+                new Date(now - AUTO_START_OCCUPANCY_REOPEN_WINDOW_MS).toISOString(),
+                new Date(now).toISOString(),
+              );
+          if (stopped || !occupied || controller.signal.aborted) {
+            return;
+          }
           const candidate =
             recent &&
-            recent.metadata?.sessionIdOrigin === "generated" &&
+            recent.session.metadata?.sessionIdOrigin === "generated" &&
             (!(source.agentId ?? ctx.agentId) ||
-              (recent.metadata?.agentId ?? "main") === (source.agentId ?? ctx.agentId)) &&
-            !activeSessions.has(recent.sessionId) &&
-            !isTranscriptSessionStarting(recent.sessionId) &&
-            !startedSessions.has(recent.sessionId)
+              (recent.session.metadata?.agentId ?? "main") === (source.agentId ?? ctx.agentId)) &&
+            !activeSessions.has(recent.session.sessionId) &&
+            !isTranscriptSessionStarting(recent.session.sessionId) &&
+            !startedSessions.has(recent.session.sessionId)
               ? recent
               : undefined;
           const owned = {
-            sessionId: candidate?.sessionId ?? createTranscriptSessionId(),
+            sessionId: candidate?.session.sessionId ?? createTranscriptSessionId(),
             lifecycleToken: Symbol(label),
           };
           diagnosticToken = owned.lifecycleToken;
@@ -364,7 +369,20 @@ export function createTranscriptsAutoStartService(
             store,
             sessionIdOrigin: "generated",
             abortSignal: controller.signal,
-            existingSession: candidate,
+            existingSession: candidate?.session,
+            existingSessionCondition: candidate
+              ? {
+                  expectedInputRevision: candidate.inputRevision,
+                  assertCurrent: () => {
+                    if (stopped || !occupied || controller.signal.aborted || capture !== owned) {
+                      throw new TranscriptStartError(
+                        "id-conflict",
+                        new Error("transcript occupancy changed before reopening"),
+                      );
+                    }
+                  },
+                }
+              : undefined,
             rawParams: {
               ...entry,
               ...source,

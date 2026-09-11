@@ -285,7 +285,12 @@ export default definePluginEntry({
         return undefined;
       }
       try {
+        const invocation = ctx.hookInvocation;
+        if (!invocation) {
+          throw new Error("prompt hook invocation support is required; intent matching skipped");
+        }
         const module = await loadStandingIntentsModule();
+        invocation.assertActive();
         if (!module.isEligibleStandingIntentTurn(ctx)) {
           return undefined;
         }
@@ -298,6 +303,7 @@ export default definePluginEntry({
         const intents = await module.matchStandingIntents({
           agentId,
           prompt: event.prompt,
+          assertCurrent: invocation.assertActive,
           ...((ctx.channelId ?? ctx.chatId)
             ? { channel: (ctx.channelId ?? ctx.chatId) as string }
             : {}),

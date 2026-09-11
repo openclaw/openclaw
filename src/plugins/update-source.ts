@@ -370,12 +370,16 @@ export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
     : undefined;
 }
 
-export function isNpmMetadataCompatibleWithCurrentHost(metadata: NpmSpecResolution): boolean {
-  const hostVersion = resolveCompatibilityHostVersion();
+export function isNpmMetadataCompatibleWithCurrentHost(
+  metadata: NpmSpecResolution,
+  options: { hostVersion?: string; allowLegacyBareSemver?: boolean } = {},
+): boolean {
+  const hostVersion = options.hostVersion ?? resolveCompatibilityHostVersion();
   const installMetadata = metadata.packageOpenClaw?.install;
   const minHostVersionCheck = checkMinHostVersion({
     currentVersion: hostVersion,
     minHostVersion: isRecord(installMetadata) ? installMetadata.minHostVersion : undefined,
+    allowLegacyBareSemver: options.allowLegacyBareSemver,
   });
   if (!minHostVersionCheck.ok) {
     return false;

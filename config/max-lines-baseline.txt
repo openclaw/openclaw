@@ -779,7 +779,6 @@ src/state/openclaw-state-db.test.ts
 src/status/status-message.ts
 src/system-agent/verified-inference.ts
 src/tasks/task-executor.test.ts
-src/tasks/task-flow-registry.ts
 src/tasks/task-registry.maintenance.ts
 src/tasks/task-registry.store.test.ts
 src/tasks/task-registry.test.ts

@@ -36,6 +36,8 @@ Home can include a bounded, quoted work-context reference with your message. Tha
 
 The operator terminal is enabled by default; set `gateway.terminal.enabled: false` to opt out. The terminal requires an `operator.admin` connection and opens a host PTY in the active agent workspace. New tabs follow the currently selected chat agent.
 
+When the terminal is disabled or your connection lacks admin access, the main terminal page shows an unavailable notice and a **New session** button to return to the composer.
+
 On Linux and macOS, a Gateway running on Bun uses a Node helper for terminal
 I/O. Keep Node available on the Gateway's `PATH`; an unavailable Node executable
 produces a startup error with installation guidance.
@@ -49,7 +51,7 @@ Control UI page to pick up the updated content security policy.
 The terminal is an unconfined host shell and inherits the Gateway process environment. Disable it with `gateway.terminal.enabled: false` on deployments where admin operators should not get a host shell. OpenClaw refuses terminal sessions for agents with `sandbox.mode: "all"`; changing an active agent to that mode closes its existing and in-flight terminal sessions.
 </Warning>
 
-Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane's unified side panel. You can also open **Terminal** from the panel's **+** menu. The shared panel docks right or bottom, resizes with the browser viewport, can expand over the Chat pane, and keeps multiple shell tabs. Opening a Codex or Claude Code session from the catalog selects **Terminal** and expands the panel. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
+Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane's unified side panel. You can also open **Terminal** from the panel's **+** menu. The shared panel docks right or bottom, resizes with the browser viewport, can expand over the Chat pane, and keeps multiple shell tabs. The dock remains available for ad-hoc operator shells. Starting a native CLI from **New session**, or opening a Claude Code or Codex catalog session in the terminal, opens the [main terminal page](/web/urls#terminal-urls), keeping the sidebar and application chrome while replacing the composer. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
 
 The unified panel also hosts **Browser**, **Files**, **Tasks**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so switching sessions restores each session's own working layout. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
 
@@ -67,18 +69,20 @@ Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`
 
 Paired-node Codex, Claude Code, OpenCode, and Pi terminals also support uploaded-path insertion, including Windows paths with spaces and apostrophes. The inserted input remains editable and is never automatically submitted.
 
-Codex and Claude Code sessions discovered in the sessions sidebar can open in their native CLI inside the same terminal panel. In **Settings › Chat**, set **Open Codex/Claude threads in** to **Terminal** to make a normal row click open `codex resume` or `claude --resume`; the default remains the read-only OpenClaw viewer. A row's right-click or kebab menu always offers both choices, and the viewer header includes **Open in terminal** when that session is eligible.
+Claude Code and Codex sessions discovered in the sessions sidebar open their native CLI in the main terminal page. In **Settings › Chat**, set **Open Codex/Claude threads in** to **Terminal** to make a normal row click open `codex resume` or `claude --resume`; the default remains the read-only OpenClaw viewer. A row's right-click or kebab menu always offers both choices, and the viewer header includes **Open in terminal** when that session is eligible.
+
+Catalog-opening requests already queued by an older version finish once in the dock after upgrading. New requests use the main terminal page; the page does not persist catalog-opening intents.
 
 Eligibility is per session and per host. Gateway-local sessions start the provider-owned resume command on the Gateway host. Paired-node sessions start an allowlisted provider command on the owning node and relay only that PTY's output, input, and resize events; this does not expose a general node shell or accept browser-supplied commands. File uploads use the separate, size-bounded `terminal.upload` node command and remain bound to the already-open terminal session. Approve the node pairing upgrade when that command first appears. Nodes that do not advertise the matching terminal-resume command, including embedded worker bridges without duplex streaming, keep the viewer available and show terminal opening as unavailable; older nodes can still run a terminal but cannot receive dragged files.
 
-Standalone operator sessions, including the terminal focus presentation, are connection-owned. A page reload, laptop sleep, or network blip detaches one on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
+Standalone operator sessions, including the main terminal page and terminal focus presentation, are connection-owned. Leaving the main terminal route does not close its PTY; returning to its terminal session URL reattaches it. The main page and the dock keep separate terminal tabs. A page reload, laptop sleep, or network blip detaches one on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
 
 Conversation-owned sessions opened from a Chat session's Terminal panel are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing an established viewer tab detaches only that browser. Conversation-owned PTYs remain until the exact-session agent closes them, their shell exits, the session is archived, policy disables them, or the Gateway shuts down. `terminal.list` marks each entry as connection- or agent-owned.
 
 All Gateway terminal PTYs are process-local. A Gateway restart ends them; the
 PTY sessions and their scrollback are not recovered after the new process starts.
 
-The terminal is also available as a [focus presentation](/web/urls#focus-presentation-routes). The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal. Focus presentation removes the application chrome; it does not invoke browser fullscreen.
+The main terminal page at `/terminal` is also available as a [focus presentation](/web/urls#focus-presentation-routes). The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal. Focus presentation removes the application chrome; it does not invoke browser fullscreen.
 
 ## Browser panel
 

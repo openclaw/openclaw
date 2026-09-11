@@ -127,6 +127,9 @@ function resolveRecoveryOutcome(
   context: UpdateFailureReportContext,
 ): string {
   if (result.recovery?.serviceRestartSafe === true) {
+    if (result.recovery.service === "failed") {
+      return "runtime files verified; Gateway restart failed. Run `openclaw gateway status --deep` before restarting manually.";
+    }
     return "verified safe to restart";
   }
   if (result.recovery?.serviceRestartSafe === false) {

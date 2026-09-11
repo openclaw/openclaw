@@ -342,7 +342,7 @@ snapshot_merge_body() {
 
 prepare_squash_merge_body() {
   local pr="$1" captured="${2:-}" source_head="${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
-  local source_trailers author_emails
+  local source_trailers author_commits authors
   # GraphQL publication can collapse local fixups. Preserve their reviewed
   # trailers, excluding main's ancestry, rather than inspecting current HEAD.
   source_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by log --reverse \
@@ -350,13 +350,21 @@ prepare_squash_merge_body() {
     --format='%(trailers:key=Co-authored-by,only,unfold)' "$PR_MAIN_SHA..$source_head") || return 1
   # A merge commit can reflect whoever refreshed the branch, not a contributor.
   # Preview credit must be backed by a published non-merge commit or explicit trailer.
-  author_emails=$(git log --no-merges --reverse --format='%ae' "$PR_MAIN_SHA..$PREP_HEAD_SHA") ||
-    return 1
+  author_commits=$(git log --no-merges --reverse --no-show-signature --no-notes \
+    --no-color --no-decorate --format='%H' "$PR_MAIN_SHA..$PREP_HEAD_SHA") || return 1
 
   local repo_nwo preview
   repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+  # A git identity alone cannot establish a human contributor. Resolve the
+  # published commits through GitHub, which leaves unlinked authors null.
+  authors=$(printf '%s\n' "$author_commits" | while IFS= read -r oid; do
+    [ -n "$oid" ] || continue
+    gh api "repos/$repo_nwo/commits/$oid" --jq \
+      '{name:.commit.author.name,email:.commit.author.email,user:(.author | if . == null then null else {login,type} end)}' || exit 1
+  done) || return 1
+  authors=$(printf '%s\n' "$authors" | jq -s .) || return 1
   preview=$(gh_plain api graphql \
-    -f 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid isMergeQueueEnabled viewerMergeBodyText(mergeType:SQUASH)}}}' \
+    -f 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid author{login __typename} isMergeQueueEnabled viewerMergeBodyText(mergeType:SQUASH)}}}' \
     -f owner="${repo_nwo%/*}" -f name="${repo_nwo#*/}" -F number="$pr") || return 1
   if ! printf '%s\n' "$preview" | jq -e --arg head "$PREP_HEAD_SHA" '
     .data.repository.pullRequest | .headRefOid == $head and
@@ -376,9 +384,9 @@ prepare_squash_merge_body() {
   local body_file
   body_file=$(mktemp .local/merge-body.XXXXXX) || return 1
   printf '%s\n' "$preview" | jq -c \
-    --arg source "$source_trailers" --arg authors "$author_emails" --arg captured "$captured" \
+    --arg source "$source_trailers" --argjson authors "$authors" --arg captured "$captured" \
     --argjson queue "$queue_enabled" '
-    {preview:.data.repository.pullRequest.viewerMergeBodyText,source:$source,authors:$authors,captured:$captured,queue:$queue}
+    {preview:.data.repository.pullRequest.viewerMergeBodyText,prAuthor:.data.repository.pullRequest.author,source:$source,authors:$authors,captured:$captured,queue:$queue}
   ' | node "${BASH_SOURCE[0]%/*}/merge-body.mjs" compose > "$body_file" || return 1
   # Queue admission cannot accept an override, but its preview still needs validation.
   if [ "$queue_enabled" = true ]; then
