@@ -1266,6 +1266,7 @@ export const en: TranslationMap & {
     space: "Space",
     sessionId: "Session ID",
     activeRun: "Active run",
+    subagentsWorking: "Subagents working",
     showChildSessions: "Show {count} child sessions for {session}",
     hideChildSessions: "Hide {count} child sessions for {session}",
     childSessions: "Child sessions",
