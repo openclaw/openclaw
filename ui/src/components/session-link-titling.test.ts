@@ -72,7 +72,8 @@ describe("SessionLinkTitler", () => {
     expect(anchor.textContent).toBe("Cached research");
     expect(anchor.querySelector(":scope > .session-label")?.textContent).toBe("Cached research");
     expect(anchor.classList.contains("markdown-session-link--titled")).toBe(true);
-    expect(anchor.title).toBe(SESSION_KEY);
+    expect(anchor.hasAttribute("title")).toBe(false);
+    expect(anchor.getAttribute("aria-label")).toBe("Cached research");
     expect(anchor.getAttribute("href")).toBe("/chat/main/research");
     expect(request).not.toHaveBeenCalled();
   });
@@ -81,12 +82,15 @@ describe("SessionLinkTitler", () => {
     const request = vi.fn().mockResolvedValue(previewResponse());
     const { titler } = createTitler([], request);
     const first = sessionAnchor();
+    first.title = "Authored session tooltip";
     const second = sessionAnchor();
 
     await titler.decorate(first, true);
     await titler.decorate(second, true);
 
     expect(first.textContent).toBe("Research plan");
+    expect(first.hasAttribute("title")).toBe(false);
+    expect(first.getAttribute("aria-label")).toBe("Research plan");
     expect(second.textContent).toBe("Research plan");
     expect(first.querySelectorAll(":scope > .session-label")).toHaveLength(1);
     await titler.decorate(first, true);
@@ -154,7 +158,8 @@ describe("SessionLinkTitler", () => {
     const seededAnchor = unseededAnchor.cloneNode() as HTMLAnchorElement;
     await seeded.decorate(seededAnchor, true);
     expect(seededAnchor.textContent).toBe("Research plan");
-    expect(seededAnchor.title).toBe(sessionKey);
+    expect(seededAnchor.hasAttribute("title")).toBe(false);
+    expect(seededAnchor.getAttribute("aria-label")).toBe("Research plan");
     expect(request).not.toHaveBeenCalled();
   });
   it.each([
@@ -218,6 +223,31 @@ describe("SessionLinkTitler", () => {
     titler.refresh();
     expect(link.dataset.sessionKey).toBeUndefined();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "", expectedName: "Session tooltip" },
+    { label: "Open<br>Research", expectedName: "Open Research" },
+    { label: "![Research](data:image/png;base64,iVBORw0KGgo=)", expectedName: "Research" },
+    {
+      label: "Open ![Research](data:image/png;base64,iVBORw0KGgo=)",
+      expectedName: "Open Research",
+    },
+    {
+      label: "Open **![Research](data:image/png;base64,iVBORw0KGgo=)**",
+      expectedName: "Open Research",
+    },
+  ])("preserves an unresolved link's accessible name: $label", ({ label, expectedName }) => {
+    const { host, titler } = createTitler();
+    host.innerHTML = toSanitizedMarkdownHtml(`[${label}](/chat/main/d0effac9 "Session tooltip")`, {
+      sessionLinks: true,
+    });
+    titler.refresh();
+    titler.refresh();
+    const anchor = host.querySelector<HTMLAnchorElement>("a")!;
+    expect(anchor.getAttribute("aria-label")).toBe(expectedName);
+    expect(anchor.hasAttribute("title")).toBe(false);
+    expect(anchor.getAttribute("href")).toBe("/chat/main/d0effac9");
   });
 
   it("leaves remote links and code spans plain", () => {

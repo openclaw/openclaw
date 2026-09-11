@@ -2699,7 +2699,7 @@ describe("grouped chat rendering", () => {
   // and grouping splits on senderSession, so a different source produces a new
   // group key and a fresh anchor. The protected behavior is that the titler's
   // stamped title and href survive ordinary re-renders of the same group.
-  it("keeps titled source chips usable across rerenders", async () => {
+  it("keeps titled source links usable across rerenders", async () => {
     const container = document.createElement("div");
     const group = createMessageGroup(createAssistantMessage("forwarded report"), "assistant", {
       senderSession: { sessionKey: "agent:main:main" },
@@ -2724,7 +2724,37 @@ describe("grouped chat rendering", () => {
     expect(sourceLink().textContent).toBe("Main session");
     expect(() => render(renderTestMessageGroup(group), container)).not.toThrow();
     expect(sourceLink().textContent).toBe("Main session");
-    expect(sourceLink().title).toBe("agent:main:main");
+    expect(sourceLink().hasAttribute("title")).toBe(false);
+    expect(sourceLink().getAttribute("aria-label")).toBe("Main session");
+  });
+
+  it("updates a forwarded main-session link name when the agent name hydrates", async () => {
+    const container = document.createElement("div");
+    const group = createMessageGroup(createAssistantMessage("forwarded report"), "assistant", {
+      senderSession: { sessionKey: "agent:research:main" },
+    });
+    const titler = new SessionLinkTitler(container);
+    const sourceLink = () => expectElement(container, "a.markdown-session-link", HTMLAnchorElement);
+    titler.connect();
+    try {
+      render(renderTestMessageGroup(group, { mainKey: "main" }), container);
+      await vi.waitFor(() => expect(sourceLink().getAttribute("aria-label")).toBe("research"));
+      const anchor = sourceLink();
+      render(
+        renderTestMessageGroup(group, {
+          mainKey: "main",
+          agents: [{ id: "research", identity: { name: "Research Agent" } }],
+        }),
+        container,
+      );
+      await vi.waitFor(() => {
+        expect(sourceLink()).toBe(anchor);
+        expect(anchor.getAttribute("aria-label")).toBe("Research Agent");
+        expect(anchor.textContent).toBe("Research Agent");
+      });
+    } finally {
+      titler.disconnect();
+    }
   });
 
   it("uses the assistant name when an assistant group has no sender label", () => {

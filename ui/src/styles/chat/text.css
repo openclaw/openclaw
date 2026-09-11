@@ -602,16 +602,12 @@
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link {
   position: relative;
   display: inline;
-  padding: 0.1em 0.2em;
-  padding-inline-start: 1.5em;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg-muted);
+  padding-inline-start: 1.3em;
   color: var(--link);
   cursor: pointer;
-  font-family: var(--mono);
-  font-size: 0.9em;
-  text-decoration: none;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 2px;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -624,7 +620,7 @@
 
   content: "";
   position: absolute;
-  inset-inline-start: 0.2em;
+  inset-inline-start: 0;
   top: calc((1lh - 1em) / 2);
   width: 1em;
   height: 1em;
@@ -633,30 +629,8 @@
   -webkit-mask: var(--session-link-mark) center / contain no-repeat;
 }
 
-:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:hover,
-:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:focus-visible {
-  text-decoration: underline;
-}
-
-:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link--titled {
-  display: inline-grid;
-  max-width: min(28em, 100%);
-  padding: 0.08em 0.45em;
-  padding-inline-start: 1.5em;
-  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
-  font-family: var(--font-body);
-  font-weight: 600;
-  line-height: 1.25;
-  white-space: nowrap;
-}
-
-/* The grid supplies the text baseline; only its label clips for ellipsis. */
-:is(.chat-text, .sidebar-markdown, .chat-reply-attribution)
-  .markdown-session-link--titled
-  > .session-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:hover {
+  color: var(--link-hover);
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-session-link > code {

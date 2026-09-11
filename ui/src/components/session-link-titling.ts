@@ -54,9 +54,18 @@ export class SessionLinkTitler {
 
   private readonly cache = new Map<string, CacheEntry>();
   private readonly observer = new MutationObserver((records) => {
-    for (const node of records.flatMap((record) => [...record.addedNodes])) {
-      if (node instanceof HTMLElement) {
-        this.refresh(node);
+    for (const record of records) {
+      const anchor =
+        record.target instanceof Element
+          ? record.target.closest<HTMLElement>(SESSION_LINK_SELECTOR)
+          : null;
+      if (anchor) {
+        this.refresh(anchor);
+      }
+      for (const node of record.addedNodes) {
+        if (node instanceof HTMLElement) {
+          this.refresh(node);
+        }
       }
     }
   });
@@ -94,6 +103,15 @@ export class SessionLinkTitler {
       element.replaceWith(anchor);
       anchor.append(element);
     }
+    if (!anchor.classList.contains("markdown-session-link")) {
+      return;
+    }
+    const accessibleName =
+      readNonBlankString(this.labelText(anchor)) ??
+      readNonBlankString(anchor.getAttribute("aria-label")) ??
+      anchor.title;
+    anchor.setAttribute("aria-label", accessibleName);
+    anchor.removeAttribute("title");
     if (!target) {
       return;
     }
@@ -107,6 +125,19 @@ export class SessionLinkTitler {
     } catch {
       // A title is decoration; the session link remains usable with its raw key.
     }
+  }
+
+  private labelText(node: Node): string {
+    if (node instanceof HTMLImageElement) {
+      return node.alt;
+    }
+    if (node instanceof HTMLBRElement) {
+      return " ";
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      return node.textContent ?? "";
+    }
+    return Array.from(node.childNodes, (child) => this.labelText(child)).join("");
   }
 
   private mainKey(): string {
@@ -249,6 +280,6 @@ export class SessionLinkTitler {
     label.className = "session-label";
     label.textContent = title;
     anchor.replaceChildren(label);
-    anchor.title = target.sessionKey;
+    anchor.setAttribute("aria-label", title);
   }
 }
