@@ -112,11 +112,14 @@ describe("container update recovery reporting", () => {
     ["git update", { mode: "git" }],
     ["unknown install", { mode: "unknown" }],
     ["missing steps", { steps: [] }],
-  ] as const)("does not give image advice for %s", (_name, overrides) => {
-    expect(
-      resolveUpdateResultNextAction({ result: failure(overrides), env: {} }) ?? "",
-    ).not.toContain(redeploy);
-  });
+  ] satisfies [string, Partial<UpdateRunResult>][])(
+    "does not give image advice for %s",
+    (_name, overrides) => {
+      expect(
+        resolveUpdateResultNextAction({ result: failure(overrides), env: {} }) ?? "",
+      ).not.toContain(redeploy);
+    },
+  );
 
   it.each(["other error", "unrelated step", "later failure", "advisory", "successful step"])(
     "does not reinterpret %s as a container package failure",
