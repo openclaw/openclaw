@@ -53,7 +53,13 @@ export type LogbookOperations = {
   >;
   countCardsForDay: Operation<{ day: string }, number>;
   replaceCardsInWindow: Operation<
-    { day: string; startMs: number; endMs: number; drafts: LogbookCardDraft[] },
+    {
+      day: string;
+      startMs: number;
+      endMs: number;
+      drafts: LogbookCardDraft[];
+      selectKeyframes?: boolean;
+    },
     void
   >;
   listDays: Operation<undefined, LogbookDay[]>;

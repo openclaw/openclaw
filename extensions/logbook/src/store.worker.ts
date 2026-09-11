@@ -15,6 +15,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { pickKeyframeId } from "./analyze.js";
 import type {
   LogbookBatchInput,
   LogbookDay,
@@ -484,14 +485,17 @@ class LogbookDatabaseStore {
     startMs: number,
     endMs: number,
     drafts: LogbookCardDraft[],
+    selectKeyframes = false,
   ): void {
     const now = Date.now();
     runSqliteImmediateTransactionSync(
       this.db,
       () => {
+        const frames = selectKeyframes ? this.framesInRange(startMs, endMs) : undefined;
         this.statements.deleteCards({ day, startMs, endMs });
         for (const draft of drafts) {
-          this.statements.insertCard({ ...draft, now });
+          const keyframeId = frames ? pickKeyframeId(draft, frames) : draft.keyframeId;
+          this.statements.insertCard({ ...draft, keyframeId, now });
         }
       },
       {
@@ -679,6 +683,7 @@ export function createSqliteWorkerBackend(
             command.input.startMs,
             command.input.endMs,
             command.input.drafts,
+            command.input.selectKeyframes,
           );
         case "listDays":
           return store.listDays();

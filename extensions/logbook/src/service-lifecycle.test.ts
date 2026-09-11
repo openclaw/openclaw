@@ -41,6 +41,92 @@ function completion(
 }
 
 describe("Logbook service disposal", () => {
+  it.each([false, true])(
+    "publishes synthesized cards with queued retention (prune=%s)",
+    async (prune) => {
+      const dataDir = tempDirs.make("logbook-publication-retention-");
+      const day = dayKeyFor(Date.now());
+      const startMs = new Date(`${day}T10:00:00`).getTime();
+      const endMs = startMs + 10 * 60_000;
+      const runtime = createPluginRuntimeMock();
+      runtime.mediaUnderstanding.extractStructuredWithModel = vi.fn(async () => ({
+        text: JSON.stringify([
+          { start: "10:00:00", end: "10:10:00", description: "Synthetic activity" },
+        ]),
+      }));
+      const synthesized = createDeferred<void>();
+      let pruning: Promise<PromiseSettledResult<number>> = Promise.resolve({
+        status: "fulfilled",
+        value: 0,
+      });
+      runtime.llm.complete = vi.fn(async () => {
+        if (prune) {
+          // Let synthesis enqueue its next worker command, then queue retention before its reply.
+          queueMicrotask(() =>
+            queueMicrotask(() => {
+              pruning = peer.pruneFrames(endMs).then(
+                (value) => ({ status: "fulfilled", value }),
+                (reason: unknown) => ({ status: "rejected", reason }),
+              );
+            }),
+          );
+        }
+        synthesized.resolve();
+        return completion(
+          JSON.stringify([
+            {
+              startTime: "10:00:00",
+              endTime: "10:10:00",
+              title: "Retained synthesis",
+              summary: "Published through retention",
+              category: "coding",
+            },
+          ]),
+        );
+      });
+      const logger = { ...quietLogger, warn: vi.fn(), error: vi.fn() };
+      const service = new LogbookService(
+        resolveLogbookConfig({ captureEnabled: false, visionModel: "codex/gpt-5.6-sol" }),
+        { dataDir, workerModuleUrl, runtime, fullConfig: {}, logger },
+      );
+      const peer = await LogbookStore.open(dataDir, workerModuleUrl);
+      try {
+        const frameId = await peer.captureFrame({
+          day,
+          capturedAtMs: startMs + 5 * 60_000,
+          screenIndex: 0,
+          buffer: Buffer.from("synthetic keyframe"),
+        });
+        await peer.createBatch({ day, startMs, endMs, frameIds: [frameId] });
+        await service.start();
+        expect(await service.analyzeNow()).toEqual({ started: true });
+        await synthesized.promise;
+        await setImmediate();
+        expect(await pruning).toEqual({ status: "fulfilled", value: prune ? 1 : 0 });
+        await service.stop();
+        expect(await peer.latestBatch()).toMatchObject({ status: "done", error: undefined });
+        expect(logger.warn).not.toHaveBeenCalled();
+        const cards = await peer.cardsForDay(day);
+        expect(cards).toHaveLength(1);
+        expect(cards[0]).toMatchObject({
+          title: "Retained synthesis",
+          keyframeId: prune ? undefined : frameId,
+        });
+        await peer.close();
+        const reopened = await LogbookStore.open(dataDir, workerModuleUrl);
+        try {
+          expect(await reopened.cardsForDay(day)).toEqual(cards);
+        } finally {
+          await reopened.close();
+        }
+      } finally {
+        await pruning;
+        await service.stop();
+        await peer.close();
+      }
+    },
+  );
+
   it("joins a pending database open and asynchronous close when the runtime retires", async () => {
     const stateDir = tempDirs.make("logbook-opening-");
     const store = await LogbookStore.open(path.join(stateDir, "logbook"), workerModuleUrl);

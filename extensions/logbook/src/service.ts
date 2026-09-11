@@ -10,7 +10,6 @@ import {
   CARD_LOOKBACK_MS,
   parseCardsJson,
   parseObservationSegments,
-  pickKeyframeId,
   revisionWindow,
   selectBatchFrames,
   validateCardCoverage,
@@ -588,14 +587,9 @@ export class LogbookService {
     if (!parsed.ok) {
       throw new Error(`card synthesis failed validation: ${parsed.error}`);
     }
-    const windowFrames = (await store.framesInRange(window.startMs, window.endMs)).map((frame) => ({
-      id: frame.id,
-      capturedAtMs: frame.capturedAtMs,
-    }));
-    const drafts = parsed.drafts.map((draft) =>
-      Object.assign(draft, { keyframeId: pickKeyframeId(draft, windowFrames) }),
-    );
-    await store.replaceCardsInWindow(batch.day, window.startMs, window.endMs, drafts);
+    await store.replaceCardsInWindow(batch.day, window.startMs, window.endMs, parsed.drafts, {
+      selectKeyframes: true,
+    });
   }
 
   async standup(

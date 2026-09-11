@@ -136,8 +136,20 @@ export class LogbookStore {
     return this.execute("countCardsForDay", { day });
   }
 
-  replaceCardsInWindow(day: string, startMs: number, endMs: number, drafts: LogbookCardDraft[]) {
-    return this.execute("replaceCardsInWindow", { day, startMs, endMs, drafts });
+  replaceCardsInWindow(
+    day: string,
+    startMs: number,
+    endMs: number,
+    drafts: LogbookCardDraft[],
+    options?: { selectKeyframes: boolean },
+  ) {
+    return this.execute("replaceCardsInWindow", {
+      day,
+      startMs,
+      endMs,
+      drafts,
+      selectKeyframes: options?.selectKeyframes,
+    });
   }
 
   listDays() {

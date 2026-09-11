@@ -481,6 +481,26 @@ describe("LogbookStore", () => {
     expect((await store.cardsForDay(DAY)).map((card) => card.title)).toEqual(["kept"]);
   });
 
+  it.each([false, true])(
+    "selects current keyframes after pruning instead of retaining a stale draft id (survivor=%s)",
+    async (survivor) => {
+      const startMs = new Date(`${DAY}T10:00:00`).getTime();
+      const expiredId = await insertFrame(startMs + 10 * 60_000);
+      const remainingId = survivor ? await insertFrame(startMs + 25 * 60_000) : undefined;
+      expect(await store.pruneFrames(startMs + 20 * 60_000)).toBe(1);
+      await store.replaceCardsInWindow(
+        DAY,
+        startMs,
+        startMs + 30 * 60_000,
+        [draft({ keyframeId: expiredId })],
+        { selectKeyframes: true },
+      );
+      const cards = await store.cardsForDay(DAY);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]?.keyframeId).toBe(remainingId);
+    },
+  );
+
   it("requeues errored batches for explicit retry", async () => {
     const t0 = Date.now();
     const frameId = await insertFrame(t0);
