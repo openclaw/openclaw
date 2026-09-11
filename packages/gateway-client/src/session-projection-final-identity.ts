@@ -142,7 +142,7 @@ function hasTerminalProjectionEvidence(
 }
 
 /** Explicit terminal markers that later history cannot contradict. */
-export function hasExplicitTerminalEvidence(entry: TerminalProjectionEntry): boolean {
+function hasExplicitTerminalEvidence(entry: TerminalProjectionEntry): boolean {
   const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
   return metadata?.runTerminal === true || hasTerminalStopReason(entry.message);
 }
@@ -250,7 +250,12 @@ export function findUniqueLiveTerminalMatch<T extends TerminalProjectionEntry>(
   if (!content) {
     return null;
   }
-  return findUniqueTerminalContentMatch(matches, content, snapshot, current.identity?.runId ?? null);
+  return findUniqueTerminalContentMatch(
+    matches,
+    content,
+    snapshot,
+    current.identity?.runId ?? null,
+  );
 }
 
 /** Check whether ordinary single-match promotion needs terminal-content verification. */
