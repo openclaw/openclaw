@@ -293,3 +293,38 @@ export function withTentativeRecovery<TRun extends { message?: unknown; status: 
   }
   return { ...run, inferredSnapshotTerminal: { entry, matchedIdentity: matched.identity } };
 }
+
+/**
+ * Check whether a live unsequenced assistant reply is a distinct later reply of
+ * the run rather than its immutable first final. Tentative recovery cannot
+ * represent these entries, so suppression must not drop them silently.
+ */
+function isDistinctLaterLiveFinal(
+  current: TerminalProjectionEntry,
+  run: TerminalProjectionRun | undefined,
+): boolean {
+  const content = readFinalContentIdentity(current.message);
+  return Boolean(
+    current.live &&
+    current.identity?.role === "assistant" &&
+    !current.identity.id &&
+    current.identity.sequence === null &&
+    run &&
+    run.status !== "streaming" &&
+    content !== null &&
+    content !== readFinalContentIdentity(run.message),
+  );
+}
+
+/**
+ * Keep a later distinct final visible when tentative recovery cannot represent
+ * it: without explicit terminal evidence, a contradicted position match would
+ * have no recovery record to restore the suppressed reply.
+ */
+export function shouldKeepLaterFinalVisible(
+  entry: TerminalProjectionEntry,
+  matched: TerminalProjectionEntry,
+  run: TerminalProjectionRun | undefined,
+): boolean {
+  return !hasExplicitTerminalEvidence(matched) && isDistinctLaterLiveFinal(entry, run);
+}

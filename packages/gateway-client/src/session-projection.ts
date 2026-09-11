@@ -8,6 +8,7 @@ import {
   findUniqueSnapshotTerminalMatch,
   isUnsequencedLiveTerminal,
   readSessionProjectionFinalMessageIdentity,
+  shouldKeepLaterFinalVisible,
   withTentativeRecovery,
 } from "./session-projection-final-identity.js";
 import {
@@ -416,7 +417,14 @@ export function projectLiveSessionMessage(
     // durable row would lose the ID every later snapshot reconciles against.
     const runId = incoming.identity?.runId ?? null;
     const recovered = runId ? withTentativeRecovery(state.runs[runId], incoming, existing) : null;
-    return runId && recovered ? { ...state, runs: { ...state.runs, [runId]: recovered } } : state;
+    if (runId && recovered) {
+      return { ...state, runs: { ...state.runs, [runId]: recovered } };
+    }
+    // Keep a later distinct final visible when tentative recovery cannot
+    // represent it; suppressing it would leave no record to restore it later.
+    return shouldKeepLaterFinalVisible(incoming, existing, runId ? state.runs[runId] : undefined)
+      ? withEntries(state, insertEntry(state.entries, incoming, state.runs))
+      : state;
   }
   if (
     incoming.identity.sequence !== null &&

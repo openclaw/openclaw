@@ -401,6 +401,67 @@ describe("live terminal reconciliation", () => {
     ).toEqual([user, toolBoundary, unmarkedReply, laterToolBoundary, synthetic]);
   });
 
+  it("keeps a later distinct final visible when tentative recovery cannot represent it", () => {
+    const runId = "multi-final-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Please inspect the repository.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const toolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking the repository." },
+        { type: "toolCall", id: "read-1", name: "read", arguments: { path: "AGENTS.md" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", seq: 2, runId },
+    };
+    const firstFinal = createAssistantMessage("First final answer.");
+    const secondFinal = createAssistantMessage("Second final answer.");
+    const unmarkedSecondFinal = createAssistantMessage("Second final answer.", {
+      id: "assistant-unmarked",
+      seq: 3,
+      runId,
+    });
+    const laterToolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking another file." },
+        { type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/index.ts" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary-2", seq: 4, runId },
+    };
+    let state = reduceSessionProjection(createSessionProjection(scope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: firstFinal,
+    });
+    state = reduceSessionProjection(state, {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: secondFinal,
+    });
+    state = reconcileSessionProjectionSnapshot(
+      state,
+      [user, toolBoundary, unmarkedSecondFinal],
+      scope,
+    );
+    expect(state.messages).toEqual([user, toolBoundary, unmarkedSecondFinal]);
+
+    state = projectLiveSessionMessage(state, structuredClone(secondFinal), { runId });
+    expect(state.messages).toEqual([user, toolBoundary, unmarkedSecondFinal, secondFinal]);
+
+    expect(
+      reconcileSessionProjectionSnapshot(
+        state,
+        [user, toolBoundary, unmarkedSecondFinal, laterToolBoundary],
+        scope,
+      ).messages,
+    ).toEqual([user, toolBoundary, unmarkedSecondFinal, laterToolBoundary, secondFinal]);
+  });
+
   it("keeps a same-caption reply with a distinct attachment and still deduplicates exact replays", () => {
     const runId = "attachment-run";
     const attachment = (data: string) => ({
