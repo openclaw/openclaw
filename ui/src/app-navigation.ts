@@ -2,7 +2,10 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
-import type { NativeDeviceSettingsCapability } from "./app/native-device-settings.ts";
+import type {
+  NativeDeviceSettingsCapability,
+  NativeDeviceSettingsSnapshot,
+} from "./app/native-device-settings.ts";
 import type { IconName } from "./components/icons.ts";
 import { i18n, t } from "./i18n/index.ts";
 
@@ -13,7 +16,7 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // The sidebar shows a small user-customizable ordered zone; every other nav route
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
-// Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
+// Skills and Skill Workshop are reached from the Plugins workspace, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
@@ -202,7 +205,16 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "labs", "model-providers", "mcp", "memory", "automation"],
+    routes: [
+      "agents",
+      "labs",
+      "model-providers",
+      "plugin-settings",
+      "skill-settings",
+      "mcp",
+      "memory",
+      "automation",
+    ],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -223,7 +235,7 @@ const NON_ADMIN_SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "model-providers", "memory"],
+    routes: ["agents", "model-providers", "plugin-settings", "skill-settings", "memory"],
   },
   { labelKey: "nav.settingsGroupSecurity", routes: ["approvals"] },
   {
@@ -251,6 +263,24 @@ export function isSettingsNavigationRouteVisible(
   );
 }
 
+export function deviceSettingsGroupLabelKey(
+  snapshot?: NativeDeviceSettingsSnapshot | null,
+): string {
+  const device = snapshot?.device;
+  if (device?.platform === "macos") {
+    return "nav.settingsGroupDevice";
+  }
+  if (device?.platform === "ios") {
+    if (device.formFactor === "phone") {
+      return "nav.settingsGroupThisIPhone";
+    }
+    if (device.formFactor === "pad") {
+      return "nav.settingsGroupThisIPad";
+    }
+  }
+  return "nav.settingsGroupThisDevice";
+}
+
 export function visibleSettingsNavigationGroups(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
@@ -259,9 +289,8 @@ export function visibleSettingsNavigationGroups(
   return groups
     .map((group) => ({
       labelKey:
-        group.labelKey === "nav.settingsGroupDevice" &&
-        nativeDeviceSettings?.snapshot?.device.platform !== "macos"
-          ? "nav.settingsGroupThisDevice"
+        group.labelKey === "nav.settingsGroupDevice"
+          ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
           : group.labelKey,
       routes: group.routes.filter((route) =>
         isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
@@ -292,6 +321,7 @@ const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
 ]);
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
+  settings: ["settings", "nav.settings", "common.settingsSections"],
   agents: ["bot", "tabs.agents", "subtitles.agents"],
   activity: ["activity", "tabs.activity", "subtitles.activity"],
   meetings: ["book", "tabs.meetings", "subtitles.meetings"],
@@ -307,7 +337,9 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   cron: ["calendarClock", "tabs.cron", "subtitles.cron"],
   tasks: ["listChecks", "tabs.tasks", "subtitles.tasks"],
   skills: ["zap", "tabs.skills", "subtitles.skills"],
-  plugins: ["puzzle", "tabs.plugins", "subtitles.plugins"],
+  "skill-settings": ["zap", "tabs.skills", "subtitles.skills"],
+  plugins: ["plug", "tabs.plugins", "subtitles.plugins"],
+  "plugin-settings": ["plug", "tabs.plugins", "subtitles.plugins"],
   "skill-workshop": ["wrench", "tabs.skillWorkshop", "subtitles.skillWorkshop"],
   device: ["monitor", "tabs.device", "subtitles.device"],
   "device-permissions": ["shieldCheck", "tabs.devicePermissions", "subtitles.devicePermissions"],
@@ -340,12 +372,16 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   advanced: ["fileCode", "routeTitles.advanced", "subtitles.advanced"],
   debug: ["bug", "tabs.debug", "subtitles.debug"],
   logs: ["scrollText", "tabs.logs", "subtitles.logs"],
-  plugin: ["puzzle", "tabs.plugin", "subtitles.plugin"],
+  plugin: ["plug", "tabs.plugin", "subtitles.plugin"],
   "new-session": ["plus", "newSession.title", "newSession.hint"],
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
+}
+
+export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
+  return routeId !== undefined && isSettingsNavigationRoute(routeId);
 }
 
 export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
@@ -435,7 +471,13 @@ export function formatDocumentTitle(options: {
   return base;
 }
 
-export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
+export function settingsNavigationLabelForRoute(
+  routeId: NavigationRouteId,
+  snapshot?: NativeDeviceSettingsSnapshot | null,
+): string {
+  if (routeId === "device" && snapshot) {
+    return t(deviceSettingsGroupLabelKey(snapshot));
+  }
   if (routeId === "custodian") {
     return t("nav.askOpenClaw");
   }

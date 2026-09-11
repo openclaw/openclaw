@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   readGatewayServiceState,
   resolveGatewayService,
@@ -8,7 +9,6 @@ import {
 import { getUpdateRun, recordUpdateRunRepairAttempt } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   renderRestartDiagnostics,
@@ -33,8 +33,6 @@ import {
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
 
-const CLI_NAME = resolveCliName();
-
 type PostUpdateGatewayHealthRecoveryDeps = {
   recoverLaunchAgent?: typeof recoverInstalledLaunchAgentAfterUpdate;
   waitForHealthy?: typeof waitForGatewayHealthyRestart;
@@ -42,6 +40,7 @@ type PostUpdateGatewayHealthRecoveryDeps = {
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   updateRun?: UpdateCommandOptions["run"];
+  assertCurrent?: () => void;
   preserveDefinition?: boolean;
   health: GatewayRestartSnapshot;
   service: GatewayService;
@@ -54,6 +53,12 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   health: GatewayRestartSnapshot;
   launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
 }> {
+  const executor = params.updateRun?.executorFence;
+  const assertCurrent = () => {
+    executor?.assertCurrent();
+    params.assertCurrent?.();
+  };
+  assertCurrent();
   if (params.health.healthy || params.preserveDefinition) {
     return { health: params.health, launchAgentRecovery: null };
   }
@@ -61,10 +66,24 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   const recoverLaunchAgent =
     params.deps?.recoverLaunchAgent ?? recoverInstalledLaunchAgentAfterUpdate;
   const startedAtMs = Date.now();
-  const launchAgentRecovery = await recoverLaunchAgent({
-    service: params.service,
-    env: params.env,
-  });
+  const launchAgentRecovery = await withGatewayServiceOperationLock(
+    params.env ?? process.env,
+    async (assertNative) => {
+      const assertRecovery = () => {
+        assertCurrent();
+        assertNative();
+      };
+      assertRecovery();
+      const recovery = await recoverLaunchAgent({
+        service: params.service,
+        env: params.env,
+        assertCurrent: assertRecovery,
+      });
+      assertRecovery();
+      return recovery;
+    },
+  );
+  assertCurrent();
   // Native repair can succeed while readiness still fails; retain both observed outcomes.
   if (launchAgentRecovery.attempted && params.updateRun) {
     const endedAtMs = Date.now();
@@ -98,6 +117,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     supervisorKeepsAlive: true,
     settle: { probes: 12 },
   });
+  assertCurrent();
   return { health, launchAgentRecovery };
 }
 
@@ -114,15 +134,9 @@ export async function hasLoadedLaunchdKeepAliveSupervisor(params: {
 }
 
 function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
-  const restartCommand = replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME);
-  const installCommand = replaceCliName(
-    formatCliCommand("openclaw gateway install --force"),
-    CLI_NAME,
-  );
-  const statusCommand = replaceCliName(
-    formatCliCommand("openclaw gateway status --deep"),
-    CLI_NAME,
-  );
+  const restartCommand = formatCliCommand("openclaw gateway restart");
+  const installCommand = formatCliCommand("openclaw gateway install --force");
+  const statusCommand = formatCliCommand("openclaw gateway status --deep");
   if (platform === "darwin") {
     return `Recovery: run \`${restartCommand}\`; if the LaunchAgent is installed but not loaded, run \`${installCommand}\` from the logged-in macOS user session, then rerun \`${statusCommand}\`.`;
   }
@@ -143,7 +157,7 @@ export function formatPostUpdateGatewayRecoveryInstructions(
   const beforeVersion = normalizeOptionalString(result.before?.version);
   if (isPackageManagerUpdateMode(result.mode) && beforeVersion) {
     lines.push(
-      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${replaceCliName(formatCliCommand("openclaw gateway install --force"), CLI_NAME)}\`.`,
+      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${formatCliCommand("openclaw gateway install --force")}\`.`,
     );
   }
   return lines;
@@ -175,12 +189,15 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       );
     }
     const service = resolveGatewayService();
-    let expectedService: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict"> =
-      before;
+    let expectedService: Pick<
+      PreManagedServiceStop,
+      "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
+    > = before;
     const readCurrentService = async () => {
       const state = await readGatewayServiceState(service, {
         env: before.serviceEnv,
         requireEffective: true,
+        requireLoadedCommand: true,
         validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
         timeoutMs: params.timeoutMs,
       });
@@ -192,6 +209,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       // Recovery preserves the current definition. Once observed, even a same-unit
       // replacement during config or health awaits must not inherit this activation.
       expectedService = {
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: state.env,
         serviceUpdateVerdict:
           inspection.kind === "owned" ? { ...inspection, refreshDefinition: false } : inspection,

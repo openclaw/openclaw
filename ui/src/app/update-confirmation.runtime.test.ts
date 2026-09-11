@@ -140,21 +140,62 @@ it("shows the git target when no package version is available", async () => {
   await settled;
 });
 
-it("states a git distance once instead of labelling it as an available version", async () => {
-  const { settled } = startUpdate({
-    updateAvailable: { channel: "dev", currentVersion: "2026.8.1", latestVersion: "2026.8.1" },
-    updateSchedule: {
-      target: { commitsBehind: 246, kind: "git" },
-    } as unknown as UpdateScheduleState,
-  });
-  const { modal } = await getRenderedModalDialog(document.body);
+it.each([
+  { cachedBehind: 246, git: undefined, expectedDistance: "246 commits behind" },
+  {
+    cachedBehind: 1,
+    git: { status: "behind", commitsBehind: 50 },
+    expectedDistance: "50 commits behind",
+  },
+  {
+    cachedBehind: 246,
+    git: { status: "behind", commitsBehind: 1 },
+    expectedDistance: "1 commit behind",
+  },
+  {
+    cachedBehind: 1,
+    git: { status: "diverged", commitsAhead: 2, commitsBehind: 50 },
+    expectedDistance: "50 commits behind",
+  },
+  {
+    cachedBehind: undefined,
+    git: { status: "behind", commitsBehind: 50 },
+    expectedDistance: "50 commits behind",
+  },
+] as const)(
+  "states $expectedDistance using the checkout comparison when present ($git)",
+  async ({ cachedBehind, git, expectedDistance }) => {
+    const { settled } = startUpdate({
+      updateAvailable: {
+        channel: "dev",
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.1",
+        commitsBehind: cachedBehind,
+      },
+      updateSchedule: {
+        channel: "dev",
+        autoEnabled: false,
+        install: { kind: "git", git },
+        target:
+          cachedBehind === undefined
+            ? undefined
+            : {
+                commitsBehind: cachedBehind,
+                kind: "git",
+                upstreamRef: "origin/main",
+                upstreamSha: "abc1234",
+              },
+      },
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
 
-  expect(modal.textContent).toContain("Installed v2026.8.1 · 246 commits behind");
-  expect(modal.textContent).not.toContain("Available 246");
+    expect(modal.textContent).toContain(`Installed v2026.8.1 · ${expectedDistance}`);
+    expect(modal.textContent).not.toContain(`Available ${expectedDistance}`);
 
-  findButton("Cancel").click();
-  await settled;
-});
+    findButton("Cancel").click();
+    await settled;
+  },
+);
 
 it("keeps a repeated request from stacking a second confirmation or update", async () => {
   const first = startUpdate();

@@ -9,6 +9,7 @@ import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { isQaPosixProcessGroupAlive } from "./posix-process-group.js";
+import { runQaCli } from "./qa-cli-process.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 // RPC is outside these process-lifetime tests. HTTP readiness and all processes stay real.
@@ -30,6 +31,7 @@ type FixtureRecord = {
 const fixtureSource = String.raw`
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
 const [record, phase, mode, command, ...args] = process.argv.slice(2);
@@ -70,8 +72,18 @@ if (command === "descendant") {
       process.exit(mode === "failure" ? 17 : 0);
     }
   } else if (current === "gateway") {
+    fs.writeFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "candidate-owner"), String(process.pid));
     http.createServer((_request, response) => response.end("ok"))
       .listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");
+  } else if (current === "message") {
+    const ownerPid = Number(fs.readFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "candidate-owner"), "utf8"));
+    process.kill(ownerPid, 0);
+    if (args.includes("--gateway-only")) throw new Error("Gateway-only argument reached scenario CLI");
+    if (args.includes("--unsupported")) {
+      console.error("candidate does not support this action");
+      process.exit(2);
+    }
+    console.log(JSON.stringify({ ownerPid, args, cwd: process.cwd(), marker: process.env.QA_CLI_MARKER }));
   } else {
     if (current === "help") process.stdout.write("--accept-capabilities");
     process.exit(0);
@@ -224,6 +236,55 @@ async function fixture(phase: string, mode: string) {
 }
 
 describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", () => {
+  it("uses the direct candidate CLI while its Gateway owns the state", async () => {
+    const f = await fixture("hang", "running");
+    const repoRoot = path.join(f.root, "harness");
+    await fs.mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "dist", "index.js"),
+      'throw new Error("harness CLI must not touch candidate-owned state");\n',
+    );
+    const gateway = await f.owner.start({
+      repoRoot,
+      command: { ...f.command, cwd: f.root, argsSuffix: ["--gateway-only"] },
+      providerMode: "mock-openai",
+      controlUiEnabled: false,
+      transportBaseUrl: "http://127.0.0.1:1",
+      runtimeEnvPatch: { QA_CLI_MARKER: "gateway" },
+    });
+    const env = {
+      gateway,
+      repoRoot,
+      providerMode: "mock-openai" as const,
+      primaryModel: "openai/gpt-5",
+      alternateModel: "openai/gpt-5",
+    };
+    await expect(
+      runQaCli(env, ["message", "edit", "--json"], {
+        json: true,
+        env: { QA_CLI_MARKER: "scenario" },
+      }),
+    ).resolves.toEqual({
+      ownerPid: gateway.pid,
+      args: ["edit", "--json"],
+      cwd: f.root,
+      marker: "scenario",
+    });
+    await expect(runQaCli(env, ["message", "edit", "--unsupported"])).rejects.toThrow(
+      "qa cli failed (2): candidate does not support this action",
+    );
+    expect(f.records().map((entry) => entry.kind)).toEqual([
+      "openai",
+      "anthropic",
+      "help",
+      "repair",
+      "gateway",
+      "message",
+      "message",
+    ]);
+    expect(isQaPosixProcessGroupAlive(gateway.pid!)).toBe(true);
+  });
+
   it.each([
     { phase: "openai", mode: "running" },
     { phase: "anthropic", mode: "running" },

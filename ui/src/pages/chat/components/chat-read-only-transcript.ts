@@ -48,6 +48,7 @@ export function renderReadOnlyTranscript(params: {
       embedSandboxMode: chat.embedSandboxMode,
       allowExternalEmbedUrls: chat.allowExternalEmbedUrls,
       fetchLinkFavicon: chat.fetchLinkFavicon,
+      pluginToolIcons: chat.pluginToolIcons,
       autoExpandToolCalls: chat.autoExpandToolCalls,
       onRequestUpdate: chat.onRequestUpdate ?? (() => {}),
       onDraftChange: () => undefined,

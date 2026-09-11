@@ -292,7 +292,7 @@ enabling `streaming.progress.commentary` hands preambles to the interleaved
 commentary lane instead.
 
 On Discord, when a utility model resolves for the agent — an explicit
-[`utilityModel`](/gateway/config-agents#agents-defaults-model), or the primary
+[`utilityModel`](/gateway/config-agents/models#agents-defaults-model), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
 Anthropic → `claude-haiku-4-5`) — it supplies a short plain-language filler
 when the model emits no preamble or has been quiet for about 20 seconds
@@ -357,6 +357,12 @@ Limit how many lines stay visible (default 8):
   },
 }
 ```
+
+With `toolProgress: true`, command exit rows use ordinary tool-log capacity,
+including exits with a code other than `0`. Older exits scroll out as newer
+activity arrives and do not reduce the plan's line budget. Approval requests
+and explicit `failed`, `error`, or `blocked` states still take priority. With
+the tool log hidden, non-zero exits remain visible as attention lines.
 
 Progress lines are compacted automatically to reduce chat-bubble reflow while
 the draft is edited, and OpenClaw truncates long lines so repeated draft edits

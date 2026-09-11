@@ -1,9 +1,12 @@
 {
   "name": "@openclaw/crabbox-provider",
-  "version": "2026.9.2",
+  "version": "2026.9.3",
   "private": true,
   "description": "OpenClaw cloud worker provider backed by the Crabbox CLI",
   "type": "module",
+  "exports": {
+    "./cli-runtime-api.js": "./cli-runtime-api.ts"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

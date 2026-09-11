@@ -23,6 +23,7 @@ import {
   persistSessionTranscriptTurn,
   readLatestTranscriptAssistantText,
   replaceSessionEntry,
+  replaceTranscriptEvents,
   updateSessionEntry,
 } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -1718,6 +1719,53 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         content: [{ type: "text", text: "[redacted by hook]" }],
       }),
     ]);
+  });
+
+  it("dedupes a delivery mirror without parsing historical message bodies", async () => {
+    await writeTranscriptStore();
+    const scope = createFixtureTranscriptScope();
+    const history = Array.from({ length: 500 }, (_, index) => ({
+      type: "message",
+      id: `history-${index}`,
+      parentId: index === 0 ? null : `history-${index - 1}`,
+      message: {
+        role: "user",
+        content: `archived-mirror-body-${index} ${"x".repeat(2_000)}`,
+      },
+    }));
+    await replaceTranscriptEvents(scope, [
+      ...history,
+      {
+        type: "message",
+        id: "latest-reply",
+        parentId: "history-499",
+        message: createExactAssistantMessage({ text: "The current reply" }),
+      },
+    ]);
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(fixture.storePath(), { agentId: "main" }).path,
+    });
+    const parse = JSON.parse;
+    let parsedHistoricalBodies = 0;
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      if (typeof text === "string" && text.includes("archived-mirror-body-")) {
+        parsedHistoricalBodies += 1;
+      }
+      return parse(text, reviver);
+    });
+    try {
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        storePath: fixture.storePath(),
+        text: "The current reply",
+      });
+      expect(result).toMatchObject({ ok: true, messageId: "latest-reply" });
+      expect(parsedHistoricalBodies).toBe(0);
+    } finally {
+      parseSpy.mockRestore();
+    }
+    expect(await loadFixtureMessages()).toHaveLength(history.length + 1);
   });
 
   it("reports assistant messages blocked by before_message_write", async () => {

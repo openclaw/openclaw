@@ -86,6 +86,9 @@ describe("SessionRowSchema", () => {
       false,
     );
     expect(Value.Check(SessionRowSchema, { ...roundTripped, lastRunId: "" })).toBe(false);
+    expect(Value.Check(SessionRowSchema, { ...roundTripped, archiveReason: "age-retention" })).toBe(
+      true,
+    );
     expect(Value.Check(SessionRowSchema, { ...roundTripped, archiveReason: "unknown" })).toBe(
       false,
     );
@@ -106,15 +109,18 @@ describe("SessionRowSchema", () => {
     expect(rejected.every((value) => !validateSessionsAssignOwnerParams(value))).toBe(true);
   });
 
-  it.each(["user", "auto", null] as const)("accepts model override source %s", (source) => {
-    expect(
-      Value.Check(SessionRowSchema, {
-        key: "agent:main:main",
-        kind: "global",
-        modelOverrideSource: source,
-      }),
-    ).toBe(true);
-  });
+  it.each(["user", "auto", "inherited", null] as const)(
+    "accepts model override source %s",
+    (source) => {
+      expect(
+        Value.Check(SessionRowSchema, {
+          key: "agent:main:main",
+          kind: "global",
+          modelOverrideSource: source,
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("rejects an invalid model override source", () => {
     expect(

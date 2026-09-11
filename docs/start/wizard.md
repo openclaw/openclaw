@@ -121,7 +121,7 @@ Quick start follows this path:
    saving the provider or replacing the active model.
    Choose **Skip for now** to prepare the local baseline and exit without starting
    the Gateway or AI chat. Choosing a provider through its manual setup keeps the
-   quick-start defaults: agent name `main`, full access, telemetry consent unset,
+   Quick start defaults: agent name `main`, full access, telemetry consent unset,
    and a foreground Gateway after verification.
 5. Save the verified route, prepare the agent workspace, and persist Gateway
    settings.
@@ -130,7 +130,7 @@ Quick start follows this path:
    for background operation, `openclaw` for the TUI, or `openclaw dashboard` to
    reopen the web UI.
 
-The quick-start choice is not offered for configured installs, remote Gateway
+The Quick start choice is not offered for configured installs, remote Gateway
 chat setup, non-interactive runs, or runs with `--skip-ui` or `--tui`.
 
 Re-running the command on a configured installation offers the current default
@@ -211,9 +211,13 @@ Local mode (default) walks through these steps:
    model/auth setup once or be ignored without blocking the rest of the
    classic wizard. Ignoring it does not unlock OpenClaw; conversational setup
    still requires a passing inference check.
-3. **Gateway** - port, bind address, auth mode, Tailscale exposure. In
-   interactive token mode, choose plaintext token storage (default) or opt
-   into a SecretRef. Non-interactive SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
+3. **Gateway** - port, bind address, secret storage, and Tailscale exposure.
+   Generates a Gateway secret in token mode by default, without asking you to
+   choose token or password. Existing password-mode configs are preserved;
+   `--gateway-auth password` or `--gateway-password <value>` selects password
+   mode explicitly. Tailscale Funnel still requires password mode. Choose
+   plaintext secret storage (default) or opt into a SecretRef. Non-interactive
+   token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
 4. **Channels** - built-in and official plugin chat channels, including
    Discord, Feishu, Google Chat, iMessage, Mattermost, Microsoft Teams,
    QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.

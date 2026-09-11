@@ -51,6 +51,21 @@ export function resolveToolOverrideState(baseEnabled: boolean, override: boolean
   return override ?? baseEnabled;
 }
 
+/**
+ * Effective web-search state for the session capability toggle.
+ * Global `tools.web.search.enabled: false` is a kill switch: a session
+ * `webSearch: true` override cannot re-enable search.
+ */
+export function resolveWebSearchToolOverrideState(
+  baseEnabled: boolean,
+  override: boolean | undefined,
+) {
+  if (!baseEnabled) {
+    return false;
+  }
+  return override ?? baseEnabled;
+}
+
 export function nextBooleanToolOverrides(
   current: SessionToolOverrides | null | undefined,
   group: BooleanOverrideGroup,
@@ -79,6 +94,13 @@ export function nextWebSearchToolOverrides(
   baseEnabled = true,
 ): SessionToolOverrides {
   const next = copyOverrides(current);
+  // Clear stale enablement without discarding an explicit session suppression.
+  if (!baseEnabled) {
+    if (next.webSearch === true) {
+      delete next.webSearch;
+    }
+    return next;
+  }
   if (nextEnabled === baseEnabled) {
     delete next.webSearch;
   } else {

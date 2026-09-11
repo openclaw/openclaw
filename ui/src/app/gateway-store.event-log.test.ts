@@ -34,8 +34,9 @@ describe("application gateway diagnostic history ownership", () => {
     store.current().opts.onEvent?.(A_EVENT);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.gateway.stop();
+    await vi.dynamicImportSettled();
     setAvatarGatewayOrigin(null);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();

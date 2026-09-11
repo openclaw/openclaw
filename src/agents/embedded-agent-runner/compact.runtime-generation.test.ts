@@ -13,6 +13,7 @@ import {
 } from "./compact.hooks.harness.js";
 
 const { compactEmbeddedAgentSession } = await loadCompactHooksHarness();
+const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
 const [{ upsertSessionEntryCore }, { closeOpenClawAgentDatabasesForTest }] = await Promise.all([
   import("../../config/sessions/session-accessor.js"),
   import("../../state/openclaw-agent-db.js"),
@@ -49,17 +50,28 @@ it("uses the admitted config and agent storage throughout queued compaction", as
     acquire({ ...input, config: admittedConfig, agentDir: admittedAgentDir }),
   );
 
-  const result = await compactEmbeddedAgentSession({
-    ...sessionTarget,
-    sessionTarget,
-    sessionFile: sessionTarget.sessionKey,
-    workspaceDir,
-    allowGatewaySubagentBinding: true,
-    provider: "openai",
-    model: "gpt-5.6-luna",
-    config: requestedConfig,
-    enqueue: async (task) => await task(),
-  });
+  const parent = new AsyncWorkScope();
+  let result: Awaited<ReturnType<typeof compactEmbeddedAgentSession>>;
+  try {
+    result = await parent.run(() =>
+      compactEmbeddedAgentSession({
+        ...sessionTarget,
+        sessionTarget,
+        sessionFile: sessionTarget.sessionKey,
+        workspaceDir,
+        allowGatewaySubagentBinding: true,
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        config: requestedConfig,
+        enqueue: async (task) => await task(),
+      }),
+    );
+  } finally {
+    await AsyncWorkScope.runWhenAllIdle(
+      () => [parent],
+      () => parent.drain(),
+    );
+  }
 
   expect(result).toMatchObject({ ok: true, compacted: true });
   const { snapshot, release } = await expectDefined(

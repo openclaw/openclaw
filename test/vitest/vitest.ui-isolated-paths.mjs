@@ -6,6 +6,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/app/bootstrap.gateway-credentials.test.ts",
   "ui/src/app/bootstrap.test.ts",
   "ui/src/app/router-outlet.test.ts",
+  "ui/src/components/github-link-title-tooltip.test.ts",
   "ui/src/components/markdown-tables.test.ts",
   "ui/src/components/mcp-app-view.test.ts",
   "ui/src/components/resizable-divider.test.ts",

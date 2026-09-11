@@ -17,23 +17,31 @@ import {
   type ReplyRunRegistry,
 } from "./reply-run-registry.contracts.js";
 import { resolveReplyMessageInjectionRejection } from "./reply-run-registry.message-injection.js";
-import { createReplyOperation, forceClearReplyOperation } from "./reply-run-registry.operation.js";
+import { createReplyOperation } from "./reply-run-registry.operation.js";
 import {
   clearReplyRunState,
   evictReplyOperationByOperation,
   expireStaleReplyOperation,
+  forceClearReplyOperation,
   getAttachedBackend,
   isReplyOperationPreBackendPhase,
   isReplyRunCompacting,
   isReplyRunEvidenceStale,
   markReplyRunDiagnosticProgress,
+  mergeReplyRunAdmissionSource,
   replyRunState,
   resolveReplyRunForCurrentSessionId,
   resolveReplyRunWaitKey,
   type ReplyRunAdmissionBarrier,
+  type ReplyRunAdmissionSource,
 } from "./reply-run-registry.state.js";
 
 type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
+
+type ReplyRunAdmissionSettlement = {
+  settled: boolean;
+  sources?: ReplyRunAdmissionSource[];
+};
 
 type ReplyRunWaiter = {
   finish: (ended: boolean) => void;
@@ -108,17 +116,38 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return replyRunState.activeRunsByKey.has(normalizedSessionKey);
   },
+  bindSourceTurnId(operation, sourceTurnId) {
+    // Durable admission can finish after reset has replaced this operation.
+    if (
+      replyRunState.activeRunsByKey.get(operation.key) !== operation ||
+      operation.result ||
+      operation.abortSignal.aborted
+    ) {
+      return;
+    }
+    replyRunState.sourceTurnByKey.set(operation.key, sourceTurnId);
+  },
+  getSourceTurnId(sessionKey) {
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
+    if (!normalizedSessionKey) {
+      return undefined;
+    }
+    return replyRunState.sourceTurnByKey.get(normalizedSessionKey);
+  },
   resolveCurrentMessageInjectionTarget(sessionKey) {
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     const operation = this.get(sessionKey);
     const resolved = resolveReplyMessageInjectionRejection({
       operation,
     });
-    if (!operation || !("injection" in resolved)) {
+    if (!operation || !("injection" in resolved) || !normalizedSessionKey) {
       return undefined;
     }
+    const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
     return {
       [replyMessageInjectionTargetOperation]: operation,
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
+      ...(sourceTurnId ? { sourceTurnId } : {}),
     };
   },
   resolveCurrentInterruptTarget(sessionKey) {
@@ -287,20 +316,20 @@ async function waitForReplyRunAdmissionBarrier(params: {
   sessionKey: string;
   signal?: AbortSignal;
   timeoutMs?: number | null;
-}): Promise<{ settled: boolean; sessionId?: string }> {
+}): Promise<ReplyRunAdmissionSettlement> {
   const deadline =
     typeof params.timeoutMs === "number"
       ? Date.now() +
         resolveTimerTimeoutMs(params.timeoutMs, params.minimumTimeoutMs, params.minimumTimeoutMs)
       : undefined;
-  let sessionId: string | undefined;
+  const sources = new Map<ReplyRunAdmissionSource["databaseIdentity"], ReplyRunAdmissionSource>();
   while (true) {
     if (params.signal?.aborted) {
       return { settled: false };
     }
     const barrier = params.barriersByKey.get(params.sessionKey);
     if (!barrier) {
-      return { settled: true, sessionId };
+      return { settled: true, ...(sources.size ? { sources: [...sources.values()] } : {}) };
     }
     const remainingMs = deadline === undefined ? undefined : deadline - Date.now();
     if (remainingMs !== undefined && remainingMs <= 0) {
@@ -339,7 +368,15 @@ async function waitForReplyRunAdmissionBarrier(params: {
     if (!outcome) {
       return { settled: false };
     }
-    sessionId = barrier.sessionId;
+    for (const [identity, source] of barrier.sources) {
+      sources.set(
+        identity,
+        mergeReplyRunAdmissionSource(
+          { ...source, sessionIds: new Set(source.sessionIds) },
+          sources.get(identity),
+        ),
+      );
+    }
   }
 }
 
@@ -347,7 +384,7 @@ export async function waitForReplyRunFollowupAdmission(
   sessionKey: string,
   timeoutMs: number,
   opts?: { signal?: AbortSignal },
-): Promise<{ settled: boolean; sessionId?: string }> {
+): Promise<ReplyRunAdmissionSettlement> {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
   return normalizedSessionKey
     ? await waitForReplyRunAdmissionBarrier({
@@ -364,7 +401,7 @@ export async function waitForReplyRunSuccessorAdmission(
   sessionKey: string,
   timeoutMs?: number | null,
   opts?: { signal?: AbortSignal },
-): Promise<{ settled: boolean; sessionId?: string }> {
+): Promise<ReplyRunAdmissionSettlement> {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
   return normalizedSessionKey
     ? await waitForReplyRunAdmissionBarrier({
@@ -514,6 +551,7 @@ const replyRunRegistryTestApi = {
     replyRunState.activeSessionIdsByKey.clear();
     replyRunState.activeKeysBySessionId.clear();
     replyRunState.waitKeysBySessionId.clear();
+    replyRunState.sourceTurnByKey.clear();
     replyRunSettle.resetReplyRunSettleTimersForTesting();
     for (const waiters of replyRunState.waitersByKey.values()) {
       for (const waiter of waiters) {

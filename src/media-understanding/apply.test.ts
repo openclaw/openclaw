@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -2186,25 +2187,81 @@ describe("applyMediaUnderstanding", () => {
     expectPolicyRejectedFileApplied({ ctx, result, mime: "application/pdf" });
   });
 
-  it("keeps cached attachment bytes intact when a PDF extractor mutates its input", async () => {
-    const original = Buffer.from("%PDF-1.7\nfixture");
-    const mediaPath = await createTempMediaFile({ fileName: "mutable.pdf", content: original });
-    const { MediaAttachmentCache } = await import("./attachments.cache.js");
-    const pdf = await import("../media/pdf-extract.js");
-    const getBuffer = vi.spyOn(MediaAttachmentCache.prototype, "getBuffer");
-    const extract = vi.spyOn(pdf, "extractPdfContent").mockImplementation(async ({ buffer }) => {
-      buffer.fill(0);
-      return { text: "extracted PDF", images: [] };
-    });
-    try {
-      const { ctx } = await applyWithDisabledMedia({ body: "<media:file>", mediaPath });
-      expect(ctx.Body).toContain("extracted PDF");
-      expect((await getBuffer.mock.results[0]?.value)?.buffer).toEqual(original);
-    } finally {
-      extract.mockRestore();
-      getBuffer.mockRestore();
-    }
-  });
+  it.each(["completed", "timed-out"] as const)(
+    "preserves earlier provider bytes when a %s PDF extractor mutates its input",
+    async (outcome) => {
+      const original = Buffer.alloc(2048, 0x20);
+      original.write("%PDF-1.7\nfixture");
+      const ctx = await createAudioCtx({
+        fileName: "mutable.txt",
+        mediaType: "audio/ogg",
+        content: original,
+      });
+      const followingFile = await createTempMediaFile({
+        fileName: "following.txt",
+        content: "Following document survives",
+      });
+      ctx.media?.push({ path: followingFile, contentType: "text/plain" });
+      let borrowed: Buffer | undefined;
+      const transcribeAudio = vi.fn<NonNullable<MediaUnderstandingProvider["transcribeAudio"]>>(
+        async (request) => {
+          borrowed = request.buffer;
+          throw new Error("Not an audio document");
+        },
+      );
+      const started = createDeferred();
+      const finish = createDeferred();
+      const finished = createDeferred();
+      let extractionInput: Buffer | undefined;
+      const pdf = await import("../media/pdf-extract.js");
+      const extract = vi.spyOn(pdf, "extractPdfContent").mockImplementation(async ({ buffer }) => {
+        extractionInput = buffer;
+        started.resolve();
+        if (outcome === "timed-out") {
+          await finish.promise;
+        }
+        buffer.fill(0);
+        finished.resolve();
+        return { text: "extracted PDF", images: [] };
+      });
+      vi.useFakeTimers();
+      try {
+        const application = applyMediaUnderstanding({
+          ctx,
+          cfg: {
+            ...createGroqAudioConfig(),
+            gateway: { http: { endpoints: { responses: { files: { timeoutMs: 10 } } } } },
+          },
+          providers: { groq: { id: "groq", transcribeAudio } },
+        });
+        await started.promise;
+        if (outcome === "timed-out") {
+          await vi.advanceTimersByTimeAsync(10);
+        }
+        const result = await application;
+        expect(result.appliedFile).toBe(true);
+        expect(transcribeAudio).toHaveBeenCalledOnce();
+        expect(ctx.Body).toContain("Following document survives");
+        if (outcome === "timed-out") {
+          expect(ctx.Body).toContain("[Attachment could not be read]");
+          expect(extractionInput).toEqual(original);
+          finish.resolve();
+          await finished.promise;
+          expect(ctx.Body).not.toContain("extracted PDF");
+        } else {
+          expect(ctx.Body).toContain("extracted PDF");
+        }
+        expect(borrowed).toEqual(original);
+      } finally {
+        finish.resolve();
+        if (extractionInput) {
+          await finished.promise;
+        }
+        extract.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("respects configured allowedMimes for text-like attachments", async () => {
     const tsvText = "a\tb\tc\n1\t2\t3";
@@ -2363,6 +2420,47 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain('mime="text/csv"');
     expect(ctx.Body).toContain('<file name="totally-not-a-spreadsheet.txt"');
   });
+
+  it.each(["files-only", "audio-and-files"] as const)(
+    "delivers pasted text without image interpretation in %s mode",
+    async (processingMode) => {
+      const filePath = await createTempMediaFile({
+        fileName: "pasted-text-123.txt",
+        content: "Synthetic diagnostic: connection refused",
+      });
+      const imagePath = await createTempMediaFile({ fileName: "photo.jpg", content: "image" });
+      const describeImage = vi.fn(async () => ({ text: "image description" }));
+      const ctx: MsgContext = {
+        Body: "Is this related?",
+        media: [
+          { path: filePath, contentType: "text/plain" },
+          { path: imagePath, contentType: "image/jpeg" },
+        ],
+      };
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg: {
+          tools: {
+            media: {
+              models: [{ provider: "openai", model: "gpt-5.4", capabilities: ["image"] }],
+              image: { enabled: true },
+            },
+          },
+        },
+        providers: { openai: { id: "openai", describeImage } },
+        processingMode,
+      });
+      expect(result.appliedFile).toBe(true);
+      expect(result.decisions.map((decision) => decision.capability)).toEqual(
+        processingMode === "files-only" ? [] : ["audio"],
+      );
+      expect(ctx.agentText).toContain("Is this related?");
+      expect(ctx.agentText).toContain("Synthetic diagnostic: connection refused");
+      expect(ctx.agentText).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+      expect(describeImage).not.toHaveBeenCalled();
+      expect(result.appliedImage).toBe(false);
+    },
+  );
 
   it("wraps extracted file text as untrusted external content", async () => {
     const filePath = await createTempMediaFile({

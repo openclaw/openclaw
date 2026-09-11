@@ -307,7 +307,7 @@ export function buildStatusHealthRows(params: {
     const status =
       normalized === "healthy" || normalized.startsWith("ok") || normalized.startsWith("configured")
         ? params.ok("OK")
-        : normalized.startsWith("not configured")
+        : normalized.startsWith("not configured") || normalized.startsWith("disabled")
           ? params.muted("OFF")
           : normalized.startsWith("linked")
             ? params.ok("LINKED")
@@ -402,7 +402,7 @@ export function buildStatusModelSelectionLines(params: {
       `  Session selected: ${selected}`,
       reasonLine,
       clearLine,
-      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-strictness",
     );
   }
   if (mismatches.length > limit) {

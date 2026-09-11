@@ -222,6 +222,7 @@ export class DraftRepositoryController {
                 branches: result.branches,
                 ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
                 ...(result.headBranch ? { headBranch: result.headBranch } : {}),
+                ...(result.branchesUnavailable ? { branchesUnavailable: true } : {}),
               }
             : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
         );
@@ -232,6 +233,12 @@ export class DraftRepositoryController {
         }
         this.adoptResolvedRepository({ kind: "unavailable", repoRoot });
       });
+  }
+
+  synchronize() {
+    if (!this.matchesCurrentRepo()) {
+      this.load();
+    }
   }
 
   private adoptResolvedRepository(state: ResolvedRepository) {

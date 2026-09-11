@@ -14,6 +14,50 @@ import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+it.each([
+  { operation: "clone", reason: "clone-failed", stage: "git clone" },
+  { operation: "checkout", reason: "checkout-failed", stage: "git checkout --detach" },
+])("surfaces $reason diagnostics to cloud placement", async ({ operation, reason, stage }) => {
+  const service = createNodeWorkspaceTransferService({
+    temporaryRoot: tempDirs.make("node-repository-failure-"),
+    getOwner: () => undefined,
+  });
+  const actions = createNodeWorkerWorkspaceActions({
+    environmentId: "environment-1",
+    ownerEpoch: 1,
+    sessionId: "session-1",
+    ownerSignal: new AbortController().signal,
+    isOwnerCurrent: () => true,
+    workspaceTransfer: service,
+    runWorkspaceCommand: async ({ argv }) => ({
+      stdout: argv.includes("rev-parse") ? "a".repeat(40) : "",
+      stderr: argv.includes(operation) ? "fatal: Permission denied\n" : "",
+      code: argv.includes(operation) ? 128 : 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+      workspaceDir: "/node/workspace",
+    }),
+  });
+  try {
+    await expect(
+      actions.syncWorkspace({
+        sessionId: "session-1",
+        generation: 1,
+        source: {
+          kind: "repository",
+          url: "https://example.invalid/repository.git",
+          branch: "openclaw/session",
+        },
+      }),
+    ).rejects.toThrow(
+      `Cloud repository preparation failed: ${reason}: ${stage}: exit (exit code 128, signal null): fatal: Permission denied`,
+    );
+  } finally {
+    await service.closeAll();
+  }
+});
+
 it("rejects repository sources on SSH before invoking any remote command", async () => {
   const run = vi.fn();
   const waitForPrepared = vi.fn();

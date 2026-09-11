@@ -1,5 +1,6 @@
 {
   "id": "github-copilot",
+  "categories": ["models", "memory"],
   "activation": {
     "onStartup": false
   },

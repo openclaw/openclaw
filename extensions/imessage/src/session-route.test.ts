@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { imessagePlugin } from "./channel.js";
 
 describe("iMessage outbound session routing", () => {
+  it("keeps a service-qualified contact alias as target presentation", async () => {
+    const resolved = await imessagePlugin.messaging?.targetResolver?.resolveTarget?.({
+      cfg: {},
+      input: "imessage:Alice",
+      normalized: "imessage:Alice",
+    });
+
+    expect(resolved).toMatchObject({ to: "imessage:Alice", display: "Alice" });
+  });
+
   it.each([
     ["+15551234567", true],
     ["+1 (555) 123-4567", true],

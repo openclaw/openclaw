@@ -40,6 +40,43 @@ describe("resolveCompactionContextTokenBudget", () => {
       expect(budget).toBe(expected);
     },
   );
+
+  it.each([
+    { requested: 16_000, expected: 3_000 },
+    { requested: 2_000, expected: 2_000 },
+  ])(
+    "caps requested=$requested by the authored native window despite a larger contextTokens cap",
+    ({ requested, expected }) => {
+      const budget = resolveCompactionContextTokenBudget({
+        config: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://models.example.test/v1",
+                models: [
+                  {
+                    id: "tiny-model",
+                    name: "Tiny model",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 3_000,
+                    contextTokens: 16_000,
+                    maxTokens: 256,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        provider: "custom",
+        modelId: "tiny-model",
+        model: modelWithWindow(3_000),
+        requestedTokenBudget: requested,
+      });
+      expect(budget).toBe(expected);
+    },
+  );
 });
 
 describe("resolveEmbeddedCompactionThinkingLevel", () => {
@@ -290,7 +327,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     "resolves literal compaction overrides without discovering provider plugins $name",
     ({ models }) => {
       const manifestNormalization = vi
-        .spyOn(manifestModelIdNormalization, "normalizeProviderModelIdWithManifest")
+        .spyOn(manifestModelIdNormalization, "resolveManifestModelIdNormalizationPolicies")
         .mockImplementation(() => {
           throw new Error("literal compaction overrides must not discover plugin manifests");
         });

@@ -51,15 +51,18 @@ import {
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
 import {
+  adoptUpdateRun,
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  heartbeatUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { summarizeUpdateStepFailure } from "../../infra/update-run-record.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-report.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   resolveUpdateInstallSurface,
   runGatewayUpdate,
@@ -502,25 +505,23 @@ export const updateHandlers: GatewayRequestHandlers = {
           }
           return;
         }
+        const driver = adoptUpdateRun(runId).origin.driver;
         recordUpdateRunPhase(runId, "staging");
         result = await runGatewayUpdate({
           runId,
           progress: {
+            onHeartbeat: () => heartbeatUpdateRun(runId, driver),
             onStepStart: (step) =>
               recordUpdateRunStep(runId, {
                 step: step.name,
                 status: "in_progress",
                 startedAtMs: Date.now(),
               }),
-            onStepComplete: (step) =>
-              recordUpdateRunStep(runId, {
-                step: step.name,
-                status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
-                endedAtMs: Date.now(),
-                ...(step.exitCode !== 0
-                  ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-                  : {}),
-              }),
+            onStepComplete: (step) => {
+              for (const entry of updateRunStepsFromResultStep(step)) {
+                recordUpdateRunStep(runId, { ...entry, endedAtMs: Date.now() });
+              }
+            },
           },
           timeoutMs,
           cwd: installSurface.root,
@@ -588,6 +589,9 @@ export const updateHandlers: GatewayRequestHandlers = {
         status: completed ? "completed" : "failed",
         ...(!completed ? { detail: summarizeUpdateStepFailure(step) } : {}),
       });
+      for (const warning of updateRunStepsFromResultStep(step).slice(1)) {
+        recordUpdateRunStep(runId, warning);
+      }
     }
     // A managed orchestrator or the replacement Gateway owns terminal success;
     // refusals and synchronous failures have no later process to finish the run.

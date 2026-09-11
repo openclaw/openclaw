@@ -21,9 +21,9 @@ import {
   BrowserObservedDialogBlockedError,
 } from "./pw-session-contracts.js";
 import {
-  appendRecentDialog,
   clearArmedDialogResponse,
   observeDialog,
+  recordClosedDialog,
   resolveObservedDialogTimeoutMs,
   resolvePendingDialogForResponse,
   serializeObservedBrowserState,
@@ -403,20 +403,18 @@ export async function respondToObservedDialogOnPage(opts: {
 }
 
 /** Mark pending observed dialogs as handled by a remote/browser-side hook. */
-export function markObservedDialogsHandledRemotelyForPage(page: Page): BrowserObservedState {
+export function markObservedDialogsHandledRemotelyForPage(
+  page: Page,
+  dialogs: readonly BrowserObservedDialogRecord[],
+): BrowserObservedState {
   const state = ensurePageState(page);
-  const pending = state.pendingDialogs.splice(0);
-  const closedAt = new Date().toISOString();
+  // A late action completion owns only the dialogs that interrupted it. A newer
+  // dialog may already be pending while the earlier action's guard settles.
+  const ids = new Set(dialogs.map((dialog) => dialog.id));
+  const pending = state.pendingDialogs.filter((dialog) => ids.has(dialog.id));
+  state.pendingDialogs = state.pendingDialogs.filter((dialog) => !ids.has(dialog.id));
   for (const dialog of pending) {
-    appendRecentDialog(state, {
-      id: dialog.id,
-      type: dialog.type,
-      message: dialog.message,
-      ...(dialog.defaultValue !== undefined ? { defaultValue: dialog.defaultValue } : {}),
-      openedAt: dialog.openedAt,
-      closedAt,
-      closedBy: "remote",
-    });
+    recordClosedDialog(state, dialog, "remote");
   }
   return serializeObservedBrowserState(state);
 }

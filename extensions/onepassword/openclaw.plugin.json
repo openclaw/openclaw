@@ -1,5 +1,6 @@
 {
   "id": "onepassword",
+  "categories": ["security", "tools"],
   "name": "1Password",
   "description": "1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.",
   "cliCommands": [

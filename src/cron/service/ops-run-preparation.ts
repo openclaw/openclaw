@@ -45,7 +45,7 @@ type PreparedManualRun =
   | {
       ok: true;
       ran: false;
-      reason: "already-running" | "disabled" | "not-due" | "invalid-spec" | "stopped";
+      reason: "already-running" | "disabled" | "not-due" | "invalid-spec" | "stopped" | "ownerless";
     }
   | {
       ok: true;
@@ -328,15 +328,24 @@ export async function prepareManualRun(
     if (!isJobDue(job, reservationAt, { forced: isImmediateCronRunMode(mode) })) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
-    // Persist the queued marker before releasing lock so timer ticks that
-    // force-reload from disk cannot start the same job concurrently.
+    // Direct run() callers also need to distinguish an ownerless result from a busy job.
+    const internalTracker = opts?.terminalTracker ?? { emitted: false };
     const [reserved] = await persistQueuedCronRunReservations({
       state,
       candidates: [job],
       ...(isImmediateCronRunMode(mode) ? { immediateJobIds: new Set([job.id]) } : {}),
       reservedAtMs: reservationAt,
+      ...(isImmediateCronRunMode(mode) ? { scheduleMode: "preserve" as const } : {}),
+      manualRun: {
+        runId: opts?.runId,
+        terminalTracker: internalTracker,
+        scheduleOwnershipAtMs: opts?.scheduleOwnershipAtMs,
+      },
     });
     if (!reserved) {
+      if (internalTracker.emitted) {
+        return { ok: true, ran: false, reason: "ownerless" as const };
+      }
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const reservedJob = reserved.job;

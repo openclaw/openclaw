@@ -3,7 +3,7 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { LONGCAT_DEFAULT_MODEL_REF } from "./models.js";
-import { applyLongCatConfig } from "./onboard.js";
+import { applyLongCatConnectionConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createLongCatThinkingWrapper } from "./stream.js";
 
@@ -20,7 +20,7 @@ export default defineSingleProviderPluginEntry({
     aliases: ["meituan-longcat"],
     manifestAuth: {
       defaultModel: LONGCAT_DEFAULT_MODEL_REF,
-      applyConfig: applyLongCatConfig,
+      applyConfig: applyLongCatConnectionConfig,
       noteTitle: "LongCat",
       noteMessage: "Manage API keys at https://longcat.chat/platform/api_keys",
     },

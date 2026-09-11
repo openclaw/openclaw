@@ -24,7 +24,7 @@ record when a mobile node last woke without treating it as connected.
 - For connection alerts, **Notifications** permission is also granted and the
   Mac node exposes `system.notify`.
 
-Activity reporting is currently implemented by the native macOS node. iOS,
+Activity reporting is implemented only by the native macOS node. iOS,
 Android, watchOS, and headless node hosts can report connection or background
 last-seen state, but they do not compete for the active-computer designation.
 
@@ -62,8 +62,9 @@ Disabling **Active computer detection** stops sampling and sends an authenticate
 clear event over the current node connection. The Gateway immediately removes
 that Mac's retained activity timestamps and recomputes the active computer;
 other node capabilities and in-flight work stay connected. If the connected
-Gateway predates this clear action, the Mac node reconnects once so disconnect
-cleanup can remove the retained activity instead.
+Gateway is older than 2026.8.1, which added this clear action
+([#112321](https://github.com/openclaw/openclaw/pull/112321)), the Mac node
+reconnects once so disconnect cleanup can remove the retained activity instead.
 
 The Gateway accepts activity only when all of these are true:
 
@@ -136,5 +137,5 @@ connection and command failures, see [Node troubleshooting](/nodes/troubleshooti
 - [Nodes](/nodes)
 - [Nodes CLI](/cli/nodes)
 - [System presence](/concepts/presence)
-- [Gateway protocol](/gateway/protocol#presence)
+- [Gateway protocol](/gateway/protocol/presence#presence)
 - [macOS app](/platforms/macos)

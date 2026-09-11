@@ -1,11 +1,14 @@
 // Mattermost tests cover draft stream plugin behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import {
   createMattermostDraftPreviewBoundaryController,
   createMattermostDraftStream,
 } from "./draft-stream.js";
+import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
 
 type RequestRecord = {
   path: string;
@@ -67,6 +70,43 @@ function parseRequestJson(init: RequestInit | undefined): Record<string, unknown
     throw new Error("expected JSON object request body");
   }
   return parsed as Record<string, unknown>;
+}
+
+function createProviderPostFixture(
+  options: {
+    beforeDelete?: (id: string) => Promise<void>;
+    warn?: (message: string) => void;
+  } = {},
+) {
+  const posts = new Map<string, string>();
+  let nextId = 1;
+  const request: MattermostClient["request"] = async <T>(
+    path: string,
+    init?: RequestInit,
+  ): Promise<T> => {
+    if (path === "/posts" && init?.method === "POST") {
+      const id = `post-${nextId++}`;
+      const message = String(parseRequestJson(init).message);
+      posts.set(id, message);
+      return { id, message } as T;
+    }
+    const id = path.slice("/posts/".length);
+    if (init?.method === "DELETE") {
+      await options.beforeDelete?.(id);
+      posts.delete(id);
+      return undefined as T;
+    }
+    if (init?.method === "PUT") {
+      if (!posts.has(id)) {
+        throw new Error("Mattermost API 404 Not Found");
+      }
+      const message = String(parseRequestJson(init).message);
+      posts.set(id, message);
+      return { id, message } as T;
+    }
+    throw new Error(`Unexpected Mattermost request: ${init?.method} ${path}`);
+  };
+  return { ...createDraftStreamFixture({ request, warn: options.warn }), posts };
 }
 
 describe("createMattermostDraftStream", () => {
@@ -134,6 +174,181 @@ describe("createMattermostDraftStream", () => {
       root_id: "root-1",
     });
     expect(stream.postId()).toBe("post-2");
+  });
+
+  it.each([
+    ...["immediately after retraction", "while deletion is pending"].flatMap((timing) =>
+      ["different", "identical"].map((replacement) => ({
+        timing,
+        replacement,
+        delayFirstPublication: false,
+      })),
+    ),
+    {
+      timing: "after the retiring publication completes",
+      replacement: "identical",
+      delayFirstPublication: true,
+    },
+  ])(
+    "keeps the $replacement plan replacement $timing",
+    async ({ timing, replacement, delayFirstPublication }) => {
+      const deleteStarted = createDeferred<void>();
+      const releaseDelete = createDeferred<void>();
+      const firstPublicationVisible = createDeferred<void>();
+      const releaseFirstPublication = createDeferred<void>();
+      let firstUpdate = true;
+      const { stream, posts } = createProviderPostFixture({
+        beforeDelete: async () => {
+          deleteStarted.resolve();
+          await releaseDelete.promise;
+        },
+      });
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { label: false } } },
+        mode: "progress",
+        active: true,
+        seed: "plan-retraction",
+        update: async (text, options) => {
+          const delayCompletion = firstUpdate && delayFirstPublication;
+          firstUpdate = false;
+          stream.update(text);
+          if (options?.flush) {
+            await stream.flush();
+          }
+          if (delayCompletion) {
+            firstPublicationVisible.resolve();
+            await releaseFirstPublication.promise;
+          }
+        },
+        deleteCurrent: () => stream.deleteCurrentMessage(),
+      });
+      let firstPublication: Promise<boolean> | undefined;
+      let retraction: Promise<boolean> | undefined;
+      let replacementPublication: Promise<boolean> | undefined;
+      try {
+        firstPublication = progress.pushPlanProgress([{ step: "Inspect", status: "in_progress" }]);
+        if (delayFirstPublication) {
+          await firstPublicationVisible.promise;
+        } else {
+          await firstPublication;
+        }
+        expect([...posts.values()]).toEqual([expect.stringContaining("Inspect")]);
+
+        retraction = progress.pushPlanProgress([]);
+        if (timing !== "immediately after retraction") {
+          await deleteStarted.promise;
+        }
+        if (delayFirstPublication) {
+          releaseFirstPublication.resolve();
+          await firstPublication;
+        }
+        const step = replacement === "identical" ? "Inspect" : "Verify";
+        replacementPublication = progress.pushPlanProgress([{ step, status: "in_progress" }]);
+        await deleteStarted.promise;
+        releaseDelete.resolve();
+        await Promise.all([retraction, replacementPublication]);
+        await stream.flush();
+
+        expect([...posts.values()]).toEqual([expect.stringContaining(step)]);
+        expect(posts.has(stream.postId() ?? "")).toBe(true);
+      } finally {
+        releaseFirstPublication.resolve();
+        releaseDelete.resolve();
+        await Promise.allSettled([firstPublication, retraction, replacementPublication]);
+        progress.cancel();
+        await stream.clear();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retries retired preview cleanup at stop while preserving the final (retry fails: %s)",
+    async (retryFails) => {
+      const warn = vi.fn();
+      const deleteAttempts: string[] = [];
+      const { client, stream, posts } = createProviderPostFixture({
+        warn,
+        beforeDelete: async (id) => {
+          deleteAttempts.push(id);
+          if (deleteAttempts.length === 1 || retryFails) {
+            throw new Error("temporary delete failure");
+          }
+        },
+      });
+      const deliverPayload = vi.fn(async () => {
+        throw new Error("the final should edit its preview in place");
+      });
+      try {
+        stream.update("Retired plan");
+        await stream.flush();
+        const retiredId = stream.postId();
+        await stream.deleteCurrentMessage();
+        stream.update("Replacement plan");
+        await stream.flush();
+        const finalId = stream.postId();
+        const result = await deliverMattermostReplyWithDraftPreview({
+          payload: { text: "Final answer" },
+          info: { kind: "final" },
+          kind: "direct",
+          client,
+          draftStream: stream,
+          resolvePreviewFinalText: (text) => ({ editText: text, alreadyDelivered: false }),
+          previewState: { finalizedViaPreviewPost: false },
+          logVerboseMessage: vi.fn(),
+          deliverPayload,
+        });
+        expect(result.visibleReplySent).toBe(true);
+        expect(result.messageIds).toEqual([finalId]);
+        expect(posts.get(finalId ?? "")).toBe("Final answer");
+        expect(deliverPayload).not.toHaveBeenCalled();
+
+        await stream.stop();
+
+        expect(posts.get(finalId ?? "")).toBe("Final answer");
+        expect(deleteAttempts).not.toContain(finalId);
+        expect(deleteAttempts).toEqual([retiredId, retiredId]);
+        expect(warn).toHaveBeenCalledTimes(retryFails ? 2 : 1);
+        expect(warn).toHaveBeenCalledWith(
+          "mattermost stream preview cleanup failed: temporary delete failure",
+        );
+        expect([...posts.values()]).toEqual(
+          retryFails ? ["Retired plan", "Final answer"] : ["Final answer"],
+        );
+      } finally {
+        await stream.seal();
+      }
+    },
+  );
+
+  it("retains a failed current-post deletion across stop until another clear", async () => {
+    const warn = vi.fn();
+    const deleteAttempts: string[] = [];
+    const { stream, posts } = createProviderPostFixture({
+      warn,
+      beforeDelete: async (id) => {
+        deleteAttempts.push(id);
+        if (deleteAttempts.length === 1) {
+          throw new Error("temporary delete failure");
+        }
+      },
+    });
+    try {
+      stream.update("Current preview");
+      await stream.flush();
+      const currentId = stream.postId();
+      await stream.clear();
+      await stream.stop();
+      expect(stream.postId()).toBe(currentId);
+      expect([...posts.values()]).toEqual(["Current preview"]);
+      expect(deleteAttempts).toEqual([currentId]);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      await stream.clear();
+      expect(posts.size).toBe(0);
+      expect(deleteAttempts).toEqual([currentId, currentId]);
+    } finally {
+      await stream.seal();
+    }
   });
 
   it("discardPending keeps the preview post but ignores later updates", async () => {

@@ -243,9 +243,11 @@ Set `stream: true` to receive Server-Sent Events:
 - Each event line is `event: <type>` and `data: <json>`
 - Stream ends with `data: [DONE]`
 
-Event types currently emitted: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done`, `response.completed`, `response.failed` (on error).
+Event types currently emitted: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done`, `response.completed`, `response.incomplete` (on output-budget truncation), `response.failed` (on error).
 
 Failed agent runs, including whole-agent timeouts, return a failed response. Streaming failures emit `response.failed` followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
+
+A reply that ends because the agent reached its output-token budget is returned with `status: "incomplete"` and `incomplete_details: { "reason": "max_output_tokens" }`, and its final message item carries `status: "incomplete"`. Streaming emits these fields on the terminal `response.incomplete` event, so clients dispatching by event type also observe the truncation. This mirrors the `finish_reason: "length"` projection on `/v1/chat/completions`.
 
 Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
 

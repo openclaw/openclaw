@@ -319,12 +319,23 @@ describe("sessions_history redaction", () => {
     expect(requests).toEqual([]);
   });
 
-  it("rejects offset and messageId together", async () => {
-    const tool = createHistoryToolWithMessage("hello");
+  it.each([0, 4])("ignores offset %i when an anchored read is requested", async (offset) => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [{ role: "assistant", content: "latest" }] } as T;
+      },
+    });
+    const args = { sessionKey: "main", offset, messageId: "message-1" };
+    const result = await tool.execute("call-1", args);
+    const request = requireGatewayRequest(requests, "chat.history");
 
-    await expect(
-      tool.execute("call-1", { sessionKey: "main", offset: 0, messageId: "message-1" }),
-    ).rejects.toThrow("offset and messageId cannot be used together");
+    expect(request.params).toMatchObject({ sessionKey: "main", messageId: "message-1" });
+    expect(request.params).not.toHaveProperty("offset");
+    expect(result.details).not.toHaveProperty("offset");
+    expect(args).toEqual({ sessionKey: "main", offset, messageId: "message-1" });
   });
 
   it("rejects sessionId without messageId", async () => {

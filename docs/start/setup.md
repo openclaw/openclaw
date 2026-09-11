@@ -21,7 +21,7 @@ Pick a setup workflow based on how often you want updates and whether you want t
 
 ## Prereqs (from source)
 
-- Node 24.15+ recommended (Node 22 LTS, currently `22.22.3+`, still supported)
+- Node 24.16+ LTS or Node 26.1+ (recommended)
 - `pnpm` required for source checkouts. OpenClaw loads bundled plugins from the
   `extensions/*` pnpm workspace packages in dev mode, so root `npm install` does
   not prepare the full source tree.
@@ -32,9 +32,8 @@ publication cooldown to npm dependencies, with trusted `@openai/codex` and
 `@openai/codex-*` packages exempt. The standalone pnpm toolchain is managed separately.
 
 For npm tooling that reads the project's `.npmrc`, use npm **11.19 or newer** for
-install and `npm pack` cooldowns and Codex exclusions. Node 22's bundled npm 10
-ignores these settings; Node runtime support does not imply support for its
-bundled npm as a source resolver. [Published/global installs](/install) do not
+install and `npm pack` cooldowns and Codex exclusions. Node runtime support does
+not imply support for its bundled npm as a source resolver. [Published/global installs](/install) do not
 inherit the repository's `.npmrc`. Source installs continue to use pnpm.
 
 pnpm owns root and plugin-local dependencies, including workspace links and
@@ -61,7 +60,7 @@ No global install yet? Run it from this repo instead:
 pnpm openclaw setup --baseline
 ```
 
-(Bare `openclaw setup`, without `--baseline`, is an alias for `openclaw onboard` and runs the full interactive wizard.)
+(Bare `openclaw setup`, without `--baseline`, opens an interactive OpenClaw chat on a configured system and falls through to guided onboarding on a fresh one. See [Setup CLI](/cli/setup) for the full routing order.)
 
 ## Run the Gateway from this repo
 
@@ -184,7 +183,7 @@ Use this when debugging auth or deciding what to back up:
 - **Model auth profiles**: shared and agent-local SQLite auth stores; see [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) for inheritance and legacy shared-store relocation
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
-  More detail: [Security](/gateway/security#credential-storage-map).
+  More detail: [Security](/gateway/security/secrets-and-storage#credential-storage-map).
 
 ## Updating (without wrecking your setup)
 
