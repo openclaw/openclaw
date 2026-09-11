@@ -829,7 +829,7 @@ wa-popover.new-session-page__where-popover::part(body) {
   width: 20px;
 }
 
-.new-session-page__environment-option.new-session-page__environment-option--selected {
+.new-session-page__environment-option[aria-pressed="true"] {
   background: var(--menu-selected);
 }
 

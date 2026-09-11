@@ -323,11 +323,6 @@ suite.define(() => {
       await openPicker();
       await selectedRow.hover();
       expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
-      expect(
-        await selectedRow.evaluate((element) =>
-          element.classList.contains("new-session-page__environment-option--selected"),
-        ),
-      ).toBe(true);
       expect(await selectedRow.locator(".capacity-meter-pips").getAttribute("aria-label")).toBe(
         "2 of 4 slots busy",
       );

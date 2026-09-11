@@ -48,7 +48,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
       type="button"
       class="session-menu__item ${description ? "session-menu__item--described" : ""} ${
         params.environment ? "new-session-page__environment-option" : ""
-      } ${params.environment && params.checked ? "new-session-page__environment-option--selected" : ""}"
+      }"
       data-value=${params.value}
       data-popover=${params.keepOpen ? nothing : "close"}
       aria-pressed=${String(params.checked)}

@@ -288,12 +288,8 @@ describe("Where chip", () => {
     expect(selected?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
       "1 of 2 slots busy",
     );
-    expect(selected?.classList.contains("new-session-page__environment-option--selected")).toBe(
-      true,
-    );
-    expect(unselected?.classList.contains("new-session-page__environment-option--selected")).toBe(
-      false,
-    );
+    expect(selected?.getAttribute("aria-pressed")).toBe("true");
+    expect(unselected?.getAttribute("aria-pressed")).toBe("false");
     expect(selected?.querySelector(".session-menu__check svg")).not.toBeNull();
     expect(unselected?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
       "0 of 1 slots busy",
@@ -315,9 +311,6 @@ describe("Where chip", () => {
 
     expect(automatic.getAttribute("role")).toBeNull();
     expect(automatic.getAttribute("aria-pressed")).toBe(String(autoDevice));
-    expect(automatic.classList.contains("new-session-page__environment-option--selected")).toBe(
-      autoDevice,
-    );
     expect(automatic.textContent).toContain("Auto");
     expect(automatic.textContent).toContain("Least-busy device");
     automatic.click();

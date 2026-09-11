@@ -1567,6 +1567,7 @@ async function createChatPickerScenario(
   fixture?: CliOptions["fixture"],
 ): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const pickerInventory = process.env.MOCK_PICKER_INVENTORY === "1";
   const selfProfile: UserProfile = {
     id: "presence-riley",
     displayName: "Riley",
@@ -2770,7 +2771,7 @@ async function createChatPickerScenario(
             label: "Mac Studio",
             status: "available",
             desktop: true,
-            ...(process.env.MOCK_PICKER_INVENTORY === "1"
+            ...(pickerInventory
               ? {
                   platform: "darwin",
                   sessionHost: true,
@@ -2778,7 +2779,7 @@ async function createChatPickerScenario(
                 }
               : {}),
           },
-          ...(process.env.MOCK_PICKER_INVENTORY === "1"
+          ...(pickerInventory
             ? [
                 {
                   id: "node:mock-macbook-offline",
@@ -2797,11 +2798,9 @@ async function createChatPickerScenario(
           {
             id: "aws",
             providerId: "aws",
-            ...(process.env.MOCK_PICKER_INVENTORY === "1"
-              ? { executionModes: ["worker-turn", "remote-exec"] }
-              : {}),
+            ...(pickerInventory ? { executionModes: ["worker-turn", "remote-exec"] } : {}),
           },
-          ...(process.env.MOCK_PICKER_INVENTORY === "1"
+          ...(pickerInventory
             ? [
                 {
                   id: "crabbox",
