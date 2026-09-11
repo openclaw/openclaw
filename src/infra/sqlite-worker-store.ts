@@ -9,6 +9,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
+import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { hasErrnoCode } from "./errno.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -419,11 +420,20 @@ class SqliteWorkerBroker {
         await Promise.race([...this.slots].map((slot) => slot.exit));
         return this.acquireSlot();
       }
+      if (process.versions.bun) {
+        throw new SqliteWorkerError(
+          "Bun SQLite workers support at most four distinct open databases; close a store or use Node",
+          "overloaded",
+        );
+      }
       const selected = available.reduce((left, right) =>
         left.actors.size <= right.actors.size ? left : right,
       );
       selected.pendingOpens += 1;
       return selected;
+    }
+    if (process.versions.bun && process.platform === "darwin") {
+      ensureSqliteLibrarySelected();
     }
     const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteStore);
     const worker = runOutsideCaller(
@@ -610,6 +620,10 @@ class SqliteWorkerBroker {
         await actor.slot.exit;
         throw error;
       } finally {
+        if (process.versions.bun) {
+          // Bun retains native statements after close; keep pathname ownership until VM exit.
+          await this.retire(actor.slot);
+        }
         this.forget(actor);
         await this.retireEmpty(actor.slot);
       }
