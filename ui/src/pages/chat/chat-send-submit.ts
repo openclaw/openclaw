@@ -503,11 +503,8 @@ export async function handleSendChat(
     }
   }
 
-  const replyTarget = isInlineEditSubmission
-    ? null
-    : opts?.replyTargetOverride === undefined
-      ? host.chatReplyTarget
-      : opts.replyTargetOverride;
+  const { replyTargetOverride = host.chatReplyTarget } = opts ?? {};
+  const replyTarget = isInlineEditSubmission ? null : replyTargetOverride;
   // Persisted ids use replyToId; synthetic replies fall back to a quote.
   const replyToId = isInlineEditSubmission
     ? inlineEdit.replyToId
