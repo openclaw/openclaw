@@ -576,13 +576,17 @@ export async function spawnSubagentDirect(
     childRunId = pipelineResult.runId;
     let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
+      if (pipelineResult.registration.kind !== "owned") {
+        throw new Error("collector registration returned no dispatch authority");
+      }
+      const { assertDispatchCurrent } = pipelineResult.registration;
       let launchTerminationConfirmed = false;
       activateSwarmRun({
         groupId: swarmSchedulerGroupKey,
         runId: childRunId,
         start: async () => {
           await runWithGatewayIndependentRootWorkContinuation(async () => {
-            const launch = await launchChildRun();
+            const launch = await launchChildRun(assertDispatchCurrent);
             // Queued registration already owns the task row before either dispatch route starts.
             // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
             const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;

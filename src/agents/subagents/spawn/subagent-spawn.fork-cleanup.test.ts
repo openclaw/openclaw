@@ -7,7 +7,10 @@ import type { ExecutionDecisionWork } from "../../../audit/execution-decision-wo
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { loadSubagentSpawnModuleForTest } from "./subagent-spawn.test-helpers.js";
+import {
+  createAcceptedSubagentRegistration,
+  loadSubagentSpawnModuleForTest,
+} from "./subagent-spawn.test-helpers.js";
 
 type ForkSession =
   typeof import("../../../auto-reply/reply/session-fork.js").forkSessionEntryFromParent;
@@ -148,10 +151,11 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     forkedEntry = undefined;
     fork.mockClear();
     resetScheduler();
-    registerSubagentRun.mockReset().mockImplementation(() => {
+    registerSubagentRun.mockReset().mockImplementation((input: Record<string, unknown>) => {
       if (failure === "registration") {
         throw new Error("registration failed");
       }
+      return createAcceptedSubagentRegistration(input);
     });
     startQueuedSubagentRun.mockReset().mockReturnValue(false);
     settleFailedQueuedSubagentLaunch.mockReset().mockReturnValue(true);

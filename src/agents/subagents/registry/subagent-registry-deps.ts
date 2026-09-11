@@ -14,6 +14,8 @@ import {
   persistSubagentRunsToDiskOrThrow,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
+import { findSubagentRunIdentityClaimFromSqlite } from "./subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SubagentAnnounceModule = Pick<
   typeof import("../announce/subagent-announce.js"),
@@ -33,6 +35,7 @@ export type SubagentRegistryDeps = {
   captureSubagentCompletionReply: SubagentAnnounceModule["captureSubagentCompletionReply"];
   cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
   getRuntimeConfig: typeof getRuntimeConfig;
+  findPersistedSubagentRunIdentityClaim: (runId: string) => SubagentRunRecord | null;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
   persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
   persistSubagentRunsToDiskOrThrow: typeof persistSubagentRunsToDiskOrThrow;
@@ -75,6 +78,7 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
     (await loadSubagentAnnounceModule()).captureSubagentCompletionReply(sessionKey, options),
   cleanupBrowserSessionsForLifecycleEnd: async (params) =>
     (await loadCleanupBrowserSessionsForLifecycleEnd())(params),
+  findPersistedSubagentRunIdentityClaim: findSubagentRunIdentityClaimFromSqlite,
   getRuntimeConfig,
   onAgentEvent,
   persistSubagentRunsToDisk,

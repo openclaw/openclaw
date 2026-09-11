@@ -110,8 +110,11 @@ type SubagentRegistryPersistListener = () => void;
 
 const SUBAGENT_REGISTRY_PERSIST_LISTENERS = new Set<SubagentRegistryPersistListener>();
 
-function emitSubagentRegistryPersisted(): void {
+function emitSubagentRegistryPersisted(isCurrent?: () => boolean): void {
   for (const listener of SUBAGENT_REGISTRY_PERSIST_LISTENERS) {
+    if (isCurrent && !isCurrent()) {
+      return;
+    }
     try {
       listener();
     } catch {
@@ -222,12 +225,18 @@ export function publishSubagentRunsAfterAtomicStore(
   runs: Map<string, SubagentRunRecord>,
   changedRunIds: readonly string[],
   deferredObserverEvents: Array<() => void>,
+  options?: { isCurrent?: () => boolean },
 ): void {
   rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
   const events = updateCommittedSwarmNotifications(runs, changedRunIds);
   deferredObserverEvents.push(() => {
-    emitSubagentRegistryPersisted();
-    events.forEach(emitSessionLifecycleEvent);
+    emitSubagentRegistryPersisted(options?.isCurrent);
+    for (const event of events) {
+      if (options?.isCurrent && !options.isCurrent()) {
+        return;
+      }
+      emitSessionLifecycleEvent(event);
+    }
   });
 }
 

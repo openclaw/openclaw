@@ -6,7 +6,6 @@ import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-regis
 import { loadSubagentSessionListRunsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   claimSubagentRunKill,
-  registerSubagentRun,
   releaseSubagentRun,
   releaseSubagentRunKillClaim,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -15,7 +14,6 @@ import {
   holdQueuedSwarmRun,
   releaseSwarmRun,
   removeQueuedSwarmRun,
-  reserveSwarmRun,
 } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
@@ -40,6 +38,7 @@ const {
   listChildren,
   spawnCollectors,
   createQueuedReservation,
+  registerQueuedSuccessor,
   observeLifecycle,
 } = useQueuedCollectorFixture();
 
@@ -302,7 +301,7 @@ describe("queued collector session projection", () => {
   });
 
   it("rejects stale copies, replaced owners, and lost reservations without losing compact status", async () => {
-    const { entry, registration } = await createQueuedReservation();
+    const { entry } = await createQueuedReservation();
     const compact = expectDefined(
       loadSubagentSessionListRunsFromSqlite().get(entry.runId),
       "compact queued record",
@@ -312,22 +311,13 @@ describe("queued collector session projection", () => {
     expect(isSubagentRunQueued(compact)).toBe(false);
     expect(isSubagentRunQueued(structuredClone(entry))).toBe(false);
 
-    registerSubagentRun(registration);
-    const replacement = expectDefined(subagentRuns.get(entry.runId), "replacement record");
-    expect(replacement).not.toBe(entry);
+    removeQueuedSwarmRun(entry.runId);
+    const replacement = registerQueuedSuccessor(entry).entry;
     expect(isSubagentRunQueued(entry)).toBe(false);
     expect(isSubagentRunQueued(replacement)).toBe(false);
     expect((await listChildren(requestContext())).sessions[0]?.hasActiveRun).toBe(false);
 
-    removeQueuedSwarmRun(entry.runId);
-    reserveSwarmRun({
-      runId: entry.runId,
-      groupId: entry.groupId!,
-      maxConcurrent: 1,
-      activeRunIds: [],
-    });
-    registerSubagentRun(registration);
-    const current = expectDefined(subagentRuns.get(entry.runId), "new reservation owner");
+    const current = registerQueuedSuccessor(replacement, { reserve: true }).entry;
     expect(isSubagentRunQueued(current)).toBe(true);
     schedulerTesting.reset();
     expect(isSubagentRunQueued(current)).toBe(false);
@@ -367,9 +357,10 @@ describe("queued collector session projection", () => {
   it.each(["replacement", "retirement"])(
     "publishes queued Stop before the kill result handoff permits %s",
     async (handoff) => {
-      const { entry, registration } = await createQueuedReservation();
+      const { entry } = await createQueuedReservation();
       const context = requestContext();
       const order: string[] = [];
+      let successorRunId: string | undefined;
       vi.mocked(context.broadcastToConnIds).mockImplementation(() => {
         expect(subagentRuns.get(entry.runId)).toBe(entry);
         order.push("published");
@@ -381,15 +372,11 @@ describe("queued collector session projection", () => {
           const result = await kill(...args);
           // Real cancellation is complete; an awaited consumer can now observe
           // another owner before it consumes the predecessor's result.
-          releaseSubagentRun(entry.runId);
           if (handoff === "replacement") {
-            reserveSwarmRun({
-              runId: entry.runId,
-              groupId: entry.groupId!,
-              maxConcurrent: 1,
-              activeRunIds: [],
-            });
-            registerSubagentRun(registration);
+            removeQueuedSwarmRun(entry.runId);
+            successorRunId = registerQueuedSuccessor(entry, { reserve: true }).entry.runId;
+          } else {
+            releaseSubagentRun(entry.runId);
           }
           order.push(handoff);
           return result;
@@ -421,8 +408,7 @@ describe("queued collector session projection", () => {
           expect.any(Object),
         );
         if (handoff === "replacement") {
-          const successor = subagentRuns.get(entry.runId);
-          expect(successor).not.toBe(entry);
+          const successor = subagentRuns.get(expectDefined(successorRunId, "successor run id"));
           expect(isSubagentRunQueued(successor)).toBe(true);
           expect(successor?.execution.endedAt).toBeUndefined();
         }
@@ -442,7 +428,7 @@ describe("queued collector session projection", () => {
     "reservation withdrawn",
     "registry replaced",
   ])("rejects queued-child Stop when %s", async (failure) => {
-    const { entry, registration } = await createQueuedReservation();
+    const { entry } = await createQueuedReservation();
     const unrelated = await createQueuedReservation("unrelated");
     const context = requestContext();
     const parent = expectDefined(
@@ -474,7 +460,7 @@ describe("queued collector session projection", () => {
             removeQueuedSwarmRun(entry.runId);
           }
           if (failure === "registry replaced") {
-            registerSubagentRun(registration);
+            registerQueuedSuccessor(entry);
           }
         });
       }

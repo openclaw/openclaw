@@ -62,6 +62,7 @@ it.each([
         requesterDisplayKey: requesterSessionKey,
         task: runId,
         cleanup: "keep",
+        taskRowOwnership: "required",
         expectsCompletionMessage: runId === "nested",
       });
     }
@@ -147,6 +148,7 @@ it.each([
         requesterDisplayKey: owner,
         task: "unrelated replacement",
         cleanup: "keep",
+        taskRowOwnership: "required",
         expectsCompletionMessage: false,
       });
     }

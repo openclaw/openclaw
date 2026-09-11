@@ -27,11 +27,15 @@ import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { getHeartbeatWakeAbortSignal, type HeartbeatRunResult } from "./heartbeat-wake.js";
 
 export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
+  const signal = getHeartbeatWakeAbortSignal();
+  signal?.throwIfAborted();
   const wake = await resolveHeartbeatWakeStage(opts);
+  signal?.throwIfAborted();
   if (wake.kind === "skipped") {
     return { status: "skipped", reason: wake.reason };
   }
   const prepared = await prepareHeartbeatRunStage(wake);
+  signal?.throwIfAborted();
   if (prepared.kind === "skipped") {
     return { status: "skipped", reason: prepared.reason };
   }
@@ -49,7 +53,6 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   }
   const policy = createHeartbeatDispatch(opts, wake, prepared);
   const state: ReplyOperationRunState = { heartbeat: policy };
-  const signal = getHeartbeatWakeAbortSignal();
   const channel = delivery.channel !== "none" ? delivery.channel : undefined;
   const typing =
     channel &&
@@ -70,7 +73,9 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   try {
     const { dispatchInboundMessageWithRoutedChannelDispatcher } =
       await import("../auto-reply/dispatch.js");
+    signal?.throwIfAborted();
     await typing?.onReplyStart();
+    signal?.throwIfAborted();
     const heartbeatContext = {
       Body: appendCronStyleCurrentTimeLine(prepared.prompt, cfg, startedAt),
       From: sender,

@@ -1,5 +1,6 @@
 // Provides the runtime adapter for detached task execution.
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
   DetachedTaskRecoveryAttemptParams,
   DetachedTaskRecoveryAttemptResult,
@@ -11,6 +12,13 @@ import type {
 import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import { cancelTaskById as cancelDetachedTaskRunByIdInCore } from "./runtime-internal.js";
 import {
+  isAuthorizedManagedTaskProjection,
+  isManagedTaskProjection,
+  validateSubagentTaskBacking,
+  type SubagentTaskBackingPolicy,
+} from "./task-backing-authority.js";
+import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import {
   completeTaskRunByRunIdCore,
   createQueuedTaskRunCore,
   createRunningTaskRunCore,
@@ -20,11 +28,81 @@ import {
   setDetachedTaskDeliveryStatusByRunIdCore,
   startTaskRunByRunIdCore,
 } from "./task-executor.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import {
+  finalizeTaskRecordsByExpectedSnapshots,
+  updateTaskDeliveryByExpectedSnapshots,
+} from "./task-registry-record-api.js";
+import { ensureTaskRegistryReady, getTasksByRunScope } from "./task-registry-state.js";
+import { bindTaskRecord, replaceTaskRunRowInDatabase } from "./task-registry.store.sqlite.js";
+import type { TaskRecord, TaskRuntime } from "./task-registry.types.js";
 import { findTaskByRunIdForStatus, listTasksForSessionKeyForStatus } from "./task-status-access.js";
 
 const log = createSubsystemLogger("tasks/detached-runtime");
 const DETACHED_TASK_RECOVERY_WARN_MS = 5_000;
+
+export type DefaultSubagentTaskBackingResult =
+  | { kind: "custom" }
+  | { kind: "valid"; task: TaskRecord; projections: TaskRecord[] }
+  | { kind: "invalid"; reason: string };
+
+export function inspectDefaultSubagentTaskBacking(params: {
+  runId: string;
+  ownerKey: string;
+  sessionKey: string;
+  generation: number | undefined;
+  policy: SubagentTaskBackingPolicy;
+  preserveTerminalState?: boolean;
+}): DefaultSubagentTaskBackingResult {
+  if (getRegisteredDetachedTaskLifecycleRuntime()) {
+    return { kind: "custom" };
+  }
+  ensureTaskRegistryReady();
+  const candidates = getTasksByRunScope({
+    runId: params.runId,
+    runtime: "subagent",
+    sessionKey: params.sessionKey,
+  });
+  const canonicalCandidates = candidates.filter((candidate) => !isManagedTaskProjection(candidate));
+  if (canonicalCandidates.length > 1) {
+    return { kind: "invalid", reason: "is ambiguous" };
+  }
+  const validation = validateSubagentTaskBacking({
+    task: canonicalCandidates[0],
+    runId: params.runId,
+    ownerKey: params.ownerKey,
+    childSessionKey: params.sessionKey,
+    generation: params.generation,
+    policy: params.policy,
+    preserveTerminalState: params.preserveTerminalState,
+  });
+  if (!validation.ok) {
+    return { kind: "invalid", reason: validation.reason };
+  }
+  return {
+    kind: "valid",
+    task: validation.task,
+    projections: candidates.filter(
+      (candidate) =>
+        candidate.taskId !== validation.task.taskId &&
+        isAuthorizedManagedTaskProjection({
+          task: candidate,
+          canonical: validation.task,
+        }),
+    ),
+  };
+}
+
+export function assertDefaultSubagentTaskBacking(
+  params: Parameters<typeof inspectDefaultSubagentTaskBacking>[0],
+): TaskRecord | undefined {
+  const result = inspectDefaultSubagentTaskBacking(params);
+  if (result.kind === "invalid") {
+    throw new Error(
+      `Collector task backing ${result.reason}. Retry the collector request to create a fresh run.`,
+    );
+  }
+  return result.kind === "valid" ? result.task : undefined;
+}
 
 function taskMatchesFindScope(task: TaskRecord, params: DetachedTaskFindParams): boolean {
   return (
@@ -52,6 +130,53 @@ function findCoreTaskRun(params: DetachedTaskFindParams): TaskRecord | undefined
   );
 }
 
+export function acceptDefaultPreparedTaskRunAtomically(params: {
+  runId: string;
+  runtime: TaskRuntime;
+  sessionKey: string;
+  ownerKey: string;
+  generation: number | undefined;
+  acceptedAt: number;
+  preserveTaskState?: boolean;
+  commitPeer: () => void;
+}): TaskRecord | null {
+  const expected = assertDefaultSubagentTaskBacking({
+    runId: params.runId,
+    ownerKey: params.ownerKey,
+    sessionKey: params.sessionKey,
+    generation: params.generation,
+    policy: "gateway-acceptance",
+    preserveTerminalState: params.preserveTaskState,
+  });
+  if (!expected) {
+    return null;
+  }
+  if (expected.runtime !== params.runtime) {
+    throw new Error("prepared task runtime changed before atomic acceptance");
+  }
+  const next = params.preserveTaskState
+    ? expected
+    : {
+        ...expected,
+        status: "running" as const,
+        startedAt: params.acceptedAt,
+        lastEventAt: params.acceptedAt,
+      };
+  runOpenClawStateWriteTransaction((database) => {
+    if (
+      !replaceTaskRunRowInDatabase({
+        database,
+        expected: bindTaskRecord(expected),
+        next: bindTaskRecord(next),
+      })
+    ) {
+      throw new Error("prepared task state changed before atomic acceptance");
+    }
+    params.commitPeer();
+  });
+  return next;
+}
+
 // Default runtime keeps detached task APIs usable before plugins install custom lifecycle hooks.
 const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
   createQueuedTaskRun: createQueuedTaskRunCore,
@@ -68,6 +193,10 @@ const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
 
 export function getDetachedTaskLifecycleRuntime(): DetachedTaskLifecycleRuntime {
   return getRegisteredDetachedTaskLifecycleRuntime() ?? DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME;
+}
+
+export function isDefaultDetachedTaskLifecycleRuntime(): boolean {
+  return getRegisteredDetachedTaskLifecycleRuntime() === undefined;
 }
 
 export function createQueuedTaskRun(
@@ -105,6 +234,106 @@ export function finalizeTaskRunByRunId(params: DetachedTaskFinalizeParams): Task
   return runtime.failTaskRunByRunId({
     ...params,
     status: params.status,
+  });
+}
+
+/**
+ * Finalizes only the task minted by one subagent owner generation.
+ * Custom runtimes retain their own lookup and persistence contract.
+ */
+export function finalizeSubagentTaskRunForOwner(params: {
+  runId: string;
+  ownerKey: string;
+  sessionKey: string;
+  generation: number | undefined;
+  resolvedTask?: TaskRecord;
+  status: DetachedTaskFinalizeParams["status"];
+  startedAt?: number;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  clearError?: boolean;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  preserveTerminalSummary?: boolean;
+  terminalOutcome?: DetachedTaskFinalizeParams["terminalOutcome"];
+  detail?: DetachedTaskFinalizeParams["detail"];
+  suppressDelivery?: boolean;
+  preserveTerminalState?: boolean;
+}): TaskRecord[] {
+  const runtime = getRegisteredDetachedTaskLifecycleRuntime();
+  if (runtime) {
+    const {
+      ownerKey: _ownerKey,
+      generation: _generation,
+      resolvedTask,
+      preserveTerminalState: _preserveTerminalState,
+      ...finalizeParams
+    } = params;
+    return finalizeTaskRunByRunId({
+      ...finalizeParams,
+      runId: resolvedTask?.runId ?? params.runId,
+      runtime: "subagent",
+      sessionKey: resolvedTask?.childSessionKey ?? params.sessionKey,
+    });
+  }
+  const backing = inspectDefaultSubagentTaskBacking({
+    runId: params.runId,
+    ownerKey: params.ownerKey,
+    sessionKey: params.sessionKey,
+    generation: params.generation,
+    policy: "failure-finalization",
+  });
+  if (backing.kind !== "valid") {
+    return [];
+  }
+  if (params.preserveTerminalState && isTerminalTaskStatus(backing.task.status)) {
+    return [];
+  }
+  return finalizeTaskRecordsByExpectedSnapshots({
+    ...params,
+    expected: [backing.task, ...backing.projections],
+  });
+}
+
+export function setSubagentTaskDeliveryStatusForOwner(params: {
+  runId: string;
+  ownerKey: string;
+  sessionKey: string;
+  generation: number | undefined;
+  resolvedTask?: TaskRecord;
+  deliveryStatus: TaskRecord["deliveryStatus"];
+  error?: string;
+}): TaskRecord[] {
+  const runtime = getRegisteredDetachedTaskLifecycleRuntime();
+  if (runtime) {
+    const {
+      ownerKey: _ownerKey,
+      generation: _generation,
+      resolvedTask,
+      ...deliveryParams
+    } = params;
+    return setDetachedTaskDeliveryStatusByRunId({
+      ...deliveryParams,
+      runId: resolvedTask?.runId ?? params.runId,
+      runtime: "subagent",
+      sessionKey: resolvedTask?.childSessionKey ?? params.sessionKey,
+    });
+  }
+  const backing = inspectDefaultSubagentTaskBacking({
+    runId: params.runId,
+    ownerKey: params.ownerKey,
+    sessionKey: params.sessionKey,
+    generation: params.generation,
+    policy: "failure-finalization",
+  });
+  if (backing.kind !== "valid") {
+    return [];
+  }
+  return updateTaskDeliveryByExpectedSnapshots({
+    expected: [backing.task, ...backing.projections],
+    deliveryStatus: params.deliveryStatus,
+    error: params.error,
   });
 }
 

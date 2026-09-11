@@ -1,5 +1,8 @@
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
-import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
+import {
+  prepareTaskActivityRetirement,
+  publishPreparedTaskActivityRetirement,
+} from "./task-registry-activity.js";
 import {
   cloneTaskRecord,
   cloneTaskRecordForObserver,
@@ -30,9 +33,8 @@ export function publishTaskRecordAfterAtomicStore(
     current !== undefined &&
     !isTerminalTaskStatus(current.status) &&
     isTerminalTaskStatus(next.status);
-  if (becomesTerminal) {
-    flushTaskActivity(next.taskId);
-  }
+  const activityRetirement =
+    becomesTerminal && current ? prepareTaskActivityRetirement(current) : undefined;
   if (current) {
     deleteOwnerKeyIndex(next.taskId, current);
     deleteParentFlowIdIndex(next.taskId, current);
@@ -40,19 +42,26 @@ export function publishTaskRecordAfterAtomicStore(
   }
   tasks.set(next.taskId, next);
   bumpTaskRegistryRevision();
-  if (becomesTerminal) {
-    clearTaskActivity(next.taskId);
-  }
   addOwnerKeyIndex(next.taskId, next);
   addParentFlowIdIndex(next.taskId, next);
   addRelatedSessionKeyIndex(next.taskId, next);
   rebuildRunIdIndex();
-  const emit = () =>
+  const emit = () => {
+    if (activityRetirement) {
+      publishPreparedTaskActivityRetirement(
+        activityRetirement,
+        () => tasks.get(next.taskId) === next,
+      );
+    }
+    if (tasks.get(next.taskId) !== next) {
+      return;
+    }
     emitTaskRegistryObserverEvent(() => ({
       kind: "upserted",
       task: cloneTaskRecordForObserver(next),
       ...(current ? { previous: cloneTaskRecordForObserver(current) } : {}),
     }));
+  };
   if (options?.deferredObserverEvents) {
     options.deferredObserverEvents.push(emit);
   } else {

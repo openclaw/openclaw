@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "./heartbeat-wake-contracts.js";
@@ -41,7 +42,13 @@ type WakeGroup = {
   event?: PendingWake;
   blockedUntil: number;
 };
-type ActiveWake = { generation: number; controller: AbortController };
+type ActiveWake = {
+  generation: number;
+  lifecycle: number;
+  controller: AbortController;
+  wakes: PendingWake[];
+  completion: Deferred<void>;
+};
 type RequestOptions = Omit<SessionEventWakeRequest, "retainedWork"> & { coalesceMs?: number };
 
 const SLOTS = ["task", "scheduled", "event"] as const;
@@ -146,6 +153,8 @@ function createSessionEventWakeRuntime() {
   const abortSignals = new AsyncLocalStorage<AbortSignal>();
   let handler: WakeHandler | null = null;
   let generation = 0;
+  let lifecycle = 0;
+  let resetting: Deferred<void> | undefined;
   let sequence = 0;
   let timer: NodeJS.Timeout | undefined;
   let timerDueAt = 0;
@@ -308,6 +317,9 @@ function createSessionEventWakeRuntime() {
     const signal = owner.controller.signal;
     try {
       for (const [index, wake] of wakes.entries()) {
+        if (owner.lifecycle !== lifecycle) {
+          return;
+        }
         // Busy backoff also owns wakes selected before the current attempt began.
         const blockedUntil = pending.get(key)?.blockedUntil ?? 0;
         if (owner.generation !== generation || blockedUntil > performance.now()) {
@@ -317,36 +329,43 @@ function createSessionEventWakeRuntime() {
         let result: SessionEventWakeResult;
         let onAbort: (() => void) | undefined;
         try {
-          result = await runWithGatewayDetachedWorkAdmission(() => {
-            signal.throwIfAborted();
-            // Subscribe before calling the handler: it can synchronously replace its owner.
-            const aborted = new Promise<never>((_resolve, reject) => {
-              onAbort = () =>
-                reject(
-                  signal.reason instanceof Error
-                    ? signal.reason
-                    : new Error("Heartbeat handler was replaced"),
-                );
-              signal.addEventListener("abort", onAbort, { once: true });
-            });
-            const request: SessionEventWakeRequest = {
-              source: wake.source,
-              intent: wake.intent,
-              reason: wake.reason,
-              ...(wake.agentId ? { agentId: wake.agentId } : {}),
-              ...(wake.sessionKey ? { sessionKey: wake.sessionKey } : {}),
-              ...(wake.heartbeat ? { heartbeat: wake.heartbeat } : {}),
-              ...(wake.scheduledEveryMs !== undefined
-                ? { scheduledEveryMs: wake.scheduledEveryMs }
-                : {}),
-              ...(wake.tasks ? { tasks: wake.tasks } : {}),
-              ...(wake.retainedWork ? { retainedWork: true } : {}),
-            };
-            // A synchronous handler throw must not leave the abort promise unobserved.
-            const running = abortSignals.run(signal, async () => run(request, signal));
-            return Promise.race([running, aborted]);
-          }, "heartbeat:wake");
+          result = await runWithGatewayDetachedWorkAdmission(
+            () => {
+              signal.throwIfAborted();
+              // Subscribe before calling the handler: it can synchronously replace its owner.
+              const aborted = new Promise<never>((_resolve, reject) => {
+                onAbort = () =>
+                  reject(
+                    signal.reason instanceof Error
+                      ? signal.reason
+                      : new Error("Heartbeat handler was replaced"),
+                  );
+                signal.addEventListener("abort", onAbort, { once: true });
+              });
+              const request: SessionEventWakeRequest = {
+                source: wake.source,
+                intent: wake.intent,
+                reason: wake.reason,
+                ...(wake.agentId ? { agentId: wake.agentId } : {}),
+                ...(wake.sessionKey ? { sessionKey: wake.sessionKey } : {}),
+                ...(wake.heartbeat ? { heartbeat: wake.heartbeat } : {}),
+                ...(wake.scheduledEveryMs !== undefined
+                  ? { scheduledEveryMs: wake.scheduledEveryMs }
+                  : {}),
+                ...(wake.tasks ? { tasks: wake.tasks } : {}),
+                ...(wake.retainedWork ? { retainedWork: true } : {}),
+              };
+              // A synchronous handler throw must not leave the abort promise unobserved.
+              const running = abortSignals.run(signal, async () => run(request, signal));
+              return Promise.race([running, aborted]);
+            },
+            "heartbeat:wake",
+            signal,
+          );
         } catch {
+          if (owner.lifecycle !== lifecycle) {
+            return;
+          }
           if (owner.generation === generation) {
             retry(wake);
           } else {
@@ -357,6 +376,9 @@ function createSessionEventWakeRuntime() {
           if (onAbort) {
             signal.removeEventListener("abort", onAbort);
           }
+        }
+        if (owner.lifecycle !== lifecycle) {
+          return;
         }
         if (result.status === "skipped" && shouldRetain(wake, result)) {
           if (owner.generation === generation) {
@@ -372,7 +394,10 @@ function createSessionEventWakeRuntime() {
       if (active.get(key) === owner) {
         active.delete(key);
       }
-      schedulePending();
+      owner.completion.resolve();
+      if (owner.lifecycle === lifecycle) {
+        schedulePending();
+      }
     }
   }
 
@@ -391,7 +416,13 @@ function createSessionEventWakeRuntime() {
         }
         // Register the whole batch first so replacement retires unstarted work too.
         const ready = takeReady().map(({ key, wakes }) => {
-          const owner = { generation, controller: new AbortController() };
+          const owner = {
+            generation,
+            lifecycle,
+            controller: new AbortController(),
+            wakes,
+            completion: createDeferredCore<void>(),
+          };
           active.set(key, owner);
           return { key, wakes, owner };
         });
@@ -464,6 +495,52 @@ function createSessionEventWakeRuntime() {
     };
   }
 
+  function reset(): Promise<void> {
+    if (resetting) {
+      return resetting.promise;
+    }
+    const completion = createDeferredCore<void>();
+    resetting = completion;
+    const groups = [...pending.values()];
+    const owners = [...active.values()];
+    // Full lifecycle retirement differs from handler handoff: payload queues are
+    // drained too. Fence and detach old work before abort listeners create successors.
+    lifecycle += 1;
+    generation += 1;
+    handler = null;
+    clearTimeout(timer);
+    timer = undefined;
+    pending.clear();
+    active.clear();
+    const cancelled: SessionEventWakeResult = {
+      status: "failed",
+      reason: "heartbeat wake cancelled",
+    };
+    for (const group of groups) {
+      for (const slot of SLOTS) {
+        const wake = group[slot];
+        if (wake) {
+          settle(wake, cancelled);
+        }
+      }
+    }
+    for (const owner of owners) {
+      for (const wake of owner.wakes) {
+        settle(wake, cancelled);
+      }
+      owner.controller.abort();
+    }
+    // Join the existing cancellation race, not an uncooperative plugin body.
+    // Every selected owner reserves completion before any handler can reenter reset.
+    void Promise.all(owners.map((owner) => owner.completion.promise)).then(() => {
+      if (resetting === completion) {
+        resetting = undefined;
+      }
+      completion.resolve();
+    });
+    return completion.promise;
+  }
+
   function enqueueRequest(options: RequestOptions, settlement?: Settlement): void {
     const now = performance.now();
     const { coalesceMs, ...wake } = options;
@@ -524,6 +601,7 @@ function createSessionEventWakeRuntime() {
   }
 
   return {
+    reset,
     setSessionEventWakeHandler,
     requestSessionEventWake,
     requestSessionEventWakeAndWait,
@@ -543,4 +621,8 @@ export const {
   getSessionEventWakeAbortSignal,
   areSessionEventWakesEnabled,
   setSessionEventWakesEnabled,
-} = resolveGlobalSingleton(Symbol.for("openclaw.sessionEventWake"), createSessionEventWakeRuntime);
+} = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionEventWake"),
+  createSessionEventWakeRuntime,
+  (runtime) => runtime.reset(),
+);

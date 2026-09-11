@@ -4,6 +4,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import { readCompletedFileMutationDelta } from "../agents/file-mutation-args.js";
 import { resolveFileMutationToolName } from "../agents/tool-mutation-names.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { readTaskBackingInstance, sameTaskBackingInstance } from "./task-backing-authority.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { cloneTaskRecordForObserver } from "./task-registry-records.js";
 import {
@@ -12,7 +13,7 @@ import {
   tasks,
 } from "./task-registry-state.js";
 import type { TaskActivityOverlayState } from "./task-registry.process-state.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import type { TaskBackingInstance, TaskRecord } from "./task-registry.types.js";
 
 const MAX_ACTIVITY_CHARS = 200;
 const ACTIVITY_LINE_PREFIX = new RegExp(`^(?:\\s*\\S){1,${MAX_ACTIVITY_CHARS + 1}}`);
@@ -25,10 +26,17 @@ type TaskActivitySnapshot = {
   diffStat?: { files: number; added: number; removed: number };
 };
 
+export type PreparedTaskActivityRetirement = {
+  task: Omit<TaskRecord, "detail">;
+  activity: TaskActivityOverlayState;
+  emit: boolean;
+};
+
 function activityFor(task: TaskRecord): TaskActivityOverlayState {
   const runId = task.runId ?? "";
+  const backing = readTaskBackingInstance(task.detail);
   const existing = taskActivityByTaskId.get(task.taskId);
-  if (existing?.runId === runId) {
+  if (existing?.runId === runId && sameOptionalTaskBackingInstance(existing.backing, backing)) {
     return existing;
   }
   if (existing?.flushTimer) {
@@ -36,6 +44,7 @@ function activityFor(task: TaskRecord): TaskActivityOverlayState {
   }
   const created: TaskActivityOverlayState = {
     runId,
+    backing,
     assistantText: "",
     thinkingText: "",
     hasAssistantActivity: false,
@@ -47,6 +56,15 @@ function activityFor(task: TaskRecord): TaskActivityOverlayState {
   };
   taskActivityByTaskId.set(task.taskId, created);
   return created;
+}
+
+function sameOptionalTaskBackingInstance(
+  left: TaskBackingInstance | undefined,
+  right: TaskBackingInstance | undefined,
+): boolean {
+  return left === undefined || right === undefined
+    ? left === right
+    : sameTaskBackingInstance(left, right);
 }
 
 function lastLineSnippet(text: string): string | undefined {
@@ -181,7 +199,50 @@ export function getTaskActivitySnapshot(taskId: string): TaskActivitySnapshot | 
     : undefined;
 }
 
-export function flushTaskActivity(taskId: string): void {
+export function prepareTaskActivityRetirement(
+  task: TaskRecord,
+): PreparedTaskActivityRetirement | undefined {
+  const activity = taskActivityByTaskId.get(task.taskId);
+  if (
+    !activity ||
+    activity.runId !== (task.runId ?? "") ||
+    !sameOptionalTaskBackingInstance(activity.backing, readTaskBackingInstance(task.detail))
+  ) {
+    return undefined;
+  }
+  return {
+    task: cloneTaskRecordForObserver(task),
+    activity,
+    emit: activity.dirty && task.status === "running",
+  };
+}
+
+export function publishPreparedTaskActivityRetirement(
+  prepared: PreparedTaskActivityRetirement,
+  isOwnerCurrent: () => boolean,
+): void {
+  const { task, activity, emit } = prepared;
+  if (taskActivityByTaskId.get(task.taskId) !== activity) {
+    return;
+  }
+  if (activity.flushTimer) {
+    clearTimeout(activity.flushTimer);
+    activity.flushTimer = undefined;
+  }
+  if (emit && activity.dirty && isOwnerCurrent()) {
+    activity.dirty = false;
+    activity.lastFlushedAt = Date.now();
+    emitTaskRegistryObserverEvent(() => ({
+      kind: "upserted",
+      task: cloneTaskRecordForObserver(task),
+    }));
+  }
+  if (taskActivityByTaskId.get(task.taskId) === activity) {
+    clearTaskActivity(task.taskId);
+  }
+}
+
+function flushTaskActivity(taskId: string): void {
   const activity = taskActivityByTaskId.get(taskId);
   if (!activity?.dirty) {
     return;

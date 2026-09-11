@@ -2,6 +2,7 @@
 // workspace selection, sandboxed cwd rejection, and cleanup deletion calls.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createAcceptedSubagentRegistration,
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
@@ -151,7 +152,9 @@ describe("spawnSubagentDirect workspace inheritance", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockClear();
-    hoisted.registerSubagentRunMock.mockClear();
+    hoisted.registerSubagentRunMock
+      .mockReset()
+      .mockImplementation(createAcceptedSubagentRegistration);
     hoisted.resolveSandboxRuntimeStatusMock.mockReset();
     hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(() => ({ sandboxed: false }));
     hoisted.hookRunner.hasHooks.mockReset();

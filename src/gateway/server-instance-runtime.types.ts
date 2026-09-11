@@ -10,6 +10,7 @@ import type {
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 
 export type GatewayInstanceAgentDispatchOptions = {
+  assertAdmissionCurrent?: () => void;
   allowModelOverride?: boolean;
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;

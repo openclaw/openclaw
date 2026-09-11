@@ -8,10 +8,11 @@ import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { SubagentRegistryDeps } from "../../agents/subagents/registry/subagent-registry-deps.js";
+import { readSubagentRun } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
-  addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
+  registerSubagentRun,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
@@ -20,8 +21,10 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
+import { getTaskFlowById } from "../../tasks/task-flow-runtime-internal.js";
 import {
   findTaskByRunId,
   createTaskRecord,
@@ -29,7 +32,12 @@ import {
   markTaskTerminalById,
   reloadTaskRegistryFromStore,
 } from "../../tasks/task-registry.js";
-import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
+import { resetTaskRegistryRuntimeForTests } from "../../tasks/task-registry.store.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../../tasks/task-runtime.test-helpers.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
@@ -91,6 +99,87 @@ function spyDetachedCreateRunningTaskRun() {
     createRunningTaskRun: createRunningTaskRunSpy,
   });
   return createRunningTaskRunSpy;
+}
+
+function createControlledSubagentWaits() {
+  const waits = new Map<string, ReturnType<typeof createDeferred<AgentWaitResult>>>();
+  return {
+    callGateway: (async <T>(request: { method?: string; params?: unknown }) => {
+      if (request.method !== "agent.wait") {
+        return {} as T;
+      }
+      const runId = (request.params as { runId?: string } | undefined)?.runId;
+      const wait = runId ? waits.get(runId) : undefined;
+      if (!wait) {
+        return { status: "pending" } as T;
+      }
+      return (await wait.promise) as T;
+    }) as SubagentRegistryDeps["callGateway"],
+    prepare(runId: string) {
+      const wait = createDeferred<AgentWaitResult>();
+      waits.set(runId, wait);
+      return wait;
+    },
+  };
+}
+
+function resetDurableAgentTaskStateForTests(): void {
+  resetTaskRegistryRuntimeForTests();
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
+}
+
+async function registerPausedRequiredSubagent(params: {
+  waits: ReturnType<typeof createControlledSubagentWaits>;
+  runId: string;
+  childSessionKey: string;
+  requesterSessionKey: string;
+  task: string;
+}) {
+  const wait = params.waits.prepare(params.runId);
+  const receipt = registerSubagentRun({
+    runId: params.runId,
+    childSessionKey: params.childSessionKey,
+    requesterSessionKey: params.requesterSessionKey,
+    requesterDisplayKey: params.requesterSessionKey,
+    task: params.task,
+    cleanup: "keep",
+    expectsCompletionMessage: true,
+    taskRowOwnership: "required",
+  });
+  expect(receipt?.kind).toBe("owned");
+  wait.resolve({
+    status: "ok",
+    startedAt: 1_000,
+    endedAt: 2_000,
+    stopReason: "end_turn",
+    livenessState: "paused",
+    yielded: true,
+  });
+  await waitForAssertion(() => {
+    expectRecordFields(getSubagentRunByChildSessionKey(params.childSessionKey), {
+      runId: params.runId,
+      taskRunId: params.runId,
+      taskOwnershipPolicy: "core_required",
+      generation: 1,
+      pauseReason: "sessions_yield",
+    });
+  });
+  const task = requireValue(findTaskByRunId(params.runId), "expected canonical paused task");
+  const flowId = requireValue(task.parentFlowId, "expected canonical paused task flow");
+  expect(getTaskFlowById(flowId)).toMatchObject({
+    flowId,
+    syncMode: "task_mirrored",
+    status: "running",
+  });
+  expect(readSubagentRun(openOpenClawStateDatabase(), params.runId)).toMatchObject({
+    runId: params.runId,
+    taskRunId: params.runId,
+    taskOwnershipPolicy: "core_required",
+    generation: 1,
+    pauseReason: "sessions_yield",
+  });
+  return { task, flowId };
 }
 
 describe("gateway agent handler", () => {
@@ -444,42 +533,33 @@ describe("gateway agent handler", () => {
     async ({ requesterSessionKey, sourceTool, continuesRun }) => {
       await withTestDir({ prefix: "openclaw-gateway-yield-completion-" }, async (root) => {
         useTestStateDir(root);
-        resetAgentTaskRegistryForTests();
+        resetDurableAgentTaskStateForTests();
         resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:main:subagent:orchestrator";
         const workerSessionKey = "agent:main:subagent:worker";
         const previousRunId = "orchestrator-before-yield";
         const runId = "orchestrator-completion-followup";
         const result = "All worker results are ready.";
-        const completion = createDeferred<AgentWaitResult>();
+        const waits = createControlledSubagentWaits();
         const announce = vi.fn<SubagentRegistryDeps["runSubagentAnnounceFlow"]>(
           async () => "delivered",
         );
         applyGatewaySubagentRegistryTestDeps({
-          callGateway: (async () =>
-            await completion.promise) as SubagentRegistryDeps["callGateway"],
+          callGateway: waits.callGateway,
           runSubagentAnnounceFlow: announce,
         });
-        addSubagentRunForTests({
+        await registerPausedRequiredSubagent({
+          waits,
           runId: previousRunId,
           childSessionKey,
           requesterSessionKey,
-          requesterDisplayKey: requesterSessionKey,
           task: "Collect the worker's result",
-          startedAt: Date.now() - 10,
-          endedAt: Date.now(),
-          pauseReason: "sessions_yield",
-          expectsCompletionMessage: true,
         });
         mockSpawnedChildSessionEntry(childSessionKey);
-        mocks.agentCommand.mockImplementation(async () => {
-          completion.resolve({
-            status: "ok",
-            startedAt: Date.now(),
-            endedAt: Date.now(),
-            terminalReply: { disposition: "visible", text: result },
-          });
-          return { payloads: [{ text: result }], meta: { durationMs: 1 } };
+        const successorWait = continuesRun ? waits.prepare(runId) : undefined;
+        mocks.agentCommand.mockResolvedValue({
+          payloads: [{ text: result }],
+          meta: { durationMs: 1 },
         });
         const context = makeContext();
         const request = {
@@ -495,14 +575,14 @@ describe("gateway agent handler", () => {
 
         await invokeAgent(request, { context, reqId: runId, client: backendGatewayClient() });
 
-        const continued = requireValue(
-          getSubagentRunByChildSessionKey(childSessionKey),
-          "expected the orchestrator's continued run",
-        );
         if (!continuesRun) {
           await waitForAssertion(() => {
             expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "ok" });
           });
+          const continued = requireValue(
+            getSubagentRunByChildSessionKey(childSessionKey),
+            "expected the paused orchestrator run",
+          );
           expectRecordFields(continued, {
             runId: previousRunId,
             requesterSessionKey,
@@ -512,6 +592,19 @@ describe("gateway agent handler", () => {
           expect(announce).not.toHaveBeenCalled();
           return;
         }
+        await waitForAssertion(() => {
+          expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe(runId);
+        });
+        const continued = requireValue(
+          getSubagentRunByChildSessionKey(childSessionKey),
+          "expected the orchestrator's continued run",
+        );
+        successorWait?.resolve({
+          status: "ok",
+          startedAt: Date.now(),
+          endedAt: Date.now(),
+          terminalReply: { disposition: "visible", text: result },
+        });
         expectRecordFields(continued, {
           runId,
           taskRunId: previousRunId,
@@ -553,21 +646,21 @@ describe("gateway agent handler", () => {
       { prefix: "openclaw-gateway-plugin-subagent-own-requester-" },
       async (root) => {
         useTestStateDir(root);
+        resetDurableAgentTaskStateForTests();
         resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:work:subagent:plugin-yield-own-requester";
+        const waits = createControlledSubagentWaits();
+        applyGatewaySubagentRegistryTestDeps({ callGateway: waits.callGateway });
         const followUpRequester = {
           sessionKey: "agent:main:telegram:direct:555",
           origin: { channel: "telegram", to: "telegram:555", accountId: "work" },
         } as const;
-        addSubagentRunForTests({
+        await registerPausedRequiredSubagent({
+          waits,
           runId: "plugin-subagent-paused",
           childSessionKey,
           requesterSessionKey: "agent:main:telegram:direct:777",
-          requesterDisplayKey: "agent:main:telegram:direct:777",
           task: "wait for the remote job",
-          endedAt: 2_000,
-          pauseReason: "sessions_yield",
-          expectsCompletionMessage: true,
         });
 
         await registerPluginSubagentRunFromGateway({
@@ -602,22 +695,22 @@ describe("gateway agent handler", () => {
       { prefix: "openclaw-gateway-plugin-subagent-mixed-delivery-" },
       async (root) => {
         useTestStateDir(root);
+        resetDurableAgentTaskStateForTests();
         resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:work:subagent:plugin-yield-mixed-delivery";
         const originalRequester = "agent:main:telegram:direct:777";
+        const waits = createControlledSubagentWaits();
+        applyGatewaySubagentRegistryTestDeps({ callGateway: waits.callGateway });
         const cfg = {
           session: { mainKey: "main", scope: "per-sender" as const },
           agents: { list: [{ id: "main", default: true }, { id: "work" }] },
         };
-        addSubagentRunForTests({
+        await registerPausedRequiredSubagent({
+          waits,
           runId: "plugin-subagent-paused",
           childSessionKey,
           requesterSessionKey: originalRequester,
-          requesterDisplayKey: originalRequester,
           task: "wait for the remote job",
-          endedAt: 2_000,
-          pauseReason: "sessions_yield",
-          expectsCompletionMessage: true,
         });
 
         // A requester-bound follow-up lands at a higher generation than the paused
@@ -664,18 +757,13 @@ describe("gateway agent handler", () => {
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },
       async (root) => {
         useTestStateDir(root);
-        resetAgentTaskRegistryForTests();
+        resetDurableAgentTaskStateForTests();
         resetSubagentRegistryForTests({ persist: false });
-        const persistSubagentRunsToDiskOrThrow = vi.fn();
-        const persistenceError = Object.assign(new Error("disk full"), { code: "SQLITE_FULL" });
-        persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
-          throw persistenceError;
-        });
-        applyGatewaySubagentRegistryTestDeps({
-          persistSubagentRunsToDiskOrThrow,
-        });
+        const waits = createControlledSubagentWaits();
+        applyGatewaySubagentRegistryTestDeps({ callGateway: waits.callGateway });
         const runId = "plugin-subagent-registry-fail";
         const childSessionKey = "agent:main:subagent:registry-fail";
+        const database = openOpenClawStateDatabase();
         const cfg = {
           session: { mainKey: "main", scope: "per-sender" },
         } satisfies typeof mocks.loadConfigReturn;
@@ -707,76 +795,106 @@ describe("gateway agent handler", () => {
         const commandCallCount = mocks.agentCommand.mock.calls.length;
         const respond = vi.fn();
 
-        await invokeAgent(
-          {
-            message: "background plugin subagent task",
-            sessionKey: childSessionKey,
-            idempotencyKey: runId,
-          },
-          {
-            context,
-            reqId: runId,
-            respond,
-            client: {
-              connect: baseClient.connect,
-              internal: {
-                ...baseClient.internal,
-                agentRunTracking: "plugin_subagent",
-                pluginRuntimeOwnerId: "memory-core",
+        // sqlite-allow-raw: Scoped trigger injects an exact registry insert failure.
+        database.db.exec(`
+          CREATE TRIGGER fail_plugin_subagent_registration
+          BEFORE INSERT ON subagent_runs
+          WHEN NEW.run_id = '${runId}'
+          BEGIN
+            SELECT RAISE(ABORT, 'injected plugin registration failure');
+          END
+        `);
+        try {
+          await invokeAgent(
+            {
+              message: "background plugin subagent task",
+              sessionKey: childSessionKey,
+              idempotencyKey: runId,
+            },
+            {
+              context,
+              reqId: runId,
+              respond,
+              client: {
+                connect: baseClient.connect,
+                internal: {
+                  ...baseClient.internal,
+                  agentRunTracking: "plugin_subagent",
+                  pluginRuntimeOwnerId: "memory-core",
+                },
               },
             },
-          },
-        );
+          );
+        } finally {
+          // sqlite-allow-raw: Drop the scoped registration fault before fixture cleanup.
+          database.db.exec("DROP TRIGGER IF EXISTS fail_plugin_subagent_registration");
+        }
 
-        expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+        expect(getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
+        expect(readSubagentRun(database, runId)).toBeNull();
         expect(findTaskByRunId(runId)).toBeUndefined();
-        expectRespondError(respond, {
-          code: ErrorCodes.UNAVAILABLE,
-          message:
-            "plugin subagent registry persistence failed; run was not started | disk full | SQLITE_FULL",
-        });
+        const registrationError = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
+        expectStringFieldContains(
+          registrationError,
+          "message",
+          "plugin subagent registry persistence failed; run was not started",
+        );
+        expectStringFieldContains(
+          registrationError,
+          "message",
+          "injected plugin registration failure",
+        );
         expect(context.logGateway.warn).toHaveBeenCalledWith(
           expect.stringContaining("rejecting untracked dispatch"),
         );
 
         resetSubagentRegistryForTests({ persist: false });
         const pausedRunId = "plugin-subagent-paused-before-persistence-failure";
-        addSubagentRunForTests({
+        const pausedOwnership = await registerPausedRequiredSubagent({
+          waits,
           runId: pausedRunId,
           childSessionKey,
           requesterSessionKey: "agent:main:telegram:direct:777",
-          requesterDisplayKey: "agent:main:telegram:direct:777",
           task: "wait for the remote job",
-          endedAt: 2_000,
-          pauseReason: "sessions_yield",
-          expectsCompletionMessage: true,
         });
-        persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
-          throw new Error("disk full during paused-run adoption");
-        });
+        const pausedSnapshot = readSubagentRun(database, pausedRunId);
         const adoptionRunId = "plugin-subagent-adoption-registry-fail";
         const adoptionRespond = vi.fn();
-        await invokeAgent(
-          {
-            message: "the remote job finished",
-            sessionKey: childSessionKey,
-            idempotencyKey: adoptionRunId,
-          },
-          {
-            context,
-            reqId: adoptionRunId,
-            respond: adoptionRespond,
-            client: {
-              connect: baseClient.connect,
-              internal: {
-                ...baseClient.internal,
-                agentRunTracking: "plugin_subagent",
-                pluginRuntimeOwnerId: "memory-core",
+        // sqlite-allow-raw: Scoped trigger injects an exact adoption insert failure.
+        database.db.exec(`
+          CREATE TRIGGER fail_plugin_subagent_adoption
+          BEFORE INSERT ON subagent_runs
+          WHEN NEW.run_id = '${adoptionRunId}'
+          BEGIN
+            SELECT RAISE(ABORT, 'injected paused-run adoption failure');
+          END
+        `);
+        try {
+          await invokeAgent(
+            {
+              message: "the remote job finished",
+              sessionKey: childSessionKey,
+              idempotencyKey: adoptionRunId,
+            },
+            {
+              context,
+              reqId: adoptionRunId,
+              respond: adoptionRespond,
+              client: {
+                connect: baseClient.connect,
+                internal: {
+                  ...baseClient.internal,
+                  agentRunTracking: "plugin_subagent",
+                  pluginRuntimeOwnerId: "memory-core",
+                },
               },
             },
-          },
-        );
+          );
+        } finally {
+          // sqlite-allow-raw: Drop the scoped adoption fault before fixture cleanup.
+          database.db.exec("DROP TRIGGER IF EXISTS fail_plugin_subagent_adoption");
+        }
 
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
         expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
@@ -784,14 +902,24 @@ describe("gateway agent handler", () => {
           pauseReason: "sessions_yield",
         });
         expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).not.toBe(adoptionRunId);
-        expectRespondError(adoptionRespond, {
-          code: ErrorCodes.UNAVAILABLE,
-          message:
-            "plugin subagent registry persistence failed; run was not started | disk full during paused-run adoption",
+        expect(readSubagentRun(database, pausedRunId)).toEqual(pausedSnapshot);
+        expect(readSubagentRun(database, adoptionRunId)).toBeNull();
+        expect(findTaskByRunId(pausedRunId)).toEqual(pausedOwnership.task);
+        expect(getTaskFlowById(pausedOwnership.flowId)).toMatchObject({
+          flowId: pausedOwnership.flowId,
+          status: "running",
         });
+        const adoptionError = expectRespondError(adoptionRespond, { code: ErrorCodes.UNAVAILABLE });
+        expectStringFieldContains(
+          adoptionError,
+          "message",
+          "plugin subagent registry persistence failed; run was not started",
+        );
+        expectStringFieldContains(adoptionError, "message", "injected paused-run adoption failure");
 
         resetSubagentRegistryForTests({ persist: false });
         const retryRunId = "plugin-subagent-registry-retry";
+        waits.prepare(retryRunId);
         await invokeAgent(
           {
             message: "retry background plugin subagent task",
@@ -812,7 +940,6 @@ describe("gateway agent handler", () => {
           },
         );
 
-        expect(persistSubagentRunsToDiskOrThrow.mock.calls.length).toBeGreaterThan(1);
         await waitForAssertion(() => {
           expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
           const retryRun = requireValue(
@@ -820,6 +947,14 @@ describe("gateway agent handler", () => {
             "expected retry plugin subagent run",
           );
           expect(retryRun.runId).toBe(retryRunId);
+        });
+        expect(readSubagentRun(database, retryRunId)).toMatchObject({
+          runId: retryRunId,
+          taskOwnershipPolicy: "core_required",
+        });
+        expect(findTaskByRunId(retryRunId)).toMatchObject({
+          runId: retryRunId,
+          status: "running",
         });
       },
     );

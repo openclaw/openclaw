@@ -11,7 +11,7 @@ import {
 } from "../../../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import {
-  finalizeTaskRunByRunId,
+  finalizeSubagentTaskRunForOwner,
   findDetachedTaskRun,
 } from "../../../tasks/detached-task-runtime.js";
 import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-state.js";
@@ -124,10 +124,12 @@ export async function reconcileDurableSubagentKillIntent(params: {
       const taskResolution = resolveSubagentTaskForRun(childRuns(), params.entry);
       const task = taskResolution.task;
       if (taskResolution.lookup === "unavailable" || isUnstableTask(task)) {
-        const finalized = finalizeTaskRunByRunId({
-          runId: task?.runId ?? params.entry.taskRunId ?? params.runId,
-          runtime: "subagent",
-          sessionKey: task?.childSessionKey ?? params.entry.childSessionKey,
+        const finalized = finalizeSubagentTaskRunForOwner({
+          runId: params.entry.taskRunId ?? params.runId,
+          ownerKey: params.entry.requesterSessionKey,
+          sessionKey: params.entry.childSessionKey,
+          generation: params.entry.generation,
+          resolvedTask: task,
           status: "cancelled",
           endedAt: killIntent.requestedAt,
           lastEventAt: killIntent.requestedAt,
@@ -445,10 +447,12 @@ export async function reconcileProvisionalSubagentKill(params: {
         ? entry.execution.outcome.error?.trim()
         : undefined;
     try {
-      const finalizedTasks = finalizeTaskRunByRunId({
-        runId: taskBefore?.runId ?? entry.taskRunId ?? runId,
-        runtime: "subagent",
-        sessionKey: taskBefore?.childSessionKey ?? entry.childSessionKey,
+      const finalizedTasks = finalizeSubagentTaskRunForOwner({
+        runId: entry.taskRunId ?? runId,
+        ownerKey: entry.requesterSessionKey,
+        sessionKey: entry.childSessionKey,
+        generation: entry.generation,
+        resolvedTask: taskBefore,
         status: "cancelled",
         endedAt: killedAt,
         lastEventAt: killedAt,

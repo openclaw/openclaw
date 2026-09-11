@@ -13,7 +13,9 @@ import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtim
 import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
-  setDetachedTaskDeliveryStatusByRunId,
+  finalizeSubagentTaskRunForOwner,
+  isDefaultDetachedTaskLifecycleRuntime,
+  setSubagentTaskDeliveryStatusForOwner,
 } from "../../../tasks/detached-task-runtime.js";
 import type { TaskDeliveryStatus } from "../../../tasks/task-registry.types.js";
 import {
@@ -245,12 +247,15 @@ export const safeSetSubagentTaskDeliveryStatus = (
     deliveryError?: string;
   },
 ) => {
-  const target = resolveSubagentTaskTarget(params, args.entry);
+  const resolution = params.resolveSubagentTask(args.entry);
+  const target = resolveSubagentTaskTarget(params, args.entry, resolution);
   try {
-    setDetachedTaskDeliveryStatusByRunId({
-      runId: target.runId,
-      runtime: "subagent",
-      sessionKey: target.sessionKey,
+    setSubagentTaskDeliveryStatusForOwner({
+      runId: args.entry.taskRunId ?? args.entry.runId,
+      ownerKey: args.entry.requesterSessionKey,
+      sessionKey: args.entry.childSessionKey,
+      generation: args.entry.generation,
+      resolvedTask: resolution.lookup === "available" ? resolution.task : undefined,
       deliveryStatus: args.deliveryStatus,
       error: args.deliveryStatus === "failed" ? args.deliveryError : undefined,
     });
@@ -276,10 +281,24 @@ export const safeFinalizeSubagentTaskRun = (
   if (!terminal) {
     return [];
   }
-  const target = resolveSubagentTaskTarget(params, args.entry, args.taskResolution);
   const { status, error, terminalOutcome, ...details } = terminal;
   const suppressDelivery = args.entry.suppressCompletionDelivery === true;
   try {
+    if (isDefaultDetachedTaskLifecycleRuntime()) {
+      return finalizeSubagentTaskRunForOwner({
+        runId: args.entry.taskRunId ?? args.entry.runId,
+        ownerKey: args.entry.requesterSessionKey,
+        sessionKey: args.entry.childSessionKey,
+        generation: args.entry.generation,
+        status,
+        error,
+        ...details,
+        terminalOutcome,
+        suppressDelivery,
+        preserveTerminalState: args.entry.taskTerminalProjection === "preserve_existing",
+      });
+    }
+    const target = resolveSubagentTaskTarget(params, args.entry, args.taskResolution);
     if (status === "succeeded") {
       return completeTaskRunByRunId({
         runId: target.runId,

@@ -236,6 +236,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
     expectsCompletionMessage: params.requester !== undefined,
     spawnMode: "run",
+    taskRowOwnership: "required",
     ...(params.gatewayContextResolver
       ? { gatewayContextResolver: params.gatewayContextResolver }
       : {}),

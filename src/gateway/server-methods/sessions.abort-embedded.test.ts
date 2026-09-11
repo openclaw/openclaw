@@ -75,6 +75,7 @@ async function seedChild(id: string, turn: string, queued = true, requester = pa
     queued,
     cleanup: "keep",
     expectsCompletionMessage: false,
+    taskRowOwnership: "required",
   });
 }
 

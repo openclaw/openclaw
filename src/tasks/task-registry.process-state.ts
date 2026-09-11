@@ -1,6 +1,6 @@
 // Tracks task process state transitions used to reconcile running work.
 import type { Result } from "@openclaw/normalization-core/result";
-import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import type { TaskBackingInstance, TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 export type TaskRunOwner = {
   task: Readonly<
@@ -11,6 +11,7 @@ export type TaskRunOwner = {
 
 export type TaskActivityOverlayState = {
   runId: string;
+  backing?: TaskBackingInstance;
   assistantText: string;
   thinkingText: string;
   hasAssistantActivity: boolean;

@@ -11,7 +11,6 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { listOpenClawAgentDatabasesForTest as listSeedAgentDatabases } from "../../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../../../state/openclaw-state-db.js";
 import "./subagent-registry.mocks.shared.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -19,11 +18,12 @@ import {
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import {
   createSubagentRegistryTestDeps,
+  createGatewayBestEffortDeliveredWake,
+  createGatewayBestEffortOrphanedRequiredDelivery,
+  createGatewayBestEffortSubagentRun,
   gateSubagentRequesterSettlement,
   settleSubagentRegistryPersistenceWork,
   withSubagentRegistryPersistenceState,
-  createDeliveredWake,
-  createOrphanedRequiredDelivery,
   writeChildSession,
 } from "./subagent-registry.persistence.test-support.js";
 import {
@@ -33,7 +33,6 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type WakeRequester = SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"];
-type WakeParams = Parameters<WakeRequester>[0];
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => "delivered" as const),
@@ -171,7 +170,7 @@ describe("subagent registry persistence resume", () => {
 
   it("resumes a persisted run from canonical SQLite state", async () => {
     await withRegistryState(async (stateDir) => {
-      const run = createSubagentRunRecord({
+      const run = createGatewayBestEffortSubagentRun({
         runId: "run-1",
         childSessionKey: "agent:main:subagent:test",
         requesterOrigin: { channel: "whatsapp", accountId: "acct-main" },
@@ -228,7 +227,7 @@ describe("subagent registry persistence resume", () => {
     await withRegistryState(async (stateDir) => {
       const runId = `run-pending-${label}-delivery`;
       const childSessionKey = `agent:main:subagent:pending-${label}-delivery`;
-      const run = createSubagentRunRecord({
+      const run = createGatewayBestEffortSubagentRun({
         runId,
         requesterTurnRunId: "run-requester",
         childSessionKey,
@@ -275,7 +274,7 @@ describe("subagent registry persistence resume", () => {
 
   it("replays one required completion after restart without the child session", async () => {
     await withRegistryState(async () => {
-      const run = createOrphanedRequiredDelivery("pending");
+      const run = createGatewayBestEffortOrphanedRequiredDelivery("pending");
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
       const settlement = gateSubagentRequesterSettlement(
         registryDepsModule.subagentRegistryDeps.maybeWakeRequesterAfterAllChildrenSettled,
@@ -352,7 +351,7 @@ describe("subagent registry persistence resume", () => {
     try {
       await withRegistryState(async () => {
         const endedAt = Date.now();
-        const run = createDeliveredWake("run-rejected-requester-wake", {
+        const run = createGatewayBestEffortDeliveredWake("run-rejected-requester-wake", {
           status: restarting && !waitingForActivation ? "dispatching" : "pending",
           attemptCount: waitingForActivation ? 2 : restarting ? 1 : 0,
           ...(restarting ? { replayCount: 1, nextAttemptAt: endedAt + 30_000 } : {}),
@@ -469,7 +468,7 @@ describe("subagent registry persistence resume", () => {
       const admission = await import("../../../process/gateway-work-admission.js");
       const oldDone = createDeferredCore<boolean>();
       const replacementDone = createDeferredCore();
-      const oldParams: WakeParams[] = [];
+      const oldParams: Array<Parameters<WakeRequester>[0]> = [];
       let oldFinished = 0;
       let firstGatewayOpen = true;
       const firstGateway = {
@@ -483,7 +482,7 @@ describe("subagent registry persistence resume", () => {
             const runs = Array.from({ length: runCount }, (_, index) => {
               const runId = `run-outstanding-wake-${index}`;
               return {
-                ...createDeliveredWake(runId, {
+                ...createGatewayBestEffortDeliveredWake(runId, {
                   status: "pending",
                   attemptCount: 2,
                   batchRunIds: [runId],
@@ -603,7 +602,7 @@ describe("subagent registry persistence resume", () => {
     "rejects the whole stale batch when only a sibling closes or is replaced: %s",
     async (settlement) => {
       const oldDone = createDeferredCore<boolean>();
-      let oldParams: WakeParams | undefined;
+      let oldParams: Parameters<WakeRequester>[0] | undefined;
       let siblingGatewayOpen = true;
       const anchorGateway = { resolveGatewayContext: () => anchorGateway as never };
       const nextGateway = { resolveGatewayContext: () => nextGateway as never };
@@ -612,7 +611,7 @@ describe("subagent registry persistence resume", () => {
         await withRegistryState(async () => {
           try {
             const batch = ["run-batch-anchor", "run-batch-sibling"].map((runId, index) =>
-              createDeliveredWake(runId, {
+              createGatewayBestEffortDeliveredWake(runId, {
                 status: "pending",
                 attemptCount: 0,
                 batchRunIds: ["run-batch-anchor", "run-batch-sibling"],
@@ -690,7 +689,7 @@ describe("subagent registry persistence resume", () => {
     { status: "in_progress" as const, disposition: "session_queued" as const, queueId: "queue-1" },
   ])("retains $status required delivery with its owner after restart", async (expected) => {
     await withRegistryState(async () => {
-      const run = createOrphanedRequiredDelivery(expected.status);
+      const run = createGatewayBestEffortOrphanedRequiredDelivery(expected.status);
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
       mod.initSubagentRegistry();
@@ -712,7 +711,7 @@ describe("subagent registry persistence resume", () => {
 
     await withRegistryState(async (stateDir) => {
       const endedAt = Date.now();
-      const yieldedRun = createDeliveredWake("run-hydrated-yield", undefined, {
+      const yieldedRun = createGatewayBestEffortDeliveredWake("run-hydrated-yield", undefined, {
         taskRunId: "run-hydrated-yield",
         requesterTurnRunId: "run-requester",
         requesterTurnYielded: true,
@@ -724,7 +723,7 @@ describe("subagent registry persistence resume", () => {
         endedAt,
         cleanupCompletedAt: endedAt,
       });
-      const queuedCollector = createSubagentRunRecord({
+      const queuedCollector = createGatewayBestEffortSubagentRun({
         runId: "run-hydrated-collector",
         childSessionKey: "agent:main:subagent:hydrated-collector",
         task: "clean only after lifecycle activation",
@@ -741,7 +740,7 @@ describe("subagent registry persistence resume", () => {
         collectorCompletion: { status: "failed" },
         collectorLaunchCleanupPending: true,
       });
-      const runningRun = createSubagentRunRecord({
+      const runningRun = createGatewayBestEffortSubagentRun({
         runId: "run-hydrated-running",
         childSessionKey: "agent:main:subagent:hydrated-running",
         task: "wait through the activated instance",
@@ -871,7 +870,7 @@ describe("subagent registry persistence resume", () => {
         const endedAt = Date.now();
         const restoredRuns = Array.from({ length: 3 }, (_, index): SubagentRunRecord => {
           const runId = `run-restored-wake-${index}`;
-          return createDeliveredWake(
+          return createGatewayBestEffortDeliveredWake(
             runId,
             activationSettlement ? undefined : { status: "pending", attemptCount: 0 },
             {
@@ -953,7 +952,7 @@ describe("subagent registry persistence resume", () => {
   it("keeps dismissed terminal delivery dormant and TTL-eligible after restore", async () => {
     await withRegistryState(async () => {
       const now = Date.now();
-      const run = createSubagentRunRecord({
+      const run = createGatewayBestEffortSubagentRun({
         runId: "run-dismissed-delivery",
         childSessionKey: "agent:main:subagent:dismissed-delivery",
         task: "retain no delivery obligation",
@@ -990,7 +989,7 @@ describe("subagent registry persistence resume", () => {
 
       await withRegistryState(async (stateDir) => {
         const endedAt = Date.now();
-        const run = createDeliveredWake("run-steered", undefined, {
+        const run = createGatewayBestEffortDeliveredWake("run-steered", undefined, {
           taskRunId: "run-original",
           requesterTurnRunId: "run-requester",
           ...(requesterYielded ? { requesterTurnYielded: true } : {}),

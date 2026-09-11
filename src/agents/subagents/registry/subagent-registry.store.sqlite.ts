@@ -2,7 +2,8 @@
  * Persists subagent run records in the shared sqlite state database, with
  * query-bearing identity columns indexing canonical normalized payload JSON.
  */
-import { safeParseJson } from "@openclaw/normalization-core";
+import { isDeepStrictEqual } from "node:util";
+import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql, type Insertable, type Selectable, type Updateable } from "kysely";
@@ -18,7 +19,10 @@ import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
-type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
+type SubagentRegistryDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "flow_runs" | "subagent_runs" | "task_runs"
+>;
 type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
 type BoundSubagentRunRecord = Insertable<SubagentRunsTable>;
 type SubagentRunSqliteInsert = BoundSubagentRunRecord;
@@ -77,6 +81,43 @@ function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagen
 
 function parseJson(raw: string | null): unknown {
   return raw ? safeParseJson(raw) : undefined;
+}
+
+function readAllSubagentRunRows(database: OpenClawStateDatabase): SubagentRunSqliteRow[] {
+  return executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .orderBy("created_at", "asc")
+      .orderBy("run_id", "asc"),
+  ).rows;
+}
+
+function subagentRunRowReservesTaskRunId(params: {
+  row: SubagentRunSqliteRow;
+  taskRunId: string;
+  ownerKey: string;
+  childSessionKey: string;
+  generation: number;
+}): boolean {
+  const { row, taskRunId } = params;
+  const payload = safeParseJsonRecord(row.payload_json);
+  if (!payload) {
+    return false;
+  }
+  if (!Object.hasOwn(payload, "taskRunId")) {
+    return row.run_id.trim() === taskRunId;
+  }
+  if (typeof payload.taskRunId === "string" && payload.taskRunId.trim()) {
+    return payload.taskRunId.trim() === taskRunId;
+  }
+  return (
+    row.run_id.trim() === taskRunId &&
+    row.requester_session_key === params.ownerKey &&
+    row.child_session_key === params.childSessionKey &&
+    payload.generation === params.generation
+  );
 }
 
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
@@ -152,6 +193,128 @@ export function deleteSubagentRunRowInDatabase(
   );
 }
 
+/** Replaces and optionally rekeys one exact run snapshot in the active state transaction. */
+export function replaceSubagentRunRowInCurrentTransaction(params: {
+  expected: BoundSubagentRunRecord;
+  next: BoundSubagentRunRecord;
+}): boolean {
+  const database = openOpenClawStateDatabase();
+  if (!database.db.isTransaction) {
+    throw new Error("subagent acceptance CAS requires an active state transaction");
+  }
+  const current = readSubagentRun(database, params.expected.run_id);
+  if (!current || !isDeepStrictEqual(bindSubagentRunRecord(current), params.expected)) {
+    return false;
+  }
+  const result = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
+      .updateTable("subagent_runs")
+      .set(params.next)
+      .where("run_id", "=", params.expected.run_id),
+  );
+  return Number(result.numAffectedRows ?? 0) === 1;
+}
+
+/** Adopts released ownership only while the exact persisted registry/task/flow tuple is current. */
+export function adoptReleasedSubagentRunInCurrentTransaction(params: {
+  expected: BoundSubagentRunRecord;
+  next: BoundSubagentRunRecord;
+}): boolean {
+  const database = openOpenClawStateDatabase();
+  if (!database.db.isTransaction) {
+    throw new Error("released subagent adoption requires an active state transaction");
+  }
+  const entry = readSubagentRun(database, params.expected.run_id);
+  if (
+    !entry ||
+    !isDeepStrictEqual(bindSubagentRunRecord(entry), params.expected) ||
+    entry.taskOwnershipPolicy !== "legacy_unresolved" ||
+    entry.legacyTaskOwnershipCandidate !== "core_required"
+  ) {
+    return false;
+  }
+  const taskRunId = entry.taskRunId?.trim();
+  const generation = entry.generation;
+  if (
+    !taskRunId ||
+    generation === undefined ||
+    !Number.isSafeInteger(generation) ||
+    generation <= 0
+  ) {
+    return false;
+  }
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
+  const taskClaims = executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .selectFrom("task_runs")
+      .select([
+        "task_id",
+        "runtime",
+        "source_id",
+        "requester_session_key",
+        "owner_key",
+        "scope_kind",
+        "child_session_key",
+        "parent_flow_id",
+        "run_id",
+        "detail_json",
+      ])
+      .where("runtime", "=", "subagent"),
+  ).rows.filter(
+    (task) => task.run_id?.trim() === taskRunId || task.source_id?.trim() === taskRunId,
+  );
+  const task = taskClaims[0];
+  const detail = task?.detail_json ? safeParseJsonRecord(task.detail_json) : undefined;
+  if (
+    taskClaims.length !== 1 ||
+    !task ||
+    task.source_id !== taskRunId ||
+    task.run_id !== taskRunId ||
+    task.requester_session_key !== entry.requesterSessionKey ||
+    task.owner_key !== entry.requesterSessionKey ||
+    task.scope_kind !== "session" ||
+    task.child_session_key !== entry.childSessionKey ||
+    detail?.kind !== "task_backing_instance" ||
+    detail.runtime !== "subagent" ||
+    Object.hasOwn(detail, "taskId") ||
+    detail.generation !== generation
+  ) {
+    return false;
+  }
+  const registryClaims = readAllSubagentRunRows(database).filter((row) =>
+    subagentRunRowReservesTaskRunId({
+      row,
+      taskRunId,
+      ownerKey: entry.requesterSessionKey,
+      childSessionKey: entry.childSessionKey,
+      generation,
+    }),
+  );
+  if (registryClaims.length !== 1 || registryClaims[0]?.run_id !== entry.runId) {
+    return false;
+  }
+  const flowId = task.parent_flow_id?.trim();
+  if (flowId) {
+    const flow = executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .selectFrom("flow_runs")
+        .select(["flow_id", "sync_mode", "owner_key"])
+        .where("flow_id", "=", flowId),
+    ).rows[0];
+    if (
+      !flow ||
+      flow.sync_mode !== "task_mirrored" ||
+      flow.owner_key !== entry.requesterSessionKey
+    ) {
+      return false;
+    }
+  }
+  return replaceSubagentRunRowInCurrentTransaction(params);
+}
+
 export function readSubagentRun(
   database: OpenClawStateDatabase,
   runId: string,
@@ -164,6 +327,31 @@ export function readSubagentRun(
       .where("run_id", "=", runId),
   ).rows[0];
   return row ? rowToSubagentRunRecord(row) : null;
+}
+
+/** Finds an exact canonical run, task-run, or collector identity claim. */
+export function findSubagentRunIdentityClaimInDatabase(
+  database: OpenClawStateDatabase,
+  runId: string,
+): SubagentRunRecord | null {
+  const key = runId.trim();
+  if (!key) {
+    return null;
+  }
+  for (const row of readAllSubagentRunRows(database)) {
+    const entry = rowToSubagentRunRecord(row);
+    if (
+      entry &&
+      (entry.runId === key || entry.taskRunId?.trim() === key || entry.swarmRunId?.trim() === key)
+    ) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+export function findSubagentRunIdentityClaimFromSqlite(runId: string): SubagentRunRecord | null {
+  return findSubagentRunIdentityClaimInDatabase(openOpenClawStateDatabase(), runId);
 }
 
 function subagentRunRecordToSqliteUpdate(values: SubagentRunSqliteInsert): SubagentRunSqliteUpdate {

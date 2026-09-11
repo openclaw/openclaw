@@ -2,6 +2,7 @@
 // inherited tool policy, and preflight failures before gateway dispatch.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createAcceptedSubagentRegistration,
   createSubagentSpawnTestConfig,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
@@ -90,7 +91,9 @@ describe("subagent spawn depth + child limits", () => {
     hoisted.activeChildrenBySession.clear();
     hoisted.depthBySession.clear();
     hoisted.callGatewayMock.mockClear();
-    hoisted.registerSubagentRunMock.mockClear();
+    hoisted.registerSubagentRunMock
+      .mockReset()
+      .mockImplementation(createAcceptedSubagentRegistration);
     hoisted.updateSessionStoreMock.mockReset();
     persistedStore = undefined;
     installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {

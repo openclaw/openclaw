@@ -1,11 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
+  expectReleasedCoreSubagentCandidatePersisted,
+  writeReleasedCoreSubagentCandidateFixture,
+  writeSubagentSessionEntry,
+} from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -169,7 +170,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
       instance.state.applyEnv();
       try {
         const endedAt = Date.now();
-        const restored: SubagentRunRecord = {
+        const fixture = writeReleasedCoreSubagentCandidateFixture({
           runId: RESTORED_RUN_ID,
           childSessionKey: `agent:${REQUESTER_AGENT_ID}:subagent:requester-owner-legacy`,
           requesterSessionKey: RESTORED_REQUESTER_KEY,
@@ -188,8 +189,9 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           expectsCompletionMessage: true,
           completion: { required: true, resultText: RESTORED_CHILD_RESULT, capturedAt: endedAt },
           delivery: { status: "pending" },
-        };
-        saveSubagentRegistryToSqlite(new Map([[restored.runId, restored]]));
+        });
+        expectReleasedCoreSubagentCandidatePersisted(fixture);
+        const restored: SubagentRunRecord = fixture.run;
         await writeSubagentSessionEntry({
           stateDir: instance.stateDir,
           agentId: REQUESTER_AGENT_ID,
@@ -215,6 +217,23 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
       let settledRequests: number | undefined;
       for (let boot = 0; boot < 2; boot += 1) {
         await instance.startGateway();
+        instance.state.applyEnv();
+        try {
+          await vi.waitFor(
+            () => {
+              expect(
+                loadSubagentRegistryFromSqlite().get(RESTORED_RUN_ID),
+                instance.logs(),
+              ).toMatchObject({
+                taskOwnershipPolicy: "core_required",
+                requesterAgentId: REQUESTER_AGENT_ID,
+              });
+            },
+            { interval: 50, timeout: 25_000 },
+          );
+        } finally {
+          closeOpenClawStateDatabaseForTest();
+        }
         const client = await connectGatewayClient({
           url: instance.url,
           token: instance.gatewayToken,

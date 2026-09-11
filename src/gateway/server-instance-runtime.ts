@@ -153,6 +153,7 @@ export function createGatewayInstanceRuntime(
         : recoveryAgentTurns;
       try {
         return await agentTurns.dispatch<T>(payload, {
+          assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
           expectFinal: dispatchOptions.expectFinal,
           onAccepted: dispatchOptions.onAccepted,
           onStartOwner: dispatchOptions.onStartOwner,

@@ -330,6 +330,9 @@ export function reconcileOrphanedRestoredRuns(params: {
   const now = Date.now();
   let changed = false;
   for (const [runId, entry] of params.runs.entries()) {
+    if (entry.taskOwnershipPolicy === "legacy_unresolved") {
+      continue;
+    }
     if (entry.collect && entry.collectorCompletion) {
       // Waitable collector tombstones intentionally outlive delete-mode sessions.
       continue;

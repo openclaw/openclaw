@@ -2801,7 +2801,10 @@ describe("openclaw state database", () => {
         controller_session_key: "agent:controller:legacy",
         requester_session_key: runPayload.requesterSessionKey,
         created_at: 200,
-        payload_json: JSON.stringify(runPayload),
+        payload_json: JSON.stringify({
+          ...runPayload,
+          taskOwnershipPolicy: "legacy_unresolved",
+        }),
       });
       expect(
         migrated.db
@@ -3726,6 +3729,75 @@ describe("openclaw state database", () => {
       released.close();
     }
 
+    // Seed the exact released producer shape: announcing subagents owned a
+    // task-mirrored flow while the registry already carried its generation.
+    const seeded = new DatabaseSync(fixture.databasePath);
+    try {
+      seeded
+        .prepare(
+          `UPDATE task_runs
+              SET owner_key = requester_session_key,
+                  parent_flow_id = 'fixture-task-flow',
+                  status = 'succeeded',
+                  notify_policy = 'done_only'
+            WHERE task_id = 'fixture-task'`,
+        )
+        .run();
+      seeded
+        .prepare(
+          `INSERT INTO flow_runs (
+             flow_id, sync_mode, owner_key, revision, status, notify_policy,
+             goal, created_at, updated_at, ended_at
+           ) VALUES (?, 'task_mirrored', ?, 0, 'succeeded', 'done_only', ?, ?, ?, ?)`,
+        )
+        .run("fixture-task-flow", "agent:fixture:main", "fixture subagent task", 1200, 1320, 1320);
+      seeded
+        .prepare(
+          `INSERT INTO subagent_runs (
+             run_id, child_session_key, requester_session_key, requester_display_key,
+             task, cleanup, created_at, started_at, session_started_at, ended_at,
+             expects_completion_message, payload_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        )
+        .run(
+          "fixture-task-run",
+          "agent:fixture:child",
+          "agent:fixture:main",
+          "fixture",
+          "fixture subagent task",
+          "keep",
+          1400,
+          1310,
+          1200,
+          1320,
+          JSON.stringify({
+            runId: "fixture-task-run",
+            taskRunId: "fixture-task-run",
+            childSessionKey: "agent:fixture:child",
+            requesterSessionKey: "agent:fixture:main",
+            requesterDisplayKey: "fixture",
+            task: "fixture subagent task",
+            cleanup: "keep",
+            expectsCompletionMessage: true,
+            generation: 9,
+            createdAt: 1400,
+            startedAt: 1310,
+            sessionStartedAt: 1200,
+            endedAt: 1320,
+            execution: {
+              status: "terminal",
+              startedAt: 1310,
+              endedAt: 1320,
+              outcome: { status: "ok" },
+            },
+            completion: { required: true, resultText: "fixture result" },
+            delivery: { status: "delivered", deliveredAt: 1320 },
+          }),
+        );
+    } finally {
+      seeded.close();
+    }
+
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "commitments-retirement-v7", path: fixture.databasePath },
       { kind: "state-table-retirement-v10", path: fixture.databasePath },
@@ -3854,7 +3926,10 @@ describe("openclaw state database", () => {
     expect(
       migrated.db
         .prepare(
-          `SELECT task_runs.task_id, task_runs.status, task_delivery_state.last_notified_event_at
+          `SELECT task_runs.task_id, task_runs.run_id, task_runs.status,
+                  task_runs.delivery_status, task_runs.progress_summary,
+                  task_runs.terminal_summary, task_runs.terminal_outcome,
+                  task_runs.detail_json, task_delivery_state.last_notified_event_at
              FROM task_runs
              JOIN task_delivery_state USING (task_id)
             WHERE task_runs.task_id = 'fixture-task'`,
@@ -3862,8 +3937,34 @@ describe("openclaw state database", () => {
         .get(),
     ).toEqual({
       task_id: "fixture-task",
-      status: "completed",
+      run_id: "fixture-task-run",
+      status: "succeeded",
+      delivery_status: "delivered",
+      progress_summary: "progress",
+      terminal_summary: "done",
+      terminal_outcome: "succeeded",
+      detail_json: '{"kind":"task_backing_instance","runtime":"subagent","generation":9}',
       last_notified_event_at: 1320,
+    });
+    expect(
+      migrated.db
+        .prepare(
+          `SELECT run_id, json_extract(payload_json, '$.taskRunId') AS task_run_id,
+                  json_extract(payload_json, '$.generation') AS generation,
+                  json_extract(payload_json, '$.completion.resultText') AS result_text,
+                  json_extract(payload_json, '$.execution.status') AS execution_status,
+                  json_extract(payload_json, '$.delivery.status') AS delivery_status
+             FROM subagent_runs
+            WHERE run_id = 'fixture-task-run'`,
+        )
+        .get(),
+    ).toEqual({
+      run_id: "fixture-task-run",
+      task_run_id: "fixture-task-run",
+      generation: 9,
+      result_text: "fixture result",
+      execution_status: "terminal",
+      delivery_status: "delivered",
     });
     for (const name of [
       ...RETIRED_COMMITMENT_SCHEMA_OBJECTS,
@@ -3903,6 +4004,42 @@ describe("openclaw state database", () => {
       { integrity_check: "ok" },
     ]);
     expect(reopened.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(
+      reopened.db
+        .prepare(
+          `SELECT task_id, run_id, status, delivery_status, progress_summary,
+                  terminal_summary, terminal_outcome, detail_json
+             FROM task_runs
+            WHERE task_id = 'fixture-task'`,
+        )
+        .get(),
+    ).toEqual({
+      task_id: "fixture-task",
+      run_id: "fixture-task-run",
+      status: "succeeded",
+      delivery_status: "delivered",
+      progress_summary: "progress",
+      terminal_summary: "done",
+      terminal_outcome: "succeeded",
+      detail_json: '{"kind":"task_backing_instance","runtime":"subagent","generation":9}',
+    });
+    expect(
+      reopened.db
+        .prepare(
+          `SELECT json_extract(payload_json, '$.generation') AS generation,
+                  json_extract(payload_json, '$.completion.resultText') AS result_text,
+                  json_extract(payload_json, '$.execution.status') AS execution_status,
+                  json_extract(payload_json, '$.delivery.status') AS delivery_status
+             FROM subagent_runs
+            WHERE run_id = 'fixture-task-run'`,
+        )
+        .get(),
+    ).toEqual({
+      generation: 9,
+      result_text: "fixture result",
+      execution_status: "terminal",
+      delivery_status: "delivered",
+    });
   });
 
   it.each(["runtime open", "doctor repair"] as const)(

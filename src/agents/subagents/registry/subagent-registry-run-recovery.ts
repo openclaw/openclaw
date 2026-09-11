@@ -40,6 +40,7 @@ import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
 } from "./subagent-session-metrics.js";
+import { inspectSubagentTaskOwnership } from "./subagent-task-ownership.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 
@@ -204,6 +205,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       killReconciliation: undefined,
       killIntent: undefined,
       suppressCompletionDelivery: undefined,
+      taskTerminalProjection: undefined,
       delivery: {
         status: source.expectsCompletionMessage === false ? "not_required" : "pending",
       },
@@ -217,13 +219,21 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     );
     clearDeliveryState(next);
 
+    const taskOwnership = inspectSubagentTaskOwnership({
+      entry: source,
+      backingPolicy: "failure-finalization",
+    });
+    // Only core-required rows transfer canonical SQLite task ownership. Gateway
+    // best-effort rows deliberately leave CLI tasks alone; custom runtimes own
+    // their separate lifecycle contract.
     const taskActivation =
-      source.expectsCompletionMessage === false
-        ? undefined
-        : prepareCanonicalTaskActivation({
+      taskOwnership.kind === "core_required"
+        ? prepareCanonicalTaskActivation({
             runtime: "subagent",
+            ownerKey: source.requesterSessionKey,
             childSessionKey: next.childSessionKey,
             runId: source.taskRunId ?? source.runId,
+            generation: source.generation,
             detail: createSubagentTaskBackingDetail(generation),
             startedAt: now,
             // An admitted kill owns the provisional task projection until its
@@ -231,7 +241,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             // successor and must not leave its task cancelled.
             preserveProvisionalCancellation:
               source.killReconciliation?.taskCancellationAccepted === true,
-          });
+          })
+        : taskOwnership;
 
     if (previousRunId !== nextRunId) {
       this.options.runs.delete(previousRunId);
@@ -272,7 +283,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       this.options.runs.set(previousRunId, source);
     };
     const adoptSuccessorOwner = () => {
-      if (!taskActivation) {
+      if (taskActivation.kind === "custom" || taskActivation.kind === "gateway_best_effort") {
         subagentRuns.commitOwnership(next);
       }
       if (previousRunId !== nextRunId) {
@@ -330,7 +341,12 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       );
     };
     const persistReplacement = (): void => {
-      if (taskActivation) {
+      if (taskActivation.kind === "invalid") {
+        throw new Error(
+          `Subagent task backing ${taskActivation.reason}. Retry the subagent request to create a fresh run.`,
+        );
+      }
+      if (taskActivation.kind === "valid") {
         commitSubagentTaskReplacement({
           runs: this.options.runs,
           changedRunIds,

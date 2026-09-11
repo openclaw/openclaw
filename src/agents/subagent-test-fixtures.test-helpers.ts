@@ -86,13 +86,15 @@ export type SubagentRunParamsOverrides = Pick<RegisterSubagentRunParams, "runId"
 export function createSubagentRunParams(
   overrides: SubagentRunParamsOverrides,
 ): RegisterSubagentRunParams {
+  const { taskRowOwnership = "required", ...rest } = overrides;
   return {
     childSessionKey: "agent:main:subagent:child",
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: overrides.runId,
     cleanup: "keep",
-    ...overrides,
+    ...rest,
+    taskRowOwnership,
   };
 }
 

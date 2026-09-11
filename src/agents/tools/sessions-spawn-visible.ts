@@ -427,6 +427,7 @@ export async function maybeSpawnVisibleSession(params: {
         runTimeoutSeconds,
         expectsCompletionMessage: params.expectsCompletionMessage,
         spawnMode: "run",
+        taskRowOwnership: "required",
       });
     } catch (error) {
       return {

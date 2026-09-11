@@ -5,6 +5,7 @@ import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import {
+  createAcceptedSubagentRegistration,
   createSubagentSpawnTestConfig,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
@@ -164,7 +165,9 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     });
     hoisted.callGatewayMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
-    hoisted.registerSubagentRunMock.mockReset();
+    hoisted.registerSubagentRunMock
+      .mockReset()
+      .mockImplementation(createAcceptedSubagentRegistration);
     hoisted.emitSessionLifecycleEventMock.mockReset();
     hoisted.hookRunner.hasHooks.mockReset();
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);

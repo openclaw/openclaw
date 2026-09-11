@@ -46,6 +46,7 @@ it.each(["canonical", "managed"] as const)(
       task: "Continue work after yielding",
       cleanup: "keep",
       expectsCompletionMessage: true,
+      taskRowOwnership: "required",
     });
     const original = subagentRuns.get("original-task-run")!;
     const originalTask = findTaskByRunId(original.runId)!;

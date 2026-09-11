@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { publishTaskRecordAfterAtomicStore } from "../../../tasks/runtime-internal.js";
-import type { PreparedCanonicalTaskActivation } from "../../../tasks/task-backing-authority-write.js";
+import type { PreparedCanonicalTaskReplacement } from "../../../tasks/task-backing-authority-write.js";
 import { readTaskBackingInstance } from "../../../tasks/task-backing-authority.js";
 import {
   bindTaskFlowRecord,
@@ -30,7 +30,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 function assertReplacementCorrelation(params: {
   source: SubagentRunRecord;
   successor: SubagentRunRecord;
-  task: PreparedCanonicalTaskActivation;
+  task: PreparedCanonicalTaskReplacement;
 }): void {
   const sourceBacking = readTaskBackingInstance(params.task.current.detail);
   const successorBacking = readTaskBackingInstance(params.task.next.detail);
@@ -61,7 +61,7 @@ export function commitSubagentTaskReplacement(params: {
   changedRunIds: readonly string[];
   source: SubagentRunRecord;
   successor: SubagentRunRecord;
-  task: PreparedCanonicalTaskActivation;
+  task: PreparedCanonicalTaskReplacement;
   canReconcileAcceptedReceipt?: () => boolean;
 }): void {
   assertReplacementCorrelation(params);

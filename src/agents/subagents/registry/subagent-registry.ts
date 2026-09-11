@@ -475,6 +475,8 @@ const subagentRunManager = createSubagentRunManager({
   resumedRuns,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
+  findPersistedSubagentRunIdentityClaim: (runId) =>
+    subagentRegistryDeps.findPersistedSubagentRunIdentityClaim(runId),
   callGateway: async <T>(request: Parameters<typeof callGateway>[0]) => {
     if (request.method === "agent.wait") {
       const gatewayRuntime = activeGatewayContextResolver?.()?.recoveryRuntime;
@@ -511,8 +513,8 @@ const subagentRunManager = createSubagentRunManager({
 export const replaceSubagentRunAfterSteerCore = subagentRunManager.replaceSubagentRunAfterSteer;
 export const claimSubagentRunKill = subagentRunManager.claimSubagentRunKill;
 export const releaseSubagentRunKillClaim = subagentRunManager.releaseSubagentRunKillClaim;
-export function registerSubagentRun(params: RegisterSubagentRunParams): void {
-  subagentRunManager.registerSubagentRun({
+export function registerSubagentRun(params: RegisterSubagentRunParams) {
+  return subagentRunManager.registerSubagentRun({
     ...params,
     gatewayContextResolver: params.gatewayContextResolver ?? activeGatewayContextResolver,
   });

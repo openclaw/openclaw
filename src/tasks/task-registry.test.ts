@@ -53,6 +53,7 @@ import { collectCronHistoryOverflowTaskIds } from "./cron-history-retention.js";
 import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { ensureTaskRuntimeStateReady } from "./runtime-internal.js";
+import { createSubagentTaskBackingDetail } from "./task-backing-authority.js";
 import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -60,7 +61,7 @@ import {
   requestFlowCancel,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
-import { getTaskActivitySnapshot } from "./task-registry-activity.js";
+import { getTaskActivitySnapshot, recordTaskActivityEvent } from "./task-registry-activity.js";
 import { updateTaskStateByRunId } from "./task-registry-record-api.js";
 import {
   cancelTaskById,
@@ -77,6 +78,7 @@ import {
   maybeDeliverTaskTerminalUpdate,
   markTaskRunningByRunId,
   markTaskTerminalById,
+  publishTaskRecordAfterAtomicStore,
   recordTaskProgressByRunId,
   reloadTaskRegistryFromStore,
   resolveTaskForLookupToken,
@@ -673,6 +675,110 @@ describe("task-registry", () => {
         status: "succeeded",
         endedAt: 250,
       });
+    });
+  });
+
+  it("preserves observer-created successor activity while retiring a terminal owner", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const runId = "ordinary-activity-owner";
+      const task = createTaskFixture("cli", {
+        childSessionKey: "agent:main:subagent:ordinary-activity",
+        runId,
+        task: "Retire only the old activity owner",
+        startedAt: 100,
+        detail: createSubagentTaskBackingDetail(1),
+      });
+      recordTaskActivityEvent(task, {
+        runId,
+        sessionKey: task.childSessionKey,
+        seq: 1,
+        ts: 110,
+        stream: "assistant",
+        data: { text: "old owner activity" },
+      });
+      let replaced = false;
+      const observedTasks: Array<Omit<TaskRecord, "detail">> = [];
+      configureTaskRegistryRuntime({
+        observers: {
+          onEvent: (event) => {
+            if (
+              replaced ||
+              event.kind !== "upserted" ||
+              event.task.taskId !== task.taskId ||
+              event.task.runId !== runId ||
+              event.task.status !== "running"
+            ) {
+              return;
+            }
+            observedTasks.push(event.task);
+            replaced = true;
+            publishTaskRecordAfterAtomicStore({
+              ...event.task,
+              detail: createSubagentTaskBackingDetail(2),
+              status: "running",
+              startedAt: 120,
+              lastEventAt: 120,
+            });
+            const successor = getTaskById(task.taskId)!;
+            recordTaskActivityEvent(successor, {
+              runId,
+              sessionKey: successor.childSessionKey,
+              seq: 2,
+              ts: 121,
+              stream: "assistant",
+              data: { text: "successor activity" },
+            });
+          },
+        },
+      });
+
+      markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 130 });
+
+      expect(replaced).toBe(true);
+      expect(observedTasks).toHaveLength(1);
+      expect(observedTasks[0]).not.toHaveProperty("detail");
+      expect(getTaskById(task.taskId)?.detail).toEqual(createSubagentTaskBackingDetail(2));
+      expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe("successor activity");
+    });
+  });
+
+  it.each([
+    { name: "already-flushed running", status: "running" as const, flush: true },
+    { name: "queued", status: "queued" as const, flush: false },
+  ])("clears $name activity when its owner becomes terminal", async ({ status, flush }) => {
+    await withTaskRegistryTempDir(async () => {
+      const runId = `ordinary-${status}-activity`;
+      const task = createTaskFixture("cli", {
+        childSessionKey: `agent:main:subagent:${runId}`,
+        runId,
+        task: "Clear retired activity",
+        status,
+        ...(status === "running" ? { startedAt: 100 } : {}),
+      });
+      if (flush) {
+        vi.useFakeTimers();
+      }
+      try {
+        recordTaskActivityEvent(task, {
+          runId,
+          sessionKey: task.childSessionKey,
+          seq: 1,
+          ts: 110,
+          stream: "assistant",
+          data: { text: "retired activity" },
+        });
+        if (flush) {
+          await vi.runOnlyPendingTimersAsync();
+        }
+
+        markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 120 });
+
+        expect(getTaskActivitySnapshot(task.taskId)).toBeUndefined();
+      } finally {
+        if (flush) {
+          vi.useRealTimers();
+        }
+      }
     });
   });
 

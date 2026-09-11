@@ -63,6 +63,7 @@ it.each(
         collect: true,
         queued: runId === "queued",
         expectsCompletionMessage: false,
+        taskRowOwnership: "required",
       });
     }
     const dispatch = vi.fn(async () => {});

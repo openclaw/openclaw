@@ -1,5 +1,6 @@
 // Persists task registry records and events through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import type { Insertable, Selectable } from "kysely";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import {
@@ -174,7 +175,8 @@ function rowToTaskDeliveryState(row: TaskDeliveryStateRow): TaskDeliveryState {
   };
 }
 
-type BoundTaskRecord = Insertable<TaskRunsTable>;
+export type BoundTaskRecord = Insertable<TaskRunsTable> & { task_id: string };
+export type BoundTaskDeliveryState = Insertable<TaskDeliveryStateTable>;
 
 /** Canonically serializes a task before an outer transaction acquires the write lock. */
 export function bindTaskRecord(record: TaskRecord): BoundTaskRecord {
@@ -213,12 +215,33 @@ export function bindTaskRecord(record: TaskRecord): BoundTaskRecord {
   };
 }
 
-function bindTaskDeliveryState(state: TaskDeliveryState): Insertable<TaskDeliveryStateTable> {
+export function bindTaskDeliveryState(state: TaskDeliveryState): BoundTaskDeliveryState {
   return {
     task_id: state.taskId,
     requester_origin_json: serializeJson(state.requesterOrigin),
     last_notified_event_at: state.lastNotifiedEventAt ?? null,
   };
+}
+
+/** Tests whether SQLite already carries an exact task run identity claim. */
+export function hasTaskRunIdentityClaimInDatabase(
+  database: OpenClawStateDatabase,
+  runId: string,
+): boolean {
+  const key = runId.trim();
+  if (!key) {
+    return false;
+  }
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      getNodeSqliteKysely<TaskRegistryStoreDatabase>(database.db)
+        .selectFrom("task_runs")
+        .select("task_id")
+        .where("run_id", "=", key)
+        .limit(1),
+    ),
+  );
 }
 
 function getTaskRegistryKysely(db: DatabaseSync) {
@@ -308,9 +331,30 @@ export function upsertTaskRunRowInDatabase(
   );
 }
 
-function replaceTaskDeliveryStateRow(
+/** Replaces one exact task snapshot while the caller owns the shared-state transaction. */
+export function replaceTaskRunRowInDatabase(params: {
+  database: OpenClawStateDatabase;
+  expected: BoundTaskRecord;
+  next: BoundTaskRecord;
+}): boolean {
+  const current = readTaskRecord(params.database.db, params.expected.task_id);
+  if (!current || !isDeepStrictEqual(bindTaskRecord(current), params.expected)) {
+    return false;
+  }
+  const { task_id: _taskId, ...updates } = params.next;
+  const result = executeSqliteQuerySync(
+    params.database.db,
+    getTaskRegistryKysely(params.database.db)
+      .updateTable("task_runs")
+      .set(updates)
+      .where("task_id", "=", params.expected.task_id),
+  );
+  return Number(result.numAffectedRows ?? 0) === 1;
+}
+
+export function upsertTaskDeliveryStateRowInDatabase(
   db: DatabaseSync,
-  row: Insertable<TaskDeliveryStateTable>,
+  row: BoundTaskDeliveryState,
 ): void {
   executeSqliteQuerySync(
     db,
@@ -476,7 +520,7 @@ export function upsertTaskWithDeliveryStateToSqlite(params: {
     const { db } = database;
     upsertTaskRunRowInDatabase(database, bindTaskRecord(params.task));
     if (params.deliveryState) {
-      replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(params.deliveryState));
+      upsertTaskDeliveryStateRowInDatabase(db, bindTaskDeliveryState(params.deliveryState));
     } else {
       executeSqliteQuerySync(
         db,
@@ -496,7 +540,7 @@ export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
 
 export function upsertTaskDeliveryStateToSqlite(state: TaskDeliveryState) {
   withWriteTransaction(({ db }) => {
-    replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(state));
+    upsertTaskDeliveryStateRowInDatabase(db, bindTaskDeliveryState(state));
   });
 }
 

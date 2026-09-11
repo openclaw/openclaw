@@ -220,8 +220,13 @@ async function configureSpawnRuntime(
       }) as unknown as import("../src/context-engine/types.js").ContextEngine,
   };
   if (mode === "memory") {
+    const [taskRuntime, taskRuntimeTestSupport] = await Promise.all([
+      import("../src/tasks/detached-task-runtime.js"),
+      import("../src/tasks/detached-task-runtime.test-support.js"),
+    ]);
     subagents.testing.setDepsForTest({
       ...sharedDeps,
+      findPersistedSubagentRunIdentityClaim: () => null,
       persistSubagentRunsToDisk: () => {},
       persistSubagentRunsToDiskOrThrow: () => {},
     });
@@ -242,6 +247,10 @@ async function configureSpawnRuntime(
         close: () => {},
       },
     });
+    taskRuntimeTestSupport.setDetachedTaskLifecycleRuntime(
+      taskRuntime.getDetachedTaskLifecycleRuntime(),
+      "agent-concurrency-benchmark",
+    );
     return;
   }
   subagents.testing.setDepsForTest(sharedDeps);
@@ -353,6 +362,7 @@ async function runSpawnSample(
         task: `benchmark child ${index}`,
         cleanup: "keep" as const,
         expectsCompletionMessage: false,
+        taskRowOwnership: "required" as const,
       }),
       progressSessionKey: "agent:bench:main",
     };
@@ -368,6 +378,9 @@ async function runSpawnSample(
     const blocked = await barrier.waitUntilBlocked(fanout);
     const successful = pipelineResults.filter((pipelineResult) => pipelineResult.ok);
     const uniqueRuns = new Set(successful.map((pipelineResult) => pipelineResult.runId)).size;
+    const ownedReceipts = successful.filter(
+      (pipelineResult) => pipelineResult.registration.kind === "owned",
+    ).length;
     const registeredRuns = registry.subagentRuns.size;
     const tasksWhileBlocked = await listBenchmarkTasks();
     assertExactRunIds(
@@ -381,11 +394,12 @@ async function runSpawnSample(
     if (
       successful.length !== fanout ||
       uniqueRuns !== fanout ||
+      ownedReceipts !== fanout ||
       registeredRuns !== fanout ||
       releases !== fanout
     ) {
       throw new Error(
-        `spawn ${mode} registration invariant failed: ${JSON.stringify({ fanout, uniqueRuns, registeredRuns, releases })}`,
+        `spawn ${mode} registration invariant failed: ${JSON.stringify({ fanout, uniqueRuns, ownedReceipts, registeredRuns, releases })}`,
       );
     }
     let durableSubagentRows = 0;
@@ -454,6 +468,7 @@ async function runSpawnSample(
       durationMs,
       invariant: {
         ok: true,
+        ownedReceipts,
         registeredRuns,
         reservationsReleased: releases,
         blockedWaits: fanout,
@@ -823,7 +838,7 @@ async function main(): Promise<void> {
   process.stdout.write(`${WORKER_RESULT_SENTINEL}${JSON.stringify(result)}\n`);
 }
 
-export const testing = { drainSpawnSampleActiveWork };
+export const testing = { drainSpawnSampleActiveWork, runSpawnSample };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {

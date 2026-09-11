@@ -85,4 +85,28 @@ describe("native subagent Gateway transport ownership", () => {
     });
     expect(callGateway).toHaveBeenCalledOnce();
   });
+
+  it("revalidates source ownership before a socket reconciliation attempt", async () => {
+    let current = true;
+    const callGateway = vi.fn(async () => {
+      current = false;
+      throw new Error("gateway timeout after 1ms");
+    });
+    const assertDispatchCurrent = vi.fn(() => {
+      if (!current) {
+        throw new Error("Subagent dispatch ownership changed. Retry the spawn request.");
+      }
+    });
+    setSubagentSpawnDepsForTest({ callGateway });
+
+    await expect(
+      callNativeSubagentGateway({
+        method: "agent",
+        params: { message: "reconcile only while owned", idempotencyKey: "source-bound-run" },
+        assertDispatchCurrent,
+      }),
+    ).rejects.toThrow("Subagent dispatch ownership changed");
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(assertDispatchCurrent).toHaveBeenCalledTimes(2);
+  });
 });

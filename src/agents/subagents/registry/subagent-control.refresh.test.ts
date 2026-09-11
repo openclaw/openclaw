@@ -52,6 +52,7 @@ it("retains a captured child prefix when the next child's parent identity read f
       collect: true,
       queued,
       expectsCompletionMessage: false,
+      taskRowOwnership: "required",
     });
   }
   const firstStart = vi.fn(async () => {});
@@ -166,6 +167,7 @@ it.each([
           cleanup: "keep",
           expectsCompletionMessage: false,
           collect: true,
+          taskRowOwnership: "required",
         });
       }
     }
@@ -265,6 +267,7 @@ it.each([
           expectsCompletionMessage: false,
           collect: true,
           queued: true,
+          taskRowOwnership: "required",
         });
         enqueueSwarmRun({
           groupId: "late-refresh",

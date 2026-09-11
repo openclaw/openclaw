@@ -86,6 +86,7 @@ it.each(
         task: id,
         cleanup: "keep",
         expectsCompletionMessage: true,
+        taskRowOwnership: "required",
       });
       const entry = subagentRuns.get(id)!;
       if (id === "queued-child") {
@@ -202,6 +203,7 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
       task: "draining",
       cleanup: "keep",
       expectsCompletionMessage: true,
+      taskRowOwnership: "required",
     });
     const parentInterrupted = createDeferredCore();
     const childInterrupted = createDeferredCore();
@@ -330,6 +332,7 @@ it("lifecycle requester cleanup respects agent ownership without granting ordina
       task: agentId,
       cleanup: "keep",
       expectsCompletionMessage: true,
+      taskRowOwnership: "required",
     });
     const entry = subagentRuns.get(agentId)!;
     expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
@@ -406,6 +409,7 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
         task: "replacement work",
         cleanup: "keep",
         expectsCompletionMessage: true,
+        taskRowOwnership: "required",
       });
       const entry = subagentRuns.get("replacement-child")!;
       expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);

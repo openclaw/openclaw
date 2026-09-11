@@ -16,10 +16,19 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
 import { ensureTaskRegistryReady, getTaskById } from "../../../tasks/runtime-internal.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
+import { loadTaskFlowRegistryStateFromSqlite } from "../../../tasks/task-flow-registry.store.sqlite.js";
+import {
+  createManagedTaskFlow,
+  getTaskFlowById,
+  requestFlowCancel,
+} from "../../../tasks/task-flow-runtime-internal.js";
 import { publishTaskRecordAfterAtomicStore } from "../../../tasks/task-registry.js";
+import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
+import { readTaskRecord } from "../../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { suspendPendingFinalDelivery } from "../registry/subagent-registry-lifecycle-cleanup.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
@@ -33,8 +42,10 @@ import {
 } from "./subagent-completion-admission.store.js";
 import {
   armRequesterWake,
+  createCoreRequiredCompletionOwner,
   failedRecords,
   records,
+  resetCompletionTaskStateForTests,
   requesterWakeDriver,
 } from "./subagent-completion-admission.test-helpers.js";
 import {
@@ -63,7 +74,7 @@ describe("atomic subagent completion admission store", () => {
 
   afterEach(() => {
     subagentRuns.clear();
-    resetTaskRegistryForTests({ persist: false });
+    resetCompletionTaskStateForTests();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
   });
@@ -108,7 +119,7 @@ describe("atomic subagent completion admission store", () => {
   function resetOwners(): void {
     clearRows();
     subagentRuns.clear();
-    resetTaskRegistryForTests({ persist: false });
+    resetCompletionTaskStateForTests();
     database = openOpenClawStateDatabase({ path: path.join(tempDir, "state.sqlite") });
   }
 
@@ -121,13 +132,131 @@ describe("atomic subagent completion admission store", () => {
   function reopenOwners() {
     closeOpenClawStateDatabaseForTest();
     subagentRuns.clear();
-    resetTaskRegistryForTests({ persist: false });
+    resetCompletionTaskStateForTests();
     database = openOpenClawStateDatabase();
     for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
       subagentRuns.set(runId, entry);
     }
     ensureTaskRegistryReady();
   }
+
+  it("reconciles managed cancellation before publishing completion observers", () => {
+    useDefaultDatabase();
+    const input = failedRecords("cancelled", { status: "error" });
+    const flow = createManagedTaskFlow({
+      ownerKey: input.task.ownerKey!,
+      controllerId: "tests/completion-publication",
+      goal: "Observe the committed cancellation pair",
+    });
+    if (!flow) {
+      throw new Error("managed flow was not created");
+    }
+    const running = createRunningTaskRun({
+      runtime: "subagent",
+      parentFlowId: flow.flowId,
+      ownerKey: input.task.ownerKey,
+      requesterSessionKey: input.task.requesterSessionKey,
+      childSessionKey: input.task.childSessionKey,
+      scopeKind: "session",
+      runId: input.task.runId,
+      task: input.task.task!,
+      deliveryStatus: "pending",
+      detail: createSubagentTaskBackingDetail(1),
+    });
+    if (!running) {
+      throw new Error("managed child was not created");
+    }
+    input.task = {
+      ...running,
+      ...input.task,
+      taskId: running.taskId,
+      parentFlowId: flow.flowId,
+      detail: running.detail,
+    };
+    input.subagent.generation = 1;
+    subagentRuns.set(input.subagent.runId, input.subagent);
+    const cancellation = requestFlowCancel({
+      flowId: flow.flowId,
+      expectedRevision: getTaskFlowById(flow.flowId)!.revision,
+      cancelRequestedAt: Date.now(),
+    });
+    expect(cancellation.applied).toBe(true);
+    if (!cancellation.applied) {
+      throw new Error("managed cancellation was not requested");
+    }
+    const pendingFlow = structuredClone(cancellation.flow);
+    expect(pendingFlow).toMatchObject({ status: "queued", cancelRequestedAt: expect.any(Number) });
+    expect(getTaskById(running.taskId)).toMatchObject({
+      status: "running",
+      detail: running.detail,
+    });
+
+    settleSubagentCompletionDelivery({
+      subagent: input.subagent,
+      task: input.task,
+      databaseOptions: { database },
+    });
+    expect(getTaskById(running.taskId)?.status).toBe("running");
+    expect(getTaskFlowById(flow.flowId)).toEqual(pendingFlow);
+    expect(readTaskRecord(database.db, running.taskId)).toMatchObject({
+      status: "cancelled",
+      parentFlowId: flow.flowId,
+      detail: createSubagentTaskBackingDetail(1),
+    });
+    expect(loadTaskFlowRegistryStateFromSqlite().flows.get(flow.flowId)).toEqual(pendingFlow);
+    const observations: Array<{
+      task: Omit<TaskRecord, "detail">;
+      liveTask: TaskRecord | undefined;
+      subagent: SubagentRunRecord | undefined;
+      flow: ReturnType<typeof getTaskFlowById>;
+    }> = [];
+    configureTaskRegistryRuntime({
+      observers: {
+        onEvent: (event) => {
+          if (event.kind === "upserted" && event.task.taskId === running.taskId) {
+            observations.push(
+              structuredClone({
+                task: event.task,
+                liveTask: getTaskById(running.taskId),
+                subagent: subagentRuns.get(input.subagent.runId),
+                flow: getTaskFlowById(flow.flowId),
+              }),
+            );
+          }
+        },
+      },
+    });
+
+    expect(
+      blockSubagentCompletionDelivery({
+        subagent: input.subagent,
+        taskId: running.taskId,
+        reason: "requester unavailable",
+      }),
+    ).toBe(true);
+
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
+      task: { taskId: running.taskId, status: "cancelled", deliveryStatus: "failed" },
+      liveTask: { taskId: running.taskId, status: "cancelled", detail: running.detail },
+      subagent: { generation: 1, delivery: { status: "failed" } },
+      flow: { status: "cancelled", revision: pendingFlow.revision + 1 },
+    });
+    expect(observations[0]!.task).not.toHaveProperty("detail");
+    const completedFlow = getTaskFlowById(flow.flowId);
+    reopenOwners();
+    expect(getTaskFlowById(flow.flowId)).toEqual(completedFlow);
+    expect(getTaskById(running.taskId)).toMatchObject({
+      status: "cancelled",
+      deliveryStatus: "failed",
+      parentFlowId: flow.flowId,
+      detail: createSubagentTaskBackingDetail(1),
+    });
+    expect(subagentRuns.get(input.subagent.runId)).toMatchObject({
+      generation: 1,
+      delivery: { status: "failed" },
+    });
+  });
 
   it.each([
     { name: "cancelled/error", status: "cancelled", outcome: { status: "error" } },
@@ -139,7 +268,7 @@ describe("atomic subagent completion admission store", () => {
     "durably settles a rejected $name wake without rewriting the child outcome",
     async ({ status, outcome }) => {
       useDefaultDatabase();
-      const input = persistOwner(failedRecords(status, outcome));
+      const input = persistOwner(createCoreRequiredCompletionOwner(failedRecords(status, outcome)));
       const originalTask = structuredClone(input.task);
       const originalExecution = structuredClone(input.subagent.execution);
       const driver = requesterWakeDriver([input]);
@@ -175,6 +304,9 @@ describe("atomic subagent completion admission store", () => {
           endedAt: originalTask.endedAt,
         });
         expect(getTaskById(input.task.taskId)?.terminalOutcome).toBeUndefined();
+        expect(getTaskFlowById(input.task.parentFlowId!)).toEqual(
+          loadTaskFlowRegistryStateFromSqlite().flows.get(input.task.parentFlowId!),
+        );
 
         const deliver = vi.fn(async () => {});
         await expect(
@@ -739,7 +871,7 @@ describe("atomic subagent completion admission store", () => {
       });
 
       await releaseSessionDeliveryClaim(second.id);
-      resetTaskRegistryForTests({ persist: false });
+      resetCompletionTaskStateForTests();
       subagentRuns.clear();
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase();
@@ -858,7 +990,7 @@ describe("atomic subagent completion admission store", () => {
         .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
         .run("2026.7.0");
 
-      resetTaskRegistryForTests({ persist: false });
+      resetCompletionTaskStateForTests();
       subagentRuns.clear();
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase();
@@ -1024,7 +1156,7 @@ describe("atomic subagent completion admission store", () => {
       });
       expect(subagentRuns.get(input.subagent.runId)?.cleanupCompletedAt).toBeTypeOf("number");
 
-      resetTaskRegistryForTests({ persist: false });
+      resetCompletionTaskStateForTests();
       subagentRuns.clear();
       for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
         subagentRuns.set(runId, entry);

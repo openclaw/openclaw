@@ -14,6 +14,9 @@ import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/s
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.test-support.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import * as transcriptInject from "./chat-transcript-inject.js";
 import { requireLastRespondCall } from "./chat.abort-authorization.test-helpers.js";
@@ -35,6 +38,11 @@ vi.mock("../session-utils.js", async () => ({
 
 describe("descendant cascade ownership", () => {
   beforeEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    subagentRegistryTesting.setDepsForTest();
+    resetSubagentRegistryForTests();
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
     subagentRegistryTesting.setDepsForTest({
       persistSubagentRunsToDisk: () => {},
       persistSubagentRunsToDiskOrThrow: () => {},
@@ -42,8 +50,11 @@ describe("descendant cascade ownership", () => {
   });
   afterEach(async () => {
     await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
     subagentRegistryTesting.setDepsForTest();
+    resetSubagentRegistryForTests();
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
+    closeOpenClawStateDatabaseForTest();
     swarmSchedulerTesting.reset();
     vi.restoreAllMocks();
   });
@@ -159,6 +170,7 @@ describe("descendant cascade ownership", () => {
         cleanup: "keep",
         collect: true,
         queued: true,
+        taskRowOwnership: "required",
       });
     if (kind === "late descendant") {
       addSubagentRunForTests({

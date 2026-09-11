@@ -67,6 +67,12 @@ export type SubagentRestartRecoveryReceipt = {
   lifecycleGeneration?: string;
 };
 
+export type SubagentTaskOwnershipPolicy =
+  | "core_required"
+  | "gateway_best_effort"
+  | "custom"
+  | "legacy_unresolved";
+
 type SubagentDeliveryDisposition =
   | "delivered"
   | "session_queued"
@@ -225,6 +231,10 @@ export type SubagentRunRecord = {
   runId: string;
   /** Detached task owner; steer/restart changes runId but continues the same task. */
   taskRunId?: string;
+  /** Persisted task authority chosen when this run is registered. */
+  taskOwnershipPolicy?: SubagentTaskOwnershipPolicy;
+  /** Migration proof that an unmarked released row may be adopted by the default runtime. */
+  legacyTaskOwnershipCandidate?: "core_required";
   /** Exact requester attempt for cancellation, independent of completion messaging. */
   requesterTurnRunId?: string;
   /** Durable proof that this requester attempt invoked sessions_yield. */
@@ -311,6 +321,8 @@ export type SubagentRunRecord = {
   queuedLaunch?: SwarmQueuedLaunch;
   /** Durable retry obligation for a prepared collector session whose launch failed. */
   collectorLaunchCleanupPending?: boolean;
+  /** A pre-dispatch rejection must not replace an already-terminal task projection on replay. */
+  taskTerminalProjection?: "preserve_existing";
   /** Set after failed-launch context-engine cleanup succeeds, preventing duplicate end hooks. */
   contextEngineCleanupCompletedAt?: number;
   collectorCompletion?: SwarmCollectorCompletion;

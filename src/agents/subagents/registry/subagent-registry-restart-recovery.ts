@@ -11,6 +11,7 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "./subagent-recovery-state.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { reconcileAcceptedRecovery } from "./subagent-registry-restart-recovery-accepted.js";
 import {
   assertRestartRecoverySnapshotCurrent,
@@ -29,15 +30,33 @@ import type {
   RestartRecoveryParams,
   RestartRecoveryResult,
 } from "./subagent-registry-restart-recovery-types.js";
+import { inspectSubagentTaskOwnership } from "./subagent-task-ownership.js";
 
 const MAX_RECOVERY_ATTEMPTS = 2;
 const RECOVERY_ATTEMPT_WINDOW_MS = 2 * 60_000;
 const MAX_INTERRUPTION_AGE_MS = 2 * 60 * 60_000;
 const TERMINAL_RESUMPTION_NOTICE_RETRY_WINDOW_MS = 2 * 60_000;
+const ownershipDiagnosticEntries = new WeakSet<object>();
 export type { RestartRecoveryParams, RestartRecoveryResult };
 
 export async function recoverInterruptedSubagentRow(
   params: RestartRecoveryParams,
+): Promise<RestartRecoveryResult> {
+  // Observe committed replacement before any await, including pending notices.
+  // Rollback never revokes the source; a later successor removal never restores it.
+  const retirement = subagentRuns.captureRetirement(params.entry, (candidate) =>
+    params.isCurrent(candidate.runId, candidate),
+  );
+  try {
+    return await recoverInterruptedSubagentRowWithOwner(params, retirement);
+  } finally {
+    retirement.release();
+  }
+}
+
+async function recoverInterruptedSubagentRowWithOwner(
+  params: RestartRecoveryParams,
+  retirement: ReturnType<typeof subagentRuns.captureRetirement>,
 ): Promise<RestartRecoveryResult> {
   const recoveryLifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();
   const isRecoveryAttemptLifecycleCurrent = () =>
@@ -46,6 +65,35 @@ export async function recoverInterruptedSubagentRow(
   if (!childSessionKey) {
     return { status: "ignored" };
   }
+  const taskOwnership = inspectSubagentTaskOwnership({
+    entry: params.entry,
+    backingPolicy: "failure-finalization",
+  });
+  if (taskOwnership.kind === "invalid") {
+    if (!ownershipDiagnosticEntries.has(params.entry)) {
+      ownershipDiagnosticEntries.add(params.entry);
+      params.warn("subagent restart recovery is waiting for authoritative task ownership", {
+        runId: params.runId,
+        childSessionKey,
+        reason: taskOwnership.reason,
+        action: "inspect the subagent and task records before retrying the subagent request",
+      });
+    }
+    return { status: "deferred" };
+  }
+  const source = params.entry;
+  const {
+    runId: sourceRunId,
+    generation,
+    createdAt,
+    childSessionKey: sourceChildSessionKey,
+    requesterSessionKey,
+    requesterAgentId,
+    task,
+    taskOwnershipPolicy,
+  } = source;
+  const taskRunId = source.taskRunId ?? sourceRunId;
+  const taskId = taskOwnership.kind === "core_required" ? taskOwnership.task.taskId : undefined;
   const pendingNotice = params.entry.resumptionNotice;
   if (pendingNotice) {
     const isNoticeOwnerCurrent = () =>
@@ -110,14 +158,39 @@ export async function recoverInterruptedSubagentRow(
     typeof params.entry.execution.endedAt === "number";
   const acceptedRecoveryCurrent =
     initialRecoveryReceipt?.phase === "accepted" && params.isCurrent(params.runId, params.entry);
-  const isRecoverySourceCurrent = () =>
-    isRecoveryAttemptLifecycleCurrent() &&
-    params.isCurrent(params.runId, params.entry) &&
-    params.entry.pauseReason !== "sessions_yield" &&
-    params.entry.suppressAnnounceReason !== "steer-restart" &&
-    params.entry.killReconciliation === undefined &&
-    params.entry.killIntent === undefined &&
-    typeof params.entry.execution.endedAt !== "number";
+  const isRecoverySourceCurrent = () => {
+    if (
+      !isRecoveryAttemptLifecycleCurrent() ||
+      !params.isCurrent(params.runId, source) ||
+      params.entry !== source ||
+      source.runId !== sourceRunId ||
+      source.generation !== generation ||
+      source.createdAt !== createdAt ||
+      source.childSessionKey !== sourceChildSessionKey ||
+      source.requesterSessionKey !== requesterSessionKey ||
+      source.requesterAgentId !== requesterAgentId ||
+      (source.taskRunId ?? source.runId) !== taskRunId ||
+      source.task !== task ||
+      source.taskOwnershipPolicy !== taskOwnershipPolicy ||
+      retirement.observation.entry !== source ||
+      retirement.observation.state !== "selected" ||
+      source.pauseReason === "sessions_yield" ||
+      source.suppressAnnounceReason === "steer-restart" ||
+      source.killReconciliation !== undefined ||
+      source.killIntent !== undefined ||
+      typeof source.execution.endedAt === "number"
+    ) {
+      return false;
+    }
+    const current = inspectSubagentTaskOwnership({
+      entry: source,
+      backingPolicy: "failure-finalization",
+    });
+    return (
+      current.kind === taskOwnership.kind &&
+      (current.kind !== "core_required" || current.task.taskId === taskId)
+    );
+  };
   if (initialRecoveryReceipt && !isRestartRecoveryLifecycleCurrent(initialRecoveryReceipt)) {
     return {
       status: "terminal",
@@ -136,6 +209,11 @@ export async function recoverInterruptedSubagentRow(
     return { status: "ignored" };
   }
 
+  const assertSourceCurrent = () => {
+    if (!isRecoverySourceCurrent()) {
+      throw new Error("subagent restart recovery source changed before dispatch");
+    }
+  };
   try {
     const session = await loadSubagentRecoverySession({
       entry: params.entry,
@@ -341,9 +419,7 @@ export async function recoverInterruptedSubagentRow(
       };
     }
     const assertSnapshotCurrent = () => {
-      if (!isRecoverySourceCurrent()) {
-        throw new Error("subagent restart recovery source changed before dispatch");
-      }
+      assertSourceCurrent();
       assertRestartRecoverySnapshotCurrent({
         childSessionKey,
         isOwnerCurrent: isRecoverySourceCurrent,
@@ -390,33 +466,37 @@ export async function recoverInterruptedSubagentRow(
         } else {
           attemptedGeneration = attempted.lifecycleGeneration;
           dispatched = await admission.run(() =>
-            params.gatewayRuntime!.dispatchAgent<{ runId: string; status: unknown }>({
-              message:
-                buildRestartRecoveryResumeMessage(
-                  params.entry.task,
-                  lastHumanMessage ?? undefined,
-                ) +
-                (configChanged
-                  ? "\n\n[config changes from your previous run were already applied — do not re-modify openclaw.json or restart the gateway]"
-                  : ""),
-              sessionKey: childSessionKey,
-              expectedExistingSessionId: sessionId,
-              internalRuntimeHandoffId: handoffId,
-              idempotencyKey,
-              deliver: false,
-              lane: "subagent",
-              ...(params.entry.collect
-                ? { swarmCollector: true, swarmOutputSchema: params.entry.outputSchema }
-                : {}),
-              inputProvenance: {
-                kind: "inter_session",
-                sourceSessionKey: params.entry.requesterSessionKey,
-                sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
-                sourceTool: "subagent_interrupted_resume",
+            params.gatewayRuntime!.dispatchAgent<{ runId: string; status: unknown }>(
+              {
+                message:
+                  buildRestartRecoveryResumeMessage(
+                    params.entry.task,
+                    lastHumanMessage ?? undefined,
+                  ) +
+                  (configChanged
+                    ? "\n\n[config changes from your previous run were already applied — do not re-modify openclaw.json or restart the gateway]"
+                    : ""),
+                sessionKey: childSessionKey,
+                expectedExistingSessionId: sessionId,
+                internalRuntimeHandoffId: handoffId,
+                idempotencyKey,
+                deliver: false,
+                lane: "subagent",
+                ...(params.entry.collect
+                  ? { swarmCollector: true, swarmOutputSchema: params.entry.outputSchema }
+                  : {}),
+                inputProvenance: {
+                  kind: "inter_session",
+                  sourceSessionKey: params.entry.requesterSessionKey,
+                  sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
+                  sourceTool: "subagent_interrupted_resume",
+                },
+                sessionEffects: "internal",
+                suppressPromptPersistence: true,
               },
-              sessionEffects: "internal",
-              suppressPromptPersistence: true,
-            }),
+              undefined,
+              { assertAdmissionCurrent: assertSourceCurrent },
+            ),
           );
         }
       }

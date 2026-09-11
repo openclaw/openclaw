@@ -6,10 +6,12 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
   findDetachedTaskRun,
+  finalizeSubagentTaskRunForOwner,
   finalizeTaskRunByRunId,
   getDetachedTaskLifecycleRuntime,
   recordTaskRunProgressByRunId,
   setDetachedTaskDeliveryStatusByRunId,
+  setSubagentTaskDeliveryStatusForOwner,
   startTaskRunByRunId,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
@@ -354,6 +356,71 @@ describe("detached-task-runtime", () => {
     expect(failArgs.runId).toBe("legacy-timeout");
     expect(failArgs.status).toBe("timed_out");
     expect(failArgs.endedAt).toBe(20);
+  });
+
+  it("preserves the custom runtime terminal contract without leaking core ownership fields", () => {
+    const defaultRuntime = getDetachedTaskLifecycleRuntime();
+    const finalize = vi.fn(() => []);
+    setDetachedTaskLifecycleRuntime({
+      ...defaultRuntime,
+      finalizeTaskRunByRunId: finalize,
+    });
+
+    finalizeSubagentTaskRunForOwner({
+      runId: "registry-run",
+      ownerKey: "agent:main:main",
+      sessionKey: "agent:main:subagent:registry-run",
+      generation: 3,
+      resolvedTask: createFakeTaskRecord({
+        runtime: "subagent",
+        runId: "custom-task-run",
+        childSessionKey: "agent:main:subagent:custom",
+      }),
+      status: "failed",
+      endedAt: 20,
+      error: "failed",
+      suppressDelivery: true,
+      preserveTerminalState: true,
+    });
+
+    expect(finalize).toHaveBeenCalledWith({
+      runId: "custom-task-run",
+      runtime: "subagent",
+      sessionKey: "agent:main:subagent:custom",
+      status: "failed",
+      endedAt: 20,
+      error: "failed",
+      suppressDelivery: true,
+    });
+  });
+
+  it("preserves the custom runtime delivery contract without leaking core ownership fields", () => {
+    const defaultRuntime = getDetachedTaskLifecycleRuntime();
+    const setDelivery = vi.fn(() => []);
+    setDetachedTaskLifecycleRuntime({
+      ...defaultRuntime,
+      setDetachedTaskDeliveryStatusByRunId: setDelivery,
+    });
+
+    setSubagentTaskDeliveryStatusForOwner({
+      runId: "registry-run",
+      ownerKey: "agent:main:main",
+      sessionKey: "agent:main:subagent:registry-run",
+      generation: 3,
+      resolvedTask: createFakeTaskRecord({
+        runtime: "subagent",
+        runId: "custom-task-run",
+        childSessionKey: "agent:main:subagent:custom",
+      }),
+      deliveryStatus: "delivered",
+    });
+
+    expect(setDelivery).toHaveBeenCalledWith({
+      runId: "custom-task-run",
+      runtime: "subagent",
+      sessionKey: "agent:main:subagent:custom",
+      deliveryStatus: "delivered",
+    });
   });
 
   it("reports unavailable lookup for an opaque legacy runtime", () => {

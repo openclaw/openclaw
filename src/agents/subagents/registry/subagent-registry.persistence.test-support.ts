@@ -5,6 +5,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Selectable } from "kysely";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions.js";
@@ -14,7 +15,15 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
+import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
+import type { TaskFlowRecord } from "../../../tasks/task-flow-registry.types.js";
+import { getTaskFlowById } from "../../../tasks/task-flow-runtime-internal.js";
+import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
@@ -22,9 +31,59 @@ import {
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
+import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
+const SYNTHETIC_PREVIOUS_BUILD = "synthetic-previous-build";
+type PersistedReleasedSubagentRow = Pick<
+  Selectable<OpenClawStateKyselyDatabase["subagent_runs"]>,
+  | "run_id"
+  | "child_session_key"
+  | "controller_session_key"
+  | "requester_session_key"
+  | "created_at"
+  | "payload_json"
+>;
+
+export function expectSubagentFixtureFields(
+  value: unknown,
+  expected: Record<string, unknown>,
+): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+export function createPersistedEndedSubagentRunFixture(params: {
+  runId: string;
+  childSessionKey: string;
+  task: string;
+  cleanup: "keep" | "delete";
+}) {
+  const now = Date.now();
+  return {
+    version: 2,
+    runs: {
+      [params.runId]: {
+        runId: params.runId,
+        childSessionKey: params.childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        taskOwnershipPolicy: "gateway_best_effort" as const,
+        task: params.task,
+        cleanup: params.cleanup,
+        createdAt: now - 2,
+        startedAt: now - 1,
+        endedAt: now,
+      },
+    },
+  };
+}
 
 export function expectDeferredSubagentAnnouncement(
   entry: SubagentRunRecord | undefined,
@@ -138,6 +197,145 @@ export function canonicalSubagentRunFixtures(
   return new Map([...runs].map(([runId, run]) => [runId, createCanonicalSubagentRunFixture(run)]));
 }
 
+export function createReleasedCoreSubagentCandidateFixture(run: SubagentRunFixture): {
+  run: SubagentRunRecord;
+  task: TaskRecord;
+  flow: TaskFlowRecord;
+} {
+  if (run.taskOwnershipPolicy !== undefined) {
+    throw new Error("released ownership candidate fixtures must omit task ownership policy");
+  }
+  const generation = run.generation ?? 1;
+  const taskRunId = run.taskRunId ?? run.runId;
+  const candidate = createCanonicalSubagentRunFixture({
+    ...run,
+    taskRunId,
+    generation,
+  });
+  const task = createRunningTaskRun({
+    runtime: "subagent",
+    sourceId: taskRunId,
+    ownerKey: candidate.requesterSessionKey,
+    requesterSessionKey: candidate.requesterSessionKey,
+    scopeKind: "session",
+    childSessionKey: candidate.childSessionKey,
+    runId: taskRunId,
+    task: candidate.task,
+    deliveryStatus: candidate.expectsCompletionMessage === false ? "not_applicable" : "pending",
+    detail: createSubagentTaskBackingDetail(generation),
+    startedAt: candidate.execution.startedAt ?? candidate.createdAt,
+    lastEventAt: candidate.execution.startedAt ?? candidate.createdAt,
+  });
+  if (!task?.parentFlowId) {
+    throw new Error(`failed to create released task backing for ${run.runId}`);
+  }
+  const flow = getTaskFlowById(task.parentFlowId);
+  if (!flow || flow.syncMode !== "task_mirrored") {
+    throw new Error(`failed to create released mirrored task flow for ${run.runId}`);
+  }
+  return { run: candidate, task, flow };
+}
+
+/** Writes the exact released row shape without current-runtime normalization. */
+export function writeReleasedCoreSubagentCandidateFixture(run: SubagentRunFixture): {
+  run: SubagentRunRecord;
+  task: TaskRecord;
+  flow: TaskFlowRecord;
+  row: PersistedReleasedSubagentRow;
+} {
+  const fixture = createReleasedCoreSubagentCandidateFixture(run);
+  let persisted: PersistedReleasedSubagentRow | undefined;
+  runOpenClawStateWriteTransaction((database) => {
+    const stateDb = getNodeSqliteKysely<
+      Pick<OpenClawStateKyselyDatabase, "schema_meta" | "subagent_runs">
+    >(database.db);
+    upsertSubagentRunRowInDatabase(database, {
+      run_id: fixture.run.runId,
+      child_session_key: fixture.run.childSessionKey,
+      controller_session_key: fixture.run.controllerSessionKey?.trim() || null,
+      requester_session_key: fixture.run.requesterSessionKey,
+      created_at: fixture.run.createdAt,
+      payload_json: JSON.stringify(fixture.run),
+    });
+    const schemaBefore = executeSqliteQuerySync(
+      database.db,
+      stateDb.selectFrom("schema_meta").select("schema_version").where("meta_key", "=", "primary"),
+    ).rows[0];
+    expect(schemaBefore).toBeDefined();
+    const updated = executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .updateTable("schema_meta")
+        .set({ app_version: SYNTHETIC_PREVIOUS_BUILD })
+        .where("meta_key", "=", "primary"),
+    );
+    expect(updated.numAffectedRows).toBe(1n);
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        stateDb
+          .selectFrom("schema_meta")
+          .select(["app_version", "schema_version"])
+          .where("meta_key", "=", "primary"),
+      ).rows[0],
+    ).toEqual({
+      app_version: SYNTHETIC_PREVIOUS_BUILD,
+      schema_version: schemaBefore?.schema_version,
+    });
+    persisted = executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .selectFrom("subagent_runs")
+        .select([
+          "run_id",
+          "child_session_key",
+          "controller_session_key",
+          "requester_session_key",
+          "created_at",
+          "payload_json",
+        ])
+        .where("run_id", "=", fixture.run.runId),
+    ).rows[0];
+  });
+  if (!persisted) {
+    throw new Error(`failed to persist released subagent row ${fixture.run.runId}`);
+  }
+  return { ...fixture, row: persisted };
+}
+
+export function expectReleasedCoreSubagentCandidatePersisted(
+  fixture: ReturnType<typeof writeReleasedCoreSubagentCandidateFixture>,
+): void {
+  const payload = JSON.parse(fixture.row.payload_json) as Record<string, unknown>;
+  expect(Object.hasOwn(payload, "taskOwnershipPolicy")).toBe(false);
+  expect(Object.hasOwn(payload, "legacyTaskOwnershipCandidate")).toBe(false);
+  expect(fixture.row).toMatchObject({
+    run_id: payload.runId,
+    child_session_key: payload.childSessionKey,
+    controller_session_key: payload.controllerSessionKey ?? null,
+    requester_session_key: payload.requesterSessionKey,
+    created_at: payload.createdAt,
+  });
+  expect(payload).toMatchObject({
+    taskRunId: fixture.task.sourceId,
+    generation: fixture.run.generation,
+    requesterSessionKey: fixture.task.requesterSessionKey,
+    childSessionKey: fixture.task.childSessionKey,
+  });
+  expect(fixture.task).toMatchObject({
+    sourceId: fixture.run.taskRunId,
+    ownerKey: fixture.run.requesterSessionKey,
+    requesterSessionKey: fixture.run.requesterSessionKey,
+    childSessionKey: fixture.run.childSessionKey,
+    detail: createSubagentTaskBackingDetail(fixture.run.generation!),
+  });
+  expect(fixture.flow).toMatchObject({
+    flowId: fixture.task.parentFlowId,
+    syncMode: "task_mirrored",
+    ownerKey: fixture.run.requesterSessionKey,
+  });
+}
+
 /** Reads test session entries through the active SQLite accessor. */
 export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
   return Object.fromEntries(
@@ -228,6 +426,26 @@ export function createDeliveredWake(
   });
 }
 
+export function createGatewayBestEffortDeliveredWake(
+  runId: string,
+  requesterSettleWake?: NonNullable<SubagentRunRecord["requesterSettleWake"]>,
+  overrides: Partial<SubagentRunRecordOverrides> = {},
+): SubagentRunRecord {
+  return createDeliveredWake(runId, requesterSettleWake, {
+    ...overrides,
+    taskOwnershipPolicy: "gateway_best_effort",
+  });
+}
+
+export function createGatewayBestEffortSubagentRun(
+  overrides: SubagentRunRecordOverrides,
+): SubagentRunRecord {
+  return createSubagentRunRecord({
+    ...overrides,
+    taskOwnershipPolicy: "gateway_best_effort",
+  });
+}
+
 export function writeChildSession(
   stateDir: string,
   sessionKey: string,
@@ -245,6 +463,7 @@ export function writeChildSession(
 
 export function createOrphanedRequiredDelivery(
   status: "pending" | "suspended" | "in_progress",
+  overrides: Partial<SubagentRunRecordOverrides> = {},
 ): SubagentRunRecord {
   const now = Date.now();
   const runId = `run-orphan-${status}-delivery`;
@@ -286,5 +505,14 @@ export function createOrphanedRequiredDelivery(
         terminalReply,
       },
     },
+    ...overrides,
+  });
+}
+
+export function createGatewayBestEffortOrphanedRequiredDelivery(
+  status: "pending" | "suspended" | "in_progress",
+): SubagentRunRecord {
+  return createOrphanedRequiredDelivery(status, {
+    taskOwnershipPolicy: "gateway_best_effort",
   });
 }

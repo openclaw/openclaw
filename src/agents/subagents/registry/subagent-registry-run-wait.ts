@@ -206,6 +206,7 @@ export type SubagentManagerOptions = {
   resumedRuns: Set<string>;
   persist(...runIds: string[]): void;
   persistOrThrow(...runIds: string[]): void;
+  findPersistedSubagentRunIdentityClaim(runId: string): SubagentRunRecord | null;
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
   ensureListener(): void;

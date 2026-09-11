@@ -102,6 +102,7 @@ describe("pending spawn invocation authority", () => {
           collect: id !== "b",
           spawnMode: id === "b" ? "session" : "run",
           expectsCompletionMessage: false,
+          taskRowOwnership: "required",
         });
         registerAgentRunContext(id, { sessionKey: key(id), sessionId: `${id}-session` });
       }

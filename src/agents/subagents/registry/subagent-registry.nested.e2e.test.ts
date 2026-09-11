@@ -45,6 +45,7 @@ describe("subagent registry nested agent tracking", () => {
       task: "orchestrate something",
       cleanup: "keep",
       label: "orchestrator",
+      taskRowOwnership: "required",
     });
 
     // Depth-1 orchestrator spawns a depth-2 leaf
@@ -56,6 +57,7 @@ describe("subagent registry nested agent tracking", () => {
       task: "do leaf work",
       cleanup: "keep",
       label: "leaf",
+      taskRowOwnership: "required",
     });
 
     // Main sees its direct child (the orchestrator)
@@ -86,6 +88,7 @@ describe("subagent registry nested agent tracking", () => {
       task: "nested task",
       cleanup: "keep",
       label: "nested-leaf",
+      taskRowOwnership: "required",
     });
 
     // Announce should target the depth-1 parent, not the main session. The
@@ -112,6 +115,7 @@ describe("subagent registry nested agent tracking", () => {
       requesterDisplayKey: "main",
       task: "orchestrate",
       cleanup: "keep",
+      taskRowOwnership: "required",
     });
 
     // Orchestrator spawns two leaves
@@ -122,6 +126,7 @@ describe("subagent registry nested agent tracking", () => {
       requesterDisplayKey: "subagent:orch1",
       task: "leaf 1",
       cleanup: "keep",
+      taskRowOwnership: "required",
     });
 
     registerSubagentRun({
@@ -131,6 +136,7 @@ describe("subagent registry nested agent tracking", () => {
       requesterDisplayKey: "subagent:orch1",
       task: "leaf 2",
       cleanup: "keep",
+      taskRowOwnership: "required",
     });
 
     // Main has 1 active child

@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   onAgentEvent: vi.fn(),
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue("retryable"),
   captureSubagentCompletionReply: vi.fn(),
+  findSubagentRunIdentityClaimFromSqlite: vi.fn(() => null),
   loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
   saveSubagentRegistryChangesToSqlite: vi.fn(),
   saveSubagentRegistryToSqlite: vi.fn(),
@@ -67,6 +68,7 @@ vi.mock("../../../infra/agent-events.js", () => ({
 }));
 
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
+  findSubagentRunIdentityClaimFromSqlite: mocks.findSubagentRunIdentityClaimFromSqlite,
   loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
   saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,

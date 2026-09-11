@@ -64,6 +64,8 @@ describe("subagent registry restart recovery", () => {
           sessionKey: childSessionKey,
           expectedExistingSessionId: "session-id",
         }),
+        undefined,
+        { assertAdmissionCurrent: expect.any(Function) },
       );
       expect(mocks.entries[childSessionKey]).toMatchObject({
         sessionId: "session-id",
@@ -230,6 +232,8 @@ describe("subagent registry restart recovery", () => {
           suppressPromptPersistence: true,
           message: expect.stringContaining("latest user direction"),
         }),
+        undefined,
+        { assertAdmissionCurrent: expect.any(Function) },
       );
       expect(String(dispatchAgent.mock.calls[0]?.[0].message).includes("already applied")).toBe(
         configChanged,
@@ -349,6 +353,23 @@ describe("subagent registry restart recovery", () => {
     });
     expect(mocks.readSessionMessages).not.toHaveBeenCalled();
     expect(mocks.entries[childSessionKey]!.abortedLastRun).toBe(true);
+  });
+
+  it("defers an unresolved legacy row with one bounded ownership diagnostic", async () => {
+    const entry = run({ taskOwnershipPolicy: "legacy_unresolved" });
+
+    await expect(recover(entry)).resolves.toEqual({ status: "deferred" });
+    await expect(recover(entry)).resolves.toEqual({ status: "deferred" });
+
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    expect(mocks.readSessionMessages).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "subagent restart recovery is waiting for authoritative task ownership",
+      expect.objectContaining({
+        reason: "has unresolved legacy task ownership",
+        action: "inspect the subagent and task records before retrying the subagent request",
+      }),
+    );
   });
 
   it("preserves the abort marker when dispatch fails", async () => {

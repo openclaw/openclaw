@@ -272,6 +272,9 @@ export function createSubagentRegistrySweeper(params: {
         if (runs.get(runId) !== entry) {
           continue;
         }
+        if (entry.taskOwnershipPolicy === "legacy_unresolved") {
+          continue;
+        }
         if (isRestoredQueuedFailureSettlementClaimed(entry)) {
           // The restored FIFO callback owns this row until durable settlement.
           continue;

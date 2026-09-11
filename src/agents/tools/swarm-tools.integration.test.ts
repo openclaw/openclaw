@@ -2,9 +2,24 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { findTaskByRunId } from "../../tasks/task-registry.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../../tasks/task-runtime.test-helpers.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
+import {
+  persistSubagentRunsToDisk,
+  persistSubagentRunsToDiskOrThrow,
+  restoreSubagentRunsFromDisk,
+} from "../subagents/registry/subagent-registry-state.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../subagents/registry/subagent-registry.store.sqlite.js";
 import {
   resetSubagentRegistryForTests,
   testing as registryTesting,
@@ -47,6 +62,8 @@ describe("swarm tools integration", () => {
   beforeEach(() => {
     completionResolvers.clear();
     resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     swarmSchedulerTesting.reset();
   });
 
@@ -54,17 +71,25 @@ describe("swarm tools integration", () => {
     spawnTesting.setDepsForTest();
     registryTesting.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     for (const runId of collectorRunIds) {
       consumeSwarmStructuredOutput(runId);
     }
     collectorRunIds.clear();
     swarmSchedulerTesting.reset();
+    closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
   });
 
   it("spawns text and structured collectors with explicit collection guidance and drains them in completion order", async () => {
     await withTestDir({ prefix: "openclaw-swarm-tools-" }, async (stateDir) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      closeOpenClawStateDatabaseForTest();
+      resetSubagentRegistryForTests({ persist: false });
+      resetTaskRegistryForTests();
+      resetTaskFlowRegistryForTests();
+      saveSubagentRegistryToSqlite(new Map());
       const publicToGateway = new Map<string, string>();
       const resultTextBySession = new Map<string, string>();
       const modelStructuredCalls: number[] = [];
@@ -143,10 +168,10 @@ describe("swarm tools integration", () => {
         getRuntimeConfig: () => config,
         maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
         onAgentEvent: vi.fn(() => () => undefined) as never,
-        persistSubagentRunsToDisk: vi.fn(),
-        persistSubagentRunsToDiskOrThrow: vi.fn(),
+        persistSubagentRunsToDisk,
+        persistSubagentRunsToDiskOrThrow,
         resolveAgentTimeoutMs: () => 1_000,
-        restoreSubagentRunsFromDisk: vi.fn(() => 0),
+        restoreSubagentRunsFromDisk,
         runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
         ensureContextEnginesInitialized: vi.fn(),
         loadAgentRuntimePluginRegistryHandle: vi.fn(),
@@ -207,6 +232,19 @@ describe("swarm tools integration", () => {
       }
       await vi.waitFor(() => expect(completionResolvers.size).toBe(3));
       expect(modelStructuredCalls).toEqual([1, 3]);
+      const durableRuns = loadSubagentRegistryFromSqlite();
+      for (const publicRunId of runIds) {
+        const gatewayRunId = publicToGateway.get(publicRunId);
+        expect(durableRuns.get(gatewayRunId ?? "")).toMatchObject({
+          runId: gatewayRunId,
+          taskRunId: publicRunId,
+          execution: { status: "running" },
+        });
+        expect(findTaskByRunId(publicRunId)).toMatchObject({
+          runId: publicRunId,
+          status: "running",
+        });
+      }
 
       const pending = new Set(runIds);
       const completionOrder: string[] = [];
@@ -240,6 +278,10 @@ describe("swarm tools integration", () => {
         expect.soft(guidance).toMatch(/Collector run: no completion notification/);
         expect.soft(guidance).not.toMatch(/auto-announce|auto-reported|push-based/);
       }
+      resetSubagentRegistryForTests({ persist: false });
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      closeOpenClawStateDatabaseForTest();
     });
   });
 });

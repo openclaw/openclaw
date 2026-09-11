@@ -27,6 +27,7 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { registerSubagentRun as registerSubagentRunCore } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type RegistryTestApi = {
@@ -53,6 +54,7 @@ type RegistryDeps = {
   captureSubagentCompletionReply: typeof import("../announce/subagent-announce.js").captureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd: typeof import("../../../browser-lifecycle-cleanup.js").cleanupBrowserSessionsForLifecycleEnd;
   getRuntimeConfig: typeof import("../../../config/config.js").getRuntimeConfig;
+  findPersistedSubagentRunIdentityClaim: import("./subagent-registry-deps.js").SubagentRegistryDeps["findPersistedSubagentRunIdentityClaim"];
   onAgentEvent: typeof import("../../../infra/agent-events.js").onAgentEvent;
   persistSubagentRunsToDisk: typeof import("./subagent-registry-state.js").persistSubagentRunsToDisk;
   persistSubagentRunsToDiskOrThrow: typeof import("./subagent-registry-state.js").persistSubagentRunsToDiskOrThrow;
@@ -73,6 +75,17 @@ function getRegistryTestApi(): RegistryTestApi {
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   getRegistryTestApi().resetSubagentRegistryForTests(opts);
+}
+
+type TestRegistrationParams = Omit<
+  Parameters<typeof registerSubagentRunCore>[0],
+  "taskRowOwnership"
+> & {
+  taskRowOwnership?: Parameters<typeof registerSubagentRunCore>[0]["taskRowOwnership"];
+};
+
+export function registerSubagentRun(params: TestRegistrationParams) {
+  return registerSubagentRunCore({ taskRowOwnership: "required", ...params });
 }
 
 export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {

@@ -327,6 +327,7 @@ describe("subagent registry lifecycle error grace", () => {
       task,
       cleanup: "keep",
       expectsCompletionMessage,
+      taskRowOwnership: "required",
     });
   }
 

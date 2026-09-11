@@ -23,6 +23,21 @@ type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> 
   resetSubagentRegistryForTests: MockFn;
 };
 
+/** Return the non-void ownership receipt produced by a successful registration. */
+export function createAcceptedSubagentRegistration(input: unknown) {
+  const registration = input as {
+    runId?: unknown;
+    taskRowOwnership?: unknown;
+  };
+  const runId = String(registration.runId);
+  return {
+    kind:
+      registration.taskRowOwnership === "required" ? ("owned" as const) : ("registered" as const),
+    runId,
+    assertDispatchCurrent: () => undefined,
+  };
+}
+
 /** Build a minimal runtime config for sessions_spawn tests. */
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
@@ -397,7 +412,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getSubagentDeliveryBacklogPressure: () => ({ suspended: 0, blocked: false }),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun:
-      params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
+      params.registerSubagentRunMock ?? vi.fn(createAcceptedSubagentRegistration),
     resetSubagentRegistryForTests,
     settleFailedQueuedSubagentLaunch:
       params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),

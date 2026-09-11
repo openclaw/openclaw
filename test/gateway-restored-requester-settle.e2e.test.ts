@@ -2,11 +2,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
+  expectReleasedCoreSubagentCandidatePersisted,
+  writeReleasedCoreSubagentCandidateFixture,
+  writeSubagentSessionEntry,
+} from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
@@ -68,6 +69,7 @@ describe("Gateway restored requester settlement", () => {
       instances.push(instance);
       await seedRestoredRequesters(instance, 1);
       await instance.startGateway();
+      await expectReleasedCandidatesAdopted(instance, 1);
       const client = await connectGatewayClient({
         url: instance.url,
         token: instance.gatewayToken,
@@ -172,6 +174,7 @@ describe("Gateway restored requester settlement", () => {
       await seedRestoredRequesters(instance, 3);
 
       await instance.startGateway();
+      await expectReleasedCandidatesAdopted(instance, 3);
       await vi.waitFor(
         () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2),
         { interval: 20, timeout: 30_000 },
@@ -204,7 +207,7 @@ async function seedRestoredRequesters(instance: OpenClawTestInstance, count: num
     const endedAt = Date.now();
     const restoredRuns = Array.from({ length: count }, (_, index): SubagentRunRecord => {
       const runId = `run-gateway-restored-settle-${index}`;
-      return {
+      const fixture = writeReleasedCoreSubagentCandidateFixture({
         runId,
         childSessionKey: `agent:main:subagent:gateway-restored-settle-${index}`,
         requesterSessionKey: `agent:main:gateway-restored-requester-${index}`,
@@ -232,11 +235,10 @@ async function seedRestoredRequesters(instance: OpenClawTestInstance, count: num
           afterRequesterYield: true,
           rearmGeneration: 1,
         },
-      };
+      });
+      expectReleasedCoreSubagentCandidatePersisted(fixture);
+      return fixture.run;
     });
-    saveSubagentRegistryToSqlite(
-      new Map(restoredRuns.map((entry) => [entry.runId, entry] as const)),
-    );
     for (const [index, entry] of restoredRuns.entries()) {
       await writeSubagentSessionEntry({
         stateDir: instance.stateDir,
@@ -249,6 +251,26 @@ async function seedRestoredRequesters(instance: OpenClawTestInstance, count: num
   } finally {
     // Keep this one state lease through the Gateway run and retained-result reads;
     // instance.cleanup owns restoration after every process has stopped.
+    closeOpenClawStateDatabaseForTest();
+  }
+}
+
+async function expectReleasedCandidatesAdopted(instance: OpenClawTestInstance, count: number) {
+  instance.state.applyEnv();
+  try {
+    await vi.waitFor(
+      () => {
+        const runs = loadSubagentRegistryFromSqlite();
+        for (let index = 0; index < count; index += 1) {
+          expect(runs.get(`run-gateway-restored-settle-${index}`)).toMatchObject({
+            taskOwnershipPolicy: "core_required",
+            requesterAgentId: "main",
+          });
+        }
+      },
+      { interval: 50, timeout: 25_000 },
+    );
+  } finally {
     closeOpenClawStateDatabaseForTest();
   }
 }

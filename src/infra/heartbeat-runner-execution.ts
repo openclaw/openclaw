@@ -57,6 +57,7 @@ import {
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
+  getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatScheduledTask,
@@ -330,6 +331,8 @@ type StageResult<T, K extends string> = Extract<Awaited<T>, { kind: K }>;
 export type ReadyHeartbeatWake = StageResult<ReturnType<typeof resolveHeartbeatWakeStage>, "ready">;
 
 export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
+  const signal = getHeartbeatWakeAbortSignal();
+  signal?.throwIfAborted();
   const { cfg, agentId, heartbeat, preflight } = wake;
   const { scheduledTasks, startedAt } = wake;
   const { listActiveEmbeddedRuns, isReplyRunActive } = wake;
@@ -353,6 +356,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       ? preflight.turnSourceDeliveryContext
       : undefined,
   });
+  signal?.throwIfAborted();
   // Routeless ambient polls are pure model burn, but only they may skip:
   // triggered wakes (hook/manual/cron/exec), polls with queued events, and
   // scheduled-task wakes must still run to process their payloads even when
@@ -491,7 +495,11 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         },
       ],
       captureArtifactCleanupError: true,
+      // Route/archive preparation can outlive its wake. Recheck inside the
+      // synchronous commit so a retired run cannot replace isolated session state.
+      beforeCommitInTransaction: () => signal?.throwIfAborted(),
     });
+    signal?.throwIfAborted();
     if (lifecycleResult.artifactCleanupError) {
       log.warn("heartbeat: failed to archive stale isolated session transcript", {
         err: formatErrorMessage(lifecycleResult.artifactCleanupError),

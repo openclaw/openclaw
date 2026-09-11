@@ -26,6 +26,10 @@ export const TASK_STATUS_FILTERS = [...TASK_STATUSES, "blocked"] as const;
 export type TaskRuntime = (typeof TASK_RUNTIMES)[number];
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskStatusFilter = (typeof TASK_STATUS_FILTERS)[number];
+/** Owner-minted identity persisted in canonical tasks and copied into managed projections. */
+export type TaskBackingInstance =
+  | { runtime: "acp"; instanceId: string; generation: number }
+  | { runtime: "subagent"; generation: number };
 
 export type TaskDeliveryStatus =
   | "pending"

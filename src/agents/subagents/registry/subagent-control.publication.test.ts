@@ -9,6 +9,7 @@ import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
 } from "../../../sessions/session-lifecycle-admission.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import { runTaskInFlowForOwner } from "../../../tasks/task-executor.js";
 import { createManagedTaskFlow } from "../../../tasks/task-flow-runtime-internal.js";
@@ -73,6 +74,7 @@ it.each(["canonical", "managed"] as const)(
       requesterDisplayKey: "main",
       task: "same-owner completion",
       cleanup: "keep",
+      taskRowOwnership: "required",
     });
     const owner = subagentRuns.get("publication-same-owner")!;
     const generation = owner.generation;
@@ -111,26 +113,31 @@ it.each(["canonical", "managed"] as const)(
     const order: string[] = [];
     const completionCommitted = createDeferred();
     const store = getTaskRegistryStore();
-    const upsert = store.upsertTaskWithDeliveryState!;
+    const database = openOpenClawStateDatabase();
     let faults = 0;
-    vi.spyOn(store, "upsertTaskWithDeliveryState").mockImplementation((params) => {
-      if (
-        params.task.taskId === selected.taskId &&
-        params.task.status === "succeeded" &&
-        faults === 0
-      ) {
+    const faultFunction = `publication_selected_write_${selectedKind}`;
+    const faultTrigger = `${faultFunction}_trigger`;
+    database.db.function(faultFunction, (taskId, status, error) => {
+      if (taskId === selected.taskId && status === "succeeded" && faults === 0) {
         faults += 1;
         order.push("selected write refused");
-        throw new Error("one-shot selected task completion write failure");
+        return 1;
       }
-      upsert(params);
-      if (
-        params.task.taskId === selected.taskId &&
-        params.task.error === "Cancelled by operator."
-      ) {
+      if (taskId === selected.taskId && error === "Cancelled by operator.") {
         order.push("operator cancellation write");
       }
+      return 0;
     });
+    database.db.exec(`
+      CREATE TEMP TRIGGER ${faultTrigger}
+      BEFORE UPDATE ON task_runs
+      BEGIN
+        SELECT CASE
+          WHEN ${faultFunction}(NEW.task_id, NEW.status, NEW.error) = 1
+          THEN RAISE(ABORT, 'one-shot selected task completion write failure')
+        END;
+      END
+    `);
     fixture.persist.mockImplementation((...runIds) => {
       persistSubagentRunsToDiskOrThrow(...runIds);
       if (
@@ -183,6 +190,7 @@ it.each(["canonical", "managed"] as const)(
       expect(owner.execution.outcome?.status).toBe("ok");
     } finally {
       capture.resolve("completed native reply");
+      database.db.exec(`DROP TRIGGER IF EXISTS ${faultTrigger}`);
       resetTaskRegistryControlRuntimeForTests();
     }
   },
@@ -277,44 +285,58 @@ it.each([
       task: "original task",
       cleanup: "keep",
       expectsCompletionMessage: true,
+      taskRowOwnership: "required",
     });
     const b0 = subagentRuns.get("publication-b0")!;
     const task = findTaskByRunId(b0.runId)!;
     expect(b0.collect).not.toBe(true);
     expect(task.status).toBe("running");
     const taskStore = getTaskRegistryStore();
-    const upsert = taskStore.upsertTaskWithDeliveryState;
-    if (!upsert) {
-      throw new Error("Expected the real SQLite composite task upsert");
-    }
+    const database = openOpenClawStateDatabase();
     const failedWrite = createDeferred();
     const successorCompleted = createDeferred();
     const originalCompleted = createDeferred();
+    const handoffOrder: string[] = [];
+    let failures = 0;
+    let registryCommitted = false;
+    let registryCommittedBeforeFailure = false;
     fixture.persist.mockImplementation((...runIds) => {
       persistSubagentRunsToDiskOrThrow(...runIds);
       if (b0.execution.outcome?.status === "ok") {
         originalCompleted.resolve();
       }
+      if (b0.execution.status === "terminal") {
+        registryCommitted =
+          loadSubagentRegistryFromSqlite().get(b0.runId)?.execution.status === "terminal";
+      }
       if (subagentRuns.get("publication-b1")?.execution.outcome?.status === "ok") {
         successorCompleted.resolve();
       }
     });
-    const handoffOrder: string[] = [];
-    let failures = 0;
-    let registryCommittedBeforeFailure = false;
-    vi.spyOn(taskStore, "upsertTaskWithDeliveryState").mockImplementation((params) => {
-      if (params.task.taskId === task.taskId && params.task.status === "failed" && failures === 0) {
-        registryCommittedBeforeFailure =
-          loadSubagentRegistryFromSqlite().get(b0.runId)?.execution.status === "terminal";
+    const faultFunction = "publication_terminal_write_fault";
+    const faultTrigger = `${faultFunction}_trigger`;
+    database.db.function(faultFunction, (taskId, status) => {
+      if (taskId === task.taskId && status === "failed" && failures === 0) {
+        registryCommittedBeforeFailure = registryCommitted;
         failures += 1;
         failedWrite.resolve();
-        throw new Error("one-shot terminal task persistence failure");
+        return 1;
       }
-      if (handoff && handoffOrder.includes("replacement") && params.task.status !== "running") {
+      if (handoff && handoffOrder.includes("replacement") && status !== "running") {
         handoffOrder.push("task write");
       }
-      upsert(params);
+      return 0;
     });
+    database.db.exec(`
+      CREATE TEMP TRIGGER ${faultTrigger}
+      BEFORE UPDATE ON task_runs
+      BEGIN
+        SELECT CASE
+          WHEN ${faultFunction}(NEW.task_id, NEW.status) = 1
+          THEN RAISE(ABORT, 'one-shot terminal task persistence failure')
+        END;
+      END
+    `);
     if (!completeDuringDrain && !provisional) {
       previousWait.resolve({ status: "error", error: "original run failed", endedAt: Date.now() });
       await failedWrite.promise;
@@ -349,6 +371,7 @@ it.each([
         collect: true,
         queued: true,
         expectsCompletionMessage: false,
+        taskRowOwnership: "required",
       });
     }
     const entered = createDeferred();
@@ -564,6 +587,7 @@ it.each([
       releaseMarker.resolve();
       childAdmission.release();
       followup?.release();
+      database.db.exec(`DROP TRIGGER IF EXISTS ${faultTrigger}`);
       await pending;
       resetTaskRegistryControlRuntimeForTests();
       expect(getActiveSessionWorkAdmissionCount()).toBe(0);

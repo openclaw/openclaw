@@ -51,6 +51,7 @@ async function setupAcceptedRecovery(persistedPhase: "attempted" | "consumed" = 
     cleanup: "keep",
     spawnMode: "session",
     expectsCompletionMessage: true,
+    taskRowOwnership: "required",
   });
   const source = subagentRuns.get("acceptance-predecessor")!;
   const task = findTaskByRunId(source.runId)!;
@@ -63,6 +64,8 @@ async function setupAcceptedRecovery(persistedPhase: "attempted" | "consumed" = 
       resumedRuns: new Set(),
       persist: (...runIds) => persistSubagentRunsToDiskOrThrow(subagentRuns, runIds),
       persistOrThrow: (...runIds) => persistSubagentRunsToDiskOrThrow(subagentRuns, runIds),
+      findPersistedSubagentRunIdentityClaim:
+        subagentRegistryDeps.findPersistedSubagentRunIdentityClaim,
       callGateway: subagentRegistryDeps.callGateway,
       getRuntimeConfig,
       ensureListener: noop,
@@ -332,6 +335,7 @@ it.each([
       task: "Newer work owns this session",
       cleanup: "keep",
       expectsCompletionMessage: false,
+      taskRowOwnership: "required",
     });
     expect(subagentRuns.get(state.source.runId)).toBe(state.source);
   }

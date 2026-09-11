@@ -20,7 +20,9 @@ import {
   consumeSessionWorkAdmissionHandoff,
   type SessionWorkAdmissionLease,
 } from "../../../sessions/session-lifecycle-admission.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { findTaskByRunId } from "../../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -45,13 +47,28 @@ import {
   testing,
 } from "./subagent-registry.test-helpers.js";
 import {
+  createCoreRequiredTaskBacking,
   makeRestartRecoveryRun as makeRunRecord,
   useSubagentRestartRecoveryFixture,
 } from "./subagent-restart-recovery.test-support.js";
 
+const subagentRegistryWarn = vi.hoisted(() => vi.fn());
+
 vi.mock("../../../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
 }));
+vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "agents/subagent-registry"
+        ? { ...logger, warn: subagentRegistryWarn }
+        : logger;
+    },
+  };
+});
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1_000;
 
@@ -173,6 +190,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
             task: "continue after update",
             cleanup: "keep",
             expectsCompletionMessage: false,
+            taskRowOwnership: "required",
           });
           await vi.waitFor(() => expect(waitRequests).toContain(runId));
           markGatewayRestartDraining();
@@ -287,6 +305,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     const record = makeRunRecord({
       runId,
       childSessionKey,
+      generation: 1,
       createdAt: now - 3 * TWO_HOURS_MS,
       startedAt: now - 3 * TWO_HOURS_MS,
     });
@@ -299,6 +318,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         childSessionKey,
         runId,
         task: record.task,
+        detail: createSubagentTaskBackingDetail(1),
         deliveryStatus: "pending",
         startedAt: record.execution.startedAt,
         lastEventAt: record.execution.startedAt,
@@ -347,10 +367,13 @@ describe("subagent orphan recovery — faithful restart path", () => {
       const record = makeRunRecord({
         runId,
         childSessionKey,
+        taskOwnershipPolicy: "core_required",
+        generation: 1,
         createdAt: now - runAgeMs,
         startedAt: now - runAgeMs,
         runTimeoutSeconds: 0,
       });
+      createCoreRequiredTaskBacking(record);
       addSubagentRunForTests(record);
 
       await testing.sweepOnceForTests();
@@ -368,6 +391,200 @@ describe("subagent orphan recovery — faithful restart path", () => {
     },
   );
 
+  it("recovers gateway-best-effort ownership without creating a CLI task across two cold restores", async () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:gateway-best-effort-recovery";
+    const runId = "run-gateway-best-effort-recovery";
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: childSessionKey,
+      sessionId: "sess-gateway-best-effort-recovery",
+      updatedAt: now,
+      abortedLastRun: true,
+      defaultSessionId: "sess-gateway-best-effort-recovery",
+    });
+    addSubagentRunForTests(
+      makeRunRecord({
+        runId,
+        childSessionKey,
+        taskOwnershipPolicy: "gateway_best_effort",
+        createdAt: now - 60_000,
+        startedAt: now - 55_000,
+      }),
+    );
+    expect(findTaskByRunId(runId)).toBeUndefined();
+
+    await testing.sweepOnceForTests();
+
+    expect(dispatchAgent).toHaveBeenCalledOnce();
+    const acceptedKey = String(dispatchAgent.mock.calls[0]?.[0].idempotencyKey);
+    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+      runId: acceptedKey,
+      taskOwnershipPolicy: "gateway_best_effort",
+      execution: { status: "running" },
+    });
+    expect(
+      getSubagentRunByChildSessionKey(childSessionKey)?.execution.restartRecovery,
+    ).toBeUndefined();
+    expect(findTaskByRunId(runId)).toBeUndefined();
+    expect(findTaskByRunId(acceptedKey)).toBeUndefined();
+
+    for (let restore = 0; restore < 2; restore += 1) {
+      resetSubagentRegistryForTests({ persist: false });
+      resetTaskRegistryForTests({ persist: false });
+      rotateAgentEventLifecycleGeneration();
+      initSubagentRegistry();
+      activateGatewayRuntime();
+      await testing.sweepOnceForTests();
+      expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+        runId: acceptedKey,
+        taskOwnershipPolicy: "gateway_best_effort",
+        execution: { status: "running" },
+      });
+      expect(
+        getSubagentRunByChildSessionKey(childSessionKey)?.execution.restartRecovery,
+      ).toBeUndefined();
+      expect(findTaskByRunId(runId)).toBeUndefined();
+      expect(findTaskByRunId(acceptedKey)).toBeUndefined();
+    }
+    expect(dispatchAgent).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an unresolved released row deferred and unchanged across cold restores", async () => {
+    const now = Date.now();
+    const runId = "run-released-unmarked";
+    const childSessionKey = "agent:main:subagent:released-unmarked";
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: childSessionKey,
+      sessionId: "sess-released-unmarked",
+      updatedAt: now,
+      abortedLastRun: true,
+      defaultSessionId: "sess-released-unmarked",
+    });
+    const releasedRecord = makeRunRecord({
+      runId,
+      childSessionKey,
+      requesterAgentId: "main",
+      generation: 1,
+      createdAt: now - 60_000,
+      startedAt: now - 55_000,
+    });
+    releasedRecord.taskOwnershipPolicy = "legacy_unresolved";
+    delete releasedRecord.taskTerminalProjection;
+    addSubagentRunForTests(releasedRecord);
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+    const readPersistedPayload = () =>
+      (
+        openOpenClawStateDatabase()
+          .db.prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+          .get(runId) as { payload_json: string }
+      ).payload_json;
+    const releasedPayload = readPersistedPayload();
+    const releasedSession = (await readSubagentSessionStore(storePath))[childSessionKey];
+    subagentRegistryWarn.mockClear();
+    testing.setDepsForTest({
+      ...createSubagentRegistryTestDeps(),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
+      onAgentEvent: vi.fn(() => () => undefined),
+    });
+
+    resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests({ persist: false });
+    await cleanupSessionStateForTest({ stateDir: fixture.stateDir });
+    rotateAgentEventLifecycleGeneration();
+    initSubagentRegistry();
+    activateGatewayRuntime();
+    await testing.sweepOnceForTests();
+    await testing.sweepOnceForTests();
+
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    expect(findTaskByRunId(runId)).toBeUndefined();
+    expect(subagentRegistryWarn).toHaveBeenCalledExactlyOnceWith(
+      "subagent restart recovery is waiting for authoritative task ownership",
+      expect.objectContaining({
+        reason: "has unresolved legacy task ownership",
+        action: "inspect the subagent and task records before retrying the subagent request",
+      }),
+    );
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.taskOwnershipPolicy).toBe(
+      "legacy_unresolved",
+    );
+    expect(readPersistedPayload()).toBe(releasedPayload);
+    expect((await readSubagentSessionStore(storePath))[childSessionKey]).toEqual(releasedSession);
+
+    resetSubagentRegistryForTests({ persist: false });
+    await cleanupSessionStateForTest({ stateDir: fixture.stateDir });
+    rotateAgentEventLifecycleGeneration();
+    initSubagentRegistry();
+    activateGatewayRuntime();
+
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.taskOwnershipPolicy).toBe(
+      "legacy_unresolved",
+    );
+    expect(readPersistedPayload()).toBe(releasedPayload);
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "mismatched"] as const)(
+    "rejects core-required recovery when its canonical backing is %s",
+    async (backingState) => {
+      const now = Date.now();
+      const childSessionKey = `agent:main:subagent:core-${backingState}-backing`;
+      const runId = `run-core-${backingState}-backing`;
+      await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey: childSessionKey,
+        sessionId: `sess-core-${backingState}-backing`,
+        updatedAt: now,
+        abortedLastRun: true,
+        defaultSessionId: `sess-core-${backingState}-backing`,
+      });
+      const record = makeRunRecord({
+        runId,
+        childSessionKey,
+        taskOwnershipPolicy: "core_required",
+        generation: 1,
+        createdAt: now - 60_000,
+        startedAt: now - 55_000,
+      });
+      if (backingState === "mismatched") {
+        createRunningTaskRun({
+          runtime: "subagent",
+          sourceId: runId,
+          ownerKey: record.requesterSessionKey,
+          scopeKind: "session",
+          childSessionKey,
+          runId,
+          task: record.task,
+          detail: createSubagentTaskBackingDetail(2),
+          deliveryStatus: "pending",
+          startedAt: record.execution.startedAt,
+          lastEventAt: record.execution.startedAt,
+        });
+      }
+      addSubagentRunForTests(record);
+      persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+
+      await testing.sweepOnceForTests();
+
+      expect(dispatchAgent).not.toHaveBeenCalled();
+      expect(getSubagentRunByChildSessionKey(childSessionKey)).toBe(record);
+      expect(record.execution.restartRecovery).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+        runId,
+        taskOwnershipPolicy: "core_required",
+        execution: { status: "running" },
+      });
+      expect(
+        loadSubagentRegistryFromSqlite().get(runId)?.execution.restartRecovery,
+      ).toBeUndefined();
+    },
+  );
+
   it("preserves an accepted response across a consumed-receipt write failure", async () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:consumed-write-failure";
@@ -381,30 +598,28 @@ describe("subagent orphan recovery — faithful restart path", () => {
       abortedLastRun: true,
       defaultSessionId: "sess-consumed-write-failure",
     });
-    addSubagentRunForTests(
-      makeRunRecord({
-        runId,
-        childSessionKey,
-        createdAt: now - 60_000,
-        startedAt: now - 55_000,
-      }),
-    );
-
-    let strictWriteCount = 0;
-    testing.setDepsForTest({
-      ...createSubagentRegistryTestDeps(),
-      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
-      onAgentEvent: vi.fn(() => () => undefined),
-      persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
-        strictWriteCount += 1;
-        if (strictWriteCount === 3) {
-          throw new Error("consumed receipt write failed");
-        }
-        persistSubagentRunsToDiskOrThrow(runs, changedRunIds);
-      },
+    const record = makeRunRecord({
+      runId,
+      childSessionKey,
+      taskOwnershipPolicy: "core_required",
+      generation: 1,
+      createdAt: now - 60_000,
+      startedAt: now - 55_000,
     });
+    createCoreRequiredTaskBacking(record);
+    addSubagentRunForTests(record);
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`CREATE TEMP TRIGGER reject_consumed_recovery_receipt
+      BEFORE UPDATE ON subagent_runs
+      WHEN NEW.run_id = 'run-consumed-write-failure'
+        AND json_extract(NEW.payload_json, '$.execution.restartRecovery.phase') = 'consumed'
+      BEGIN SELECT RAISE(ABORT, 'consumed receipt write failed'); END`);
 
-    await testing.sweepOnceForTests();
+    try {
+      await testing.sweepOnceForTests();
+    } finally {
+      database.exec("DROP TRIGGER reject_consumed_recovery_receipt");
+    }
 
     expect(dispatchAgent).toHaveBeenCalledOnce();
     const acceptedKey = String(dispatchAgent.mock.calls[0]?.[0].idempotencyKey);
@@ -536,28 +751,26 @@ describe("subagent orphan recovery — faithful restart path", () => {
     const record = makeRunRecord({
       runId,
       childSessionKey,
+      taskOwnershipPolicy: "core_required",
       generation: 1,
       createdAt: now - 60_000,
       startedAt: now - 55_000,
     });
+    createCoreRequiredTaskBacking(record);
     addSubagentRunForTests(record);
 
-    let strictWriteCount = 0;
-    testing.setDepsForTest({
-      ...createSubagentRegistryTestDeps(),
-      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
-      onAgentEvent: vi.fn(() => () => undefined),
-      persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
-        strictWriteCount += 1;
-        if (strictWriteCount === 5) {
-          throw new Error("successor write failed");
-        }
-        persistSubagentRunsToDiskOrThrow(runs, changedRunIds);
-      },
-    });
     dispatchAgent.mockImplementationOnce(acceptRecoveryDispatch);
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`CREATE TEMP TRIGGER reject_recovery_successor
+      BEFORE INSERT ON subagent_runs
+      WHEN NEW.run_id LIKE 'subagent-recovery:%'
+      BEGIN SELECT RAISE(ABORT, 'successor write failed'); END`);
 
-    await testing.sweepOnceForTests();
+    try {
+      await testing.sweepOnceForTests();
+    } finally {
+      database.exec("DROP TRIGGER reject_recovery_successor");
+    }
 
     const acceptedKey = String(dispatchAgent.mock.calls[0]?.[0].idempotencyKey);
     expect(subagentRuns.get(runId)).toMatchObject({
@@ -727,32 +940,29 @@ describe("subagent orphan recovery — faithful restart path", () => {
       abortedLastRun: true,
       defaultSessionId: "sess-accepted-write-failure",
     });
-    addSubagentRunForTests(
-      makeRunRecord({
-        runId,
-        childSessionKey,
-        generation: 1,
-        createdAt: now - 60_000,
-        startedAt: now - 55_000,
-      }),
-    );
-
-    let strictWriteCount = 0;
-    testing.setDepsForTest({
-      ...createSubagentRegistryTestDeps(),
-      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
-      onAgentEvent: vi.fn(() => () => undefined),
-      persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
-        strictWriteCount += 1;
-        if (strictWriteCount === 4) {
-          throw new Error("accepted receipt write failed");
-        }
-        persistSubagentRunsToDiskOrThrow(runs, changedRunIds);
-      },
+    const record = makeRunRecord({
+      runId,
+      childSessionKey,
+      taskOwnershipPolicy: "core_required",
+      generation: 1,
+      createdAt: now - 60_000,
+      startedAt: now - 55_000,
     });
+    createCoreRequiredTaskBacking(record);
+    addSubagentRunForTests(record);
     dispatchAgent.mockImplementationOnce(acceptRecoveryDispatch);
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`CREATE TEMP TRIGGER reject_accepted_recovery_receipt
+      BEFORE UPDATE ON subagent_runs
+      WHEN NEW.run_id = 'run-accepted-write-failure'
+        AND json_extract(NEW.payload_json, '$.execution.restartRecovery.phase') = 'accepted'
+      BEGIN SELECT RAISE(ABORT, 'accepted receipt write failed'); END`);
 
-    await testing.sweepOnceForTests();
+    try {
+      await testing.sweepOnceForTests();
+    } finally {
+      database.exec("DROP TRIGGER reject_accepted_recovery_receipt");
+    }
 
     const acceptedKey = String(dispatchAgent.mock.calls[0]?.[0].idempotencyKey);
     expect(subagentRuns.has(runId)).toBe(false);
@@ -789,6 +999,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
       sessionStartedAt: now - 60_000,
     });
     for (const record of [staleRecord, freshRecord]) {
+      if (record.generation === undefined) {
+        throw new Error("Restart fixture did not define a task backing generation");
+      }
       expect(
         createRunningTaskRun({
           runtime: "subagent",
@@ -798,6 +1011,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
           childSessionKey,
           runId: record.runId,
           task: record.task,
+          detail: createSubagentTaskBackingDetail(record.generation),
           deliveryStatus: "pending",
           startedAt: record.execution.startedAt,
           lastEventAt: record.execution.startedAt,

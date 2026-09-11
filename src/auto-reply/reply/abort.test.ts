@@ -806,6 +806,7 @@ describe("abort detection", () => {
           cleanup: "keep",
           collect: true,
           queued: true,
+          taskRowOwnership: "required",
         });
       }
       const queueClearedBeforeAcpWait = getFollowupQueueDepth(sessionKey) === 0;

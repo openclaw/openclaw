@@ -29,6 +29,7 @@ import {
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
 import { startGatewayServer } from "./server.js";
+import "../../test/helpers/gateway/subagent-released-ownership.js";
 import {
   connectDeviceAuthReq,
   disconnectGatewayClient,

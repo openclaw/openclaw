@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -14,6 +14,8 @@ import {
   consumeSessionWorkAdmissionHandoff,
   type SessionWorkAdmissionLease,
 } from "../../../sessions/session-lifecycle-admission.js";
+import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -46,11 +48,33 @@ export function makeRestartRecoveryRun(
       requesterDisplayKey: "main",
       task: "restart-recoverable work",
       cleanup: "keep",
+      taskOwnershipPolicy: "gateway_best_effort",
       createdAt: Date.now(),
       startedAt: Date.now(),
       ...overrides,
     }),
   );
+}
+
+export function createCoreRequiredTaskBacking(record: SubagentRunRecord) {
+  if (record.generation === undefined) {
+    throw new Error("Core-required recovery fixture needs a task backing generation");
+  }
+  const task = createRunningTaskRun({
+    runtime: "subagent",
+    sourceId: record.taskRunId ?? record.runId,
+    ownerKey: record.requesterSessionKey,
+    scopeKind: "session",
+    childSessionKey: record.childSessionKey,
+    runId: record.taskRunId ?? record.runId,
+    task: record.task,
+    detail: createSubagentTaskBackingDetail(record.generation),
+    deliveryStatus: record.expectsCompletionMessage === false ? "not_applicable" : "pending",
+    startedAt: record.execution.startedAt,
+    lastEventAt: record.execution.startedAt,
+  });
+  expect(task).not.toBeNull();
+  return task!;
 }
 
 export function useSubagentRestartRecoveryFixture() {

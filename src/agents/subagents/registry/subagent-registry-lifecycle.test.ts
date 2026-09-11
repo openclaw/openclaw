@@ -171,10 +171,26 @@ const sessionReconciliationMocks = vi.hoisted(() => ({
   loadSubagentSessionEntry: vi.fn(),
 }));
 
-vi.mock("../../../tasks/detached-task-runtime.js", () => ({
+vi.mock("../../../tasks/detached-task-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../tasks/detached-task-runtime.js")>()),
   completeTaskRunByRunId: taskExecutorMocks.completeTaskRunByRunId,
   failTaskRunByRunId: taskExecutorMocks.failTaskRunByRunId,
+  isDefaultDetachedTaskLifecycleRuntime: () => false,
   setDetachedTaskDeliveryStatusByRunId: taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId,
+  setSubagentTaskDeliveryStatusForOwner: (params: {
+    runId: string;
+    sessionKey: string;
+    resolvedTask?: { runId?: string; childSessionKey?: string };
+    deliveryStatus: string;
+    error?: string;
+  }) =>
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId({
+      runId: params.resolvedTask?.runId ?? params.runId,
+      runtime: "subagent",
+      sessionKey: params.resolvedTask?.childSessionKey ?? params.sessionKey,
+      deliveryStatus: params.deliveryStatus,
+      error: params.error,
+    }),
 }));
 
 vi.mock("../completion/subagent-completion-admission.store.js", async (importOriginal) => ({

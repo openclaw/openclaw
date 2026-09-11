@@ -86,6 +86,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         cleanup: "keep",
         collect: true,
         expectsCompletionMessage: false,
+        taskRowOwnership: "required",
       });
       // Running fixture turns need real ownership so cold lifecycle setup cannot
       // let the registry sweeper mistake them for lost executions.
@@ -212,6 +213,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         collect: true,
         queued: true,
         expectsCompletionMessage: false,
+        taskRowOwnership: "required",
       });
       enqueueSwarmRun({
         groupId: "late",
@@ -281,6 +283,7 @@ it.each(["child", "ancestor"])(
         collect: true,
         queued: true,
         expectsCompletionMessage: false,
+        taskRowOwnership: "required",
       });
     }
     const storePath = await writeSubagentSessionEntry({
@@ -305,6 +308,7 @@ it.each(["child", "ancestor"])(
         collect: true,
         queued: true,
         expectsCompletionMessage: false,
+        taskRowOwnership: "required",
       });
     }
     const database = listOpenClawAgentDatabasesForTest().find(

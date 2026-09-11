@@ -41,6 +41,7 @@ import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { createAcceptedSubagentRegistration } from "./subagent-spawn.test-helpers.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
@@ -713,7 +714,9 @@ describe("spawnAcpDirect", () => {
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
-    hoisted.registerSubagentRunMock.mockReset();
+    hoisted.registerSubagentRunMock
+      .mockReset()
+      .mockImplementation(createAcceptedSubagentRegistration);
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
     hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
     hoisted.listTasksForOwnerKeyMock.mockReset().mockReturnValue([]);
@@ -928,16 +931,13 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.acpTurnSource).toBe("manual_spawn");
-    // ACP registration must leave taskRowOwnership absent so the registry
-    // falls back to best-effort task-row creation (subagent-registry-run-launch.ts).
-    // Native/in-process spawn forwards "required" instead (subagent-spawn.ts);
-    // if ACP ever claimed "required" here, a failed task-row write would abort
-    // an ACP run the registry never actually owns.
+    // Gateway owns ACP task projection, so registry tracking stays explicit
+    // without creating or adopting a canonical subagent task row.
     const registeredAcpRun = expectRecordFields(
       firstMockCall(hoisted.registerSubagentRunMock, "ACP subagent registration")[0],
       {},
     );
-    expect(registeredAcpRun.taskRowOwnership).toBeUndefined();
+    expect(registeredAcpRun.taskRowOwnership).toBe("gateway_best_effort");
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       mode: "persistent",
@@ -2056,6 +2056,11 @@ describe("spawnAcpDirect", () => {
     hoisted.registerSubagentRunMock.mockImplementationOnce(() => {
       throw new Error("registry unavailable");
     });
+    hoisted.cleanupFailedAcpSpawnMock.mockRejectedValueOnce(
+      Object.assign(new Error("repair ACP session ownership"), {
+        detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
+      }),
+    );
     const context = {
       ...createRequesterContext(),
       agentSessionKey: "agent:main:subagent:parent",
@@ -2074,6 +2079,9 @@ describe("spawnAcpDirect", () => {
       errorCode: "spawn_failed",
       error: expect.stringContaining("registry unavailable"),
     });
+    expect(expectFailedSpawn(failed, "error").error).toContain(
+      "Cleanup also failed: repair ACP session ownership",
+    );
     expectAcceptedSpawn(replacement);
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(2);
   });

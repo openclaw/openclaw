@@ -9,6 +9,7 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { assertDefaultSubagentTaskBacking } from "../../../tasks/detached-task-runtime.js";
 import {
   backfillSubagentRequesterAgentIds,
   resolveSubagentRequesterAgentId,
@@ -31,6 +32,10 @@ import {
   loadSubagentSessionEntry,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
+import {
+  adoptReleasedSubagentTaskOwnership,
+  isLegacyUnresolvedSubagentTaskOwnership,
+} from "./subagent-task-ownership.js";
 
 type RestoredQueuedFailureSettlementClaim = {
   entry: SubagentRunRecord;
@@ -158,16 +163,22 @@ export function createSubagentRegistryRestorer(config: {
     if (restoreState !== "succeeded" || !bindGatewayOwners()) {
       return;
     }
+    const cfg = deps().getRuntimeConfig();
+    for (const entry of runs.values()) {
+      adoptReleasedSubagentTaskOwnership(cfg, entry);
+    }
     // Post-ready only: collector cleanup retains the canonical sessions.delete RPC owner.
     scheduleSweep();
     if (activated) {
       return;
     }
-    const cfg = deps().getRuntimeConfig();
     const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
     const resolveRequesterAgentId = (entry: SubagentRunRecord) =>
       resolveSubagentRequesterAgentId(cfg, entry);
     for (const entry of runs.values()) {
+      if (isLegacyUnresolvedSubagentTaskOwnership(entry)) {
+        continue;
+      }
       const requesterTurnRunId = entry.requesterTurnRunId?.trim();
       if (!requesterTurnRunId || entry.expectsCompletionMessage !== true) {
         continue;
@@ -213,6 +224,15 @@ export function createSubagentRegistryRestorer(config: {
     startSweeper();
     const restoredSessionCache: SubagentSessionStoreCache = new Map();
     for (const [runId, entry] of runs) {
+      if (isLegacyUnresolvedSubagentTaskOwnership(entry)) {
+        warn("subagent restart recovery is waiting for authoritative task ownership", {
+          runId,
+          childSessionKey: entry.childSessionKey,
+          reason: "has unresolved legacy task ownership",
+          action: "inspect the subagent and task records before retrying the subagent request",
+        });
+        continue;
+      }
       // Restart recovery exclusively owns receipt-bearing source rows until it
       // remaps or terminalizes them. Generic resume would wait on an obsolete run.
       if (entry.execution.restartRecovery || entry.killIntent || entry.killReconciliation) {
@@ -262,6 +282,13 @@ export function createSubagentRegistryRestorer(config: {
           start: async () => {
             await runWithGatewayIndependentRootWorkAdmission(async () => {
               launchLifecycleGeneration = getAgentEventLifecycleGeneration();
+              assertDefaultSubagentTaskBacking({
+                runId: entry.taskRunId ?? entry.runId,
+                ownerKey: entry.requesterSessionKey,
+                sessionKey: entry.childSessionKey,
+                generation: entry.generation,
+                policy: "queued-dispatch",
+              });
               const request = {
                 params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
                 timeoutMs: launch.timeoutMs,
@@ -358,20 +385,34 @@ export function createSubagentRegistryRestorer(config: {
         return;
       }
       const cfg = deps().getRuntimeConfig();
-      let restoredStateChanged = reconcileOrphanedRestoredRuns({
+      const restoredRunIds = [...runs.keys()];
+      reconcileOrphanedRestoredRuns({
         runs,
         resumedRuns,
       });
-      if (backfillSubagentRequesterAgentIds(cfg, runs.values()) > 0) {
-        restoredStateChanged = true;
-      }
-      for (const entry of runs.values()) {
-        if (updateSubagentArchiveAtMs(entry, cfg)) {
-          restoredStateChanged = true;
+      const changedRunIds = new Set(restoredRunIds.filter((runId) => !runs.has(runId)));
+      const ownedEntries = [...runs.values()].filter(
+        (entry) => !isLegacyUnresolvedSubagentTaskOwnership(entry),
+      );
+      const missingRequesterAgentIds = new Set(
+        ownedEntries.filter((entry) => !entry.requesterAgentId).map((entry) => entry.runId),
+      );
+      backfillSubagentRequesterAgentIds(cfg, ownedEntries);
+      for (const entry of ownedEntries) {
+        if (entry.requesterAgentId && missingRequesterAgentIds.has(entry.runId)) {
+          changedRunIds.add(entry.runId);
         }
       }
-      if (restoredStateChanged) {
-        persist();
+      for (const entry of runs.values()) {
+        if (isLegacyUnresolvedSubagentTaskOwnership(entry)) {
+          continue;
+        }
+        if (updateSubagentArchiveAtMs(entry, cfg)) {
+          changedRunIds.add(entry.runId);
+        }
+      }
+      if (changedRunIds.size > 0) {
+        persist(...changedRunIds);
       }
       completeRestore();
     } catch (err) {

@@ -47,6 +47,7 @@ it.each(["bulk", "admin"] as const)(
         collect: true,
         queued: queued.includes(id),
         expectsCompletionMessage: false,
+        taskRowOwnership: "required",
       });
     }
     const start = vi.fn(async () => {});
@@ -153,6 +154,7 @@ it.each(["after interrupt", "before capacity release"] as const)(
         collect: true,
         queued,
         expectsCompletionMessage: false,
+        taskRowOwnership: "required",
       });
     for (const id of ["a", "b", "d", "x", "g"] as const) {
       storePath = await writeSubagentSessionEntry({

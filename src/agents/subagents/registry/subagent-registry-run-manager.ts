@@ -11,7 +11,7 @@ import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
-import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
+import { finalizeSubagentTaskRunForOwner } from "../../../tasks/detached-task-runtime.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { isSwarmRunActive, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -157,13 +157,13 @@ class SubagentRunManager extends SubagentLaunchManager {
     const finalizeKilledTask = (entry: SubagentRunRecord, endedAt: number) => {
       const taskResolution = this.options.resolveSubagentTask(entry);
       const task = taskResolution.lookup === "available" ? taskResolution.task : undefined;
-      const targetRunId = task?.runId ?? entry.taskRunId ?? entry.runId;
-      const targetSessionKey = task?.childSessionKey ?? entry.childSessionKey;
       try {
-        finalizeTaskRunByRunId({
-          runId: targetRunId,
-          runtime: "subagent",
-          sessionKey: targetSessionKey,
+        finalizeSubagentTaskRunForOwner({
+          runId: entry.taskRunId ?? entry.runId,
+          ownerKey: entry.requesterSessionKey,
+          sessionKey: entry.childSessionKey,
+          generation: entry.generation,
+          resolvedTask: task,
           status: "cancelled",
           endedAt,
           lastEventAt: endedAt,
@@ -173,8 +173,8 @@ class SubagentRunManager extends SubagentLaunchManager {
       } catch (err) {
         log.warn("failed to finalize killed subagent task run", {
           err,
-          runId: targetRunId,
-          childSessionKey: targetSessionKey,
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
         });
       }
     };

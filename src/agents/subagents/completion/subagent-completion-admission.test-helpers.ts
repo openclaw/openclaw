@@ -1,8 +1,14 @@
 import { expect, vi } from "vitest";
 import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue-storage.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
 import { getTaskById } from "../../../tasks/runtime-internal.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../../../tasks/task-runtime.test-helpers.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -32,6 +38,7 @@ export function records() {
   const subagent = createSubagentRunRecord({
     runId: "completion-run",
     taskRunId: task.runId,
+    taskOwnershipPolicy: "gateway_best_effort",
     childSessionKey: task.childSessionKey,
     requesterSessionKey: task.requesterSessionKey,
     requesterDisplayKey: task.requesterSessionKey,
@@ -72,6 +79,40 @@ export function records() {
   );
   subagent.delivery!.queueId = queueEntry.id;
   return { queueEntry, subagent, task };
+}
+
+export function createCoreRequiredCompletionOwner(input: ReturnType<typeof records>) {
+  const generation = 1;
+  const runningTask = createRunningTaskRun({
+    runtime: "subagent",
+    sourceId: input.task.runId!,
+    ownerKey: input.task.ownerKey!,
+    requesterSessionKey: input.task.requesterSessionKey,
+    scopeKind: input.task.scopeKind,
+    childSessionKey: input.task.childSessionKey!,
+    runId: input.task.runId!,
+    task: input.task.task!,
+    deliveryStatus: "pending",
+    detail: createSubagentTaskBackingDetail(generation),
+    startedAt: input.task.createdAt,
+    lastEventAt: input.task.createdAt,
+  });
+  expect(runningTask).not.toBeNull();
+  input.task = {
+    ...input.task,
+    taskId: runningTask!.taskId,
+    sourceId: runningTask!.sourceId,
+    parentFlowId: runningTask!.parentFlowId,
+    detail: runningTask!.detail,
+  };
+  input.subagent.taskOwnershipPolicy = "core_required";
+  input.subagent.generation = generation;
+  return input;
+}
+
+export function resetCompletionTaskStateForTests() {
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
 }
 
 export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {

@@ -49,6 +49,7 @@ async function seed() {
       cleanup: "keep",
       collect: true,
       expectsCompletionMessage: false,
+      taskRowOwnership: "required",
     });
   }
   return storePath;

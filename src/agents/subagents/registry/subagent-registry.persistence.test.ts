@@ -15,6 +15,8 @@ import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { captureEnv, setTestEnvValue, withEnv } from "../../../test-utils/env.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { subagentRegistryDeps } from "./subagent-registry-deps.js";
@@ -24,7 +26,9 @@ import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   canonicalSubagentRunFixtures,
   cleanupSubagentRegistryPersistenceTest,
+  createPersistedEndedSubagentRunFixture,
   expectDeferredSubagentAnnouncement,
+  expectSubagentFixtureFields,
   gateSubagentRequesterSettlement,
   settleSubagentRegistryPersistenceWork,
   createSubagentRegistryTestDeps,
@@ -56,16 +60,6 @@ const { announceSpy } = vi.hoisted(() => ({
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
 
 describe("subagent registry persistence", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -147,31 +141,6 @@ describe("subagent registry persistence", () => {
   const readPersistedRegistry = () => ({
     runs: Object.fromEntries(loadSubagentRegistryFromSqlite()),
   });
-
-  const createPersistedEndedRun = (params: {
-    runId: string;
-    childSessionKey: string;
-    task: string;
-    cleanup: "keep" | "delete";
-  }) => {
-    const now = Date.now();
-    return {
-      version: 2,
-      runs: {
-        [params.runId]: {
-          runId: params.runId,
-          childSessionKey: params.childSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: params.task,
-          cleanup: params.cleanup,
-          createdAt: now - 2,
-          startedAt: now - 1,
-          endedAt: now,
-        },
-      },
-    };
-  };
 
   const flushQueuedRegistryWork = async () => {
     await Promise.resolve();
@@ -491,17 +460,18 @@ describe("subagent registry persistence", () => {
       requesterDisplayKey: "main",
       task: "live spaced keys",
       cleanup: "keep",
+      taskRowOwnership: "required",
     });
 
     const liveRuns = listSubagentRunsForRequester("agent:main:main");
     expect(liveRuns).toHaveLength(1);
-    expectFields(liveRuns[0], {
+    expectSubagentFixtureFields(liveRuns[0], {
       runId: "run-live",
       childSessionKey: "agent:main:subagent:live-child",
       controllerSessionKey: "agent:main:subagent:live-controller",
       requesterSessionKey: "agent:main:main",
     });
-    expectFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
+    expectSubagentFixtureFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
       runId: "run-live",
     });
   });
@@ -637,7 +607,12 @@ describe("subagent registry persistence", () => {
   ] as const)("$name", async ({ runId, cleanup, reject }) => {
     const childSessionKey = `agent:main:subagent:${runId}`;
     await writePersistedRegistry(
-      createPersistedEndedRun({ runId, childSessionKey, task: "retry announce", cleanup }),
+      createPersistedEndedSubagentRunFixture({
+        runId,
+        childSessionKey,
+        task: "retry announce",
+        cleanup,
+      }),
     );
     const announcement = createDeferred<"retryable">();
     const releaseAnnouncement = () =>
@@ -733,7 +708,7 @@ describe("subagent registry persistence", () => {
   });
 
   it("reconciles orphaned restored runs by pruning them from registry", async () => {
-    const persisted = createPersistedEndedRun({
+    const persisted = createPersistedEndedSubagentRunFixture({
       runId: "run-orphan-restore",
       childSessionKey: "agent:main:subagent:ghost-restore",
       task: "orphan restore",
@@ -767,6 +742,7 @@ describe("subagent registry persistence", () => {
             childSessionKey: "agent:main:subagent:killed-restore-tombstone",
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",
+            taskOwnershipPolicy: "gateway_best_effort",
             task: "restore killed tombstone",
             cleanup: "keep",
             createdAt: now - 100,
@@ -809,6 +785,7 @@ describe("subagent registry persistence", () => {
             childSessionKey: "agent:main:subagent:interrupted-recovery-restore",
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",
+            taskOwnershipPolicy: "gateway_best_effort",
             task: "replay interrupted terminal",
             cleanup: "keep",
             createdAt: now - 100,
@@ -846,6 +823,7 @@ describe("subagent registry persistence", () => {
           childSessionKey,
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
+          taskOwnershipPolicy: "gateway_best_effort",
           task: "stale unended restored work",
           cleanup: "keep",
           createdAt: now - 3 * 60 * 60 * 1_000,
@@ -867,10 +845,10 @@ describe("subagent registry persistence", () => {
 
   it("finalizes restored runs whose restart interruption exceeded the recovery window", async () => {
     vi.mocked(callGateway).mockImplementationOnce(async (request) => {
-      expectFields(request, {
+      expectSubagentFixtureFields(request, {
         method: "agent.wait",
       });
-      expectFields((request as { params?: unknown }).params, {
+      expectSubagentFixtureFields((request as { params?: unknown }).params, {
         runId: "run-stale-aborted-restore",
       });
       return {
@@ -886,6 +864,9 @@ describe("subagent registry persistence", () => {
         runs: {
           [runId]: {
             runId,
+            taskRunId: runId,
+            taskOwnershipPolicy: "core_required",
+            generation: 1,
             childSessionKey,
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",
@@ -898,6 +879,21 @@ describe("subagent registry persistence", () => {
       },
       { seedChildSessions: false },
     );
+    expect(
+      createRunningTaskRun({
+        runtime: "subagent",
+        sourceId: runId,
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId,
+        task: "stale restart-recoverable work",
+        detail: createSubagentTaskBackingDetail(1),
+        deliveryStatus: "pending",
+        startedAt: now - 3 * 60 * 60 * 1_000,
+        lastEventAt: now - 3 * 60 * 60 * 1_000,
+      }),
+    ).not.toBeNull();
     await writeChildSessionEntry({
       sessionKey: childSessionKey,
       sessionId: "sess-stale-aborted-restore",
@@ -926,7 +922,7 @@ describe("subagent registry persistence", () => {
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
 
-    const persisted = createPersistedEndedRun({
+    const persisted = createPersistedEndedSubagentRunFixture({
       runId: "run-orphan-attachments",
       childSessionKey: "agent:main:subagent:ghost-attachments",
       task: "orphan attachments",
@@ -993,7 +989,7 @@ describe("subagent registry persistence", () => {
       getSubagentRunByChildSessionKey(childSessionKey),
     );
 
-    expectFields(resolved, {
+    expectSubagentFixtureFields(resolved, {
       runId: "run-active",
       childSessionKey,
     });
@@ -1039,7 +1035,7 @@ describe("subagent registry persistence", () => {
       getLatestSubagentRunByChildSessionKey(childSessionKey),
     );
 
-    expectFields(resolved, {
+    expectSubagentFixtureFields(resolved, {
       runId: "run-current-ended",
       childSessionKey,
     });

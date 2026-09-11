@@ -119,6 +119,7 @@ function run(overrides: Partial<SubagentRunRecordOverrides> = {}): SubagentRunRe
     requesterOrigin: { channel: "qa-channel", to: "qa-requester", accountId: "default" },
     task: "finish the restart-safe task",
     cleanup: "keep",
+    taskOwnershipPolicy: "gateway_best_effort",
     createdAt: Date.now() - 60_000,
     startedAt: Date.now() - 55_000,
     ...overrides,

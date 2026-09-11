@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
@@ -10,6 +13,9 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type { deliverAgentCommandResult } from "../../command/delivery.js";
@@ -70,6 +76,10 @@ let chatHistoryBySessionKey = new Map<string, Array<Record<string, unknown>>>();
 let sessionStore: Record<string, SessionStoreEntry> = {};
 let rejectNextRequesterWake = false;
 let emptyGatedAgentReply = false;
+let tempStateDir: string | undefined;
+
+const resolveRequesterSessionStorePath = () =>
+  path.join(tempStateDir ?? os.tmpdir(), "agents", "main", "sessions", "sessions.json");
 
 const sendMessageMock = vi.fn<typeof import("../../../infra/outbound/message.js").sendMessage>(
   async () => ({
@@ -118,7 +128,7 @@ const loadConfigMock = vi.fn(() => ({
 vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: (key: string) => key.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveSessionStorePathCore: () => "/tmp/test-store",
+  resolveSessionStorePathCore: () => resolveRequesterSessionStorePath(),
   resolveMainSessionKey: () => MAIN_REQUESTER_SESSION_KEY,
   updateSessionStore: vi.fn(),
 }));
@@ -149,8 +159,17 @@ const loadSubagentRegistryRuntimeForTest = async () =>
 
 describe("requester settle wake product flow", () => {
   let previousFastTestEnv: string | undefined;
+  let previousStateDir: string | undefined;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-requester-wake-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    closeOpenClawStateDatabaseForTest();
+    registry.testing.setDepsForTest();
+    registry.resetSubagentRegistryForTests();
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
     vi.useFakeTimers();
@@ -188,8 +207,6 @@ describe("requester settle wake product flow", () => {
         lifecycleHandler = handler;
         return () => {};
       }) as unknown as typeof import("../../../infra/agent-events.js").onAgentEvent,
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
       restoreSubagentRunsFromDisk: () => 0,
       maybeWakeRequesterAfterAllChildrenSettled: async (params) => {
         if (rejectNextRequesterWake) {
@@ -222,7 +239,7 @@ describe("requester settle wake product flow", () => {
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       readSubagentSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
       resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
-      resolveSessionStorePathCore: () => "/tmp/test-store",
+      resolveSessionStorePathCore: resolveRequesterSessionStorePath,
     });
   });
 
@@ -236,8 +253,20 @@ describe("requester settle wake product flow", () => {
     subagentAnnounceOutputTesting.setDepsForTest();
     subagentAnnounceTesting.setDepsForTest();
     registry.testing.setDepsForTest();
-    registry.resetSubagentRegistryForTests({ persist: false });
+    registry.resetSubagentRegistryForTests();
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
+    closeOpenClawStateDatabaseForTest();
     vi.useRealTimers();
+    if (tempStateDir) {
+      await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      tempStateDir = undefined;
+    }
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     if (previousFastTestEnv === undefined) {
       delete process.env.OPENCLAW_TEST_FAST;
     } else {

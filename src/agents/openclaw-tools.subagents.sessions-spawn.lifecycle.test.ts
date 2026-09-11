@@ -10,6 +10,7 @@ import {
   resetSessionsSpawnAnnounceFlowOverride,
   resetSessionsSpawnConfigOverride,
   resetSessionsSpawnHookRunnerOverride,
+  resetSessionsSpawnTaskRuntime,
   setSessionsSpawnHookRunnerOverride,
   setSessionsSpawnAnnounceFlowOverride,
   setupSessionsSpawnGatewayMock,
@@ -164,6 +165,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     resetSessionsSpawnAnnounceFlowOverride();
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
+    resetSessionsSpawnTaskRuntime();
     setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",
@@ -200,6 +202,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     resetSessionsSpawnAnnounceFlowOverride();
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
+    resetSessionsSpawnTaskRuntime();
     resetSubagentRegistryForTests({ persist: false });
     await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
   });

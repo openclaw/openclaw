@@ -61,7 +61,7 @@ function isOneTaskFlowEligible(task: TaskRecord): boolean {
   return task.runtime === "acp" || task.runtime === "subagent";
 }
 
-function ensureSingleTaskFlow(params: {
+export function ensureSingleTaskFlowForDetachedTask(params: {
   task: TaskRecord;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
 }): TaskRecord {
@@ -107,7 +107,7 @@ export function createQueuedTaskRunCore(params: DetachedTaskCreateParams): TaskR
   if (!task) {
     return null;
   }
-  return ensureSingleTaskFlow({
+  return ensureSingleTaskFlowForDetachedTask({
     task,
     requesterOrigin: params.requesterOrigin,
   });
@@ -127,7 +127,7 @@ export function createRunningTaskRunCore(
   if (!task) {
     return null;
   }
-  return ensureSingleTaskFlow({
+  return ensureSingleTaskFlowForDetachedTask({
     task,
     requesterOrigin: params.requesterOrigin,
   });

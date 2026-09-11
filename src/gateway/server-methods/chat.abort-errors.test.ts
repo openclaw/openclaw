@@ -109,6 +109,7 @@ it.each(
         collect: true,
         queued: true,
         expectsCompletionMessage: false,
+        taskRowOwnership: "required",
       });
     }
     await corruptChildDatabase(badStore, badKey);
@@ -270,6 +271,7 @@ it.each(
         collect: true,
         queued: runId === "healthy" || (runId === "bad" && queued),
         expectsCompletionMessage: false,
+        taskRowOwnership: "required",
       });
     }
     const badStore = path.join(fixture.stateDir, "agents/broken/sessions/sessions.json");
@@ -465,6 +467,7 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
       cleanup: "keep",
       collect: true,
       expectsCompletionMessage: false,
+      taskRowOwnership: "required",
     });
     const entered = createDeferred();
     const release = createDeferred();

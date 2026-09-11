@@ -7,6 +7,7 @@ import {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { registerPluginSubagentRunFromGateway } from "../../../gateway/server-methods/agent-task-tracking.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import type { WorkerConnectionIdentity } from "../../../gateway/worker-environments/connection-identity.js";
 import { createWorkerLiveEventReceiver } from "../../../gateway/worker-environments/live-events.js";
@@ -24,25 +25,51 @@ import {
   getAgentRunContextOwnerStatus,
 } from "../../../infra/agent-run-registry.js";
 import { onSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../../state/openclaw-state-db.js";
+import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
+import { setDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.test-support.js";
 import { reloadTaskRuntimeStateFromStore } from "../../../tasks/runtime-internal.js";
 import { failFlow, getTaskFlowById } from "../../../tasks/task-flow-registry.js";
+import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
 import { getTaskActivitySnapshot } from "../../../tasks/task-registry-activity.js";
 import { findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
+import { loadTaskRegistryStateFromSqlite } from "../../../tasks/task-registry.store.sqlite.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import type { AgentWaitResult } from "../../run-wait.js";
+import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   onSubagentRegistryPersisted,
   persistSubagentRunsToDiskOrThrow,
+  restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
-import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
+import {
+  markSubagentRunTerminated,
+  registerSubagentRun,
+  replaceSubagentRunAfterSteerCore,
+} from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
-import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
+import {
+  finalizeInterruptedSubagentRun,
+  resetSubagentRegistryForTests,
+} from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
+
+function coldReloadTaskOwnership(): void {
+  closeOpenClawStateDatabaseForTest();
+  resetSubagentRegistryForTests({ persist: false });
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
+  restoreSubagentRunsFromDisk({ runs: subagentRuns });
+  reloadTaskRuntimeStateFromStore();
+}
 
 it.each(["end", "error"] as const)(
   "keeps a timeout successor running when its exact predecessor owner publishes its first %s terminal",
@@ -85,6 +112,7 @@ it.each(["end", "error"] as const)(
       spawnMode: "session",
       expectsCompletionMessage: true,
       runTimeoutSeconds: 1,
+      taskRowOwnership: "required",
     });
     const previous = subagentRuns.get("timeout-predecessor")!;
     const originalTask = findTaskByRunId(previous.runId)!;
@@ -286,6 +314,7 @@ it.each(["successor", "task activation", "flow activation"] as const)(
       cleanup: "keep",
       spawnMode: "session",
       expectsCompletionMessage: true,
+      taskRowOwnership: "required",
     });
     const previous = subagentRuns.get("rollback-predecessor")!;
     const originalTask = findTaskByRunId(previous.runId)!;
@@ -385,6 +414,7 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
     cleanup: "keep",
     spawnMode: "session",
     expectsCompletionMessage: true,
+    taskRowOwnership: "required",
   });
   const previous = subagentRuns.get("interrupted-task-old")!;
   const originalTask = findTaskByRunId(previous.runId)!;
@@ -510,4 +540,399 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
     }),
   ).toBe(true);
   expect(getTaskFlowById(flowId)?.status).toBe("running");
+});
+
+it.each([
+  { kind: "collector", collect: true },
+  { kind: "non-collector", collect: false },
+])(
+  "advances a non-announcing $kind task with its replacement through completion",
+  async ({ kind, collect }) => {
+    const prefix = collect ? "silent-collector" : "silent-direct";
+    const previousRunId = `${prefix}-predecessor`;
+    const successorRunId = `${prefix}-successor`;
+    const previousWait = createDeferred<AgentWaitResult>();
+    const successorWait = createDeferred<AgentWaitResult>();
+    vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(async (request) => {
+      expect(request.method).toBe("agent.wait");
+      return (request.params as { runId: string }).runId === previousRunId
+        ? await previousWait.promise
+        : await successorWait.promise;
+    });
+    registerSubagentRun({
+      runId: previousRunId,
+      childSessionKey: `agent:main:subagent:${prefix}`,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: `Continue the ${kind} task`,
+      cleanup: "keep",
+      collect,
+      ...(collect ? { groupId: prefix } : {}),
+      expectsCompletionMessage: false,
+      taskRowOwnership: "required",
+    });
+    const previous = subagentRuns.get(previousRunId)!;
+    const originalTask = findTaskByRunId(previous.runId)!;
+    const observerSnapshots: Array<{ generation?: number; delivery?: string; task?: string }> = [];
+    const unsubscribe = onSubagentRegistryPersisted(() => {
+      const successor = subagentRuns.get(successorRunId);
+      const task = getTaskById(originalTask.taskId);
+      observerSnapshots.push({
+        generation: successor?.generation,
+        delivery: successor?.delivery?.status,
+        task: task?.status,
+      });
+    });
+    try {
+      expect(
+        replaceSubagentRunAfterSteerCore({
+          previousRunId: previous.runId,
+          nextRunId: successorRunId,
+          expected: previous,
+          persistenceFailure: "throw",
+        }),
+      ).toBe(true);
+    } finally {
+      unsubscribe();
+    }
+
+    const successor = subagentRuns.get(successorRunId)!;
+    expect(observerSnapshots).toEqual([
+      {
+        generation: previous.generation! + 1,
+        delivery: "not_required",
+        task: "running",
+      },
+    ]);
+    expect(successor).toMatchObject({
+      taskRunId: previous.runId,
+      generation: previous.generation! + 1,
+      delivery: { status: "not_required" },
+    });
+    const activatedTask = getTaskById(originalTask.taskId)!;
+    expect(activatedTask).toMatchObject({
+      taskId: originalTask.taskId,
+      runId: previous.runId,
+      parentFlowId: undefined,
+      deliveryStatus: "not_applicable",
+      detail: { runtime: "subagent", generation: successor.generation },
+    });
+    expect(loadTaskRegistryStateFromSqlite().tasks.get(originalTask.taskId)).toEqual(activatedTask);
+
+    successorWait.resolve({ status: "ok", endedAt: Date.now() });
+    await vi.waitFor(() => {
+      expect(getTaskById(originalTask.taskId)).toMatchObject({
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        detail: { generation: successor.generation },
+      });
+    });
+  },
+);
+
+it("keeps non-announcing replacement authority through cold reopen and cancellation", () => {
+  registerSubagentRun({
+    runId: "silent-cold-predecessor",
+    childSessionKey: "agent:main:subagent:silent-cold",
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "Continue after restart",
+    cleanup: "keep",
+    collect: false,
+    expectsCompletionMessage: false,
+    taskRowOwnership: "required",
+  });
+  const previous = subagentRuns.get("silent-cold-predecessor")!;
+  const originalTask = findTaskByRunId(previous.runId)!;
+  expect(
+    replaceSubagentRunAfterSteerCore({
+      previousRunId: previous.runId,
+      nextRunId: "silent-cold-successor",
+      expected: previous,
+      persistenceFailure: "throw",
+    }),
+  ).toBe(true);
+  const generation = subagentRuns.get("silent-cold-successor")!.generation;
+
+  coldReloadTaskOwnership();
+
+  const restored = subagentRuns.get("silent-cold-successor")!;
+  expect(restored).toMatchObject({
+    taskRunId: previous.runId,
+    generation,
+    delivery: { status: "not_required" },
+  });
+  expect(getTaskById(originalTask.taskId)).toMatchObject({
+    status: "running",
+    deliveryStatus: "not_applicable",
+    detail: { generation },
+  });
+  expect(markSubagentRunTerminated({ runId: restored.runId, reason: "killed" })).toBe(1);
+  expect(getTaskById(originalTask.taskId)).toMatchObject({
+    status: "cancelled",
+    deliveryStatus: "not_applicable",
+    detail: { generation },
+  });
+});
+
+it("keeps plugin task and mirrored-flow ownership through replacement, success, and cold reopen", async () => {
+  vi.spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow").mockResolvedValue("delivered");
+  const previousRunId = "plugin-producer-predecessor";
+  const successorRunId = "plugin-producer-successor";
+  const previousWait = createDeferred<AgentWaitResult>();
+  const successorWait = createDeferred<AgentWaitResult>();
+  vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(async (request) => {
+    expect(request.method).toBe("agent.wait");
+    return (request.params as { runId: string }).runId === previousRunId
+      ? await previousWait.promise
+      : await successorWait.promise;
+  });
+
+  await registerPluginSubagentRunFromGateway({
+    cfg: getRuntimeConfig(),
+    runId: previousRunId,
+    childSessionKey: "agent:main:subagent:plugin-producer",
+    task: "Complete plugin-owned background work",
+    pluginId: "fixture",
+    requester: {
+      sessionKey: "agent:main:main",
+      origin: { channel: "telegram", to: "fixture-chat" },
+    },
+  });
+  const previous = subagentRuns.get(previousRunId)!;
+  const originalTask = findTaskByRunId(previousRunId)!;
+  const initialFlow = getTaskFlowById(originalTask.parentFlowId!)!;
+  expect(previous.taskOwnershipPolicy).toBe("core_required");
+  expect(initialFlow).toMatchObject({ syncMode: "task_mirrored", status: "running" });
+
+  expect(
+    replaceSubagentRunAfterSteerCore({
+      previousRunId,
+      nextRunId: successorRunId,
+      expected: previous,
+      persistenceFailure: "throw",
+    }),
+  ).toBe(true);
+  const successor = subagentRuns.get(successorRunId)!;
+  const runningTask = getTaskById(originalTask.taskId)!;
+  const runningFlow = getTaskFlowById(originalTask.parentFlowId!)!;
+  expect(successor).toMatchObject({
+    taskRunId: previousRunId,
+    taskOwnershipPolicy: "core_required",
+    generation: previous.generation! + 1,
+  });
+  expect(runningTask).toMatchObject({
+    taskId: originalTask.taskId,
+    runId: previousRunId,
+    parentFlowId: initialFlow.flowId,
+    status: "running",
+    detail: { runtime: "subagent", generation: successor.generation },
+  });
+  expect(runningFlow).toMatchObject({
+    flowId: initialFlow.flowId,
+    syncMode: "task_mirrored",
+    status: "running",
+  });
+  expect(runningFlow.revision).toBeGreaterThan(initialFlow.revision);
+
+  successorWait.resolve({
+    status: "ok",
+    endedAt: Date.now(),
+    terminalReply: { disposition: "visible", text: "plugin work complete" },
+  });
+  await vi.waitFor(() => {
+    expect(getTaskById(originalTask.taskId)).toMatchObject({
+      status: "succeeded",
+      detail: { generation: successor.generation },
+    });
+    expect(getTaskFlowById(initialFlow.flowId)?.status).toBe("succeeded");
+  });
+  const terminalFlowRevision = getTaskFlowById(initialFlow.flowId)!.revision;
+
+  coldReloadTaskOwnership();
+  expect(subagentRuns.get(successorRunId)).toMatchObject({
+    taskOwnershipPolicy: "core_required",
+    generation: successor.generation,
+  });
+  expect(getTaskById(originalTask.taskId)).toMatchObject({
+    status: "succeeded",
+    detail: { runtime: "subagent", generation: successor.generation },
+  });
+  expect(getTaskFlowById(initialFlow.flowId)).toMatchObject({
+    syncMode: "task_mirrored",
+    revision: terminalFlowRevision,
+    status: "succeeded",
+  });
+});
+
+it("keeps visible-session task and mirrored-flow ownership through replacement, cancellation, and cold reopen", async () => {
+  const previousRunId = "visible-producer-predecessor";
+  const successorRunId = "visible-producer-successor";
+  const childSessionKey = "agent:main:dashboard:visible-producer";
+  const spawnResult = await maybeSpawnVisibleSession({
+    raw: { visible: true },
+    task: "Complete visible background work",
+    label: "Visible producer",
+    runtime: "subagent",
+    sandbox: "inherit",
+    expectsCompletionMessage: true,
+    options: {
+      agentSessionKey: "agent:main:main",
+      requesterAgentIdOverride: "main",
+      config: {
+        agents: { list: [{ id: "main" }] },
+        session: { mainKey: "main", scope: "per-sender" },
+      },
+      callGateway: vi.fn(async () => ({
+        key: childSessionKey,
+        sessionId: "visible-producer-session",
+        entry: { lifecycleRevision: "visible-producer-revision" },
+        runStarted: true,
+        runId: previousRunId,
+      })) as never,
+      countActiveRuns: () => 0,
+    },
+  });
+  expect(spawnResult).toMatchObject({ status: "accepted", childSessionKey, runId: previousRunId });
+
+  const previous = subagentRuns.get(previousRunId)!;
+  const originalTask = findTaskByRunId(previousRunId)!;
+  const initialFlow = getTaskFlowById(originalTask.parentFlowId!)!;
+  expect(previous.taskOwnershipPolicy).toBe("core_required");
+  expect(initialFlow).toMatchObject({ syncMode: "task_mirrored", status: "running" });
+
+  expect(
+    replaceSubagentRunAfterSteerCore({
+      previousRunId,
+      nextRunId: successorRunId,
+      expected: previous,
+      persistenceFailure: "throw",
+    }),
+  ).toBe(true);
+  const successor = subagentRuns.get(successorRunId)!;
+  expect(getTaskById(originalTask.taskId)).toMatchObject({
+    status: "running",
+    detail: { runtime: "subagent", generation: successor.generation },
+  });
+  expect(getTaskFlowById(initialFlow.flowId)).toMatchObject({
+    syncMode: "task_mirrored",
+    status: "running",
+  });
+  expect(markSubagentRunTerminated({ runId: successorRunId, reason: "killed" })).toBe(1);
+  expect(getTaskById(originalTask.taskId)).toMatchObject({
+    status: "cancelled",
+    detail: { runtime: "subagent", generation: successor.generation },
+  });
+  expect(getTaskFlowById(initialFlow.flowId)?.status).toBe("cancelled");
+  const terminalFlowRevision = getTaskFlowById(initialFlow.flowId)!.revision;
+
+  coldReloadTaskOwnership();
+  expect(subagentRuns.get(successorRunId)).toMatchObject({
+    taskOwnershipPolicy: "core_required",
+    generation: successor.generation,
+  });
+  expect(getTaskById(originalTask.taskId)).toMatchObject({
+    status: "cancelled",
+    detail: { runtime: "subagent", generation: successor.generation },
+  });
+  expect(getTaskFlowById(initialFlow.flowId)).toMatchObject({
+    syncMode: "task_mirrored",
+    revision: terminalFlowRevision,
+    status: "cancelled",
+  });
+});
+
+it.each(["successor", "task"] as const)(
+  "rolls back non-announcing replacement when the %s write fails",
+  (rejectedWrite) => {
+    registerSubagentRun({
+      runId: "silent-rollback-predecessor",
+      childSessionKey: "agent:main:subagent:silent-rollback",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Keep the prior owner on failure",
+      cleanup: "keep",
+      collect: false,
+      expectsCompletionMessage: false,
+      taskRowOwnership: "required",
+    });
+    const previous = subagentRuns.get("silent-rollback-predecessor")!;
+    const originalTask = findTaskByRunId(previous.runId)!;
+    const database = openOpenClawStateDatabase().db;
+    const trigger = `reject_silent_replacement_${rejectedWrite}`;
+    database.exec(
+      rejectedWrite === "successor"
+        ? `CREATE TEMP TRIGGER ${trigger}
+           BEFORE INSERT ON subagent_runs
+           WHEN NEW.run_id = 'silent-rollback-successor'
+           BEGIN SELECT RAISE(ABORT, 'successor write rejected'); END`
+        : `CREATE TEMP TRIGGER ${trigger}
+           BEFORE UPDATE ON task_runs
+           WHEN NEW.task_id = '${originalTask.taskId}'
+           BEGIN SELECT RAISE(ABORT, 'task write rejected'); END`,
+    );
+    try {
+      expect(
+        replaceSubagentRunAfterSteerCore({
+          previousRunId: previous.runId,
+          nextRunId: "silent-rollback-successor",
+          expected: previous,
+          persistenceFailure: "return-false",
+        }),
+      ).toBe(false);
+    } finally {
+      database.exec(`DROP TRIGGER ${trigger}`);
+    }
+    expect(subagentRuns.get(previous.runId)).toBe(previous);
+    expect(subagentRuns.has("silent-rollback-successor")).toBe(false);
+    expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toEqual(previous);
+    expect(loadSubagentRegistryFromSqlite().has("silent-rollback-successor")).toBe(false);
+    expect(getTaskById(originalTask.taskId)).toEqual(originalTask);
+    expect(loadTaskRegistryStateFromSqlite().tasks.get(originalTask.taskId)).toEqual(originalTask);
+  },
+);
+
+it("leaves non-announcing replacement task ownership to a custom runtime", () => {
+  const runtime = getDetachedTaskLifecycleRuntime();
+  const createRunningTaskRun = vi.fn(
+    (params: Parameters<typeof runtime.createRunningTaskRun>[0]) => {
+      const task = runtime.createRunningTaskRun(params);
+      return task ? { ...task } : null;
+    },
+  );
+  setDetachedTaskLifecycleRuntime({
+    ...runtime,
+    createRunningTaskRun,
+    findTaskRun: undefined,
+  });
+  registerSubagentRun({
+    runId: "custom-silent-predecessor",
+    childSessionKey: "agent:main:subagent:custom-silent",
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "Custom runtime task",
+    cleanup: "keep",
+    collect: false,
+    expectsCompletionMessage: false,
+    taskRowOwnership: "required",
+  });
+  const previous = subagentRuns.get("custom-silent-predecessor")!;
+  const originalTask = findTaskByRunId(previous.runId)!;
+  expect(createRunningTaskRun).toHaveBeenCalledOnce();
+  expect(previous.taskOwnershipPolicy).toBe("custom");
+
+  expect(
+    replaceSubagentRunAfterSteerCore({
+      previousRunId: previous.runId,
+      nextRunId: "custom-silent-successor",
+      expected: previous,
+      persistenceFailure: "throw",
+    }),
+  ).toBe(true);
+  expect(subagentRuns.get("custom-silent-successor")).toMatchObject({
+    generation: previous.generation! + 1,
+    delivery: { status: "not_required" },
+  });
+  expect(getTaskById(originalTask.taskId)).toEqual(originalTask);
+  expect(loadTaskRegistryStateFromSqlite().tasks.get(originalTask.taskId)).toEqual(originalTask);
 });

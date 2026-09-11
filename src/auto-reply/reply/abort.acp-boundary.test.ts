@@ -217,6 +217,7 @@ it.each(
           collect: true,
           queued: runId === "queued",
           expectsCompletionMessage: false,
+          taskRowOwnership: "required",
         });
       }
       for (const [runId, start] of [

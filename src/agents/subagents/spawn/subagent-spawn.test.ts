@@ -13,6 +13,7 @@ import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
+  createAcceptedSubagentRegistration,
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
   installSessionStoreCaptureMock,
@@ -239,7 +240,9 @@ describe("spawnSubagentDirect seam flow", () => {
       pluginIds: ["test-provider"],
     });
     hoisted.updateSessionStoreMock.mockReset();
-    hoisted.registerSubagentRunMock.mockReset();
+    hoisted.registerSubagentRunMock
+      .mockReset()
+      .mockImplementation(createAcceptedSubagentRegistration);
     hoisted.startQueuedSubagentRunMock.mockReset().mockReturnValue(true);
     hoisted.settleFailedQueuedSubagentLaunchMock.mockReset().mockReturnValue(true);
     hoisted.completeCollectorLaunchCleanupMock.mockReset();

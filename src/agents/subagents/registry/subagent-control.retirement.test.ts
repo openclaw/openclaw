@@ -11,6 +11,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
 import { setDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.test-support.js";
 import { getTaskById, findTaskByRunId } from "../../../tasks/task-registry.js";
@@ -79,6 +80,7 @@ it.each([
         expectsCompletionMessage: false,
         collect: true,
         queued: true,
+        taskRowOwnership: "required",
       });
     }
     for (const [runId, childSessionKey, owner, collect] of [
@@ -97,6 +99,7 @@ it.each([
         expectsCompletionMessage: false,
         collect,
         queued: collect,
+        taskRowOwnership: "required",
       });
     }
     const ancestor = subagentRuns.get("ancestor")!;
@@ -160,6 +163,8 @@ it.each([
           }
           if (transition.includes("successor")) {
             const taskRuntime = getDetachedTaskLifecycleRuntime();
+            const database = openOpenClawStateDatabase();
+            const registrationTrigger = "reject_successor_registration";
             const failTask =
               transition.includes("required-task") || transition.includes("failed rollback");
             if (failTask) {
@@ -172,11 +177,20 @@ it.each([
                 },
               });
             }
+            if (transition === "successor registration write rollback") {
+              database.db.exec(`
+                CREATE TEMP TRIGGER ${registrationTrigger}
+                BEFORE INSERT ON subagent_runs
+                WHEN NEW.run_id = 'successor'
+                BEGIN
+                  SELECT RAISE(ABORT, 'registration write rejected');
+                END
+              `);
+            }
             persist.mockImplementation((runs, ids) => {
               if (
-                transition === "successor registration write rollback" ||
-                (transition === "retained successor after failed rollback" &&
-                  !runs.has("successor"))
+                transition === "retained successor after failed rollback" &&
+                !runs.has("successor")
               ) {
                 throw new Error("registration write rejected");
               }
@@ -210,6 +224,7 @@ it.each([
                 releaseSubagentRun("successor");
               }
             } finally {
+              database.db.exec(`DROP TRIGGER IF EXISTS ${registrationTrigger}`);
               setDetachedTaskLifecycleRuntime(taskRuntime);
               persist.mockImplementation(persistSubagentRunsToDiskOrThrow);
             }
@@ -237,6 +252,7 @@ it.each([
               queued: true,
               expectsCompletionMessage: false,
               collect: true,
+              taskRowOwnership: "required",
             });
             enqueueSwarmRun({
               groupId: "late-lane",
@@ -324,6 +340,7 @@ it.each(
       expectsCompletionMessage: false,
       collect,
       queued: collect,
+      taskRowOwnership: "required",
     });
   }
   const ancestor = subagentRuns.get("draining-ancestor")!;
@@ -451,6 +468,7 @@ it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
       task: "cross-agent child",
       cleanup: "keep",
       expectsCompletionMessage: false,
+      taskRowOwnership: "required",
     });
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ abort, runId: "fixed-store-child" });
@@ -496,6 +514,7 @@ it("does not create a missing child database while binding cancellation", async 
     collect: true,
     queued: true,
     expectsCompletionMessage: false,
+    taskRowOwnership: "required",
   });
   const dispatch = vi.fn(async () => {});
   enqueueSwarmRun({

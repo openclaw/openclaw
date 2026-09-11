@@ -4,6 +4,12 @@ import path from "node:path";
 import { vi, type Mock } from "vitest";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../tasks/detached-task-runtime.test-support.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 
 type SessionsSpawnTestConfig = ReturnType<
@@ -144,10 +150,140 @@ const hoisted = vi.hoisted(() => {
 let cachedCreateSessionsSpawnTool: CreateSessionsSpawnTool | null = null;
 let cachedSubagentRegistryTesting: SubagentRegistryTesting | null = null;
 let cachedSubagentSpawnTesting: SubagentSpawnTesting | null = null;
+const sessionsSpawnTasks = new Map<string, TaskRecord>();
+let sessionsSpawnTaskRuntimeInstalled = false;
 const sessionStorePath = path.join(
   os.tmpdir(),
   `openclaw-sessions-spawn-test-store-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}.json`,
 );
+
+function createSessionsSpawnTask(
+  params: Parameters<DetachedTaskLifecycleRuntime["createQueuedTaskRun"]>[0],
+  status: "queued" | "running",
+): TaskRecord | null {
+  const runId = params.runId?.trim();
+  if (!runId) {
+    return null;
+  }
+  const now = Date.now();
+  const task: TaskRecord = {
+    taskId: `sessions-spawn-task:${runId}`,
+    runtime: params.runtime,
+    sourceId: params.sourceId,
+    requesterSessionKey: params.requesterSessionKey ?? params.ownerKey ?? "",
+    ownerKey: params.ownerKey ?? params.requesterSessionKey ?? "",
+    scopeKind: params.scopeKind ?? "session",
+    childSessionKey: params.childSessionKey,
+    runId,
+    label: params.label,
+    task: params.task,
+    status,
+    deliveryStatus: params.deliveryStatus ?? "pending",
+    notifyPolicy: params.notifyPolicy ?? "done_only",
+    detail: params.detail,
+    createdAt: now,
+    ...(status === "running" ? { startedAt: now, lastEventAt: now } : {}),
+  };
+  sessionsSpawnTasks.set(runId, task);
+  return task;
+}
+
+function updateSessionsSpawnTasks(
+  runId: string,
+  update: (task: TaskRecord) => TaskRecord,
+): TaskRecord[] {
+  const task = sessionsSpawnTasks.get(runId);
+  if (!task) {
+    return [];
+  }
+  const next = update(task);
+  sessionsSpawnTasks.set(runId, next);
+  return [next];
+}
+
+function installSessionsSpawnTaskRuntime(): void {
+  if (sessionsSpawnTaskRuntimeInstalled) {
+    return;
+  }
+  const runtime: DetachedTaskLifecycleRuntime = {
+    createQueuedTaskRun: (params) => createSessionsSpawnTask(params, "queued"),
+    createRunningTaskRun: (params) => createSessionsSpawnTask(params, "running"),
+    startTaskRunByRunId: (params) =>
+      updateSessionsSpawnTasks(params.runId, (task) => ({
+        ...task,
+        status: "running",
+        startedAt: params.startedAt ?? Date.now(),
+        lastEventAt: params.lastEventAt ?? Date.now(),
+      })),
+    recordTaskRunProgressByRunId: (params) =>
+      updateSessionsSpawnTasks(params.runId, (task) => ({
+        ...task,
+        lastEventAt: params.lastEventAt ?? Date.now(),
+        progressSummary: params.progressSummary ?? undefined,
+      })),
+    finalizeTaskRunByRunId: (params) =>
+      updateSessionsSpawnTasks(params.runId, (task) => ({
+        ...task,
+        status: params.status,
+        endedAt: params.endedAt,
+        lastEventAt: params.lastEventAt ?? params.endedAt,
+        error: params.clearError ? undefined : (params.error ?? task.error),
+        progressSummary: params.progressSummary ?? task.progressSummary,
+        terminalSummary: params.terminalSummary ?? task.terminalSummary,
+        terminalOutcome: params.terminalOutcome ?? task.terminalOutcome,
+        detail: params.detail ?? task.detail,
+      })),
+    completeTaskRunByRunId: (params) =>
+      updateSessionsSpawnTasks(params.runId, (task) => ({
+        ...task,
+        status: "succeeded",
+        endedAt: params.endedAt,
+        lastEventAt: params.lastEventAt ?? params.endedAt,
+        terminalSummary: params.terminalSummary ?? task.terminalSummary,
+        terminalOutcome: params.terminalOutcome ?? task.terminalOutcome,
+      })),
+    failTaskRunByRunId: (params) =>
+      updateSessionsSpawnTasks(params.runId, (task) => ({
+        ...task,
+        status: params.status ?? "failed",
+        endedAt: params.endedAt,
+        lastEventAt: params.lastEventAt ?? params.endedAt,
+        error: params.error,
+        terminalSummary: params.terminalSummary ?? task.terminalSummary,
+      })),
+    setDetachedTaskDeliveryStatusByRunId: (params) =>
+      updateSessionsSpawnTasks(params.runId, (task) => ({
+        ...task,
+        deliveryStatus: params.deliveryStatus,
+        error: params.error ?? task.error,
+      })),
+    findTaskRun: (params) => {
+      const task = sessionsSpawnTasks.get(params.runId);
+      return task?.runtime === params.runtime && task.childSessionKey === params.sessionKey
+        ? task
+        : undefined;
+    },
+    cancelDetachedTaskRunById: async ({ taskId }) => {
+      const task = [...sessionsSpawnTasks.values()].find(
+        (candidate) => candidate.taskId === taskId,
+      );
+      if (!task) {
+        return { found: false, cancelled: false };
+      }
+      const next = { ...task, status: "cancelled" as const, endedAt: Date.now() };
+      sessionsSpawnTasks.set(task.runId ?? task.taskId, next);
+      return { found: true, cancelled: true, task: next };
+    },
+  };
+  setDetachedTaskLifecycleRuntime(runtime);
+  sessionsSpawnTaskRuntimeInstalled = true;
+}
+
+export function resetSessionsSpawnTaskRuntime(): void {
+  sessionsSpawnTasks.clear();
+  sessionsSpawnTaskRuntimeInstalled = false;
+  resetDetachedTaskLifecycleRuntimeForTests();
+}
 
 export function getCallGatewayMock(): Mock {
   return hoisted.callGatewayMock;
@@ -200,6 +336,7 @@ export function setSessionsSpawnAnnounceFlowOverride(next: RunSubagentAnnounceFl
 
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   // Lazily installs test deps before constructing the real sessions_spawn tool.
+  installSessionsSpawnTaskRuntime();
   if (!cachedSubagentSpawnTesting || !cachedSubagentRegistryTesting) {
     const [{ testing: subagentSpawnTesting }, { testing: subagentRegistryTesting }] =
       await Promise.all([
@@ -406,15 +543,6 @@ vi.mock("../config/sessions.js", () => ({
   ) => {
     await mutator(hoisted.sessionStore);
   },
-}));
-
-vi.mock("../tasks/detached-task-runtime.js", () => ({
-  completeTaskRunByRunId: vi.fn(),
-  createQueuedTaskRun: vi.fn(() => ({})),
-  createRunningTaskRun: vi.fn(() => ({})),
-  failTaskRunByRunId: vi.fn(),
-  findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
-  setDetachedTaskDeliveryStatusByRunId: vi.fn(),
 }));
 
 // Same module, different specifier (used by tools under src/agents/tools/*).

@@ -14,6 +14,7 @@ export type SpawnBackendAdapter<TState> = {
 };
 
 type RegisterSubagentRunInput = Parameters<typeof registerSubagentRun>[0];
+type RegisterSubagentRunResult = NonNullable<ReturnType<typeof registerSubagentRun>>;
 
 type SpawnProgressOrigin = {
   channel?: string;
@@ -25,7 +26,7 @@ type SpawnProgressOrigin = {
 };
 
 type SpawnPipelineResult<TState> =
-  | { ok: true; state: TState; runId: string }
+  | { ok: true; state: TState; runId: string; registration: RegisterSubagentRunResult }
   | {
       ok: false;
       phase: SpawnPipelinePhase;
@@ -57,6 +58,7 @@ export async function runSpawnPipeline<TState>(
   let phase: SpawnPipelinePhase = "initialize";
   let state: TState | undefined;
   let runId: string | undefined;
+  let registered: RegisterSubagentRunResult | undefined;
   try {
     let registration: RegisterSubagentRunInput;
     try {
@@ -71,12 +73,26 @@ export async function runSpawnPipeline<TState>(
       params.assertActive?.();
       // Construction and registration transfer ownership without an interleaving await.
       registration = params.buildRegistration(state, runId);
-      registerSubagentRun(registration);
+      registered = registerSubagentRun(registration);
+      if (!registered) {
+        throw new Error("subagent registration lost ownership before publication");
+      }
       // Registry insertion takes ownership synchronously; keeping the slot would double-count it.
       params.admissionReservation?.release();
     } catch (error) {
-      await params.adapter.cleanupOnFailure({ phase, state, error });
-      return { ok: false, phase, state, runId, error };
+      let failure = error;
+      try {
+        await params.adapter.cleanupOnFailure({ phase, state, error });
+      } catch (cleanupError) {
+        failure = new AggregateError(
+          [error, cleanupError],
+          `${summarizeSpawnError(error)} Cleanup also failed: ${summarizeSpawnError(cleanupError)}`,
+          // ACP cleanup only rethrows owner-repair failures. Keep that error on
+          // the cause chain while retaining the primary failure in `errors`.
+          { cause: cleanupError },
+        );
+      }
+      return { ok: false, phase, state, runId, error: failure };
     }
 
     if (params.hookRunner?.hasHooks("subagent_progress")) {
@@ -98,7 +114,7 @@ export async function runSpawnPipeline<TState>(
         // Presentation hooks are best-effort after the run is durably registered.
       }
     }
-    return { ok: true, state, runId };
+    return { ok: true, state, runId, registration: registered };
   } finally {
     params.admissionReservation?.release();
   }

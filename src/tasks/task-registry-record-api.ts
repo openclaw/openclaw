@@ -27,7 +27,11 @@ import {
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
 } from "./task-registry-delivery.js";
-import { syncFlowFromTaskAfterTaskMutation, updateTask } from "./task-registry-mutation.js";
+import {
+  syncFlowFromTaskAfterTaskMutation,
+  updateTask,
+  updateTaskExpectedSnapshots,
+} from "./task-registry-mutation.js";
 import {
   cloneTaskRecord,
   cloneTaskRecordForObserver,
@@ -59,6 +63,47 @@ import {
   type TaskTerminalOutcome,
 } from "./task-registry.types.js";
 import { resolveTaskCleanupAfter } from "./task-retention.js";
+
+export type CreateTaskRecordParams = {
+  runtime: TaskRuntime;
+  taskKind?: string;
+  sourceId?: string;
+  requesterSessionKey?: string;
+  ownerKey?: string;
+  scopeKind?: TaskScopeKind;
+  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+  childSessionKey?: string;
+  parentFlowId?: string;
+  parentTaskId?: string;
+  agentId?: string;
+  requesterAgentId?: string;
+  runId?: string;
+  label?: string;
+  task: string;
+  preferMetadata?: boolean;
+  status?: TaskStatus;
+  deliveryStatus?: TaskDeliveryStatus;
+  notifyPolicy?: TaskNotifyPolicy;
+  startedAt?: number;
+  lastEventAt?: number;
+  cleanupAfter?: number;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+  detail?: JsonValue;
+};
+
+export type PreparedTaskRecordCreation =
+  | {
+      kind: "existing";
+      existing: TaskRecord;
+      params: CreateTaskRecordParams & { agentId?: string };
+    }
+  | {
+      kind: "create";
+      record: TaskRecord;
+      deliveryState?: TaskDeliveryState;
+    };
 
 export function setTaskCleanupAfterById(params: {
   taskId: string;
@@ -153,34 +198,9 @@ function updateTasksByRunId(params: {
   return updated;
 }
 
-export function createTaskRecord(params: {
-  runtime: TaskRuntime;
-  taskKind?: string;
-  sourceId?: string;
-  requesterSessionKey?: string;
-  ownerKey?: string;
-  scopeKind?: TaskScopeKind;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  childSessionKey?: string;
-  parentFlowId?: string;
-  parentTaskId?: string;
-  agentId?: string;
-  requesterAgentId?: string;
-  runId?: string;
-  label?: string;
-  task: string;
-  preferMetadata?: boolean;
-  status?: TaskStatus;
-  deliveryStatus?: TaskDeliveryStatus;
-  notifyPolicy?: TaskNotifyPolicy;
-  startedAt?: number;
-  lastEventAt?: number;
-  cleanupAfter?: number;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  terminalOutcome?: TaskTerminalOutcome | null;
-  detail?: JsonValue;
-}): TaskRecord | null {
+export function prepareTaskRecordCreation(
+  params: CreateTaskRecordParams,
+): PreparedTaskRecordCreation {
   ensureTaskRegistryReady();
   const requesterSessionKey = resolveTaskRequesterSessionKey(params);
   const scopeKind = resolveTaskScopeKind({
@@ -222,7 +242,7 @@ export function createTaskRecord(params: {
     task: params.task,
   });
   if (existing) {
-    return mergeExistingTaskForCreate(existing, { ...params, agentId });
+    return { kind: "existing", existing, params: { ...params, agentId } };
   }
   const now = Date.now();
   const taskId = crypto.randomUUID();
@@ -281,27 +301,50 @@ export function createTaskRecord(params: {
         requesterOrigin,
       }
     : undefined;
-  if (!tryPersistTaskUpsert(record, "create", deliveryState)) {
-    return null;
-  }
-  tasks.set(taskId, record);
+  return { kind: "create", record, deliveryState };
+}
+
+/** Publishes a prepared create after its task and delivery rows are durable. */
+export function publishPreparedTaskRecordCreation(
+  prepared: Extract<PreparedTaskRecordCreation, { kind: "create" }>,
+  deferredObserverEvents?: Array<() => void>,
+): TaskRecord {
+  const { record, deliveryState } = prepared;
+  tasks.set(record.taskId, record);
   bumpTaskRegistryRevision();
-  if (requesterOrigin) {
-    taskDeliveryStates.set(taskId, deliveryState!);
+  if (deliveryState) {
+    taskDeliveryStates.set(record.taskId, deliveryState);
   }
-  addRunIdIndex(taskId, record.runId);
-  addOwnerKeyIndex(taskId, record);
-  addParentFlowIdIndex(taskId, record);
-  addRelatedSessionKeyIndex(taskId, record);
+  addRunIdIndex(record.taskId, record.runId);
+  addOwnerKeyIndex(record.taskId, record);
+  addParentFlowIdIndex(record.taskId, record);
+  addRelatedSessionKeyIndex(record.taskId, record);
   syncFlowFromTaskAfterTaskMutation(record, "create");
-  emitTaskRegistryObserverEvent(() => ({
-    kind: "upserted",
-    task: cloneTaskRecordForObserver(record),
-  }));
+  const emit = () =>
+    emitTaskRegistryObserverEvent(() => ({
+      kind: "upserted",
+      task: cloneTaskRecordForObserver(record),
+    }));
+  if (deferredObserverEvents) {
+    deferredObserverEvents.push(emit);
+  } else {
+    emit();
+  }
   if (isTerminalTaskStatus(record.status)) {
-    void maybeDeliverTaskTerminalUpdate(taskId);
+    void maybeDeliverTaskTerminalUpdate(record.taskId);
   }
   return cloneTaskRecord(record);
+}
+
+export function createTaskRecord(params: CreateTaskRecordParams): TaskRecord | null {
+  const prepared = prepareTaskRecordCreation(params);
+  if (prepared.kind === "existing") {
+    return mergeExistingTaskForCreate(prepared.existing, prepared.params);
+  }
+  if (!tryPersistTaskUpsert(prepared.record, "create", prepared.deliveryState)) {
+    return null;
+  }
+  return publishPreparedTaskRecordCreation(prepared);
 }
 
 export function updateTaskStateByRunId(params: {
@@ -333,102 +376,166 @@ export function updateTaskStateByRunId(params: {
     if (!hasAuthoritativeTaskBacking(current)) {
       continue;
     }
-    const patch: Partial<TaskRecord> = {};
-    const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
-    if (
-      params.status &&
-      !shouldApplyRunScopedStatusUpdate({
-        currentStatus: current.status,
-        currentRuntime: current.runtime,
-        currentChildSessionKey: current.childSessionKey,
-        currentError: current.error,
-        currentEndedAt: current.endedAt,
-        nextStatus,
-        nextError: params.error,
-        nextEndedAt: params.endedAt,
-      })
-    ) {
+    const prepared = prepareTaskStateUpdate(current, params);
+    if (!prepared) {
       continue;
     }
-    const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
-    if (params.status) {
-      patch.status = normalizeTaskStatus(params.status);
-    }
-    if (params.startedAt != null) {
-      patch.startedAt = params.startedAt;
-    }
-    if (params.endedAt != null) {
-      patch.endedAt = params.endedAt;
-    }
-    if (params.lastEventAt != null) {
-      patch.lastEventAt = params.lastEventAt;
-    }
-    if (params.childSessionKey !== undefined) {
-      patch.childSessionKey = params.childSessionKey?.trim() || undefined;
-    }
-    if (params.clearError) {
-      patch.error = undefined;
-    } else if (
-      current.status === "cancelled" &&
-      nextStatus !== "cancelled" &&
-      params.error === undefined
-    ) {
-      patch.error = undefined;
-    } else if (params.error !== undefined) {
-      patch.error = params.error;
-    }
-    if (params.progressSummary !== undefined) {
-      patch.progressSummary = normalizeTaskSummary(params.progressSummary);
-    }
-    if (params.terminalSummary !== undefined) {
-      patch.terminalSummary = params.preserveTerminalSummary
-        ? (params.terminalSummary ?? undefined)
-        : normalizeTaskSummary(params.terminalSummary);
-    }
-    if (params.terminalOutcome !== undefined) {
-      patch.terminalOutcome = resolveTaskTerminalOutcome({
-        status: nextStatus,
-        terminalOutcome: params.terminalOutcome,
-      });
-    }
-    if (params.detail !== undefined) {
-      patch.detail = params.detail;
-    }
-    if (params.suppressDelivery) {
-      // Teardown suppression must survive redundant lifecycle finalizers that
-      // arrive after queues are cleared, or they can repopulate the stopped session.
-      patch.deliveryStatus = "not_applicable";
-    }
-    const eventSummary =
-      normalizeTaskSummary(params.eventSummary) ??
-      (nextStatus === "failed"
-        ? normalizeTaskSummary(params.error ?? current.error)
-        : nextStatus === "succeeded"
-          ? normalizeTaskSummary(params.terminalSummary ?? current.terminalSummary)
-          : undefined);
-    const shouldAppendEvent =
-      (params.status && params.status !== current.status) ||
-      Boolean(normalizeTaskSummary(params.eventSummary));
-    const nextEvent = shouldAppendEvent
-      ? appendTaskEvent({
-          at: eventAt,
-          kind:
-            params.status && normalizeTaskStatus(params.status) !== current.status
-              ? normalizeTaskStatus(params.status)
-              : "progress",
-          summary: eventSummary,
-        })
-      : undefined;
-    const task = updateTask(current.taskId, patch);
+    const task = updateTask(current.taskId, prepared.patch);
     if (task) {
       updated.push(task);
       if (!params.suppressDelivery) {
-        void maybeDeliverTaskStateChangeUpdate(task.taskId, nextEvent);
+        void maybeDeliverTaskStateChangeUpdate(task.taskId, prepared.nextEvent);
         void maybeDeliverTaskTerminalUpdate(task.taskId);
       }
     }
   }
   return updated;
+}
+
+type TaskStateUpdateParams = Parameters<typeof updateTaskStateByRunId>[0];
+type TaskRecordStateUpdateParams = Omit<TaskStateUpdateParams, "runId" | "runtime" | "sessionKey">;
+
+function prepareTaskStateUpdate(
+  current: TaskRecord,
+  params: TaskRecordStateUpdateParams,
+): { patch: Partial<TaskRecord>; nextEvent?: ReturnType<typeof appendTaskEvent> } | null {
+  const patch: Partial<TaskRecord> = {};
+  const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
+  if (
+    params.status &&
+    !shouldApplyRunScopedStatusUpdate({
+      currentStatus: current.status,
+      currentRuntime: current.runtime,
+      currentChildSessionKey: current.childSessionKey,
+      currentError: current.error,
+      currentEndedAt: current.endedAt,
+      nextStatus,
+      nextError: params.error,
+      nextEndedAt: params.endedAt,
+    })
+  ) {
+    return null;
+  }
+  const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
+  if (params.status) {
+    patch.status = nextStatus;
+  }
+  if (params.startedAt != null) {
+    patch.startedAt = params.startedAt;
+  }
+  if (params.endedAt != null) {
+    patch.endedAt = params.endedAt;
+  }
+  if (params.lastEventAt != null) {
+    patch.lastEventAt = params.lastEventAt;
+  }
+  if (params.childSessionKey !== undefined) {
+    patch.childSessionKey = params.childSessionKey?.trim() || undefined;
+  }
+  if (params.clearError) {
+    patch.error = undefined;
+  } else if (
+    current.status === "cancelled" &&
+    nextStatus !== "cancelled" &&
+    params.error === undefined
+  ) {
+    patch.error = undefined;
+  } else if (params.error !== undefined) {
+    patch.error = params.error;
+  }
+  if (params.progressSummary !== undefined) {
+    patch.progressSummary = normalizeTaskSummary(params.progressSummary);
+  }
+  if (params.terminalSummary !== undefined) {
+    patch.terminalSummary = params.preserveTerminalSummary
+      ? (params.terminalSummary ?? undefined)
+      : normalizeTaskSummary(params.terminalSummary);
+  }
+  if (params.terminalOutcome !== undefined) {
+    patch.terminalOutcome = resolveTaskTerminalOutcome({
+      status: nextStatus,
+      terminalOutcome: params.terminalOutcome,
+    });
+  }
+  if (params.detail !== undefined) {
+    patch.detail = params.detail;
+  }
+  if (params.suppressDelivery) {
+    // Teardown suppression must survive redundant lifecycle finalizers that
+    // arrive after queues are cleared, or they can repopulate the stopped session.
+    patch.deliveryStatus = "not_applicable";
+  }
+  const eventSummary =
+    normalizeTaskSummary(params.eventSummary) ??
+    (nextStatus === "failed"
+      ? normalizeTaskSummary(params.error ?? current.error)
+      : nextStatus === "succeeded"
+        ? normalizeTaskSummary(params.terminalSummary ?? current.terminalSummary)
+        : undefined);
+  const shouldAppendEvent =
+    (params.status && params.status !== current.status) ||
+    Boolean(normalizeTaskSummary(params.eventSummary));
+  return {
+    patch,
+    ...(shouldAppendEvent
+      ? {
+          nextEvent: appendTaskEvent({
+            at: eventAt,
+            kind: params.status && nextStatus !== current.status ? nextStatus : "progress",
+            summary: eventSummary,
+          }),
+        }
+      : {}),
+  };
+}
+
+export function finalizeTaskRecordsByExpectedSnapshots(
+  params: TaskRecordStateUpdateParams & {
+    expected: readonly TaskRecord[];
+    status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+    endedAt: number;
+  },
+): TaskRecord[] {
+  const [canonical, ...projections] = params.expected;
+  if (!canonical) {
+    return [];
+  }
+  const canonicalUpdate = prepareTaskStateUpdate(canonical, params);
+  if (!canonicalUpdate) {
+    return [];
+  }
+  const updates = [
+    { expected: canonical, ...canonicalUpdate },
+    ...projections.flatMap((expected) => {
+      const prepared = prepareTaskStateUpdate(expected, params);
+      return prepared ? [{ expected, ...prepared }] : [];
+    }),
+  ];
+  const updatedTasks = updateTaskExpectedSnapshots(updates);
+  for (const task of updatedTasks) {
+    const prepared = updates.find((entry) => entry.expected.taskId === task.taskId);
+    if (!params.suppressDelivery) {
+      void maybeDeliverTaskStateChangeUpdate(task.taskId, prepared?.nextEvent);
+      void maybeDeliverTaskTerminalUpdate(task.taskId);
+    }
+  }
+  return updatedTasks;
+}
+
+export function updateTaskDeliveryByExpectedSnapshots(params: {
+  expected: readonly TaskRecord[];
+  deliveryStatus: TaskDeliveryStatus;
+  error?: string;
+}): TaskRecord[] {
+  return updateTaskExpectedSnapshots(
+    params.expected.map((expected) => ({
+      expected,
+      patch: {
+        deliveryStatus: params.deliveryStatus,
+        ...(params.error !== undefined ? { error: params.error } : {}),
+      },
+    })),
+  );
 }
 
 function updateTaskDeliveryByRunId(params: {

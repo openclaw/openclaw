@@ -43,6 +43,7 @@ import {
   handleChatAbortRequest,
   handleChatAbortRequestWithLifecycle,
 } from "./chat-abort-handler.js";
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -60,6 +61,8 @@ function expectReactivationFailure(respond: ReturnType<typeof vi.fn>, runId: str
 
 describe("gateway agent handler chat.abort integration", () => {
   beforeEach(describe1BeforeEach0);
+
+  useChatAbortRegistryFixture();
 
   afterEach(describe1AfterEach1);
 
@@ -1973,8 +1976,6 @@ describe("gateway agent handler chat.abort integration", () => {
     async ({ expectsCompletionMessage, collect, releaseOnParent, partialFailure, cascade }) => {
       prime();
       applyGatewaySubagentRegistryTestDeps({
-        persistSubagentRunsToDisk: () => {},
-        persistSubagentRunsToDiskOrThrow: () => {},
         callGateway: async () => await new Promise(() => {}),
       });
       const pending = new Promise(() => {});
@@ -2021,6 +2022,7 @@ describe("gateway agent handler chat.abort integration", () => {
           expectsCompletionMessage,
           collect,
           queued,
+          taskRowOwnership: "required",
         });
       }
 

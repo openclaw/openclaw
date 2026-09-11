@@ -209,7 +209,7 @@ describe("subagent registry steer restarts", () => {
     runSubagentEndedHookMock.mockImplementation(async () => {});
     emitSessionLifecycleEventMock.mockReset();
     removeInternalSessionEffectsSessionMock.mockClear();
-    mod.resetSubagentRegistryForTests({ persist: false });
+    mod.resetSubagentRegistryForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();
   });
@@ -287,6 +287,7 @@ describe("subagent registry steer restarts", () => {
       cleanup: "keep",
       spawnMode: params.spawnMode,
       expectsCompletionMessage: params.expectsCompletionMessage,
+      taskRowOwnership: "required",
     });
   };
 
@@ -354,7 +355,7 @@ describe("subagent registry steer restarts", () => {
     emitSessionLifecycleEventMock.mockReset();
     lifecycleHandler = undefined;
     removeInternalSessionEffectsSessionMock.mockClear();
-    mod.resetSubagentRegistryForTests({ persist: false });
+    mod.resetSubagentRegistryForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();
   });
@@ -585,6 +586,7 @@ describe("subagent registry steer restarts", () => {
       };
       previous.cleanupCompletedAt = Date.now();
       previous.cleanupHandled = true;
+      previous.taskTerminalProjection = "preserve_existing";
     }
 
     const run = expectDefined(
@@ -600,6 +602,7 @@ describe("subagent registry steer restarts", () => {
     expect(run.completion?.capturedAt).toBeUndefined();
     expect(run.cleanupCompletedAt).toBeUndefined();
     expect(run.cleanupHandled).toBe(false);
+    expect(run.taskTerminalProjection).toBeUndefined();
   });
 
   it("updates task to the dispatched steer message when provided", () => {
@@ -687,7 +690,7 @@ describe("subagent registry steer restarts", () => {
     expect(run.task).toBe("preserve me verbatim");
   });
 
-  it("retains a legacy task owner fallback across another restart", () => {
+  it("rejects a legacy replacement row without canonical task ownership", () => {
     registerRun({
       runId: "run-legacy-owner-original",
       childSessionKey: "agent:main:subagent:legacy-owner",
@@ -704,16 +707,14 @@ describe("subagent registry steer restarts", () => {
     first.taskRunId = undefined;
     first.sessionStartedAt = first.createdAt - 1;
 
-    const second = expectDefined(
+    expect(() =>
       replaceRunAfterSteer({
         previousRunId: "run-legacy-owner-restored",
         nextRunId: "run-legacy-owner-next",
         fallback: first,
       }),
-      'replaceRunAfterSteer({ previousRunId: "run-legacy-owner-restored", ne... test invariant',
-    );
-    expect(second.taskRunId).toBe("run-legacy-owner-restored");
-    expect(second.generation).toBe(3);
+    ).toThrow("task backing is missing");
+    expect(listMainRuns()).toEqual([first]);
   });
 
   it("preserves cumulative session timing across steer replacement runs", () => {

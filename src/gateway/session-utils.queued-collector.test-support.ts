@@ -6,6 +6,7 @@ import {
   resetSubagentRegistryForTests,
   testing as registryTesting,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
@@ -18,6 +19,12 @@ import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.j
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { getTaskFlowByIdForOwner } from "../tasks/task-flow-owner-access.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
+import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -39,14 +46,20 @@ export function useQueuedCollectorFixture() {
   let state: OpenClawTestState;
   let stopLifecycleListener: (() => void) | undefined;
   const launchedRunIds: string[] = [];
+  let successorSequence = 0;
 
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     schedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     resetAgentEventsForTest({ preserveListeners: true });
     state = await createOpenClawTestState({ label: "queued-collector-projection" });
     state.applyEnv();
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
+    successorSequence = 0;
     await state.writeConfig({
       session: { mainKey: "main", scope: "per-sender" },
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
@@ -116,6 +129,8 @@ export function useQueuedCollectorFixture() {
       clearAgentRunContext(runId);
     }
     resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     registryTesting.setDepsForTest();
     spawnTesting.setDepsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
@@ -236,12 +251,63 @@ export function useQueuedCollectorFixture() {
       collect: true,
       queued: true,
       groupId,
+      taskRowOwnership: "required" as const,
     };
     registerSubagentRun(registration);
     return {
-      registration,
       entry: expectDefined(subagentRuns.get(runId), "registered reservation"),
     };
+  }
+
+  function registerQueuedSuccessor(
+    previous: SubagentRunRecord,
+    options: { reserve?: boolean } = {},
+  ) {
+    const groupId = expectDefined(previous.groupId, "queued collector group");
+    const runId = `${previous.runId}-successor-${++successorSequence}`;
+    if (options.reserve) {
+      reserveSwarmRun({ runId, groupId, maxConcurrent: 1, activeRunIds: [] });
+    }
+    const receipt = expectDefined(
+      registerSubagentRun({
+        runId,
+        childSessionKey: previous.childSessionKey,
+        requesterSessionKey: previous.requesterSessionKey,
+        requesterTurnRunId: previous.requesterTurnRunId,
+        requesterDisplayKey: previous.requesterDisplayKey,
+        task: previous.task,
+        cleanup: previous.cleanup,
+        collect: true,
+        queued: true,
+        groupId,
+        taskRowOwnership: "required",
+      }),
+      "queued successor registration receipt",
+    );
+    const entry = expectDefined(subagentRuns.get(runId), "queued successor");
+    expect(entry).toMatchObject({
+      runId,
+      childSessionKey: previous.childSessionKey,
+      taskRunId: runId,
+      generation: (previous.generation ?? 0) + 1,
+      taskOwnershipPolicy: "core_required",
+    });
+    const task = expectDefined(findTaskByRunIdForStatus(runId), "queued successor task");
+    expect(task).toMatchObject({
+      runId,
+      childSessionKey: previous.childSessionKey,
+      detail: { generation: entry.generation },
+    });
+    expect(
+      getTaskFlowByIdForOwner({
+        flowId: expectDefined(task.parentFlowId, "queued successor mirrored flow"),
+        callerOwnerKey: previous.requesterSessionKey,
+      }),
+    ).toMatchObject({
+      ownerKey: previous.requesterSessionKey,
+      syncMode: "task_mirrored",
+    });
+    return { entry, receipt };
   }
 
   function observeLifecycle(listener: Parameters<typeof onSessionLifecycleEvent>[0]) {
@@ -256,6 +322,7 @@ export function useQueuedCollectorFixture() {
     listChildren,
     spawnCollectors,
     createQueuedReservation,
+    registerQueuedSuccessor,
     observeLifecycle,
   };
 }

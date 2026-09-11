@@ -11,6 +11,7 @@ import {
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../src/process/gateway-work-admission.js";
+import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { createDeferred } from "../helpers/promise.js";
 
 function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2, 3]): WorkerResult {
@@ -68,6 +69,32 @@ function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2,
 
 function workerStdout(result: WorkerResult): string {
   return `${WORKER_RESULT_SENTINEL}${JSON.stringify(result)}\n`;
+}
+
+async function runOneChildSpawnLifecycle(
+  scenario: Extract<WorkerScenario, "spawnPipelineInMemory" | "spawnPipelineDurable">,
+): Promise<Awaited<ReturnType<typeof workerTesting.runSpawnSample>>> {
+  try {
+    return await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: `openclaw-agent-concurrency-${scenario}-`,
+      },
+      async (state) => {
+        const { pinRuntimePaths } = await import("../../src/config/paths.js");
+        pinRuntimePaths();
+        return await workerTesting.runSpawnSample(
+          1,
+          0,
+          scenario === "spawnPipelineInMemory" ? "memory" : "durable",
+          state.stateDir,
+        );
+      },
+    );
+  } finally {
+    const { pinRuntimePaths } = await import("../../src/config/paths.js");
+    pinRuntimePaths();
+  }
 }
 
 describe("agent concurrency benchmark", () => {
@@ -147,6 +174,40 @@ describe("agent concurrency benchmark", () => {
       }),
     ).rejects.toThrow("spawn sample left 2 active gateway work items");
   });
+
+  it.each([
+    {
+      scenario: "spawnPipelineInMemory" as const,
+      durableStateFile: false,
+      durableRows: 0,
+    },
+    {
+      scenario: "spawnPipelineDurable" as const,
+      durableStateFile: true,
+      durableRows: 1,
+    },
+  ])(
+    "settles one child through the $scenario lifecycle owner",
+    async ({ scenario, durableStateFile, durableRows }) => {
+      const result = await runOneChildSpawnLifecycle(scenario);
+
+      expect(result.invariant).toMatchObject({
+        ok: true,
+        ownedReceipts: 1,
+        registeredRuns: 1,
+        settledRuns: 1,
+        settledTasks: 1,
+        durableSubagentRows: durableRows,
+        durableTaskRows: durableRows,
+        durableStateFile,
+        postTeardownRegistryRows: 0,
+        postTeardownTaskRows: 0,
+        postTeardownDurableSubagentRows: 0,
+        postTeardownDurableTaskRows: 0,
+        postTeardownActiveRootWork: 0,
+      });
+    },
+  );
 
   it("aggregates synthetic worker results into schema version 2", () => {
     const options = testing.parseOptions([
