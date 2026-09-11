@@ -34,12 +34,21 @@ import {
 import * as servicePlan from "./update-command-service-plan.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-it.each([0, 86])("persists and surfaces successful Doctor warnings (exit %s)", (exitCode) => {
+it.each([
+  { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 0 },
+  { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 86 },
+  { kind: "recoverable-maintenance", name: "global install swap", exitCode: 0 },
+] as const)("persists and surfaces $kind warnings (exit $exitCode)", ({ kind, name, exitCode }) => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("update-warning-ledger-") };
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-  const message = "Skipped derived cache cleanup: permission denied. Run openclaw doctor --fix.";
+  const message =
+    kind === "recoverable-maintenance"
+      ? "baseline package fingerprint incomplete after 30 s; rollback will be verified by the retained package copy"
+      : "Skipped derived cache cleanup: permission denied. Run openclaw doctor --fix.";
   const otherWarning =
-    "Skipped legacy cache cleanup: read-only directory. Run openclaw doctor --fix.";
+    kind === "recoverable-maintenance"
+      ? "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version."
+      : "Skipped legacy cache cleanup: read-only directory. Run openclaw doctor --fix.";
   const result = completeUpdateCommandRun(
     {
       status: "ok",
@@ -47,12 +56,12 @@ it.each([0, 86])("persists and surfaces successful Doctor warnings (exit %s)", (
       durationMs: 1,
       steps: [
         {
-          name: "openclaw doctor",
-          command: "openclaw doctor --fix",
+          name,
+          command: name,
           cwd: "/tmp/update-fixture",
           durationMs: 1,
           exitCode,
-          advisory: { kind: "package-post-install-doctor", message },
+          advisory: { kind, message },
           warnings: [message, otherWarning],
         },
       ],
@@ -65,12 +74,12 @@ it.each([0, 86])("persists and surfaces successful Doctor warnings (exit %s)", (
     status: "succeeded",
     steps: expect.arrayContaining([
       expect.objectContaining({
-        step: "warning:openclaw doctor",
+        step: `warning:${name}`,
         status: "completed",
         detail: message,
       }),
       expect.objectContaining({
-        step: "warning:openclaw doctor:2",
+        step: `warning:${name}:2`,
         status: "completed",
         detail: otherWarning,
       }),

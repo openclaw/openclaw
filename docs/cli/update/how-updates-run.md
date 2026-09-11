@@ -44,6 +44,13 @@ reported cause, then run the warning's exact cleanup command or
 that cannot boot or pass readiness still block completion. See
 [Status and history](/cli/update/status-and-history) to inspect recorded warnings.
 
+The baseline package fingerprint is best effort. If its bounded scan times out,
+the update records a warning and continues with the retained package copy.
+Rollback then verifies the restored directory identity, package version, and
+affected launchers, and records that full fingerprint verification was unavailable.
+A timeout alone does not fail the update or rollback; detected changes to the
+retained copy still refuse restoration.
+
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.
 An interrupted update is not a successful update or a verified rollback.
