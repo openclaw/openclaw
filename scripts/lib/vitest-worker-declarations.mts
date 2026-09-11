@@ -10,6 +10,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "cli/cli-entrypoint.test-support": "src/cli/cli-entrypoint.test-support.ts",
+  "cli/update-cli/update-command-executor-native-runtime.test-support":
+    "src/cli/update-cli/update-command-executor-native-runtime.test-support.ts",
   "commands/doctor-config-runtime.test-support":
     "src/commands/doctor-config-runtime.test-support.ts",
   "test-support/channel-ingress-gateway-restart-entrypoint":
