@@ -37,6 +37,8 @@ export type MSTeamsEmployeeOnboardingRequest = {
   protectedRoute: {
     peerId: string;
     conversationId: string;
+    /** Bot Framework/Teams user id for proactive personal sends. */
+    teamsUserId?: string;
   };
   senderName?: string;
   status: MSTeamsEmployeeOnboardingRequestStatus;
@@ -197,6 +199,7 @@ export function createMSTeamsEmployeeOnboardingRequest(params: {
   senderId: string;
   senderName?: string;
   conversationId: string;
+  teamsUserId?: string;
   now?: Date;
 }): MSTeamsEmployeeOnboardingRequest {
   const requestedAt = (params.now ?? new Date()).toISOString();
@@ -213,6 +216,7 @@ export function createMSTeamsEmployeeOnboardingRequest(params: {
     protectedRoute: {
       peerId: params.senderId,
       conversationId: params.conversationId,
+      ...(params.teamsUserId?.trim() ? { teamsUserId: params.teamsUserId.trim() } : {}),
     },
     ...(params.senderName?.trim() ? { senderName: params.senderName.trim() } : {}),
     status: "pending",
@@ -228,6 +232,7 @@ export function resolveMSTeamsEmployeeOnboardingDecision(params: {
   senderId: string;
   senderName?: string;
   conversationId: string;
+  teamsUserId?: string;
   now?: Date;
 }): MSTeamsEmployeeOnboardingDecision {
   if (!params.isDirectMessage) {
@@ -249,6 +254,7 @@ export function resolveMSTeamsEmployeeOnboardingDecision(params: {
       senderId: params.senderId,
       senderName: params.senderName,
       conversationId: params.conversationId,
+      teamsUserId: params.teamsUserId,
       now: params.now,
     }),
   };

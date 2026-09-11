@@ -534,6 +534,7 @@ describe("msteams monitor handler authz", () => {
       protectedRoute: {
         peerId: "new-user-aad",
         conversationId: "a:self-service-personal-chat",
+        teamsUserId: "new-user-id",
       },
     });
     expect(sendActivity).toHaveBeenCalledWith(

@@ -245,6 +245,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       senderId,
       senderName,
       conversationId,
+      teamsUserId: from?.id,
     });
     log.info(
       "msteams employee onboarding decision",

@@ -296,13 +296,13 @@ export async function admitMSTeamsMessage(params: {
       };
     }
     if (senderAccess.decision === "pairing") {
-      params.conversationStore
-        .upsert(params.conversationId, params.conversationRef)
-        .catch((err: unknown) => {
-          params.log.debug?.("failed to save conversation reference", {
-            error: formatUnknownError(err),
-          });
+      try {
+        await params.conversationStore.upsert(params.conversationId, params.conversationRef);
+      } catch (err: unknown) {
+        params.log.debug?.("failed to save conversation reference", {
+          error: formatUnknownError(err),
         });
+      }
       const request = await pairing.upsertPairingRequest({
         id: senderId,
         meta: { name: senderName },
@@ -405,13 +405,13 @@ export async function admitMSTeamsMessage(params: {
     return null;
   }
 
-  params.conversationStore
-    .upsert(params.conversationId, params.conversationRef)
-    .catch((err: unknown) => {
-      params.log.debug?.("failed to save conversation reference", {
-        error: formatUnknownError(err),
-      });
+  try {
+    await params.conversationStore.upsert(params.conversationId, params.conversationRef);
+  } catch (err: unknown) {
+    params.log.debug?.("failed to save conversation reference", {
+      error: formatUnknownError(err),
     });
+  }
 
   return {
     ...access,
