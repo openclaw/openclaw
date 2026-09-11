@@ -160,7 +160,11 @@ export function planCodexCyberEscalation(params: {
 
 export type CodexCyberAttemptOutcome = Pick<
   EmbeddedRunAttemptResult,
-  "terminal" | "lastAssistant" | "currentAttemptAssistant" | "replayMetadata"
+  | "terminal"
+  | "lastAssistant"
+  | "currentAttemptAssistant"
+  | "replayMetadata"
+  | "runtimeContinuationStarted"
 >;
 
 export type CodexCyberAttemptVerdict = {
@@ -185,12 +189,16 @@ export function readCodexCyberAttemptVerdict(
   // costs nothing and stops an earlier refusal from rerouting a later turn.
   const message = result?.currentAttemptAssistant;
   const refusals = message?.role === "assistant" ? (message.diagnostics ?? []) : [];
-  const cyberRefused = refusals.some(
-    (d) =>
-      d.type === "provider_refusal" &&
-      d.details?.category === "cyber" &&
-      d.details?.provider === "openai",
-  );
+  // Finalization can supersede a refusal with an interruption or failure while
+  // retaining its diagnostic; only an otherwise completed refusal may escalate.
+  const cyberRefused =
+    result?.terminal.kind === "ok" &&
+    refusals.some(
+      (d) =>
+        d.type === "provider_refusal" &&
+        d.details?.category === "cyber" &&
+        d.details?.provider === "openai",
+    );
   const promptError = result ? attemptTerminal.project(result.terminal).promptError : undefined;
   const failed = promptError !== undefined && promptError !== null;
   // Any refusal category is a refusal, not an answer, so bio and misalignment
@@ -210,7 +218,8 @@ export function readCodexCyberAttemptVerdict(
   return {
     cyberRefused,
     // Absence of an explicit safe verdict counts as unsafe.
-    replaySafe: result?.replayMetadata?.replaySafe === true,
+    replaySafe:
+      result?.replayMetadata?.replaySafe === true && result.runtimeContinuationStarted !== true,
     answered,
     unavailable: errorTexts.some((t) => t !== undefined && AUTHORIZATION_FAILURE_RE.test(t)),
   };
