@@ -271,6 +271,7 @@ export function bindPluginInstanceModuleLoader(params: {
   rootDir: string;
   devSourceRoot?: string | null;
   standalone?: boolean;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
   inputBoundaryRoot?: string;
 }): void {
   const cache = getPluginCache();
@@ -285,6 +286,7 @@ export function bindPluginInstanceModuleLoader(params: {
       modulePath: params.source,
       importerUrl: import.meta.url,
       devSourceRoot: params.devSourceRoot,
+      pluginSdkResolution: params.pluginSdkResolution,
     });
     const modules = createPluginModuleRequireCacheOwner(params.rootDir);
     const boundaryRoot = (params.standalone && params.inputBoundaryRoot) || params.rootDir;

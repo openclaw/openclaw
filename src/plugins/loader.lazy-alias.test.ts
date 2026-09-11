@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import Module, { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,8 +14,11 @@ import {
 import { registerPluginCliCommands } from "./cli.js";
 import { createPluginModuleLoader } from "./loader-module-runtime.js";
 import { createPluginCache, resetPluginCache, withPluginCache } from "./plugin-cache.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 beforeEach(() => resetPluginCache());
 const roots: string[] = [];
@@ -72,6 +75,39 @@ afterEach(() => {
 });
 
 describe("native plugin alias preparation", () => {
+  it.each([
+    ["src", "production", "source"],
+    ["dist", "development", "dist"],
+  ] as const)(
+    "preserves explicit %s SDK preference without native module hooks in %s",
+    async (pluginSdkResolution, environment, expected) => {
+      const f = fixture();
+      const source = writeFile(
+        f.root,
+        "external/index.ts",
+        'export { value } from "openclaw/plugin-sdk/used";',
+      );
+      const rootDir = path.dirname(source);
+      const record = createPluginRecord({ id: "external", rootDir, source, origin: "global" });
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push(record);
+      const hooks = Object.getOwnPropertyDescriptor(Module, "registerHooks");
+      Object.defineProperty(Module, "registerHooks", { value: undefined, configurable: true });
+      vi.stubEnv("NODE_ENV", environment);
+      try {
+        const load = createPluginModuleLoader({ devSourceRoot: f.root, pluginSdkResolution });
+        expect(load(source, { record, rootDir, registry })).toMatchObject({ value: expected });
+      } finally {
+        if (hooks) {
+          Object.defineProperty(Module, "registerHooks", hooks);
+        } else {
+          Reflect.deleteProperty(Module, "registerHooks");
+        }
+        await getPluginInstance(record)?.dispose();
+      }
+    },
+  );
+
   it("loads alias-free compiled metadata without reading unused SDK artifacts", () => {
     return withPluginCache(createPluginCache(), () => {
       const f = fixture();
