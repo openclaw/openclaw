@@ -125,6 +125,53 @@ it("reports popup blocking", async () => {
   });
 });
 
+it.each(["open-new-tab", "open-new-window"] as const)(
+  "hands %s to the native shell link bridge instead of a blocked popup",
+  async (kind) => {
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const open = vi.spyOn(window, "open");
+
+    await run(kind);
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "open-link",
+      url: `${window.location.origin}/control${sessionPath}`,
+      target: "external",
+    });
+    expect(open).not.toHaveBeenCalled();
+    expect(showToast).not.toHaveBeenCalled();
+  },
+);
+
+it("falls back to the browser popup when the native link bridge rejects the post", async () => {
+  vi.stubGlobal("webkit", {
+    messageHandlers: {
+      openclawLink: {
+        postMessage: vi.fn(() => {
+          throw new Error("bridge unavailable");
+        }),
+      },
+    },
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const opened = { opener: window, location: { replace: vi.fn() } };
+  const open = vi.spyOn(window, "open").mockReturnValue(opened as unknown as Window);
+
+  await run("open-new-window");
+
+  expect(open).toHaveBeenCalledWith("about:blank", "_blank", "popup");
+  expect(opened.location.replace).toHaveBeenCalledWith(
+    `${window.location.origin}/control${sessionPath}`,
+  );
+  expect(showToast).not.toHaveBeenCalled();
+});
+
 it.each([null, "leaf-3"])(
   "copies coherent history chronologically with tail leaf %s",
   async (activeLeafEntryId) => {

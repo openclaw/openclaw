@@ -96,6 +96,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/session-management.child-failures.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
   "ui/src/e2e/session-management.new-nested.real-gateway.e2e.test.ts",
+  "ui/src/e2e/session-menu-native-bridge.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-progress-runtime.e2e.test.ts",
   "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
