@@ -496,6 +496,48 @@ describe("PluginPage", () => {
     }
   });
 
+  it("forwards initial and live themes only while the current plugin frame is mounted", async () => {
+    const refresh = vi.fn(async () => externalPluginConfig());
+    const page = createExternalPluginPage(refresh, false);
+    document.documentElement.dataset.themeMode = "dark";
+    document.body.append(page);
+    try {
+      await page.updateComplete;
+      const frame = page.querySelector<HTMLIFrameElement>("iframe");
+      expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+      expect(refresh).not.toHaveBeenCalled();
+      if (!frame?.contentWindow) {
+        throw new Error("Expected the plugin frame to be mounted.");
+      }
+      const postMessage = vi.spyOn(frame.contentWindow, "postMessage");
+
+      frame.dispatchEvent(new Event("load"));
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "openclaw:widget-theme", mode: "dark" }),
+        "*",
+      );
+
+      postMessage.mockClear();
+      document.documentElement.dataset.themeMode = "light";
+      await waitForFast(() =>
+        expect(postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "openclaw:widget-theme", mode: "light" }),
+          "*",
+        ),
+      );
+
+      postMessage.mockClear();
+      page.remove();
+      document.documentElement.dataset.themeMode = "dark";
+      frame.dispatchEvent(new Event("load"));
+      await Promise.resolve();
+      expect(postMessage).not.toHaveBeenCalled();
+    } finally {
+      page.remove();
+      delete document.documentElement.dataset.themeMode;
+    }
+  });
+
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const bundledView = createDeferred<TestBundledView>();
     const stop = vi.fn();

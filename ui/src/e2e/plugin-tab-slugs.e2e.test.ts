@@ -15,18 +15,40 @@ const pluginId = "reports-fixture";
 const tabId = "summary";
 
 async function installReports(page: Page, holdHello = false) {
-  await page.route("**/plugins/reports-fixture/", (route) =>
-    route.fulfill({
+  const frameRequests: string[] = [];
+  await page.route("**/plugins/reports-fixture/", (route) => {
+    frameRequests.push(route.request().url());
+    return route.fulfill({
       contentType: "text/html",
-      body: "<!doctype html><h1>Synthetic reports</h1>",
-    }),
-  );
-  return installMockGateway(page, {
+      body: `<!doctype html>
+          <html data-instance="${frameRequests.length}">
+            <body>
+              <h1>Synthetic reports</h1>
+              <output aria-label="Received OpenClaw theme"></output>
+              <script>
+                let themeMessages = 0;
+                addEventListener("message", (event) => {
+                  if (event.data?.type !== "openclaw:widget-theme") return;
+                  themeMessages += 1;
+                  document.querySelector("output").textContent = JSON.stringify({
+                    instance: document.documentElement.dataset.instance,
+                    messages: themeMessages,
+                    mode: event.data.mode,
+                    surface: event.data.tokens.surface,
+                  });
+                });
+              </script>
+            </body>
+          </html>`,
+    });
+  });
+  const gateway = await installMockGateway(page, {
     controlUiTabs: [
       { pluginId, id: tabId, label: "Reports", slug: "reports", path: "/plugins/reports-fixture/" },
     ],
     heldMethods: holdHello ? ["connect"] : [],
   });
+  return { gateway, frameRequests };
 }
 
 async function expectReports(page: Page, pathname = "/reports") {
@@ -66,7 +88,7 @@ suite.define(() => {
     "keeps a cold %s deep link over the remembered session until hello resolves the tab",
     async (path) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const gateway = await installReports(page, true);
+        const { gateway } = await installReports(page, true);
         await page.addInitScript((settingsKey) => {
           localStorage.setItem(settingsKey, JSON.stringify({ sessionKey: "agent:main:main" }));
         }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
@@ -94,7 +116,7 @@ suite.define(() => {
 
   it("recovers an unknown slug to chat only after hello", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installReports(page, true);
+      const { gateway } = await installReports(page, true);
       await page.goto(`${suite.server.baseUrl}unknown-reports`);
       await gateway.waitForRequest("connect");
       expect(new URL(page.url()).pathname).toBe("/unknown-reports");
@@ -106,7 +128,7 @@ suite.define(() => {
 
   it("replaces the generic tab URL with its slug while preserving page parameters and hash", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installReports(page, true);
+      const { gateway } = await installReports(page, true);
       await page.goto(
         `${suite.server.baseUrl}plugin?plugin=${pluginId}&id=${tabId}&p.range=week#details`,
       );
@@ -119,5 +141,68 @@ suite.define(() => {
       expect(location.hash).toBe("#details");
       expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
     });
+  });
+
+  it("forwards an explicit host theme and live switches without reloading the plugin frame", async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), colorScheme: "light" },
+      async ({ page }) => {
+        const { frameRequests } = await installReports(page);
+        await page.goto(`${suite.server.baseUrl}reports`);
+        const frame = page.frameLocator("openclaw-plugin-page iframe");
+        const receivedTheme = frame.getByLabel("Received OpenClaw theme");
+        expect(await page.evaluate(() => matchMedia("(prefers-color-scheme: light)").matches)).toBe(
+          true,
+        );
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const identityMenu = sidebar.getByRole("button", { name: /^Identity and app menu for / });
+        if (!(await sidebar.locator(".theme-mode-toggle").isVisible())) {
+          await identityMenu.click();
+        }
+        for (const currentMode of ["System", "Light"] as const) {
+          const toggle = sidebar.getByRole("button", { name: `Color mode: ${currentMode}` });
+          if (await toggle.isVisible()) {
+            await toggle.click();
+          }
+        }
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+        await expect
+          .poll(async () => JSON.parse((await receivedTheme.textContent()) ?? "{}"))
+          .toMatchObject({
+            instance: "1",
+            messages: expect.any(Number),
+            mode: "dark",
+            surface: expect.stringMatching(/\S/),
+          });
+        const initialMessageCount = Number(
+          JSON.parse((await receivedTheme.textContent()) ?? "{}").messages,
+        );
+
+        const toggle = sidebar.getByRole("button", { name: "Color mode: Dark" });
+        if (!(await toggle.isVisible())) {
+          await identityMenu.click();
+        }
+        await toggle.click();
+
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
+        await expect
+          .poll(async () => {
+            const received = JSON.parse((await receivedTheme.textContent()) ?? "{}");
+            return {
+              instance: received.instance,
+              mode: received.mode,
+              receivedLiveUpdate: Number(received.messages) > initialMessageCount,
+              surface: received.surface,
+            };
+          })
+          .toEqual({
+            instance: "1",
+            mode: "light",
+            receivedLiveUpdate: true,
+            surface: expect.stringMatching(/\S/),
+          });
+        expect(frameRequests).toHaveLength(1);
+      },
+    );
   });
 });
