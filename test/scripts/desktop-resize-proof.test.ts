@@ -1,8 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   desktopProofAssets,
+  desktopProofCommit,
   desktopProofSource,
   desktopResizeStages,
   exportDesktopResizeProof,
@@ -114,11 +116,85 @@ describe("desktop proof identity and public evidence", () => {
         { head: merge, tree, parents: [base, head] },
         { checkout: merge, head, base },
       ),
-    ).toMatchObject({ kind: "pr-merge", prHead: head, prBase: base, head: merge });
+    ).toMatchObject({
+      kind: "pr-merge",
+      prHead: head,
+      prEventBase: base,
+      testedBase: base,
+      head: merge,
+    });
     expect(desktopProofSource({ head, tree, parents: [base] }, { checkout: head }).kind).toBe(
       "checkout",
     );
   });
+
+  it("reads actual merge parents at a depth-one Git boundary without conflating the event base", async () => {
+    const root = dirs.make("desktop-shallow-source-");
+    const git = (args: string[], input?: string) =>
+      execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
+        cwd: root,
+        input,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Test Author",
+          GIT_AUTHOR_EMAIL: "author@example.invalid",
+          GIT_COMMITTER_NAME: "Test Committer",
+          GIT_COMMITTER_EMAIL: "committer@example.invalid",
+          GIT_NO_LAZY_FETCH: "1",
+          GIT_NO_REPLACE_OBJECTS: "1",
+        },
+      }).trim();
+    git(["init", "--quiet"]);
+    const objectTree = git(["mktree"], "");
+    const eventBase = git(["commit-tree", objectTree, "-m", "event base"]);
+    const testedBase = git(["commit-tree", objectTree, "-p", eventBase, "-m", "tested base"]);
+    const prHead = git(["commit-tree", objectTree, "-p", eventBase, "-m", "PR head"]);
+    const checkout = git([
+      "commit-tree",
+      objectTree,
+      "-p",
+      testedBase,
+      "-p",
+      prHead,
+      "-m",
+      "test merge",
+    ]);
+    git(["update-ref", "HEAD", checkout]);
+    await writeFile(path.join(root, ".git", "shallow"), `${checkout}\n`);
+    expect(git(["rev-parse", "--is-shallow-repository"])).toBe("true");
+    expect(git(["show", "-s", "--format=%P", "HEAD"])).toBe("");
+    const observedHead = git(["rev-parse", "--verify", "HEAD"]);
+    const actual = desktopProofCommit(observedHead, git(["cat-file", "commit", observedHead]));
+    expect(desktopProofSource(actual, { checkout, head: prHead, base: eventBase })).toEqual({
+      head: checkout,
+      tree: objectTree,
+      parents: [testedBase, prHead],
+      kind: "pr-merge",
+      prHead,
+      prEventBase: eventBase,
+      testedBase,
+    });
+  });
+
+  it("reads only raw commit headers, not signature continuations or the message", () => {
+    expect(
+      desktopProofCommit(
+        merge,
+        `tree ${tree}\nparent ${base}\nparent ${head}\ngpgsig signature\n parent ${merge}\n\nparent ${merge}\n`,
+      ),
+    ).toEqual({ head: merge, tree, parents: [base, head] });
+  });
+
+  it.each([[], [base], [base, merge], [base, head, merge]].map((parents) => ({ parents })))(
+    "rejects unbound actual merge parents: $parents",
+    ({ parents }) => {
+      expect(() =>
+        desktopProofSource({ head: merge, tree, parents }, { checkout: merge, head, base }),
+      ).toThrow();
+    },
+  );
 
   it.each([
     { checkout: base, head, base },

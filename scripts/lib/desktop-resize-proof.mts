@@ -38,6 +38,16 @@ export async function withDesktopProofCleanup<T>(
   return result as T;
 }
 
+export function desktopProofCommit(head: string, rawCommit: string) {
+  // Read stored headers, not traversal-derived parents hidden at shallow boundaries.
+  const headers = (rawCommit.split("\n\n", 1)[0] ?? "").split("\n");
+  return {
+    head,
+    tree: headers[0]?.startsWith("tree ") ? headers[0].slice(5) : "",
+    parents: headers.filter((line) => line.startsWith("parent ")).map((line) => line.slice(7)),
+  };
+}
+
 export function desktopProofSource(
   actual: { head: string; tree: string; parents: string[] },
   expected: { checkout: string; head?: string; base?: string },
@@ -58,14 +68,19 @@ export function desktopProofSource(
     kind = actual.head === expected.head ? "pr-head" : "pr-merge";
     if (
       kind === "pr-merge" &&
-      (actual.parents.length !== 2 ||
-        actual.parents[0] !== expected.base ||
-        actual.parents[1] !== expected.head)
+      (actual.parents.length !== 2 || actual.parents[1] !== expected.head)
     ) {
       throw new Error("Desktop proof merge parents do not match the PR event");
     }
   }
-  return { ...actual, kind, prHead: expected.head || null, prBase: expected.base || null };
+  // Event base and the immutable test merge's first parent can differ on GitHub.
+  return {
+    ...actual,
+    kind,
+    prHead: expected.head || null,
+    prEventBase: expected.base || null,
+    testedBase: kind === "pr-merge" ? (actual.parents[0] ?? null) : null,
+  };
 }
 
 function geometry(value: unknown) {

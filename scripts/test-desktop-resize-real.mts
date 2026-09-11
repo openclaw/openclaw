@@ -8,6 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { getFreePort } from "../src/test-utils/ports.ts";
 import { assertPrebuiltUiE2eRuntime } from "../test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts";
 import {
+  desktopProofCommit,
   desktopProofSource,
   exportDesktopResizeProof,
   withDesktopProofCleanup,
@@ -250,20 +251,15 @@ async function waitFor(test: () => Promise<boolean>, cleanup = false) {
 }
 
 async function sourceIdentity() {
-  const fields = (
-    await run("source-identity", "git", ["show", "-s", "--format=%H%n%T%n%P", "HEAD"])
-  )
+  const head = (await run("source-head", "git", ["rev-parse", "--verify", "HEAD"]))
     .toString()
-    .trim()
-    .split("\n");
-  const source = desktopProofSource(
-    { head: fields[0]!, tree: fields[1]!, parents: fields[2]?.split(" ") ?? [] },
-    {
-      checkout: process.env.DESKTOP_PROOF_CHECKOUT_SHA ?? "",
-      head: process.env.DESKTOP_PROOF_PR_HEAD_SHA,
-      base: process.env.DESKTOP_PROOF_PR_BASE_SHA,
-    },
-  );
+    .trim();
+  const commit = await run("source-identity", "git", ["cat-file", "commit", head]);
+  const source = desktopProofSource(desktopProofCommit(head, commit.toString()), {
+    checkout: process.env.DESKTOP_PROOF_CHECKOUT_SHA ?? "",
+    head: process.env.DESKTOP_PROOF_PR_HEAD_SHA,
+    base: process.env.DESKTOP_PROOF_PR_BASE_SHA,
+  });
   assert.equal(
     (await run("source-clean", "git", ["status", "--porcelain", "--untracked-files=all"]))
       .toString()
