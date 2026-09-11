@@ -50,14 +50,12 @@ import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
 type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
 
-function toSlackOutboundResult<T extends { channelId?: string }>(result: T) {
+function toSlackOutboundResult(result: SlackSendResult) {
   const { channelId, ...delivery } = result;
-  return attachChannelToResult(
-    "slack",
-    channelId === undefined
-      ? delivery
-      : { ...delivery, target: { kind: "channel" as const, id: channelId } },
-  );
+  return attachChannelToResult("slack", {
+    ...delivery,
+    target: { kind: "channel" as const, id: channelId },
+  });
 }
 
 type SlackOutboundChannelData = Record<string, unknown> & {
@@ -199,7 +197,7 @@ type SlackOutboundSendParams = ChannelOutboundContext &
   Pick<
     Parameters<SlackSendFn>[2],
     "blocks" | "authoredTextPlacement" | "nativeDataFallbackBaseText" | "textIsSlackPlainText"
-  >;
+  > & { signal?: AbortSignal };
 
 async function prepareSlackOutboundSend(ctx: ChannelOutboundContext) {
   // Sends require the scoped runtime snapshot, including resolved active credentials.
@@ -243,6 +241,10 @@ async function prepareSlackOutboundSend(ctx: ChannelOutboundContext) {
       ...(params.onPlatformSendDispatch
         ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
         : {}),
+      ...(params.assertDirectAdapterHandoff
+        ? { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff }
+        : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
       ...(params.onDeliveryResult
         ? {
             onDeliveryResult: async (progress) => {

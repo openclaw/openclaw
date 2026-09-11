@@ -52,6 +52,7 @@ const fetchWithSsrFGuard = vi.fn(
     if (!signal) {
       throw new Error("guarded Slack upload fetch requires a finite timeout signal");
     }
+    params.beforeRequest?.();
     return {
       response: await fetch(params.url, {
         ...params.init,

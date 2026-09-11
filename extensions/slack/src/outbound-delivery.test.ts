@@ -14,8 +14,8 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import * as clientDelivery from "./client-delivery.js";
+import { createSlackWriteClient } from "./client.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import { sendMessageSlack } from "./send.js";
 import { clearSlackThreadParticipationCache } from "./sent-thread-cache.js";
@@ -25,6 +25,43 @@ const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 vi.mock("./send.runtime.js", () => ({
   sendMessageSlack: sendMessageSlackMock,
 }));
+
+type ScriptedSlackResponse = { ok: true; ts: string } | { ok: false; error: "invalid_blocks" };
+
+function createScriptedSlackWriteClient(responses: readonly ScriptedSlackResponse[]) {
+  const remaining = [...responses];
+  const requestBodies: URLSearchParams[] = [];
+  const client = createSlackWriteClient("xoxb-test", {
+    fetch: async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.href !== "https://slack.com/api/chat.postMessage") {
+        throw new Error(`Unexpected Slack API endpoint: ${url.href}`);
+      }
+      const response = remaining.shift();
+      if (!response) {
+        throw new Error("Slack API response sequence exhausted");
+      }
+      const body = init?.body;
+      assert(typeof body === "string", "Expected URL-encoded Slack request body");
+      requestBodies.push(new URLSearchParams(body));
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  return {
+    client,
+    requestBodies,
+    assertExhausted: () => expect(remaining).toHaveLength(0),
+  };
+}
+
+function decodeSlackBlocks(body: URLSearchParams): unknown {
+  const encoded = body.get("blocks");
+  assert(encoded, "Slack request blocks missing");
+  return JSON.parse(encoded);
+}
 
 const cfg: OpenClawConfig = {
   channels: {
@@ -87,7 +124,18 @@ describe("slack outbound shared hook wiring", () => {
       },
     ])("uploads $name only once before finalization", async ({ media }) => {
       const mediaUrls = media.mediaUrls ?? [media.mediaUrl];
-      const client = createSlackSendTestClient();
+      const postedBodies: string[] = [];
+      const client = createSlackWriteClient("xoxb-test", {
+        fetch: async (_input, init) => {
+          const body = init?.body;
+          assert(typeof body === "string", "Expected URL-encoded Slack request body");
+          postedBodies.push(body);
+          return new Response(JSON.stringify({ ok: true, ts: "171234.567" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
       const upload = vi
         .spyOn(clientDelivery, "uploadSlackFile")
         .mockImplementation(async (opts) => {
@@ -115,9 +163,10 @@ describe("slack outbound shared hook wiring", () => {
       const finalOptions = sendMessageSlackMock.mock.calls.at(-1)?.[2];
       expect(finalOptions).not.toHaveProperty("mediaUrl");
       expect(Boolean(finalOptions.blocks)).toBe(hasBlocks);
-      expect(client.chat.postMessage).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ text: expectedText, thread_ts: "1712000000.000001" }),
-      );
+      expect(postedBodies).toHaveLength(1);
+      const postPayload = new URLSearchParams(postedBodies[0]);
+      expect(postPayload.get("text")).toBe(expectedText);
+      expect(postPayload.get("thread_ts")).toBe("1712000000.000001");
       expect(upload.mock.calls.every(([opts]) => opts.threadTs === "1712000000.000001")).toBe(true);
       expect(result.results[0]?.receipt?.parts.map((part) => part.platformMessageId)).toEqual([
         ...mediaUrls.map((_url, index) => `F${index + 1}`),
@@ -127,11 +176,13 @@ describe("slack outbound shared hook wiring", () => {
   });
 
   it("delivers a valid field-rich section through the outbound adapter", async () => {
-    const client = createSlackSendTestClient();
+    const transport = createScriptedSlackWriteClient([{ ok: true, ts: "171234.567" }]);
     sendMessageSlackMock.mockImplementation(
       async (to: string, text: string, opts: Parameters<typeof sendMessageSlack>[2]) =>
-        await sendMessageSlack(to, text, { ...opts, client }),
+        await sendMessageSlack(to, text, { ...opts, client: transport.client }),
     );
+    const assertDirectAdapterHandoff = vi.fn();
+    const signal = new AbortController().signal;
     const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
       type: "plain_text",
       text: label.padEnd(1_500, "."),
@@ -144,26 +195,34 @@ describe("slack outbound shared hook wiring", () => {
       to: "C123",
       payloads: [{ channelData: { slack: { blocks } } }],
       accountId: "default",
+      assertDirectAdapterHandoff,
+      signal,
     });
 
     assert(result.status === "sent", "error" in result ? String(result.error) : result.status);
-    expect(client.chat.postMessage).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        blocks,
-        text: fields.map((field) => field.text).join("\n"),
-        mrkdwn: false,
-      }),
-    );
+    expect(transport.requestBodies).toHaveLength(1);
+    const body = transport.requestBodies[0];
+    assert(body);
+    expect(body.get("channel")).toBe("C123");
+    expect(decodeSlackBlocks(body)).toEqual(blocks);
+    expect(body.get("text")).toBe(fields.map((field) => field.text).join("\n"));
+    expect(body.get("mrkdwn")).toBe("false");
+    const forwardedOptions = sendMessageSlackMock.mock.calls[0]?.[2];
+    expect(forwardedOptions?.assertDirectAdapterHandoff).toEqual(expect.any(Function));
+    expect(forwardedOptions?.signal).toBeInstanceOf(AbortSignal);
+    expect(forwardedOptions?.signal?.aborted).toBe(false);
+    expect(assertDirectAdapterHandoff).toHaveBeenCalled();
     expect(result.results[0]?.receipt?.platformMessageIds).toEqual(["171234.567"]);
+    transport.assertExhausted();
   });
 
   it.each(["text", "context"] as const)(
     "preserves prose after a Windows root path in long %s presentations",
     async (type) => {
-      const client = createSlackSendTestClient();
+      const transport = createScriptedSlackWriteClient([{ ok: true, ts: "171234.567" }]);
       sendMessageSlackMock.mockImplementation(
         async (to: string, text: string, opts: Parameters<typeof sendMessageSlack>[2]) =>
-          await sendMessageSlack(to, text, { ...opts, client }),
+          await sendMessageSlack(to, text, { ...opts, client: transport.client }),
       );
       const intro = "Install in `C:\\` and continue. ";
       const text = intro + "Ordinary prose. ".repeat(220) + "Done.";
@@ -177,47 +236,49 @@ describe("slack outbound shared hook wiring", () => {
       });
 
       assert(result.status === "sent", "error" in result ? String(result.error) : result.status);
-      expect(client.chat.postMessage).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          blocks: [expect.stringContaining(intro), expect.not.stringContaining("`")].map((chunk) =>
-            type === "context"
-              ? {
-                  type: "context",
-                  elements: [{ type: "mrkdwn", text: chunk, verbatim: true }],
-                }
-              : { type: "section", text: { type: "mrkdwn", text: chunk } },
-          ),
-        }),
+      expect(transport.requestBodies).toHaveLength(1);
+      const body = transport.requestBodies[0];
+      assert(body);
+      expect(body.get("channel")).toBe("C123");
+      expect(decodeSlackBlocks(body)).toEqual(
+        [expect.stringContaining(intro), expect.not.stringContaining("`")].map((chunk) =>
+          type === "context"
+            ? {
+                type: "context",
+                elements: [{ type: "mrkdwn", text: chunk, verbatim: true }],
+              }
+            : { type: "section", text: { type: "mrkdwn", text: chunk } },
+        ),
       );
       expect(result.results[0]?.receipt?.platformMessageIds).toEqual(["171234.567"]);
+      transport.assertExhausted();
     },
   );
 
   it("preserves a field-rich section and every receipt when native table delivery falls back", async () => {
-    const client = createSlackSendTestClient();
-    client.chat.postMessage
-      .mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
-      .mockResolvedValueOnce({ ts: "171234.1" })
-      .mockResolvedValueOnce({ ts: "171234.2" });
+    const transport = createScriptedSlackWriteClient([
+      { ok: false, error: "invalid_blocks" },
+      { ok: true, ts: "171234.1" },
+      { ok: true, ts: "171234.2" },
+    ]);
     sendMessageSlackMock.mockImplementation(
       async (to: string, text: string, opts: Parameters<typeof sendMessageSlack>[2]) =>
-        await sendMessageSlack(to, text, { ...opts, client }),
+        await sendMessageSlack(to, text, { ...opts, client: transport.client }),
     );
+    const assertDirectAdapterHandoff = vi.fn();
+    const signal = new AbortController().signal;
     const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
       type: "plain_text",
       text: label.padEnd(1_500, "."),
     }));
     const section = { type: "section", fields };
     const footer = { type: "section", text: { type: "plain_text", text: "End of report" } };
-    const blocks = [
-      section,
-      {
-        type: "data_table",
-        caption: "Pipeline",
-        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
-      },
-      footer,
-    ];
+    const table = {
+      type: "data_table",
+      caption: "Pipeline",
+      rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
+    };
+    const blocks = [section, table, footer];
 
     const result = await sendDurableMessageBatch({
       cfg,
@@ -225,24 +286,31 @@ describe("slack outbound shared hook wiring", () => {
       to: "C123",
       payloads: [{ channelData: { slack: { blocks } } }],
       accountId: "default",
+      assertDirectAdapterHandoff,
+      signal,
     });
 
     assert(result.status === "sent", "error" in result ? String(result.error) : result.status);
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
-    expect(client.chat.postMessage.mock.calls[1]?.[0]).toMatchObject({
-      blocks: [section],
-      text: fields.map((field) => field.text).join("\n"),
-      mrkdwn: false,
-    });
-    expect(client.chat.postMessage.mock.calls[2]?.[0]).toMatchObject({
-      blocks: [
-        { type: "section", text: { type: "plain_text", text: "Pipeline (table)\nAccount\nAcme" } },
-        footer,
-      ],
-      text: "Pipeline (table)\nAccount\nAcme\n\nEnd of report",
-      mrkdwn: false,
-    });
+    expect(transport.requestBodies).toHaveLength(3);
+    const [initialBody, sectionBody, tableBody] = transport.requestBodies;
+    assert(initialBody && sectionBody && tableBody);
+    expect(decodeSlackBlocks(initialBody)).toEqual(blocks);
+    expect(decodeSlackBlocks(sectionBody)).toEqual([section]);
+    expect(sectionBody.get("text")).toBe(fields.map((field) => field.text).join("\n"));
+    expect(sectionBody.get("mrkdwn")).toBe("false");
+    expect(decodeSlackBlocks(tableBody)).toEqual([
+      { type: "section", text: { type: "plain_text", text: "Pipeline (table)\nAccount\nAcme" } },
+      footer,
+    ]);
+    expect(tableBody.get("text")).toBe("Pipeline (table)\nAccount\nAcme\n\nEnd of report");
+    expect(tableBody.get("mrkdwn")).toBe("false");
+    const forwardedOptions = sendMessageSlackMock.mock.calls[0]?.[2];
+    expect(forwardedOptions?.assertDirectAdapterHandoff).toEqual(expect.any(Function));
+    expect(forwardedOptions?.signal).toBeInstanceOf(AbortSignal);
+    expect(forwardedOptions?.signal?.aborted).toBe(false);
+    expect(assertDirectAdapterHandoff).toHaveBeenCalled();
     expect(result.results[0]?.receipt?.platformMessageIds).toEqual(["171234.1", "171234.2"]);
+    transport.assertExhausted();
   });
 
   it("fires message_sending once with shared routing fields", async () => {

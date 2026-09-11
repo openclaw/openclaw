@@ -25,6 +25,11 @@ import {
   type SlackPostMessagePayload,
   type SlackUnfurlOptions,
 } from "./post-message-payload.js";
+import {
+  assertSlackWriteAttemptAuthorized,
+  resolveSlackWriteAttemptSignal,
+  type SlackWriteAttemptAuthority,
+} from "./write-attempt-context.js";
 
 const SLACK_COMMERCIAL_API_HOSTNAME = "slack.com";
 const SLACK_COMMERCIAL_UPLOAD_HOSTNAME = "files.slack.com";
@@ -213,19 +218,26 @@ function resolveSlackUploadTransportPolicy(params: { uploadUrl: string; slackApi
 export async function withSlackDnsRequestRetry<T>(
   operation: string,
   fn: () => Promise<T>,
+  authority?: SlackWriteAttemptAuthority,
 ): Promise<T> {
-  return await retryAsync(fn, {
-    attempts: SLACK_DNS_RETRY_ATTEMPTS + 1,
-    minDelayMs: 0,
-    shouldRetry: hasSlackDnsRequestSignal,
-    delayMs: ({ attempt }) => SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt),
-    onRetry: ({ attempt }) => {
-      logVerbose(
-        `slack send: retrying ${operation} after transient DNS request error (${attempt}/${SLACK_DNS_RETRY_ATTEMPTS})`,
-      );
+  return await retryAsync(
+    async () => {
+      assertSlackWriteAttemptAuthorized(authority);
+      return await fn();
     },
-    sleep: (delayMs) => sleepWithAbort(delayMs),
-  });
+    {
+      attempts: SLACK_DNS_RETRY_ATTEMPTS + 1,
+      minDelayMs: 0,
+      shouldRetry: hasSlackDnsRequestSignal,
+      delayMs: ({ attempt }) => SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt),
+      onRetry: ({ attempt }) => {
+        logVerbose(
+          `slack send: retrying ${operation} after transient DNS request error (${attempt}/${SLACK_DNS_RETRY_ATTEMPTS})`,
+        );
+      },
+      sleep: (delayMs) => sleepWithAbort(delayMs, authority?.signal),
+    },
+  );
 }
 
 export function requireSlackPostMessageTimestamp(
@@ -254,12 +266,15 @@ export async function postSlackMessageBestEffort(params: {
   metadata?: MessageMetadata;
   mrkdwn?: boolean;
   unfurl?: SlackUnfurlOptions;
+  writeAttempt?: SlackWriteAttemptAuthority;
 }) {
   const basePayload = buildSlackPostMessagePayload(params);
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => ({
-    response: await withSlackDnsRequestRetry("chat.postMessage", () =>
-      postChatMessage(payload),
+    response: await withSlackDnsRequestRetry(
+      "chat.postMessage",
+      () => postChatMessage(payload),
+      params.writeAttempt,
     ).catch(rethrowSlackPermanentOutboundApiRejection),
     identity,
   });
@@ -294,6 +309,7 @@ export async function uploadSlackFile(params: {
   maxBytes?: number;
   onPlatformSendDispatch?: () => Promise<void>;
   auditContext?: string;
+  writeAttempt?: SlackWriteAttemptAuthority;
 }): Promise<string> {
   const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
     maxBytes: params.maxBytes,
@@ -306,11 +322,14 @@ export async function uploadSlackFile(params: {
   const uploadFileName =
     params.uploadFileName ?? fileName ?? `upload${extensionForMime(contentType) ?? ""}`;
   const uploadTitle = params.uploadTitle ?? uploadFileName;
-  const uploadUrlResp = await withSlackDnsRequestRetry("files.getUploadURLExternal", () =>
-    params.client.files.getUploadURLExternal({
-      filename: uploadFileName,
-      length: buffer.length,
-    }),
+  const uploadUrlResp = await withSlackDnsRequestRetry(
+    "files.getUploadURLExternal",
+    () =>
+      params.client.files.getUploadURLExternal({
+        filename: uploadFileName,
+        length: buffer.length,
+      }),
+    params.writeAttempt,
   ).catch(rethrowSlackPermanentOutboundApiRejection);
   if (!uploadUrlResp.ok || !uploadUrlResp.upload_url || !uploadUrlResp.file_id) {
     throw new Error(`Failed to get upload URL: ${uploadUrlResp.error ?? "unknown error"}`);
@@ -328,6 +347,8 @@ export async function uploadSlackFile(params: {
     url: resolveSlackUploadTimeoutLogUrl(uploadUrlResp.upload_url),
   });
   try {
+    assertSlackWriteAttemptAuthorized(params.writeAttempt);
+    const signal = resolveSlackWriteAttemptSignal(params.writeAttempt, uploadTimeoutSignal);
     const { response: uploadResp, release } = await fetchWithSsrFGuard(
       withTrustedEnvProxyGuardedFetchMode({
         url: uploadUrlResp.upload_url,
@@ -339,7 +360,8 @@ export async function uploadSlackFile(params: {
         // The signal bounds the whole transfer; the guarded timeout also applies
         // the same budget to Undici's connect, header, and body phases.
         timeoutMs: SLACK_UPLOAD_POST_TIMEOUT_MS,
-        signal: uploadTimeoutSignal,
+        signal,
+        beforeRequest: () => assertSlackWriteAttemptAuthorized(params.writeAttempt),
         requireHttps: uploadTransport.requireHttps,
         policy: uploadTransport.policy,
         capture: false,
@@ -376,13 +398,16 @@ export async function uploadSlackFile(params: {
   // Dispatch is already recorded above, so this call is the ambiguous send:
   // no rejection here may claim non-dispatch, however definitive its code reads.
   const completionClient = params.completionClient ?? params.client;
-  const completeResp = await withSlackDnsRequestRetry("files.completeUploadExternal", () =>
-    completionClient.files.completeUploadExternal({
-      files: [{ id: uploadFileId, title: uploadTitle }],
-      channel_id: params.channelId,
-      ...(params.caption ? { initial_comment: params.caption } : {}),
-      ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
-    }),
+  const completeResp = await withSlackDnsRequestRetry(
+    "files.completeUploadExternal",
+    () =>
+      completionClient.files.completeUploadExternal({
+        files: [{ id: uploadFileId, title: uploadTitle }],
+        channel_id: params.channelId,
+        ...(params.caption ? { initial_comment: params.caption } : {}),
+        ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
+      }),
+    params.writeAttempt,
   );
   if (!completeResp.ok) {
     throw new Error(`Failed to complete upload: ${completeResp.error ?? "unknown error"}`);

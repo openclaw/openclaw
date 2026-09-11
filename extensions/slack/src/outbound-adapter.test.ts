@@ -286,8 +286,31 @@ describe("slackOutbound", () => {
     );
   });
 
+  it("forwards request-local authority and cancellation to Slack delivery", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+    const assertDirectAdapterHandoff = vi.fn();
+    const controller = new AbortController();
+
+    await slackOutbound.sendText!({
+      cfg,
+      to: "C123",
+      text: "hello",
+      assertDirectAdapterHandoff,
+      signal: controller.signal,
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        assertDirectAdapterHandoff,
+        signal: controller.signal,
+      }),
+    );
+  });
+
   it("renders channelData Slack blocks on payload sends", async () => {
-    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks", channelId: "C123" });
 
     const result = await slackOutbound.sendPayload!({
       cfg,
@@ -314,7 +337,11 @@ describe("slackOutbound", () => {
         { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
       ],
     });
-    expect(result).toEqual({ channel: "slack", messageId: "m-blocks" });
+    expect(result).toEqual({
+      channel: "slack",
+      messageId: "m-blocks",
+      target: { kind: "channel", id: "C123" },
+    });
   });
 
   it.each([

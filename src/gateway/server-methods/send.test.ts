@@ -291,6 +291,7 @@ async function runSendWithClient(
   params: Record<string, unknown>,
   client?: { connect?: { scopes?: string[] }; internal?: Record<string, unknown> } | null,
   context: GatewayRequestContext = makeContext(),
+  signal?: AbortSignal,
 ) {
   const respond = vi.fn();
   await expectDefined(sendHandlers.send, "sendHandlers.send test invariant").call(sendHandlers, {
@@ -300,6 +301,7 @@ async function runSendWithClient(
     req: { type: "req", id: "1", method: "send" },
     client: (client ?? null) as never,
     isWebchatConnect: () => false,
+    signal,
   });
   return { respond };
 }
@@ -368,6 +370,7 @@ async function runMessageActionRequest(
     };
   } | null,
   context: GatewayRequestContext = makeContext(),
+  signal?: AbortSignal,
 ) {
   const respond = vi.fn();
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : undefined;
@@ -417,6 +420,7 @@ async function runMessageActionRequest(
     req: { type: "req", id: "1", method: "message.action" },
     client: (effectiveClient ?? null) as never,
     isWebchatConnect: () => false,
+    signal,
   });
   return { respond };
 }
@@ -1666,6 +1670,56 @@ describe("gateway send mirroring", () => {
       expect(platformSend).not.toHaveBeenCalled();
     },
   );
+
+  it("fences a send when authority closes in the post-refresh microtask", async () => {
+    const enteredDelivery = createDeferred<null>();
+    const resumeDelivery = createDeferred<null>();
+    const platformSend = vi.fn();
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      async (params: {
+        onPlatformSendDispatch?: () => Promise<void>;
+        assertDirectAdapterHandoff?: () => void;
+      }) => {
+        enteredDelivery.resolve(null);
+        await resumeDelivery.promise;
+        await params.onPlatformSendDispatch?.();
+        queueMicrotask(() => {
+          authorityActive = false;
+        });
+        await Promise.resolve();
+        params.assertDirectAdapterHandoff?.();
+        platformSend();
+        return [{ channel: "slack", messageId: "must-not-send" }];
+      },
+    );
+    let authorityActive = true;
+    const cancellation = new AbortController();
+    const context = {
+      ...makeContext(),
+      validateAgentRuntimeApprovalAuthority: () => authorityActive,
+    } as GatewayRequestContext;
+    const request = runSendWithClient(
+      {
+        channel: "slack",
+        to: "channel:C1",
+        message: "must not escape",
+        sessionKey: "agent:main:slack:channel:C1",
+        idempotencyKey: "idem-send-delivery-authority-race",
+      },
+      agentRuntimeClient("agent:main:slack:channel:C1"),
+      context,
+      cancellation.signal,
+    );
+    await enteredDelivery.promise;
+    resumeDelivery.resolve(null);
+
+    const { respond } = await request;
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+    expect(deliveryCall()?.skipQueue).toBe(true);
+    expect(deliveryCall()?.abortSignal).toBe(cancellation.signal);
+    expect(platformSend).not.toHaveBeenCalled();
+  });
 
   it("does not send after turn capability closes while delegated authority remains active", async () => {
     const enteredDelivery = createDeferred<null>();
@@ -4684,6 +4738,50 @@ describe("gateway send mirroring", () => {
         expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
       },
     );
+
+    it("fences canonical outbound send after a post-refresh microtask closes authority", async () => {
+      let authorityActive = true;
+      const cancellation = new AbortController();
+      const platformSend = vi.fn();
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async (params: {
+          onPlatformSendDispatch?: () => Promise<void>;
+          assertDirectAdapterHandoff?: () => void;
+        }) => {
+          await params.onPlatformSendDispatch?.();
+          queueMicrotask(() => {
+            authorityActive = false;
+          });
+          await Promise.resolve();
+          params.assertDirectAdapterHandoff?.();
+          platformSend();
+          return [{ channel: "twitch", messageId: "must-not-send" }];
+        },
+      );
+      const sessionKey = "agent:main:twitch:group:explicit-room";
+      const { respond } = await runMessageActionRequest(
+        {
+          channel: "twitch",
+          action: "send",
+          params: { to: "explicit-room", message: "must not escape" },
+          sessionKey,
+          idempotencyKey: "canonical-send-authority-race",
+        },
+        agentRuntimeClient(sessionKey),
+        {
+          ...makeContext(),
+          validateAgentRuntimeApprovalAuthority: () => authorityActive,
+        } as GatewayRequestContext,
+        cancellation.signal,
+      );
+
+      expect(firstRespondCall(respond)[0]).toBe(false);
+      expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+      expect(deliveryCall()?.skipQueue).toBe(true);
+      expect(deliveryCall()?.abortSignal).toBe(cancellation.signal);
+      expect(platformSend).not.toHaveBeenCalled();
+      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    });
   });
 
   it("falls back once to canonical outbound poll delivery when plugin actions decline", async () => {

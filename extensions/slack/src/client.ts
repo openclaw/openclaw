@@ -1,15 +1,18 @@
 // Slack plugin module implements client behavior.
 import { createHash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
-import type { SlackLookupClientOptions } from "./client-options.js";
+import pLimit from "p-limit";
+import type { SlackLookupClientOptions, SlackWriteRequestAdmission } from "./client-options.js";
 import {
+  bindSlackWriteClientOptions,
   resolveSlackLookupClientOptions,
   resolveSlackReadClientOptions,
   resolveSlackWebClientOptions,
-  resolveSlackWriteClientOptions,
+  resolveSlackWriteClientTransportOptions,
   SLACK_DEFAULT_RETRY_OPTIONS,
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
+import type { SlackWriteAttemptAuthority } from "./write-attempt-context.js";
 
 const SLACK_WRITE_CLIENT_CACHE_MAX = 32;
 const SLACK_STARTUP_AUTH_TIMEOUT_MS = 10_000;
@@ -19,9 +22,19 @@ const slackListenerWriteClientCache = new WeakMap<
   WebClient,
   { teamId: string | undefined; client: WebClient }
 >();
+type SlackWriteTransport = {
+  token: string;
+  options: Readonly<WebClientOptions>;
+  admitRequest: SlackWriteRequestAdmission;
+};
+
+// Cache reusable transport facts only. Each derived fetch hook owns one
+// invocation authority while physical admission stays shared by the transport.
+const slackWriteClientTransport = new WeakMap<WebClient, SlackWriteTransport>();
 
 type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl" | "teamId">;
 type SlackFetch = NonNullable<WebClientOptions["fetch"]>;
+const SLACK_DEFAULT_MAX_REQUEST_CONCURRENCY = 100;
 
 export {
   resolveSlackWebClientOptions,
@@ -82,8 +95,84 @@ export function createSlackLookupClient(token: string, options: SlackLookupClien
   return new WebClient(token, resolveSlackLookupClientOptions(options));
 }
 
-export function createSlackWriteClient(token: string, options: WebClientOptions = {}) {
-  return new WebClient(token, resolveSlackWriteClientOptions(options));
+function createSlackWriteRequestAdmission(concurrency: number): SlackWriteRequestAdmission {
+  return pLimit(concurrency);
+}
+
+function freezeSlackWriteAttemptAuthority(
+  authority?: SlackWriteAttemptAuthority,
+): SlackWriteAttemptAuthority | undefined {
+  if (!authority?.assertAuthorized && !authority?.signal) {
+    return undefined;
+  }
+  return Object.freeze({
+    ...(authority.assertAuthorized ? { assertAuthorized: authority.assertAuthorized } : {}),
+    ...(authority.signal ? { signal: authority.signal } : {}),
+  });
+}
+
+function createRegisteredSlackWriteClient(
+  token: string,
+  transportOptions: WebClientOptions,
+  authority?: SlackWriteAttemptAuthority,
+  admitRequest = createSlackWriteRequestAdmission(
+    transportOptions.maxRequestConcurrency ?? SLACK_DEFAULT_MAX_REQUEST_CONCURRENCY,
+  ),
+): WebClient {
+  const client = new WebClient(
+    token,
+    bindSlackWriteClientOptions(
+      transportOptions,
+      freezeSlackWriteAttemptAuthority(authority),
+      admitRequest,
+    ),
+  );
+  const transport: SlackWriteTransport = {
+    token,
+    options: Object.freeze({ ...transportOptions }),
+    admitRequest,
+  };
+  slackWriteClientTransport.set(client, transport);
+  return client;
+}
+
+export function createSlackWriteClient(
+  token: string,
+  options: WebClientOptions = {},
+  authority?: SlackWriteAttemptAuthority,
+) {
+  return createRegisteredSlackWriteClient(
+    token,
+    resolveSlackWriteClientTransportOptions(options),
+    authority,
+  );
+}
+
+export function bindSlackWriteClientToAttempt(
+  client: WebClient,
+  authority?: SlackWriteAttemptAuthority,
+): Readonly<{ client: WebClient; authority?: SlackWriteAttemptAuthority }> {
+  const boundAuthority = freezeSlackWriteAttemptAuthority(authority);
+  if (!boundAuthority) {
+    return Object.freeze({ client });
+  }
+  const transport = slackWriteClientTransport.get(client);
+  if (!transport) {
+    throw new TypeError(
+      "Slack authority-bound sends require a client from a registered write-client factory",
+    );
+  }
+  // Preserve the source client's proxy, headers, team, timeout, and retry policy,
+  // while one transport-owned admission queue fences all derived physical writes.
+  return Object.freeze({
+    client: createRegisteredSlackWriteClient(
+      transport.token,
+      transport.options,
+      boundAuthority,
+      transport.admitRequest,
+    ),
+    authority: boundAuthority,
+  });
 }
 
 export function createSlackTokenCacheKey(token: string): string {
@@ -101,15 +190,15 @@ export function getSlackWriteClient(
   token: string,
   options: SlackWriteClientCacheOptions = {},
 ): WebClient {
-  const resolvedOptions = resolveSlackWriteClientOptions(options);
-  const tokenKey = slackWriteClientCacheKey(token, resolvedOptions);
+  const transportOptions = resolveSlackWriteClientTransportOptions(options);
+  const tokenKey = slackWriteClientCacheKey(token, transportOptions);
   const cached = slackWriteClientCache.get(tokenKey);
   if (cached) {
     slackWriteClientCache.delete(tokenKey);
     slackWriteClientCache.set(tokenKey, cached);
     return cached;
   }
-  const client = new WebClient(token, resolvedOptions);
+  const client = createRegisteredSlackWriteClient(token, transportOptions);
   if (slackWriteClientCache.size >= SLACK_WRITE_CLIENT_CACHE_MAX) {
     const oldestTokenKey = slackWriteClientCache.keys().next().value;
     if (oldestTokenKey) {
@@ -141,11 +230,26 @@ export function getSlackListenerWriteClient(params: {
       ([name]) => name.toLowerCase() !== "authorization",
     ),
   );
+  const listenerTransportOptions = resolveSlackWriteClientTransportOptions({
+    ...params.clientOptions,
+    headers,
+    slackApiUrl: params.listenerClient.slackApiUrl,
+    teamId,
+    retryConfig: params.clientOptions?.retryConfig ?? SLACK_DEFAULT_RETRY_OPTIONS,
+  });
+  const admitRequest = createSlackWriteRequestAdmission(
+    listenerTransportOptions.maxRequestConcurrency ?? SLACK_DEFAULT_MAX_REQUEST_CONCURRENCY,
+  );
+  slackWriteClientTransport.set(params.listenerClient, {
+    token,
+    options: Object.freeze(listenerTransportOptions),
+    admitRequest,
+  });
   // Stream writes and upload completion are one-shot. Preserve transport and team
   // scope, but never inherit its retry policy or request deadline.
-  const client = new WebClient(
+  const client = createRegisteredSlackWriteClient(
     token,
-    resolveSlackWriteClientOptions({
+    resolveSlackWriteClientTransportOptions({
       ...params.clientOptions,
       headers,
       slackApiUrl: params.listenerClient.slackApiUrl,
@@ -153,6 +257,8 @@ export function getSlackListenerWriteClient(params: {
       retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       timeout: 0,
     }),
+    undefined,
+    admitRequest,
   );
   slackListenerWriteClientCache.set(params.listenerClient, { teamId, client });
   return client;

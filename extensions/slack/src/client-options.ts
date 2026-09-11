@@ -10,9 +10,21 @@ import { isDebugProxyGlobalFetchPatchInstalled } from "openclaw/plugin-sdk/proxy
 import { parseRetryAfterHeaderSeconds, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { EnvHttpProxyAgent } from "undici";
+import {
+  assertSlackWriteAttemptAuthorized,
+  resolveSlackWriteAttemptSignal,
+  type SlackWriteAttemptAuthority,
+} from "./write-attempt-context.js";
 
 type SlackUndiciRuntime = Pick<typeof import("undici"), "EnvHttpProxyAgent" | "fetch">;
 type SlackProxyDispatcher = EnvHttpProxyAgent;
+type SlackFetch = NonNullable<WebClientOptions["fetch"]>;
+export type SlackWriteRequestAdmission = <T>(request: () => Promise<T>) => Promise<T>;
+
+const slackWriteFetchMetadata = new WeakMap<
+  SlackFetch,
+  { baseFetch: SlackFetch; forcedRejectRateLimitedCalls: boolean }
+>();
 
 const requireFromSlackSocketMode = (() => {
   const require = createRequire(import.meta.url);
@@ -136,56 +148,95 @@ export function resolveSlackReadClientOptions(
   return resolved;
 }
 
-export function resolveSlackWriteClientOptions(
+export function resolveSlackWriteClientTransportOptions(
   options: WebClientOptions = {},
   dispatcher = resolveSlackProxyDispatcher(),
 ): WebClientOptions {
   const resolved: WebClientOptions = Object.assign({}, options);
+  const fetchMetadata = resolved.fetch ? slackWriteFetchMetadata.get(resolved.fetch) : undefined;
+  if (fetchMetadata) {
+    resolved.fetch = fetchMetadata.baseFetch;
+    if (fetchMetadata.forcedRejectRateLimitedCalls && resolved.rejectRateLimitedCalls === true) {
+      delete resolved.rejectRateLimitedCalls;
+    }
+  }
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
+  resolved.fetch ??= buildSlackFetch(dispatcher);
   resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
-  // A caller's nonzero SDK retry policy already owns rate-limit recovery.
-  if (resolved.rejectRateLimitedCalls !== true && resolved.retryConfig.retries === 0) {
-    const slackFetch = resolved.fetch ?? buildSlackFetch(dispatcher);
-    if (slackFetch) {
+  return resolved;
+}
+
+export function bindSlackWriteClientOptions(
+  transportOptions: WebClientOptions,
+  authority?: SlackWriteAttemptAuthority,
+  admitRequest?: SlackWriteRequestAdmission,
+): WebClientOptions {
+  const resolved: WebClientOptions = Object.assign({}, transportOptions);
+  const slackFetch = resolved.fetch;
+  if (slackFetch) {
+    // A caller's nonzero SDK retry policy already owns rate-limit recovery.
+    const replayRateLimits =
+      resolved.rejectRateLimitedCalls !== true && resolved.retryConfig?.retries === 0;
+    const guardedFetch: SlackFetch = (input, init) => {
+      const signal = resolveSlackWriteAttemptSignal(authority, init?.signal ?? undefined);
+      const attemptInit = signal ? { ...init, signal } : init;
+      const attempt = async () => {
+        signal?.throwIfAborted();
+        assertSlackWriteAttemptAuthorized(authority);
+        const response = await slackFetch(input, attemptInit);
+        if (!replayRateLimits || response.status !== 429) {
+          return response;
+        }
+        const retryAfter = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
+        // Do not wait for peer EOF or a capture tee before retry/abort can proceed.
+        // SAFETY: Runtime fetch responses expose an optional standard body stream.
+        void (response as { body?: ReadableStream | null }).body?.cancel().catch(() => undefined);
+        signal?.throwIfAborted();
+        // The shared abortable timer caps one sleep at this platform limit;
+        // refuse an unrepresentable delay instead of retrying before Slack allows.
+        if (retryAfter === undefined || retryAfter * 1000 > 2_147_000_000) {
+          return response;
+        }
+        throw new WebAPIRateLimitedError(retryAfter);
+      };
+      const admittedAttempt = () => (admitRequest ? admitRequest(attempt) : attempt());
+      if (!replayRateLimits) {
+        return admittedAttempt();
+      }
       // Replay the SDK's serialized body, not chatStream.append(), which retains
       // its buffer after rejection. Only an HTTP 429 proves this write was refused.
-      resolved.fetch = (input, init) =>
-        retryAsync(
-          async () => {
-            init?.signal?.throwIfAborted();
-            const response = await slackFetch(input, init);
-            if (response.status !== 429) {
-              return response;
-            }
-            const retryAfter = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
-            // Do not wait for peer EOF or a capture tee before retry/abort can proceed.
-            // SAFETY: Runtime fetch responses expose an optional standard body stream.
-            void (response as { body?: ReadableStream | null }).body
-              ?.cancel()
-              .catch(() => undefined);
-            init?.signal?.throwIfAborted();
-            // The shared abortable timer caps one sleep at this platform limit;
-            // refuse an unrepresentable delay instead of retrying before Slack allows.
-            if (retryAfter === undefined || retryAfter * 1000 > 2_147_000_000) {
-              return response;
-            }
-            throw new WebAPIRateLimitedError(retryAfter);
-          },
-          {
-            attempts: 3,
-            minDelayMs: 0,
-            maxDelayMs: 0,
-            shouldRetry: (error) => error instanceof WebAPIRateLimitedError,
-            retryAfterMs: (error) =>
-              error instanceof WebAPIRateLimitedError ? error.retryAfter * 1000 : undefined,
-            sleep: (delayMs) => sleepWithAbort(delayMs, init?.signal),
-          },
-        );
+      return retryAsync(admittedAttempt, {
+        attempts: 3,
+        minDelayMs: 0,
+        maxDelayMs: 0,
+        shouldRetry: (error) => error instanceof WebAPIRateLimitedError,
+        retryAfterMs: (error) =>
+          error instanceof WebAPIRateLimitedError ? error.retryAfter * 1000 : undefined,
+        sleep: (delayMs) => sleepWithAbort(delayMs, signal),
+      });
+    };
+    resolved.fetch = guardedFetch;
+    slackWriteFetchMetadata.set(guardedFetch, {
+      baseFetch: slackFetch,
+      forcedRejectRateLimitedCalls: replayRateLimits,
+    });
+    if (replayRateLimits) {
+      // Preserve the explicit opt-out and avoid SDK sleeps/retries after our budget.
+      resolved.rejectRateLimitedCalls = true;
     }
-    // Preserve the explicit opt-out and avoid SDK sleeps/retries after our budget.
-    resolved.rejectRateLimitedCalls = true;
   }
   return resolved;
+}
+
+export function resolveSlackWriteClientOptions(
+  options: WebClientOptions = {},
+  dispatcher = resolveSlackProxyDispatcher(),
+  authority?: SlackWriteAttemptAuthority,
+): WebClientOptions {
+  return bindSlackWriteClientOptions(
+    resolveSlackWriteClientTransportOptions(options, dispatcher),
+    authority,
+  );
 }
 
 export function resolveSlackLookupClientOptions(

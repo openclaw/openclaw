@@ -934,7 +934,7 @@ function scheduleDeliveredSourceReplyTranscriptMirror(params: {
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
-  "message.action": async ({ params, respond, context, client }) => {
+  "message.action": async ({ params, respond, context, client, signal }) => {
     const p = params;
     if (!assertValidParams(p, validateMessageActionParams, "message.action", respond)) {
       return;
@@ -1162,6 +1162,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   skipQueue: client?.internal?.agentRuntimeIdentity !== undefined,
                 }
               : {}),
+            abortSignal: signal,
           };
           let payload: unknown;
           if (canonicalAction) {
@@ -1237,7 +1238,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       },
     });
   },
-  send: async ({ params, respond, context, client }) => {
+  send: async ({ params, respond, context, client, signal }) => {
     const p = params;
     if (!assertValidParams(p, validateSendParams, "send", respond)) {
       return;
@@ -1511,6 +1512,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             silent: request.silent,
             formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
             onDeliveryResult: commitOutboundSessionRoute,
+            signal,
             // Runtime-bound sends cannot outlive their operational run. Keep
             // recovery from replaying them after the live authority closes.
             onPlatformSendDispatch,
