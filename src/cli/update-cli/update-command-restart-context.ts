@@ -121,6 +121,7 @@ export async function prepareUpdateRestart(
           serviceState.env,
           gatewayPort,
           serviceState.command?.programArguments,
+          serviceState.command?.sourcePath,
         );
       }
     } catch (err) {

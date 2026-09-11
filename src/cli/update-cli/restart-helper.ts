@@ -22,6 +22,7 @@ import {
 } from "../../daemon/schtasks-layout.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "../../process/exec-spawn.js";
+import { renderLaunchdPlistSelection } from "./restart-helper-launchd.js";
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -136,6 +137,7 @@ export async function prepareRestartScript(
   env: NodeJS.ProcessEnv = process.env,
   gatewayPort: number = DEFAULT_GATEWAY_PORT,
   windowsGatewayArgv: readonly string[] = [],
+  launchAgentPlistSourcePath?: string,
 ): Promise<string | null> {
   const timestamp = Date.now();
   const platform = process.platform;
@@ -192,11 +194,7 @@ exit "$status"
       const escaped = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
-      // Resolve HOME at generation time via env/process.env to match launchd.ts,
-      // and shell-escape the label in the plist filename to prevent injection.
-      const home = normalizeOptionalString(env.HOME) || process.env.HOME || os.homedir();
-      const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
-      const escapedPlistPath = shellEscape(plistPath);
+      const plistSelection = renderLaunchdPlistSelection(env, label, launchAgentPlistSourcePath);
       const logSetup = renderPosixRestartLogSetup({ ...process.env, ...env });
       const systemOwnershipProbe = renderSystemLaunchDaemonOwnershipShellProbe(label);
       filename = `openclaw-restart-${timestamp}.sh`;
@@ -210,6 +208,7 @@ sleep 1
 ${logSetup}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${shellEscapeRestartLogValue(label)}' >&2
 ${systemOwnershipProbe}
+${plistSelection}
 # Try kickstart first (works when the service is still registered).
 # If it fails (e.g. after bootout), clear any persisted disabled state,
 # then re-register via bootstrap. Bootstrap loads RunAtLoad agents, so the
@@ -222,7 +221,7 @@ if [ -n "$openclaw_system_launchd_conflict" ]; then
   printf '[%s] openclaw restart blocked source=update reason=%s\n' "$(date -u +%FT%TZ)" "$openclaw_system_launchd_detail" >&2
 elif ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
   launchctl enable 'gui/${uid}/${escaped}'
-  if launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'; then
+  if launchctl bootstrap 'gui/${uid}' "$openclaw_launch_agent_plist"; then
     status=0
   else
     launchctl kickstart -k 'gui/${uid}/${escaped}'

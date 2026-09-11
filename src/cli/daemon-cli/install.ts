@@ -30,7 +30,11 @@ import {
   assertGatewayServiceUpdateCurrent,
   isUpdateOwnedGatewayServiceCommand,
 } from "../../daemon/service-update-authority.js";
-import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
+import {
+  readGatewayServiceCommandForMutation,
+  resolveGatewayService,
+  type GatewayServiceCommandConfig,
+} from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd-exec.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
@@ -193,13 +197,16 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
     loaded = false;
   }
-  let existingServiceCommand: GatewayServiceCommandConfig | null;
+  let installCommand: Awaited<ReturnType<typeof readGatewayServiceCommandForMutation>>;
   try {
-    existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
+    installCommand = await readGatewayServiceCommandForMutation(service, process.env, {
+      requireEffective: true,
+    });
   } catch {
     fail("SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.");
     return;
   }
+  const existingServiceCommand = installCommand.command;
   const existingManagedCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
   const existingServiceEnv = existingManagedCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
@@ -224,7 +231,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return false;
     }
   };
-  if ((opts.force || !loaded) && !(await assertWritable())) {
+  if ((opts.force || !loaded || installCommand.kind === "relocated") && !(await assertWritable())) {
     return;
   }
 
@@ -389,7 +396,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn("No gateway.mode found. Set gateway.mode=local for managed gateway install.");
   }
 
-  if (loaded && !opts.force && !autoRefreshMessage && !opts.deferActivation) {
+  if (
+    loaded &&
+    !opts.force &&
+    !autoRefreshMessage &&
+    !opts.deferActivation &&
+    installCommand.kind !== "relocated"
+  ) {
     emit({
       ok: true,
       result: "already-installed",
