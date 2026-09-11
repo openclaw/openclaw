@@ -20,6 +20,7 @@ import {
   providerOpenAiExtensionTestRoots,
 } from "./vitest.extension-provider-paths.mjs";
 import { qaExtensionTestRoots } from "./vitest.extension-qa-paths.mjs";
+import { teamReportsExtensionTestRoots } from "./vitest.extension-team-reports-paths.mjs";
 import { telegramExtensionTestRoots } from "./vitest.extension-telegram-paths.mjs";
 import { voiceCallExtensionTestRoots } from "./vitest.extension-voice-call-paths.mjs";
 import { whatsAppExtensionTestRoots } from "./vitest.extension-whatsapp-paths.mjs";
@@ -45,6 +46,7 @@ export const extensionCatchAllExcludedTestRoots = [
   providerOpenAiExtensionTestRoots,
   providerExtensionTestRoots,
   qaExtensionTestRoots,
+  teamReportsExtensionTestRoots,
   telegramExtensionTestRoots,
   voiceCallExtensionTestRoots,
   whatsAppExtensionTestRoots,

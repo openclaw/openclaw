@@ -117,7 +117,10 @@ function fetchPath(
 
 beforeAll(async () => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-http-"));
-  store = await createTeamReportsStore({ stateDir: directory });
+  store = await createTeamReportsStore({
+    stateDir: directory,
+    workerModuleUrl: new URL("./store.worker.ts", import.meta.url),
+  });
   const avatarReport = report("day", "2026-08-19");
   avatarReport.members = avatarPeople.map((person) => ({
     login: person.github[0] ?? "",
@@ -464,7 +467,10 @@ describe("Team Reports HTTP responses", () => {
   });
 
   it("reads current overview organizations and prefers the displayed report's organizations", async () => {
-    const emptyStore = await createTeamReportsStore({ stateDir: path.join(directory, "empty") });
+    const emptyStore = await createTeamReportsStore({
+      stateDir: path.join(directory, "empty"),
+      workerModuleUrl: new URL("./store.worker.ts", import.meta.url),
+    });
     try {
       for (const name of ["first-organization", "new <organization>"]) {
         currentOrgs = [name];

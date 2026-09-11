@@ -16,7 +16,7 @@ type OpenClawAgentSqlitePathOptions = {
   path?: string;
 };
 
-const INCOGNITO_AGENT_SQLITE_BASENAME = "incognito-openclaw-agent.sqlite";
+export const INCOGNITO_AGENT_SQLITE_BASENAME = "incognito-openclaw-agent.sqlite";
 
 /** Resolve the SQLite file for one normalized agent id. */
 export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentSqlitePathOptions): string {

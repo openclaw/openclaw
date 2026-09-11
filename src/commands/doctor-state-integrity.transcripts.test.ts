@@ -168,7 +168,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
 
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const keys = listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
+    const keys = await listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
     const recoveredKey = keys.find((key) => key.startsWith("agent:ops:heartbeat-recovered-"));
     expect(keys).not.toContain(mainKey);
     if (!recoveredKey) {
@@ -206,7 +206,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
 
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const keys = listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
+    const keys = await listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
     expect(keys).toEqual([mainKey]);
     expect(keys.filter((key) => key.startsWith("agent:ops:heartbeat-recovered-"))).toStrictEqual(
       [],
@@ -259,7 +259,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
 
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const keys = listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
+    const keys = await listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
     const recoveredKeys = keys.filter((key) => key.startsWith("agent:ops:heartbeat-recovered-"));
     expect(keys).not.toContain(mainKey);
     expect(recoveredKeys).toHaveLength(1);

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./src/config.js";
 import { registerTeamReportsGatewayMethods } from "./src/gateway-methods.js";
@@ -77,7 +77,18 @@ export default definePluginEntry({
           delete summaryOptions.model;
         }
         startingStore = (async () => {
-          const nextStore = await createTeamReportsStore({ stateDir: ctx.stateDir });
+          if (!api.runtimeSource) {
+            throw new Error(
+              "Team Reports requires an OpenClaw host with runtime entrypoint metadata",
+            );
+          }
+          const nextStore = await createTeamReportsStore({
+            stateDir: ctx.stateDir,
+            workerModuleUrl: new URL(
+              `./src/store.worker${path.extname(api.runtimeSource)}`,
+              pathToFileURL(api.runtimeSource),
+            ),
+          });
           if (retired || currentGeneration !== generation) {
             await nextStore.close();
             return;
