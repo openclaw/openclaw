@@ -1976,33 +1976,168 @@ describe("startGatewayConfigReloader", () => {
     }
   });
 
-  it("reconciles disk changes made during initial candidate preparation", async () => {
-    const gate = createDeferred();
-    let initial = true;
-    let disk = makeSnapshot({ config: { gateway: { reload: {} } }, hash: "initial-raw-hash" });
-    const harness = createReloaderHarness(async () => disk, {
-      prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => {
-        if (initial) {
-          initial = false;
-          await gate.promise;
-        }
-        return { runtimeConfig, compareConfig: sourceConfig };
+  it.each([true, false])(
+    "keeps unchanged initial watch scans out of config candidate ownership (exists: %s)",
+    async (exists) => {
+      const gate = createDeferred<ConfigFileSnapshot>();
+      const observed = vi.fn();
+      const harness = createReloaderHarness(() => gate.promise, {
+        initialSnapshotRawHash: exists ? "initial-raw-hash" : null,
+        prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => ({
+          runtimeConfig,
+          compareConfig: sourceConfig,
+        }),
+        onConfigCandidateObserved: observed,
+      });
+      try {
+        await harness.reloader.ready;
+        harness.watcher.emit("ready");
+        expect(observed).not.toHaveBeenCalled();
+        gate.resolve(makeSnapshot({ exists, hash: exists ? "initial-raw-hash" : undefined }));
+        await vi.runAllTimersAsync();
+        expect(observed).not.toHaveBeenCalled();
+        expect(harness.onConfigAccepted).not.toHaveBeenCalled();
+        expect(harness.onRestart).not.toHaveBeenCalled();
+      } finally {
+        gate.resolve(makeSnapshot());
+        await harness.reloader.stop();
+      }
+    },
+  );
+
+  it.each(["root", "include", "created root"] as const)(
+    "reconciles %s changes made during initial candidate preparation",
+    async (changedFile) => {
+      const gate = createDeferred();
+      let initial = true;
+      let disk = makeSnapshot({ config: { gateway: { reload: {} } }, hash: "initial-raw-hash" });
+      const includedPaths = changedFile === "include" ? ["/tmp/hooks.json5"] : [];
+      const harness = createReloaderHarness(async () => disk, {
+        initialSnapshotRawHash: changedFile === "created root" ? null : "initial-raw-hash",
+        initialIncludedPaths: includedPaths,
+        prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => {
+          if (initial) {
+            initial = false;
+            await gate.promise;
+          }
+          return { runtimeConfig, compareConfig: sourceConfig };
+        },
+      });
+      try {
+        const nextConfig = { gateway: { reload: {} }, hooks: { enabled: true } };
+        disk = makeSnapshot({
+          config: nextConfig,
+          hash: changedFile === "include" ? "initial-raw-hash" : "written-during-preparation",
+          includedPaths,
+        });
+        gate.resolve();
+        await harness.reloader.ready;
+        expect(harness.onHotReload).not.toHaveBeenCalled();
+        harness.watcher.emit("ready");
+        await vi.runAllTimersAsync();
+        expect(getOnlyHotReloadCall(harness)[1]).toEqual(nextConfig);
+      } finally {
+        gate.resolve();
+        await harness.reloader.stop();
+      }
+    },
+  );
+
+  it("updates watch dependencies when an initial include resolves to unchanged config", async () => {
+    const config = { gateway: { reload: {} } };
+    const harness = createReloaderHarness(
+      async () =>
+        makeSnapshot({ config, hash: "initial-raw-hash", includedPaths: ["/tmp/new.json5"] }),
+      {
+        initialIncludedPaths: ["/tmp/old.json5"],
+        prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => ({
+          runtimeConfig,
+          compareConfig: sourceConfig,
+        }),
       },
-    });
+    );
     try {
-      const nextConfig = { gateway: { reload: {} }, hooks: { enabled: true } };
-      disk = makeSnapshot({ config: nextConfig, hash: "written-during-preparation" });
-      gate.resolve();
       await harness.reloader.ready;
-      expect(harness.onHotReload).not.toHaveBeenCalled();
       harness.watcher.emit("ready");
       await vi.runAllTimersAsync();
-      expect(getOnlyHotReloadCall(harness)[1]).toEqual(nextConfig);
+      expect(chokidar.watch).toHaveBeenLastCalledWith(
+        ["/tmp/openclaw.json", "/tmp/new.json5"],
+        expect.any(Object),
+      );
+      expect(harness.onConfigAccepted).toHaveBeenCalledTimes(1);
     } finally {
-      gate.resolve();
       await harness.reloader.stop();
     }
   });
+
+  it("reconciles through the reload owner after an initial watch read rejects", async () => {
+    const nextConfig = { gateway: { reload: {} }, hooks: { enabled: true } };
+    const readSnapshot = vi
+      .fn(async () => makeSnapshot({ config: nextConfig, hash: "new-disk-config" }))
+      .mockRejectedValueOnce(new Error("initial read failed"));
+    const harness = createReloaderHarness(readSnapshot, {
+      prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => ({
+        runtimeConfig,
+        compareConfig: sourceConfig,
+      }),
+    });
+    try {
+      await harness.reloader.ready;
+      harness.watcher.emit("ready");
+      await vi.runAllTimersAsync();
+      expect(getOnlyHotReloadCall(harness)[1]).toEqual(nextConfig);
+      expect(harness.log.warn).toHaveBeenCalledWith(expect.stringContaining("initial read failed"));
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  it.each(["write", "stop", "replace"] as const)(
+    "discards an initial watch read superseded by %s",
+    async (supersededBy) => {
+      const gate = createDeferred<ConfigFileSnapshot>();
+      const observed = vi.fn();
+      const harness = createReloaderHarness(() => gate.promise, {
+        prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => ({
+          runtimeConfig,
+          compareConfig: sourceConfig,
+        }),
+        onConfigCandidateObserved: observed,
+      });
+      let stopFinished = false;
+      let stopping: Promise<void> | undefined;
+      try {
+        await harness.reloader.ready;
+        harness.watcher.emit("ready");
+        expect(observed).not.toHaveBeenCalled();
+        if (supersededBy === "write") {
+          harness.emitWrite(makeZeroDebounceHookWrite("newer-write"));
+          await vi.runAllTimersAsync();
+          expect(getOnlyHotReloadCall(harness)[1].hooks?.enabled).toBe(true);
+        } else if (supersededBy === "stop") {
+          stopping = harness.reloader.stop().then(() => {
+            stopFinished = true;
+          });
+          await Promise.resolve();
+          expect(stopFinished).toBe(false);
+        } else {
+          harness.watcher.emit("error", new Error("watch failed"));
+        }
+        observed.mockClear();
+        gate.resolve(makeSnapshot({ config: { hooks: { enabled: false } }, hash: "stale-read" }));
+        await stopping;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(observed).not.toHaveBeenCalled();
+        expect(harness.onRestart).not.toHaveBeenCalled();
+        if (supersededBy === "stop") {
+          expect(stopFinished).toBe(true);
+        }
+      } finally {
+        gate.resolve(makeSnapshot());
+        await harness.reloader.stop();
+      }
+    },
+  );
 
   it.each(["resolve", "reject"] as const)(
     "owns shutdown while initial candidate preparation is pending: %s",

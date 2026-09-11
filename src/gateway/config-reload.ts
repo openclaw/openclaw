@@ -331,7 +331,7 @@ export function startGatewayConfigReloader(opts: {
       clearTimeout(debounceTimer);
     }
     debounceTimer = setTimeout(() => {
-      startTrackedReload();
+      trackReload(runReload());
     }, wait);
   };
   const schedule = () => {
@@ -1018,8 +1018,7 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  function startTrackedReload(): void {
-    const reload = runReload();
+  function trackReload(reload: Promise<void>): void {
     activeReloads.add(reload);
     // A quick invocation can only set `pending` and finish while the owner run
     // remains active. Track every promise so it cannot replace that owner.
@@ -1113,7 +1112,43 @@ export function startGatewayConfigReloader(opts: {
   let degradedToPolling = false;
   let watcherUsesPolling = false;
 
-  const createWatcher = (reconcileAfterReady = false) => {
+  const reconcileInitialWatch = async (source: NonNullable<typeof watcher>) => {
+    const epoch = configWriteEpoch;
+    const isCurrent = () => !stopped && watcher === source && configWriteEpoch === epoch;
+    try {
+      const snapshot = await opts.readSnapshot(currentRuntimeEnvSourceConfig);
+      if (!isCurrent()) {
+        return;
+      }
+      const includedPaths = snapshot.includedPaths ?? [];
+      const hasIncludes = acceptedIncludedPaths.size > 0 || includedPaths.length > 0;
+      const sameIncludedPaths =
+        acceptedIncludedPaths.size === includedPaths.length &&
+        includedPaths.every((path) => acceptedIncludedPaths.has(path));
+      const sameRoot = snapshot.exists
+        ? typeof snapshot.hash === "string" && snapshot.hash === currentRawHash
+        : currentRawHash === null;
+      // Without includes, equal authored bytes prove the initial scan found no disk edit.
+      // Included files can change without changing the root file hash.
+      if (
+        snapshot.valid &&
+        sameRoot &&
+        (!hasIncludes ||
+          (sameIncludedPaths &&
+            diffConfigPaths(currentSourceConfig, snapshot.sourceConfig).length === 0))
+      ) {
+        return;
+      }
+    } catch (err) {
+      if (!isCurrent()) {
+        return;
+      }
+      opts.log.warn(`config reload initial watch check failed: ${String(err)}`);
+    }
+    scheduleExternalRefresh();
+  };
+
+  const createWatcher = (reconcileAfterReady?: "initial" | "replacement") => {
     if (stopped) {
       return;
     }
@@ -1142,10 +1177,14 @@ export function startGatewayConfigReloader(opts: {
     next.on("ready", () => {
       opts.onWatcherReady?.();
       if (reconcileAfterReady) {
-        // Replacement watchers suppress their initial add event. Reconcile only after the
-        // scan completes, and ignore a watcher that failed again before reaching ready.
+        // Initial add events are suppressed. Reconcile after the scan, ignoring a
+        // watcher that was replaced or stopped before reaching ready.
         if (!stopped && watcher === next) {
-          scheduleExternalRefresh();
+          if (reconcileAfterReady === "initial") {
+            trackReload(reconcileInitialWatch(next));
+          } else {
+            scheduleExternalRefresh();
+          }
         }
       }
     });
@@ -1175,7 +1214,7 @@ export function startGatewayConfigReloader(opts: {
         );
         watcherRecreateTimer = setTimeout(() => {
           watcherRecreateTimer = null;
-          createWatcher(true);
+          createWatcher("replacement");
         }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
         return;
       }
@@ -1196,7 +1235,7 @@ export function startGatewayConfigReloader(opts: {
     );
     watcherRecreateTimer = setTimeout(() => {
       watcherRecreateTimer = null;
-      createWatcher(true);
+      createWatcher("replacement");
     }, backoff);
   };
 
@@ -1227,7 +1266,7 @@ export function startGatewayConfigReloader(opts: {
     }
     watcher = null;
     watcherUsesPolling = false;
-    createWatcher(true);
+    createWatcher("replacement");
   };
 
   const observeCandidateWatchedPaths = async (includedPaths: readonly string[]) => {
@@ -1318,7 +1357,9 @@ export function startGatewayConfigReloader(opts: {
     currentPluginInstallRecords = initialPluginInstallRecords;
     // Async preparation can outlive disk changes before the initial watch scan.
     createWatcher(
-      opts.prepareConfigCandidate !== undefined || opts.initialPluginInstallRecords === undefined,
+      opts.prepareConfigCandidate !== undefined || opts.initialPluginInstallRecords === undefined
+        ? "initial"
+        : undefined,
     );
     initialized = true;
     if (pendingInProcessConfig || pluginMetadataRefreshRequests > pluginMetadataRefreshApplied) {
