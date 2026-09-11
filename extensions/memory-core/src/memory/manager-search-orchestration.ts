@@ -8,6 +8,7 @@ import {
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemoryIndexIdentityState,
   type MemorySearchManager,
   type MemorySearchResult,
   type MemorySource,
@@ -217,8 +218,24 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           providerKeyKnown: this.providerInitialized,
         });
       }
+      // A pending OpenClaw chunking upgrade keeps the stored keyword rows
+      // readable: the resolver only marks chunkingVersionOnly when every
+      // configuration-owned constraint still matches, so scope or model changes
+      // still fail closed here.
+      const chunkingUpgradePendingKeywordOnly = (state: MemoryIndexIdentityState): boolean =>
+        state.status === "mismatched" &&
+        state.owner === "openclaw" &&
+        state.code === "chunking_version" &&
+        state.chunkingVersionOnly === true &&
+        this.fts.enabled &&
+        this.fts.available;
       if (repairedIndexIdentity.status !== "valid") {
-        return [];
+        if (!chunkingUpgradePendingKeywordOnly(repairedIndexIdentity)) {
+          return [];
+        }
+        log.warn(
+          "memory search: chunking upgrade rebuild is pending; serving the existing keyword index",
+        );
       }
       // No watcher can observe later edits after kernel capacity exhaustion.
       // Record a fresh generation at the search boundary so detached maintenance
@@ -240,6 +257,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       }
       // Bootstrap and identity repair may publish a new generation. Acquire the
       // read lease only after those writers finish so first search cannot wait on itself.
+      let effectiveIdentity: MemoryIndexIdentityState = repairedIndexIdentity;
       for (let identityAttempt = 0; identityAttempt < 2; identityAttempt += 1) {
         releaseGeneration = await acquireMemoryIndexReadGeneration(
           this.settings.store.databasePath,
@@ -248,10 +266,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         if (embeddingBootstrapKeywordOnly) {
           break;
         }
+        // Recompute under the lease: a publisher that queued ahead of this read
+        // may have replaced the generation the earlier eligibility was based on.
         const leasedIdentity = this.refreshIndexIdentityDirty({
           providerKeyKnown: this.providerInitialized,
         });
-        if (leasedIdentity.status === "valid") {
+        effectiveIdentity = leasedIdentity;
+        if (
+          leasedIdentity.status === "valid" ||
+          chunkingUpgradePendingKeywordOnly(leasedIdentity)
+        ) {
           break;
         }
         releaseGeneration();
@@ -295,7 +319,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           activeProjectKeys: opts?.activeProjectKeys,
         });
 
-      const keywordOnly = embeddingBootstrapKeywordOnly || !this.provider || opts?.lexicalOnly;
+      const keywordOnly =
+        embeddingBootstrapKeywordOnly ||
+        chunkingUpgradePendingKeywordOnly(effectiveIdentity) ||
+        !this.provider ||
+        opts?.lexicalOnly;
       const loadKeywordResults = async () => {
         const results =
           (keywordOnly || hybrid.enabled) && this.fts.enabled && this.fts.available

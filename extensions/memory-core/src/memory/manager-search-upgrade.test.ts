@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -101,6 +103,75 @@ describe("memory search after a chunking upgrade", () => {
       code: "model",
       owner: "configuration",
     });
+  });
+
+  it("keeps keyword results readable while an upgrade rebuild cannot embed", async () => {
+    const cfg = fixture.createConfig({});
+    await seedIndex(cfg);
+    // The changed file forces the upgrade rebuild to request a fresh embedding.
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-12.md"),
+      "# Log\nAlpha memory line changed after the prior index was published.",
+    );
+    fixture.provider.embedBatchPermanentFailure = Object.assign(
+      new Error("openai embeddings failed: 429 insufficient_quota"),
+      { status: 429, code: "insufficient_quota" },
+    );
+    const manager = await fixture.getFreshManager(cfg);
+    try {
+      const results = await manager.search("alpha");
+      expect(results).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+      );
+      expect(manager.status().custom?.indexIdentity).toMatchObject({
+        status: "mismatched",
+        code: "chunking_version",
+        owner: "openclaw",
+        chunkingVersionOnly: true,
+      });
+    } finally {
+      await manager.close();
+      await closeAllMemorySearchManagers();
+      closeOpenClawAgentDatabasesForTest();
+    }
+  });
+
+  it("fails closed when a pending upgrade coincides with a changed scope", async () => {
+    const wikiPath = path.join(fixture.paths.root, "wiki");
+    await fs.mkdir(wikiPath, { recursive: true });
+    await fs.writeFile(path.join(wikiPath, "note.md"), "# Wiki\nWiki alpha note.");
+    const cfgWithWiki = fixture.createConfig({ extraPaths: [wikiPath] });
+    const cfgWithoutWiki = fixture.createConfig({});
+    await seedIndex(cfgWithWiki);
+    // The changed file forces the upgrade rebuild to request a fresh embedding.
+    // Without it the embedding cache satisfies the whole rebuild, which then
+    // republishes a valid index under the narrowed scope and never reaches the
+    // fail-closed path under test.
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-12.md"),
+      "# Log\nAlpha memory line changed after the prior index was published.",
+    );
+    fixture.provider.embedBatchPermanentFailure = Object.assign(
+      new Error("openai embeddings failed: 429 insufficient_quota"),
+      { status: 429, code: "insufficient_quota" },
+    );
+    const manager = await fixture.getFreshManager(cfgWithoutWiki);
+    try {
+      await expect(manager.search("alpha", { lexicalOnly: true })).resolves.toEqual([]);
+      expect(manager.status().custom?.indexIdentity).toMatchObject({
+        status: "mismatched",
+        code: "chunking_version",
+        owner: "openclaw",
+      });
+      expect(manager.status().custom?.indexIdentity).not.toHaveProperty(
+        "chunkingVersionOnly",
+        true,
+      );
+    } finally {
+      await manager.close();
+      await closeAllMemorySearchManagers();
+      closeOpenClawAgentDatabasesForTest();
+    }
   });
 
   it("uses current configured settings when an eligible upgrade rebuild runs", async () => {

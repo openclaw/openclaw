@@ -211,6 +211,9 @@ export type MemoryIndexIdentityState =
       | {
           code: "provenance_version" | "chunking_version";
           owner: "openclaw";
+          // Set only when every configuration-owned constraint still matches, so
+          // a pending OpenClaw chunking upgrade cannot mask a narrowed scope.
+          chunkingVersionOnly?: boolean;
         }
       | {
           code:
@@ -261,7 +264,15 @@ export function resolveMemoryIndexIdentityDiagnostic(
     identity.owner === "openclaw" &&
     (identity.code === "provenance_version" || identity.code === "chunking_version")
   ) {
-    return { status: "mismatched", reason, code: identity.code, owner: "openclaw" };
+    return {
+      status: "mismatched",
+      reason,
+      code: identity.code,
+      owner: "openclaw",
+      ...(identity.code === "chunking_version" && identity.chunkingVersionOnly === true
+        ? { chunkingVersionOnly: true }
+        : {}),
+    };
   }
   if (
     identity.owner === "configuration" &&

@@ -198,7 +198,15 @@ async function finalizeMemorySearchToolQuery(params: {
   const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
   const status = params.status ?? active.manager.status();
   const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
-  if (pausedIndexIdentity) {
+  // A pending chunking upgrade on an otherwise matching index degrades to
+  // keyword-only results instead of pausing memory search; every other
+  // mismatch still withholds all candidates.
+  const chunkingUpgradeKeywordOnly =
+    pausedIndexIdentity?.status === "mismatched" &&
+    pausedIndexIdentity.owner === "openclaw" &&
+    pausedIndexIdentity.code === "chunking_version" &&
+    pausedIndexIdentity.chunkingVersionOnly === true;
+  if (pausedIndexIdentity && !chunkingUpgradeKeywordOnly) {
     return {
       searchStartedAt: startedAt,
       status,

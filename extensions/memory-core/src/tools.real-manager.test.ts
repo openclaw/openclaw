@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { MEMORY_SEARCH_DEADLINE_CONTROL } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  MEMORY_CHUNKING_VERSION,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 // Memory Core integration tests exercise the real SQLite search manager through tools.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
@@ -740,6 +744,117 @@ describe("memory_search real manager", () => {
       await execution.catch(() => undefined);
       await cleanupFinished.promise;
       getSpy.mockRestore();
+    }
+  });
+
+  // Seeds a published index, then reopens its metadata as an older runtime's
+  // index so the next search sees a pending OpenClaw chunking upgrade.
+  async function seedPriorChunkingVersionIndex(
+    cfg: Parameters<typeof fixture.getFreshManager>[0],
+  ): Promise<string> {
+    const manager = await fixture.getFreshManager(cfg);
+    await manager.sync({ reason: "test", force: true });
+    const dbPath = manager.status().dbPath;
+    if (!dbPath) {
+      throw new Error("memory search manager database path missing");
+    }
+    await manager.close();
+    await closeAllMemorySearchManagers();
+    closeOpenClawAgentDatabasesForTest();
+    const db = new DatabaseSync(dbPath);
+    try {
+      const row = db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+        .get();
+      if (typeof row?.value !== "string") {
+        throw new Error("fixture index metadata is missing");
+      }
+      const meta = JSON.parse(row.value) as Record<string, unknown>;
+      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
+        JSON.stringify({ ...meta, chunkingVersion: MEMORY_CHUNKING_VERSION - 1 }),
+      );
+    } finally {
+      db.close();
+    }
+    return dbPath;
+  }
+
+  it("serves keyword results through memory_search while an upgrade rebuild cannot embed", async () => {
+    const cfg = fixture.createConfig({ minScore: 0 });
+    const filePath = path.join(fixture.paths.memory, "upgrade-fallback.md");
+    await fs.writeFile(filePath, "UpgradeKeywordFallback()\nfinish()");
+    await seedPriorChunkingVersionIndex(cfg);
+    // The changed file forces the upgrade rebuild to request a fresh embedding
+    // instead of republishing from the embedding cache.
+    await fs.writeFile(
+      filePath,
+      "UpgradeKeywordFallback() changed after the prior index was published.",
+    );
+    fixture.provider.embedBatchPermanentFailure = Object.assign(
+      new Error("openai embeddings failed: 429 insufficient_quota"),
+      { status: 429, code: "insufficient_quota" },
+    );
+
+    const tool = createMemorySearchTool({
+      config: cfg,
+      agentId: "main",
+      oneShotCliRun: true,
+    });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+    try {
+      const result = await tool.execute("upgrade-keyword-fallback", {
+        query: "UpgradeKeywordFallback",
+        corpus: "memory",
+      });
+      expect(result.details).toMatchObject({
+        results: [expect.objectContaining({ path: "memory/upgrade-fallback.md" })],
+      });
+    } finally {
+      await closeAllMemorySearchManagers();
+      closeOpenClawAgentDatabasesForTest();
+    }
+  });
+
+  it("pauses memory_search when a pending upgrade coincides with a changed scope", async () => {
+    const wikiPath = path.join(fixture.paths.root, "wiki");
+    await fs.mkdir(wikiPath, { recursive: true });
+    await fs.writeFile(path.join(wikiPath, "note.md"), "UpgradeScopeWiki alpha note.");
+    const cfgWithWiki = fixture.createConfig({ extraPaths: [wikiPath], minScore: 0 });
+    const cfgWithoutWiki = fixture.createConfig({ minScore: 0 });
+    const filePath = path.join(fixture.paths.memory, "upgrade-scope.md");
+    await fs.writeFile(filePath, "UpgradeScopeMemory alpha note.");
+    await seedPriorChunkingVersionIndex(cfgWithWiki);
+    // The changed file forces the upgrade rebuild to request a fresh embedding;
+    // without it the embedding cache satisfies the whole rebuild, which then
+    // republishes a valid index under the narrowed scope.
+    await fs.writeFile(filePath, "UpgradeScopeMemory note changed after the prior index.");
+    fixture.provider.embedBatchPermanentFailure = Object.assign(
+      new Error("openai embeddings failed: 429 insufficient_quota"),
+      { status: 429, code: "insufficient_quota" },
+    );
+
+    const tool = createMemorySearchTool({
+      config: cfgWithoutWiki,
+      agentId: "main",
+      oneShotCliRun: true,
+    });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+    try {
+      const result = await tool.execute("upgrade-changed-scope", {
+        query: "UpgradeScopeMemory",
+        corpus: "memory",
+      });
+      expect(result.details).toMatchObject({
+        unavailable: true,
+        error: expect.stringContaining("chunking"),
+      });
+    } finally {
+      await closeAllMemorySearchManagers();
+      closeOpenClawAgentDatabasesForTest();
     }
   });
 });

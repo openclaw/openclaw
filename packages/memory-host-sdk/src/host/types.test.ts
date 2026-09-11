@@ -71,6 +71,29 @@ describe("memory search staleness", () => {
     });
   });
 
+  it("preserves the keyword-only marker only when a pending upgrade carries it", () => {
+    const base = {
+      status: "mismatched",
+      reason: "index chunking implementation changed",
+      code: "chunking_version",
+      owner: "openclaw",
+    } as const;
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        backend: "builtin",
+        provider: "openai",
+        custom: { indexIdentity: { ...base, chunkingVersionOnly: true } },
+      }),
+    ).toEqual({ ...base, chunkingVersionOnly: true });
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        backend: "builtin",
+        provider: "openai",
+        custom: { indexIdentity: { ...base } },
+      }),
+    ).toEqual({ ...base });
+  });
+
   it("does not claim provider cost for a keyword-only index", () => {
     expect(
       resolveMemorySearchStaleness(
