@@ -20,6 +20,7 @@ import type { BundledProviderPolicySurface } from "../../../plugins/provider-pol
 import { createColdPluginFixture } from "../../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { closeOpenClawStateDatabaseByPath } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
 import { VERSION } from "../../../version.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import {
@@ -66,9 +67,7 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
     throw new Error("Expected record");
   }
   const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
+  expectObjectFields(actual, expected);
   return actual;
 }
 
