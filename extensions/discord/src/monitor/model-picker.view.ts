@@ -14,7 +14,6 @@ import {
   Separator,
   StringSelectMenu,
   TextDisplay,
-  type MessagePayloadObject,
   type TopLevelComponents,
 } from "../internal/discord.js";
 import {
@@ -30,7 +29,6 @@ import {
   normalizeModelPickerPage,
   type DiscordModelPickerBucket,
   type DiscordModelPickerCommandContext,
-  type DiscordModelPickerLayout,
   type DiscordModelPickerModelPage,
   type DiscordModelPickerPage,
   type DiscordModelPickerProviderItem,
@@ -57,7 +55,6 @@ type CompactRuntimeState = {
 };
 
 type DiscordModelPickerRenderShellParams = {
-  layout: DiscordModelPickerLayout;
   title: string;
   detailLines: string[];
   rows: DiscordModelPickerRow[];
@@ -69,8 +66,6 @@ type DiscordModelPickerRenderShellParams = {
 };
 
 type DiscordModelPickerRenderedView = {
-  layout: DiscordModelPickerLayout;
-  content?: string;
   components: TopLevelComponents[];
 };
 
@@ -81,7 +76,6 @@ type DiscordModelPickerProviderViewParams = {
   page?: number;
   providerBucket?: string;
   currentModel?: string;
-  layout?: DiscordModelPickerLayout;
 };
 
 type DiscordModelPickerModelViewParams = {
@@ -99,7 +93,6 @@ type DiscordModelPickerModelViewParams = {
   pendingModelIndex?: number;
   pendingRuntime?: string;
   quickModels?: string[];
-  layout?: DiscordModelPickerLayout;
 };
 
 function parseCurrentModelRef(raw?: string): DiscordModelPickerCurrentModelRef | null {
@@ -269,15 +262,6 @@ function resolveCompactRuntimeState(params: {
 function buildRenderedShell(
   params: DiscordModelPickerRenderShellParams,
 ): DiscordModelPickerRenderedView {
-  if (params.layout === "classic") {
-    const lines = [params.title, ...params.detailLines, "", params.footer].filter(Boolean);
-    return {
-      layout: "classic",
-      content: lines.join("\n"),
-      components: params.rows,
-    };
-  }
-
   const containerComponents: Array<TextDisplay | Separator | DiscordModelPickerRow> = [
     new TextDisplay(`## ${params.title}`),
   ];
@@ -300,7 +284,6 @@ function buildRenderedShell(
 
   const container = new Container(containerComponents);
   return {
-    layout: "v2",
     components: [container],
   };
 }
@@ -709,7 +692,6 @@ export function renderDiscordModelPickerProvidersView(
       ? `Showing page ${page.page}/${page.totalPages} · ${page.totalItems} providers total`
       : `All ${page.totalItems} providers shown`;
   return buildRenderedShell({
-    layout: params.layout ?? "v2",
     title: "Model Picker",
     detailLines,
     rows,
@@ -745,7 +727,6 @@ export function renderDiscordModelPickerModelsView(
     ];
 
     return buildRenderedShell({
-      layout: params.layout ?? "v2",
       title: "Model Picker",
       detailLines: [
         formatCurrentModelLine(params.currentModel),
@@ -826,7 +807,6 @@ export function renderDiscordModelPickerModelsView(
   }
 
   return buildRenderedShell({
-    layout: params.layout ?? "v2",
     title: "Model Picker",
     detailLines,
     preRowText: pendingLine,
@@ -847,7 +827,6 @@ type DiscordModelPickerRecentsViewParams = {
   page?: number;
   providerPage?: number;
   modelBucket?: string;
-  layout?: DiscordModelPickerLayout;
 };
 
 function formatRecentsButtonLabel(modelRef: string, suffix?: string): string {
@@ -920,7 +899,6 @@ export function renderDiscordModelPickerRecentsView(
   ]);
 
   return buildRenderedShell({
-    layout: params.layout ?? "v2",
     title: "Recents",
     detailLines: [
       "Models you've previously selected appear here.",
@@ -930,19 +908,5 @@ export function renderDiscordModelPickerRecentsView(
     rows,
     trailingRows: [backRow],
   });
-}
-
-export function toDiscordModelPickerMessagePayload(
-  view: DiscordModelPickerRenderedView,
-): MessagePayloadObject {
-  if (view.layout === "classic") {
-    return {
-      content: view.content,
-      components: view.components,
-    };
-  }
-  return {
-    components: view.components,
-  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

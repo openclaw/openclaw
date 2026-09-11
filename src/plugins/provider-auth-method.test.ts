@@ -2,25 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
+import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
 import type { ProviderPlugin } from "./types.js";
-
-const ensureCodexRuntimePluginForModelSelection = vi.hoisted(() => vi.fn());
-vi.mock("../commands/codex-runtime-plugin-install.js", () => ({
-  CODEX_RUNTIME_PLUGIN_ID: "codex",
-  ensureCodexRuntimePluginForModelSelection,
-}));
-
-const ensureCopilotRuntimePluginForModelSelection = vi.hoisted(() => vi.fn());
-vi.mock("../commands/copilot-runtime-plugin-install.js", () => ({
-  ensureCopilotRuntimePluginForModelSelection,
-}));
-
-const offerPostInstallMigrations = vi.hoisted(() => vi.fn());
-vi.mock("../wizard/setup.post-install-migration.js", () => ({
-  offerPostInstallMigrations,
-}));
-
-const { runProviderPluginAuthMethodUnpersisted } = await import("./provider-auth-choice.js");
 
 describe("runProviderPluginAuthMethodUnpersisted", () => {
   it("delegates remote browser destinations to structured wizard clients", async () => {

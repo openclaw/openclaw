@@ -85,6 +85,12 @@ export async function dispatchDiscordNativeAgentReply(params: {
         const payloadDelivered = await deliverDiscordInteractionReply({
           interaction: params.interaction,
           payload,
+          componentRoute: {
+            accountId: params.effectiveRoute.accountId,
+            agentId: params.effectiveRoute.agentId,
+            sessionKey:
+              params.ctxPayload.CommandTargetSessionKey ?? params.effectiveRoute.sessionKey,
+          },
           mediaLocalRoots: params.mediaLocalRoots,
           textLimit: resolveTextChunkLimit(params.cfg, "discord", params.accountId, {
             fallbackLimit: 2000,

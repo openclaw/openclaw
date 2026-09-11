@@ -201,6 +201,28 @@ describe("docs-link-audit", () => {
       broken: 1,
     },
     { name: "valid prose", source: ["[valid](/page)"], broken: 0 },
+    ...[false, true].map((anchors) => ({
+      name: `fenced raw HTML boundaries (anchors=${anchors})`,
+      anchors,
+      source: [
+        "```html",
+        "",
+        "<code>",
+        "```",
+        "",
+        '<ParamField path="live" type="string">',
+        "[Visible](/missing-page)",
+        "</ParamField>",
+        "",
+        "```html",
+        "</code>",
+        "```",
+        "",
+        "[valid](/page)",
+      ],
+      broken: 1,
+      diagnostics: ["page.mdx:7 :: /missing-page :: route/file not found"],
+    })),
     {
       name: "repeated occurrences beside protected literals",
       source: [

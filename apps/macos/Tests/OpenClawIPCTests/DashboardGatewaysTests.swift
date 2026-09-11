@@ -389,7 +389,10 @@ struct DashboardManagerGatewayTargetTests {
             #expect(auxiliary.controller.currentURL == replacementServer.url("/#token=primary-token"))
             #expect(auxiliary.controller._testDashboardDataStore === dataStore)
             #expect(!auxiliary.controller._testDashboardDataStore.isPersistent)
-            try auxiliary.controller.nativeBrowser.open(tabId: "mac-auxiliary", url: server.url("/reader/auxiliary"))
+            try auxiliary.controller.nativeBrowser.open(
+                tabId: "mac-auxiliary",
+                url: server.url("/reader/auxiliary"),
+                sessionKey: "")
             #expect(try #require(auxiliary.controller.nativeBrowser.webView(for: "mac-auxiliary"))
                 .configuration.websiteDataStore === dataStore)
 
@@ -421,7 +424,10 @@ struct DashboardManagerGatewayTargetTests {
             #expect(profileAutosaveName.hasPrefix("\(primaryAutosaveName)-\(studio)-"))
             #expect(replacement._testDashboardDataStore === dataStore)
             #expect(!replacement._testDashboardDataStore.isPersistent)
-            try replacement.nativeBrowser.open(tabId: "mac-replacement", url: server.url("/reader/replacement"))
+            try replacement.nativeBrowser.open(
+                tabId: "mac-replacement",
+                url: server.url("/reader/replacement"),
+                sessionKey: "")
             #expect(try #require(replacement.nativeBrowser.webView(for: "mac-replacement"))
                 .configuration.websiteDataStore === replacement._testDashboardDataStore)
         }

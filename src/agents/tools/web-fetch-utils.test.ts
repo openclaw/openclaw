@@ -11,6 +11,113 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
   const grin = String.fromCodePoint(0x1f600); // 😀 — an astral (> U+FFFF) code point
   const doubleT = String.fromCodePoint(0x1d54b); // 𝕋 — mathematical double-struck capital T
 
+  it.each(["meta\u00a0", "embed\u00a0"])(
+    "retains visible contents in the complete ordinary name %s",
+    async (name) => {
+      const result = await extractBasicHtmlContent({
+        html: `<${name}><p>Visible inside</p></${name}><p>Visible sibling</p>`,
+        extractMode: "text",
+      });
+      expect(result?.text).toBe("Visible inside\nVisible sibling");
+    },
+  );
+
+  it("filters real metadata and hidden ordinary names without removing the visible sibling", async () => {
+    const result = await extractBasicHtmlContent({
+      html: '<meta content="Secret metadata"><meta\u00a0 hidden>Secret body</meta\u00a0><p>Visible sibling</p>',
+      extractMode: "text",
+    });
+    expect(result?.text).toBe("Visible sibling");
+  });
+
+  it("matches HTML null replacement in complete tag names", async () => {
+    const result = await extractBasicHtmlContent({
+      html: "<div\u0000 hidden>Secret</div\uFFFD><p>Visible</p>",
+      extractMode: "text",
+    });
+    expect(result?.text).toBe("Visible");
+  });
+
+  it.each([
+    "<lin\u212a hidden>Secret</lin\u212a><p>Visible</p>",
+    "<trac\u212a hidden>Secret</trac\u212a><p>Visible</p>",
+    "<p hidden>Before<bloc\u212aquote>Secret</bloc\u212aquote></p><p>Visible</p>",
+  ])("keeps non-ASCII tag-name characters distinct from HTML names: %s", async (html) => {
+    const result = await extractBasicHtmlContent({ html, extractMode: "text" });
+    expect(result?.text).toContain("Visible");
+    expect(result?.text).not.toContain("Secret");
+  });
+
+  it("still recovers paragraph scope with uppercase ASCII names", async () => {
+    const result = await extractBasicHtmlContent({
+      html: "<p hidden>Secret<BLOCKQUOTE>Visible block</BLOCKQUOTE><p>Visible sibling</p>",
+      extractMode: "text",
+    });
+    expect(result?.text).toContain("Visible block");
+    expect(result?.text).toContain("Visible sibling");
+    expect(result?.text).not.toContain("Secret");
+  });
+
+  it.each([
+    "<p hidden>Before<div.foo>Secret</div.foo></p><p>Visible</p>",
+    "<p hidden>Before<p.foo>Secret</p.foo></p><p>Visible</p>",
+    "<p hidden>Before<div@click>Secret</div@click></p><p>Visible</p>",
+    "<p hidden>Before<div=note>Secret</div=note></p><p>Visible</p>",
+    "<p hidden>Before< div>Secret</ div></p><p>Visible</p>",
+    "<p hidden>Before<\u00a0div>Secret</\u00a0div></p><p>Visible</p>",
+    "<div><p hidden>Before</div.foo>Secret</p></div><p>Visible</p>",
+    "<div><p hidden>Before</ div>Secret</p></div><p>Visible</p>",
+    "<ul><li hidden>Before<li.foo>Secret</li.foo></li><li>Visible</li></ul>",
+    "<dl><dt hidden>Before<dd.foo>Secret</dd.foo></dt><dd>Visible</dd></dl>",
+    "<table><tr><td hidden>Before<th.foo>Secret</th.foo></td><td>Visible</td></tr></table>",
+    "<select><option hidden>Before<option.foo>Secret</option.foo></option><option>Visible</option></select>",
+  ])("does not recover HTML scope from an incomplete tag identity: %s", async (html) => {
+    const result = await extractBasicHtmlContent({ html, extractMode: "text" });
+    expect(result?.text).toContain("Visible");
+    expect(result?.text).not.toContain("Secret");
+  });
+
+  it.each(["script.foo", "textarea.foo", "title.foo", "plaintext.foo", " script", "\u00a0script"])(
+    "filters hidden content inside the ordinary element %s",
+    async (name) => {
+      const html = `<${name}><p hidden>Secret data</p></${name}><p>Visible sibling</p>`;
+      const result = await extractBasicHtmlContent({ html, extractMode: "text" });
+      expect(result?.text).toContain("Visible sibling");
+      expect(result?.text).not.toContain("Secret data");
+    },
+  );
+
+  it.each(["<!-->", "<!--->", "<!-- Secret comment --!>"])(
+    "retains visible text after the recovered comment boundary %s",
+    async (comment) => {
+      const result = await extractBasicHtmlContent({
+        html: `<p>Visible before</p>${comment}<p>Visible after</p>`,
+        extractMode: "text",
+      });
+      expect(result?.text).toBe("Visible before\nVisible after");
+    },
+  );
+
+  it.each(['x</script data-note="<!--">', "<!-- Secret script text</script>"])(
+    "preserves the script closing boundary around %s",
+    async (script) => {
+      const html = `<p>Visible before</p><script>${script}<p>Visible after</p>`;
+      expect(htmlToMarkdown(html).text).toBe("Visible before\nVisible after");
+      const result = await extractBasicHtmlContent({ html, extractMode: "text" });
+      expect(result?.text).toBe("Visible before\nVisible after");
+    },
+  );
+
+  it.each(["</scr<!-- -->ipt>", "</script<!-- -->>"])(
+    "keeps script delimiters separated around %s",
+    async (delimiter) => {
+      const html = `<script>${delimiter}<p>Secret data</p></script><p>Visible sibling</p>`;
+      expect(htmlToMarkdown(html).text).toBe("Visible sibling");
+      const result = await extractBasicHtmlContent({ html, extractMode: "text" });
+      expect(result?.text).toBe("Visible sibling");
+    },
+  );
+
   it("decodes astral numeric entities via code points instead of truncating to garbage", () => {
     expect(htmlToMarkdown(`<p>I &#128512; this</p>`).text).toBe(`I ${grin} this`);
     expect(htmlToMarkdown(`<p>&#x1F600;</p>`).text).toBe(grin);
@@ -72,6 +179,17 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(htmlToMarkdown(`<p>Visible</p><script data=">IGNORE</script><p>Shown</p>`).text).toBe(
       "Visible\nShown",
     );
+  });
+
+  it("keeps double-escaped script data out of rendered text", () => {
+    expect(
+      htmlToMarkdown("<script><!--<script></script><p>Secret data</p>--></script><p>Visible</p>")
+        .text,
+    ).toBe("Visible");
+  });
+
+  it("returns to normal script data after an empty escaped comment", () => {
+    expect(htmlToMarkdown("<script><!--><script></script><p>Visible</p>").text).toBe("Visible");
   });
 
   it("does not end raw-text blocks inside opener attributes", () => {

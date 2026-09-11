@@ -808,6 +808,7 @@ extension DashboardWindowController {
         // the drawer topbar row (layout.mobile.css); their body-qualified
         // !important selectors also outrank the rules older app builds inject.
         let css = """
+        \(DashboardDeviceSymbolStyle.css())
         html.openclaw-native-macos {
           /* Matches the 52pt unified-toolbar titlebar so the web buttons and the
              traffic lights share one vertical center. */
@@ -1305,8 +1306,8 @@ extension DashboardWindowController {
                     navigationType: navigationAction.navigationType,
                     buttonNumber: navigationAction.buttonNumber)
             }
-            // Mac tabs have no download destination UI. Preserve
-            // direct pointer-activated downloads by handing them to the default browser.
+            // Page-initiated downloads keep their external-browser behavior.
+            // The explicit toolbar action owns the native Save dialog.
             if navigationAction.shouldPerformDownload {
                 if Self.shouldOpenExternalDashboardNavigation(
                     url,

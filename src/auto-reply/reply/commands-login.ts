@@ -6,6 +6,10 @@ import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
+  cancelProviderLoginFlow,
+  answerProviderLoginModelAccess,
+  offerProviderLoginModelAccess,
+  type PreparedProviderModelAccess,
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
   formatProviderLoginCommand,
@@ -19,7 +23,7 @@ import {
   type ProviderChannelLoginChoice,
 } from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { isConfiguredCommandOwner } from "../command-auth.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../types.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
@@ -87,7 +91,7 @@ function keyPart(value: unknown, fallback: string): string {
   return fallback;
 }
 
-function buildProviderLoginFlowKey(params: HandleCommandsParams, choiceId: string): string {
+function buildProviderLoginFlowKey(params: HandleCommandsParams): string {
   const threadId =
     params.ctx.MessageThreadId ?? params.ctx.TransportThreadId ?? params.ctx.ThreadParentId;
   return [
@@ -97,8 +101,28 @@ function buildProviderLoginFlowKey(params: HandleCommandsParams, choiceId: strin
     keyPart(params.ctx.OriginatingTo ?? params.command.to ?? params.command.channelId, "unknown"),
     keyPart(threadId, "main"),
     params.agentId,
-    choiceId,
+    params.sessionKey,
+    keyPart(params.command.senderId, "unknown"),
   ].join(":");
+}
+
+function assertProviderLoginAuthority(
+  params: HandleCommandsParams,
+  config: typeof params.cfg,
+): void {
+  params.opts?.abortSignal?.throwIfAborted();
+  if (params.opts?.assertProviderLoginAuthority) {
+    params.opts.assertProviderLoginAuthority();
+    return;
+  }
+  const authorization = resolveCommandAuthorization({
+    cfg: config,
+    ctx: { ...params.ctx, SenderId: params.command.senderId, AccountId: params.command.accountId },
+    commandAuthorized: params.command.isAuthorizedSender,
+  });
+  if (!authorization.senderIsOwner || !authorization.isAuthorizedSender) {
+    throw new Error("Provider login authority is no longer active.");
+  }
 }
 
 async function emitLoginMessage(params: HandleCommandsParams, text: string): Promise<void> {
@@ -219,7 +243,7 @@ async function runChannelProviderLogin(params: {
   agentId: string;
   runtime?: RuntimeEnv;
 }): Promise<ReplyPayload> {
-  const flowKey = buildProviderLoginFlowKey(params.commandParams, params.choice.command);
+  const flowKey = buildProviderLoginFlowKey(params.commandParams);
   const sendReply = params.commandParams.opts?.onBlockReply;
   if (!sendReply) {
     return {
@@ -230,30 +254,22 @@ async function runChannelProviderLogin(params: {
   const reservation = reserveProviderLoginFlow({
     flows: activeProviderLoginFlows,
     flowKey,
+    signal: params.commandParams.opts?.abortSignal,
   });
   if (reservation.status === "active") {
     return {
-      text: `${params.choice.providerLabel} login is already active for this chat or channel. Complete it, or wait for it to expire before requesting a new one.`,
+      text: "A provider login is already active for this chat. Complete it, or send `/login cancel` before requesting a new one.",
     };
   }
 
-  const commandSignal = params.commandParams.opts?.abortSignal;
-  const flowSignal = commandSignal
-    ? AbortSignal.any([reservation.record.signal, commandSignal])
-    : reservation.record.signal;
+  const flowSignal = reservation.record.signal;
   const readConfig =
     params.commandParams.opts?.getProviderLoginConfig ??
     (() => getRuntimeConfigSnapshot() ?? params.commandParams.cfg);
   const assertCurrent = (config = readConfig()) => {
-    const assertAuthority = params.commandParams.opts?.assertProviderLoginAuthority;
-    if (assertAuthority) {
-      assertAuthority();
-      return;
-    }
-    if (!isConfiguredCommandOwner(config, params.commandParams.command)) {
-      throw new Error("Provider login authority is no longer active.");
-    }
+    assertProviderLoginAuthority(params.commandParams, config);
   };
+  let modelAccess: PreparedProviderModelAccess | undefined;
   try {
     const loginResult = await runProviderChannelLoginFlow({
       choice: params.choice,
@@ -264,6 +280,10 @@ async function runChannelProviderLogin(params: {
       signal: flowSignal,
       assertCurrent,
       sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
+      sendReply,
+      onModelAccessRequested: (request) => {
+        modelAccess = request;
+      },
       unsupportedPromptMessage:
         "This provider needs input that chat cannot collect. Open Control UI → Models and choose Sign in.",
     });
@@ -272,33 +292,39 @@ async function runChannelProviderLogin(params: {
       (profile) =>
         normalizeSurface(profile.provider) === normalizeSurface(params.choice.providerId),
     )?.profileId;
-    if (!nextProfileId) {
-      return { text: formatProviderLoginCompletion(params.choice, loginResult.authRefresh, true) };
-    }
-    const switchResult = await switchLoginSessionProfile({
-      commandParams: params.commandParams,
-      loginProvider: params.choice.providerId,
-      nextProfileId,
-      signal: flowSignal,
-      assertCurrent,
-    });
-    return {
-      text: formatProviderLoginCompletion(
-        params.choice,
-        loginResult.authRefresh,
-        switchResult === "failed",
-      ),
-    };
+    const switchResult = nextProfileId
+      ? await switchLoginSessionProfile({
+          commandParams: params.commandParams,
+          loginProvider: params.choice.providerId,
+          nextProfileId,
+          signal: flowSignal,
+          assertCurrent,
+        })
+      : "failed";
+    const terminalMessage = formatProviderLoginCompletion(
+      params.choice,
+      loginResult.authRefresh,
+      switchResult === "failed",
+    );
+    return modelAccess
+      ? offerProviderLoginModelAccess({
+          record: reservation.record,
+          prepared: modelAccess,
+          terminalMessage,
+        })
+      : { text: terminalMessage };
   } catch (error) {
     return {
       text: formatProviderLoginFailure(params.choice, error),
     };
   } finally {
-    releaseProviderLoginFlow({
-      flows: activeProviderLoginFlows,
-      flowKey,
-      record: reservation.record,
-    });
+    if (!reservation.record.pendingModelAccess) {
+      releaseProviderLoginFlow({
+        flows: activeProviderLoginFlows,
+        flowKey,
+        record: reservation.record,
+      });
+    }
   }
 }
 
@@ -316,6 +342,27 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     signal: params.opts?.abortSignal,
+    cancelLogin: () =>
+      cancelProviderLoginFlow({
+        flows: activeProviderLoginFlows,
+        flowKey: buildProviderLoginFlowKey(params),
+      }),
+    answerChoice: (command) =>
+      answerProviderLoginModelAccess({
+        flows: activeProviderLoginFlows,
+        flowKey: buildProviderLoginFlowKey(params),
+        command,
+        runtime: defaultRuntime,
+        signal: params.opts?.abortSignal,
+        assertCurrent: (config) =>
+          assertProviderLoginAuthority(
+            params,
+            config ??
+              params.opts?.getProviderLoginConfig?.() ??
+              getRuntimeConfigSnapshot() ??
+              params.cfg,
+          ),
+      }),
   });
   if (!prepared) {
     return null;

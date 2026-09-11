@@ -327,6 +327,13 @@ vi.mock("./command-secret-targets.js", () => ({
   getTtsCommandSecretTargetIds: mocks.getTtsCommandSecretTargetIds,
 }));
 
+// Account-secret snapshot preparation is covered by dedicated
+// model.account-secrets.* tests; keep this command-wiring suite on the
+// pre-existing mocked world instead of loading the real secrets runtime.
+vi.mock("./capability-cli/model-local-secrets.js", () => ({
+  prepareLocalModelRunAccountSecrets: vi.fn(async () => {}),
+}));
+
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: mocks.resolveAgentDir,

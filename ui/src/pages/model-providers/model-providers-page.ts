@@ -18,10 +18,16 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { createCatalogDiscoveryController } from "./catalog-discovery.ts";
 import {
+  buildDefaultsPatch,
+  DEFAULT_MODELS_REPLACE_PATHS,
+  isMissingMethodError,
+  mergeProbeResults,
   modelProviderApiKeySuccess,
   modelProviderErrorMessage,
+  readModelBehaviorConfig,
   runModelProviderApiKeyMutation,
   runModelProviderConfigMutation,
+  type ModelBehaviorConfig,
   type ModelProviderConfigMutation,
   type ModelProviderConfigMutationResult,
   type ModelProviderRowMessage,
@@ -41,9 +47,6 @@ import {
   type ModelProvidersData,
 } from "./load.ts";
 import { ModelProviderLoginController } from "./login-controller.ts";
-import { readModelBehaviorConfig, type ModelBehaviorConfig } from "./model-behavior.ts";
-import { buildDefaultsPatch, DEFAULT_MODELS_REPLACE_PATHS } from "./mutations.ts";
-import { isMissingMethodError, mergeProbeResults } from "./probe-results.ts";
 import { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.ts";
 import { updateRecordEntry } from "./record-state.ts";

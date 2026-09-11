@@ -238,7 +238,6 @@ async function planMemoryIndex(params: {
           (source.source === "sessions" && removedSessionPaths.has(source.path)),
       );
       const chunkIds = chunks.map((chunk) => chunk.id);
-      const chunkHashes = [...new Set(chunks.map((chunk) => chunk.hash))];
       const ftsRows =
         chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
           ? executeSqliteQuerySync(
@@ -247,16 +246,14 @@ async function planMemoryIndex(params: {
             ).rows.length
           : 0;
       const hasVectorTable = tableExists(db, "memory_index_chunks_vec");
-      const embeddingCacheRows =
-        chunkHashes.length > 0 && tableExists(db, "memory_embedding_cache")
-          ? executeSqliteQuerySync(
-              db,
-              kysely
-                .selectFrom("memory_embedding_cache")
-                .select("hash")
-                .where("hash", "in", chunkHashes),
-            ).rows.length
-          : 0;
+      let embeddingCacheRows = 0;
+      if (params.sessionIds.size > 0 && tableExists(db, "memory_embedding_cache")) {
+        const cacheCount = db
+          .prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache")
+          // SAFETY: the aggregate query always returns one row with the declared count alias.
+          .get() as { count?: unknown };
+        embeddingCacheRows = Number(cacheCount.count ?? 0);
+      }
       return { chunks, sources, ftsRows, embeddingCacheRows, hasVectorTable, databasePath };
     },
     { agentId: params.agentId },
@@ -598,7 +595,6 @@ async function forgetWorkspaceMemory(
   try {
     const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
     const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
-    const chunkHashes = [...new Set(indexPlan.chunks.map((chunk) => chunk.hash))];
     if (chunkIds.length > 0 && indexPlan.hasVectorTable) {
       const loaded = await loadSqliteVecExtension({ db });
       if (!loaded.ok) {
@@ -614,9 +610,9 @@ async function forgetWorkspaceMemory(
       agentId: params.agentId,
       sessionIds: [...sessionIds],
     });
-    if (recorded === 0 && changedPaths.size > 0) {
-      // Repeating a partial purge can still rewrite an unindexed file. Fence
-      // pending shadow rebuilds before any filesystem mutation, even on failure.
+    if (recorded === 0) {
+      // Every explicit purge invalidates in-flight cache work, including a
+      // repeated purge whose selected source was already scrubbed.
       executeSqliteQuerySync(
         db,
         kysely
@@ -657,11 +653,8 @@ async function forgetWorkspaceMemory(
             .where("source", "=", source.source),
         );
       }
-      if (indexPlan.embeddingCacheRows > 0) {
-        executeSqliteQuerySync(
-          db,
-          kysely.deleteFrom("memory_embedding_cache").where("hash", "in", chunkHashes),
-        );
+      if (tableExists(db, "memory_embedding_cache")) {
+        executeSqliteQuerySync(db, kysely.deleteFrom("memory_embedding_cache"));
       }
     });
     if (retainedShortTerm.length !== shortTermEntries.length) {

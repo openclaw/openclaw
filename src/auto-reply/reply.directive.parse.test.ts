@@ -1,5 +1,6 @@
 /** Tests parsing of inline reply directives and command tags. */
 import { describe, expect, it } from "vitest";
+import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { parseInlineSessionDirectives } from "./reply/directive-handling.parse.js";
 import {
   extractElevatedDirective,
@@ -12,7 +13,6 @@ import {
 } from "./reply/directives.js";
 import { extractExecDirective } from "./reply/exec/directive.js";
 import { extractQueueDirective } from "./reply/queue/directive.js";
-import { extractReplyToTag } from "./reply/reply-tags.js";
 
 describe("directive parsing", () => {
   it.each([
@@ -454,33 +454,48 @@ describe("directive parsing", () => {
   });
 
   it("extracts reply_to_current tag", () => {
-    const res = extractReplyToTag("ok [[reply_to_current]]", "msg-1");
+    const res = parseInlineDirectives("ok [[reply_to_current]]", {
+      currentMessageId: "msg-1",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("msg-1");
-    expect(res.cleaned).toBe("ok");
+    expect(res.text).toBe("ok");
   });
 
   it("extracts reply_to_current tag with whitespace", () => {
-    const res = extractReplyToTag("ok [[ reply_to_current ]]", "msg-1");
+    const res = parseInlineDirectives("ok [[ reply_to_current ]]", {
+      currentMessageId: "msg-1",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("msg-1");
-    expect(res.cleaned).toBe("ok");
+    expect(res.text).toBe("ok");
   });
 
   it("extracts reply_to id tag", () => {
-    const res = extractReplyToTag("see [[reply_to:12345]] now", "msg-1");
+    const res = parseInlineDirectives("see [[reply_to:12345]] now", {
+      currentMessageId: "msg-1",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("12345");
-    expect(res.cleaned).toBe("see now");
+    expect(res.text).toBe("see now");
   });
 
   it("extracts reply_to id tag with whitespace", () => {
-    const res = extractReplyToTag("see [[ reply_to : 12345 ]] now", "msg-1");
+    const res = parseInlineDirectives("see [[ reply_to : 12345 ]] now", {
+      currentMessageId: "msg-1",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("12345");
-    expect(res.cleaned).toBe("see now");
+    expect(res.text).toBe("see now");
   });
 
   it("preserves newlines when stripping reply tags", () => {
-    const res = extractReplyToTag("line 1\nline 2 [[reply_to_current]]\n\nline 3", "msg-2");
+    const res = parseInlineDirectives("line 1\nline 2 [[reply_to_current]]\n\nline 3", {
+      currentMessageId: "msg-2",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("msg-2");
-    expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
+    expect(res.text).toBe("line 1\nline 2\n\nline 3");
   });
 });
 

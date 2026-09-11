@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChatMarkdown, exportChatMarkdown } from "./export.ts";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -16,6 +17,7 @@ describe("exportChatMarkdown", () => {
   });
 
   it("downloads one readable Markdown file for a populated transcript", async () => {
+    vi.useFakeTimers();
     const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:chat-export");
     const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
@@ -32,6 +34,8 @@ describe("exportChatMarkdown", () => {
 
     expect(createObjectURL).toHaveBeenCalledOnce();
     expect(click).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:chat-export");
     expect((createObjectURL.mock.calls[0]![0] as Blob).type).toBe("text/markdown");
     const markdown = await (createObjectURL.mock.calls[0]![0] as Blob).text();

@@ -10,9 +10,9 @@ import type {
   RuntimeConfigExternalMutationOptions,
   RuntimeConfigExternalMutationResult,
 } from "../../lib/config/config-gateway-operations.ts";
+import type { ModelBehaviorConfig } from "./config-mutation.ts";
 import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
-import type { ModelBehaviorConfig } from "./model-behavior.ts";
 import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import "./model-providers-page.ts";
