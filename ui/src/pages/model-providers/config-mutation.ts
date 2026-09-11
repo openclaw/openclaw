@@ -1,7 +1,104 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+
+export type ModelBehaviorConfig = {
+  thinkingLevel: string | undefined;
+  thinkingOverridden: boolean;
+  fastMode: FastMode | undefined;
+  fastModeOverridden: boolean;
+};
+
+export function readModelBehaviorConfig(
+  agentsDefaults: Record<string, unknown> | null,
+): ModelBehaviorConfig {
+  const thinkingValue = agentsDefaults?.thinkingDefault;
+  const fastValue = agentsDefaults?.fastModeDefault;
+  return {
+    thinkingLevel: typeof thinkingValue === "string" ? thinkingValue : undefined,
+    thinkingOverridden: agentsDefaults !== null && Object.hasOwn(agentsDefaults, "thinkingDefault"),
+    fastMode: fastValue === "auto" || typeof fastValue === "boolean" ? fastValue : undefined,
+    fastModeOverridden: agentsDefaults !== null && Object.hasOwn(agentsDefaults, "fastModeDefault"),
+  };
+}
+
+/**
+ * Removing or reordering fallbacks shrinks a config array; the gateway's
+ * destructive-array guard rejects such merge patches unless the exact path is
+ * confirmed via replacePaths.
+ */
+export const DEFAULT_MODELS_REPLACE_PATHS = ["agents.defaults.model.fallbacks"];
+
+export function buildDefaultsPatch(params: {
+  primary: string;
+  fallbacks: readonly string[];
+  utilityModel: string | null;
+  thinkingLevel: string | undefined;
+  thinkingOverridden: boolean;
+  fastMode: FastMode | undefined;
+  fastModeOverridden: boolean;
+}) {
+  return {
+    agents: {
+      defaults: {
+        ...(params.primary
+          ? {
+              model:
+                params.fallbacks.length > 0
+                  ? { primary: params.primary, fallbacks: [...params.fallbacks] }
+                  : params.primary,
+            }
+          : {}),
+        utilityModel: params.utilityModel,
+        thinkingDefault:
+          params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
+        fastModeDefault:
+          params.fastModeOverridden && params.fastMode !== undefined ? params.fastMode : null,
+      },
+    },
+  };
+}
+
+const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
+  "auth",
+  "billing",
+  "rate_limit",
+  "timeout",
+  "format",
+  "no_model",
+  "unknown",
+];
+
+export function isMissingMethodError(error: unknown): boolean {
+  return /method (?:not found|not supported)|unknown method/iu.test(
+    modelProviderErrorMessage(error),
+  );
+}
+
+export function mergeProbeResults(cardId: string, results: ModelsProbeResult[]): ModelsProbeResult {
+  if (results.length === 1) {
+    return results[0]!;
+  }
+  const status = results.some((result) => result.status === "ok")
+    ? "ok"
+    : (PROBE_FAILURE_PRIORITY.find((candidate) =>
+        results.some((result) => result.status === candidate),
+      ) ?? "unknown");
+  const error = results.find((result) => result.status === status)?.error;
+  return {
+    provider: cardId,
+    status,
+    ...(error ? { error } : {}),
+    results: results.flatMap((result) =>
+      result.results.map((target) => ({
+        ...target,
+        label: `${result.provider}: ${target.label}`,
+      })),
+    ),
+  };
+}
 
 export type ModelProviderRowMessage = {
   kind: "success" | "error";

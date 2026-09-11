@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { modelProviderErrorMessage } from "./config-mutation.ts";
-import { buildDefaultsPatch, DEFAULT_MODELS_REPLACE_PATHS } from "./mutations.ts";
+import {
+  buildDefaultsPatch,
+  DEFAULT_MODELS_REPLACE_PATHS,
+  modelProviderErrorMessage,
+} from "./config-mutation.ts";
 
 describe("model provider config patches", () => {
   it("redacts secrets in displayed mutation failures", () => {
