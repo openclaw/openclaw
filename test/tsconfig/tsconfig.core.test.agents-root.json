@@ -17,6 +17,9 @@
     "../../src/agents/code-mode*.test.tsx",
     "../../src/agents/model-catalog-view.test.ts",
     "../../src/agents/tool-search*.test.ts",
-    "../../src/agents/tool-search*.test.tsx"
+    "../../src/agents/tool-search*.test.tsx",
+    "../../src/agents/agent-tools.read.workspace-root-guard.test.ts",
+    "../../src/agents/agent-tools.read.workspace-root-lazy.test.ts",
+    "../../src/agents/agent-tools.workspace-paths.test.ts"
   ]
 }
