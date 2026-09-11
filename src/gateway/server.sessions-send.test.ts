@@ -28,6 +28,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import { GatewayClient } from "./client.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   runSessionsSendAuthorityScenario,
@@ -200,8 +201,19 @@ describe("sessions_send gateway loopback", () => {
       await runSessionsSendNodeAuthorityScenario({
         nodeOnly,
         gatewayContext,
-        gatewayPort,
-        gatewayToken,
+        createNodeClient: (options) =>
+          new GatewayClient({
+            ...options,
+            url: `ws://127.0.0.1:${gatewayPort}`,
+            token: gatewayToken,
+            role: "node",
+            clientName: "node-host",
+            clientVersion: "1.0.0",
+            platform: "linux",
+            mode: "node",
+            scopes: [],
+            caps: ["system"],
+          }),
         makeTempDir: (prefix) => tempDirs.make(prefix),
       });
     },

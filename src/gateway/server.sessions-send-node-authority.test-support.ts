@@ -28,7 +28,7 @@ import {
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { coerceNodeInvokePayload } from "../node-host/invoke-payload.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import { GatewayClient } from "./client.js";
+import type { GatewayClient, GatewayClientOptions } from "./client.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   emitLifecycleAssistantReply,
@@ -37,7 +37,11 @@ import {
 import { agentCommandMock } from "./test-helpers.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
-async function connectExecutionNode(params: { port: number; token: string }) {
+type CreateExecutionNodeClient = (
+  options: Pick<GatewayClientOptions, "commands" | "deviceIdentity" | "onHelloOk" | "onEvent">,
+) => Pick<GatewayClient, "start" | "stopAndWait" | "request">;
+
+async function connectExecutionNode(createClient: CreateExecutionNodeClient) {
   const { handleInvoke } = await import("../node-host/invoke.js");
   const deviceIdentity = loadOrCreateDeviceIdentity({ identityKey: "session-send-exec-node" });
   const deviceRequest = await requestDevicePairing({
@@ -61,16 +65,7 @@ async function connectExecutionNode(params: { port: number; token: string }) {
   let connected = false;
   const invocations: string[] = [];
   const pending = new Set<Promise<void>>();
-  const client = new GatewayClient({
-    url: `ws://127.0.0.1:${params.port}`,
-    token: params.token,
-    role: "node",
-    clientName: "node-host",
-    clientVersion: "1.0.0",
-    platform: "linux",
-    mode: "node",
-    scopes: [],
-    caps: ["system"],
+  const client = createClient({
     commands,
     deviceIdentity,
     onHelloOk: () => {
@@ -114,8 +109,7 @@ async function connectExecutionNode(params: { port: number; token: string }) {
 export async function runSessionsSendNodeAuthorityScenario(params: {
   nodeOnly: boolean;
   gatewayContext: GatewayRequestContext;
-  gatewayPort: number;
-  gatewayToken: string;
+  createNodeClient: CreateExecutionNodeClient;
   makeTempDir: (prefix: string) => string;
 }): Promise<void> {
   const dir = params.makeTempDir("openclaw-sessions-send-node-effect-");
@@ -177,7 +171,7 @@ export async function runSessionsSendNodeAuthorityScenario(params: {
     saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
     await writeConfigFile({ ...previousConfig, tools: { exec: config.tools!.exec } });
     if (params.nodeOnly) {
-      node = await connectExecutionNode({ port: params.gatewayPort, token: params.gatewayToken });
+      node = await connectExecutionNode(params.createNodeClient);
     }
     const sourceContext = await admission.admit("embedded");
     const identity = createAdmittedGatewayToolCallerIdentity({
