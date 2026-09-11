@@ -291,6 +291,16 @@ export function broadcastToOwner(
   connId: string,
   event: TalkRealtimeRelayEvent,
 ): void {
+  if (event.type === "ready" || event.type === "error" || event.type === "close") {
+    const [relaySessionId, ownerConnId] = [event.relaySessionId, connId].map((value) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+        ? value
+        : "unknown",
+    );
+    context.logGateway?.[event.type === "error" ? "warn" : "info"]?.(
+      `[talk-relay] ${event.type} relaySessionId=${relaySessionId} connId=${ownerConnId}`,
+    );
+  }
   // Classify the materialized Talk event so final results cannot be mistaken
   // for transient tool progress by individual provider callback paths.
   const delivery = relayEventDeliveryOptions(event, event.talkEvent);
