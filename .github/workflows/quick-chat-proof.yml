@@ -95,6 +95,9 @@ jobs:
         run: |
           set -euo pipefail
           swiftformat apps/macos/Sources/OpenClaw/QuickChatController.swift apps/macos/Sources/OpenClaw/QuickChatModel.swift apps/macos/Tests/OpenClawIPCTests/QuickChat*PresentationTests.swift --config config/swiftformat
+          if [ -f apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPublicationTests.swift ]; then
+            swiftformat apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPublicationTests.swift --config config/swiftformat
+          fi
           git diff --binary > "$RUNNER_TEMP/quick-chat-proof/format.patch"
           swiftlint lint --strict --config config/swiftlint.yml apps/macos/Sources/OpenClaw/QuickChatController.swift apps/macos/Sources/OpenClaw/QuickChatModel.swift
       - name: Build app and native tests
