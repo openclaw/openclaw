@@ -5,6 +5,9 @@ import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
+import ai.openclaw.app.ui.chat.ChatModelPickerAction
+import ai.openclaw.app.ui.chat.chatModelPickerAction
+import ai.openclaw.app.ui.chat.chatModelPickerSections
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -29,6 +32,41 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class ChatControllerModelSelectionTest {
   private val json = chatControllerTestJson
+
+  @Test
+  fun publishedSessionCatalogRevealsHiddenFavoriteAsSelectableChoice() =
+    runTest {
+      var visible = false
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
+          respond("chat.history", historyResponse("beta-session", emptyList()))
+          respond("chat.metadata") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            assertEquals(JsonPrimitive("beta"), params["agentId"])
+            assertEquals(JsonPrimitive("agent:beta:main"), params["sessionKey"])
+            if (visible) {
+              """{"commands":[],"models":[{"id":"published","provider":"fixture","available":true}]}"""
+            } else {
+              """{"commands":[],"models":[]}"""
+            }
+          }
+        }
+      controller.load("agent:beta:main")
+      advanceUntilIdle()
+      val favorites = listOf("fixture/published")
+      assertTrue(chatModelPickerSections(controller.modelCatalog.value, favorites, emptyList()).pinned.isEmpty())
+      val historyRequests = requests.count { it.first == "chat.history" }
+
+      visible = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+
+      val choice = chatModelPickerSections(controller.modelCatalog.value, favorites, emptyList()).pinned.single()
+      assertEquals("published", choice.id)
+      assertEquals(ChatModelPickerAction.Select, chatModelPickerAction(choice))
+      assertEquals(historyRequests, requests.count { it.first == "chat.history" })
+    }
 
   @Test
   fun nativeModelLockSurvivesHistoryAndPartialSettingsWithoutLockingThinking() =

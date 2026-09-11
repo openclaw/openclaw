@@ -43,13 +43,21 @@ import java.util.concurrent.atomic.AtomicReference
 @Config(sdk = [34])
 class NodeRuntimeAgentSelectionTest {
   @Test
-  fun failedRefreshPublishesCompatibleRowsAndWarning() =
+  fun selectedAgentPublishesRefreshFailureAndSuccessfulEmptyResult() =
     runBlocking {
       val runtime = createConnectedRuntime()
       val catalogJobs = Channel<Job>(Channel.UNLIMITED)
       val response = AtomicReference("""{"models":[{"id":"previous","provider":"fixture","available":true}]}""")
       try {
-        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          assertEquals(
+            "beta",
+            Json
+              .parseToJsonElement(paramsJson.orEmpty())
+              .jsonObject["agentId"]
+              ?.jsonPrimitive
+              ?.content,
+          )
           when (method) {
             "models.list" -> {
               catalogJobs.send(currentCoroutineContext().job)
@@ -65,8 +73,8 @@ class NodeRuntimeAgentSelectionTest {
             }
           }
         }
-        runtime.refreshProviderModels()
-        withTimeout(2_000) { catalogJobs.receive().join() }
+        runtime.selectChatAgent("beta")
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
         assertEquals(listOf("previous"), runtime.providerModelCatalog.value.map { it.id })
 
         response.set("""{"models":[{"id":"compatible","provider":"fixture","available":true}],"refreshFailed":true}""")
@@ -76,6 +84,15 @@ class NodeRuntimeAgentSelectionTest {
         assertEquals(listOf("compatible"), runtime.providerModelCatalog.value.map { it.id })
         assertEquals(listOf("current-credential"), runtime.modelAuthProviders.value.map { it.id })
         assertFalse("A failed refresh must remain visible alongside its returned rows", runtime.providerModelCatalogErrorText.value.isNullOrBlank())
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
+
+        response.set("""{"models":[],"refreshFailed":false}""")
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels(refresh = true)
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertEquals(null, runtime.providerModelCatalogErrorText.value)
         assertFalse(runtime.providerModelCatalogRefreshing.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
@@ -135,51 +152,7 @@ class NodeRuntimeAgentSelectionTest {
     }
 
   @Test
-  fun successfulEmptyPublicationClearsPreviousRowsAndWarning() =
-    runBlocking {
-      val runtime = createConnectedRuntime()
-      val catalogJobs = Channel<Job>(Channel.UNLIMITED)
-      val response = AtomicReference("""{"models":[{"id":"old-compatible","provider":"fixture"}],"refreshFailed":true}""")
-      try {
-        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
-          when (method) {
-            "models.list" -> {
-              catalogJobs.send(currentCoroutineContext().job)
-              response.get()
-            }
-
-            "models.authStatus" -> {
-              """{"providers":[]}"""
-            }
-
-            else -> {
-              error("Unexpected catalog request: $method")
-            }
-          }
-        }
-        runtime.refreshModelCatalog()
-        runtime.refreshProviderModels()
-        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
-        assertEquals(listOf("old-compatible"), runtime.modelCatalog.value.map { it.id })
-        assertEquals(listOf("old-compatible"), runtime.providerModelCatalog.value.map { it.id })
-        assertFalse(runtime.providerModelCatalogErrorText.value.isNullOrBlank())
-
-        response.set("""{"models":[],"refreshFailed":false}""")
-        runtime.refreshModelCatalog()
-        runtime.refreshProviderModels()
-        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
-
-        assertTrue(runtime.modelCatalog.value.isEmpty())
-        assertTrue(runtime.providerModelCatalog.value.isEmpty())
-        assertEquals(null, runtime.providerModelCatalogErrorText.value)
-      } finally {
-        closeNodeRuntimeTestFixture(runtime)
-        catalogJobs.close()
-      }
-    }
-
-  @Test
-  fun publicationsRereadSelectedAgentModelsWithoutDiscovery() =
+  fun publicationsRevealSelectedAgentModelsWithoutDiscovery() =
     runBlocking {
       for (event in listOf("config.changed", "chat.metadata.changed")) {
         val runtime = createConnectedRuntime()
@@ -190,7 +163,11 @@ class NodeRuntimeAgentSelectionTest {
             when (method) {
               "models.list" -> {
                 catalogRequests.send(Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject to currentCoroutineContext().job)
-                """{"models":[{"id":"model-${revision.get()}","provider":"fixture","name":"Published"}]}"""
+                if (revision.get() == 0) {
+                  """{"models":[]}"""
+                } else {
+                  """{"models":[{"id":"model-1","provider":"fixture","name":"Published","available":true}]}"""
+                }
               }
 
               "models.authStatus" -> {
@@ -218,18 +195,8 @@ class NodeRuntimeAgentSelectionTest {
           withTimeout(2_000) {
             repeat(2) { catalogRequests.receive().second.join() }
           }
-          assertEquals(
-            "model-0",
-            runtime.modelCatalog.value
-              .single()
-              .id,
-          )
-          assertEquals(
-            "model-0",
-            runtime.providerModelCatalog.value
-              .single()
-              .id,
-          )
+          assertTrue(runtime.modelCatalog.value.isEmpty())
+          assertTrue(runtime.providerModelCatalog.value.isEmpty())
           assertEquals(
             "credential-0",
             runtime.modelAuthProviders.value
