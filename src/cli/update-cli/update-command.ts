@@ -20,16 +20,13 @@ import {
   tryResolveInvocationCwd,
   type UpdateCommandOptions,
 } from "./shared.js";
-import type { UpdateCommandExecutor } from "./update-command-executor.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import type { InitializedUpdate } from "./update-command-initialization.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
-  reportPreMutationUpdateFailure,
-  reportUnreportedUpdateAdmissionOutcome,
-  UpdateCommandFailure,
-  withUpdateAdmissionReporting,
-} from "./update-command-result.js";
+  captureUpdateCommandExecutorAuthority,
+  type UpdateCommandExecutor,
+  withUpdateCommandExecutor,
+} from "./update-command-executor.js";
+import type { InitializedUpdate } from "./update-command-initialization.js";
+import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
   assertUpdatePackageActivationAdmission,
@@ -42,6 +39,7 @@ import {
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
 import {
   resolveServiceRefreshEnv,
+  withOwnedManagedUpdateEnv,
   resolveUpdateTargetEnv,
   withUpdateInProgressEnv,
 } from "./update-command-service-env.js";
@@ -51,7 +49,11 @@ import {
 } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
-import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
+import {
+  reportPreMutationUpdateFailure,
+  reportUnreportedUpdateAdmissionOutcome,
+  withUpdateCommandTerminalResult,
+} from "./update-command-terminal.js";
 import {
   prepareUpdateCommandFailureTriage,
   withUpdateFailureTriage,
@@ -92,7 +94,7 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     };
     const env = await resolveUpdateCommandAdmissionEnv(admission);
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
-    if (!env.OPENCLAW_UPDATE_RUN_ID && (await updateStateNeedsInitialization(env))) {
+    if (await updateStateNeedsInitialization(env)) {
       return await initializeAndRunUpdate(inputOpts, prepared, recoveryState, invocationCwd, env);
     }
     return await runAdmittedUpdate(inputOpts, prepared, recoveryState, invocationCwd);
@@ -174,7 +176,7 @@ async function initializeAndRunUpdate(
   invocationCwd: string | undefined,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  const runId = randomUUID();
+  const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
   let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
   try {
     await withUpdateCommandTerminalResult((registerRun) =>
@@ -211,7 +213,7 @@ async function initializeAndRunUpdate(
           const runInitialized = () =>
             runAdmittedUpdate(opts, prepared, recoveryState, invocationCwd, initialization);
           if (opts.dryRun) {
-            await previewUpdateCommand({
+            return await previewUpdateCommand({
               target,
               prepared,
               opts,
@@ -219,7 +221,6 @@ async function initializeAndRunUpdate(
               invocationCwd,
               updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
             });
-            return;
           }
           const artifact =
             target.updateInstallKind === "package" &&
@@ -477,7 +478,7 @@ async function updateCommandInternal(
 
   if (opts.dryRun) {
     finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
-    await previewUpdateCommand({
+    return await previewUpdateCommand({
       target,
       prepared,
       opts,
@@ -486,7 +487,6 @@ async function updateCommandInternal(
       invocationCwd,
       preflight: schemaPreflight,
     });
-    return;
   }
 
   const currentCoreFinalization = {
@@ -508,7 +508,7 @@ async function updateCommandInternal(
   };
   if (packageAlreadyCurrent) {
     const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
-    await finishAlreadyCurrentUpdate({
+    return await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
       legacyConfigPlan,
       opts,
@@ -523,7 +523,6 @@ async function updateCommandInternal(
         durationMs: Date.now() - startedAt,
       },
     });
-    return;
   }
 
   if (
@@ -555,8 +554,7 @@ async function updateCommandInternal(
       fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
     });
     if (!runtimePreflight.ok) {
-      await refuseUpdate("node-runtime-preflight", runtimePreflight.error);
-      return;
+      return await refuseUpdate("node-runtime-preflight", runtimePreflight.error);
     }
     const runtimeSelection = runtimePreflight.value;
     packageUpdateNodeRunner = runtimeSelection.nodeRunner;
@@ -659,7 +657,7 @@ async function updateCommandInternal(
   result.runId = run.runId;
   if (result.status === "skipped" && result.reason === "already-current") {
     stop();
-    await finishAlreadyCurrentUpdate({
+    return await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
       root: result.root ?? root,
       opts,
@@ -668,7 +666,6 @@ async function updateCommandInternal(
       packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
       legacyConfigPlan,
     });
-    return;
   }
   recoveryState.triageTarget.root = result.root ?? root;
   recoveryState.triageTarget.failureResult = result;

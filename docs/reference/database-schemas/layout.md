@@ -257,6 +257,27 @@ The restart sentinel carries `stats.runId` and remains the continuation owner;
 consuming it does not delete the run row. Chat, CLI, and status reports read that
 row. See [Run history and reports](/cli/update#run-history-and-reports).
 
+### Update installation control
+
+Managed update leases use a separate machine-local `managed-update-handoffs.sqlite`
+database under the secure OpenClaw temporary directory. This owner must remain
+available while an update replaces an installation or changes its runtime state.
+The update history above remains in the profile's shared state database.
+
+First creation publishes a complete private database atomically, so concurrent
+updaters cannot observe unfinished permissions or schema. A competing initializer
+opens the published winner without replacing it. Reads of an absent database
+create no state. Existing lease rows, transactions, recovery behavior, and the
+rule that one updater owns an installation are unchanged.
+
+Publication uses the filesystem owner's atomic no-replace rename and follows
+the existing platform policy for directory durability. The published database
+always has one filesystem link.
+Failure stops that lease admission before its operation runs. A crash before publication can leave
+private staging; it cannot expose an incomplete canonical database. This change
+requires no schema migration. See the
+[accepted initialization design](https://github.com/openclaw/openclaw/pull/144155).
+
 ### Cloud repository workspaces
 
 Repository-only [cloud sessions](/gateway/cloud-workers#dispatching-a-session) use the first-use `session_repository_workspaces` table in the shared state database. The existing session entry carries only `repositoryWorkspaceId`; the shared row owns the canonical agent/session key, repository URL, requested ref, session branch, setup intent, pinned base commit and manifest, accepted checkpoint pointer, and revision. Session reset preserves this owner; a fork receives a distinct owner.

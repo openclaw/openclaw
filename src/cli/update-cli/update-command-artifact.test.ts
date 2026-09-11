@@ -77,6 +77,7 @@ it.each(["activate", "refuse", "directory"] as const)(
       if(process.argv.includes('doctor')) fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify({doctorState:process.env.OPENCLAW_STATE_DIR}));
     `,
       );
+      await fs.chmod(path.join(source, "dist", "index.js"), 0o755);
       await writePackageDistInventory(source);
       const archive = path.join(base, "candidate.tgz");
       execFileSync("tar", ["-czf", archive, "-C", base, "package"], {

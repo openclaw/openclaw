@@ -227,7 +227,7 @@ export function resolveAutomaticUpdateTriage(
     : undefined;
 }
 
-type UpdateAdmissionReportParams = {
+export type UpdateAdmissionReportParams = {
   root: string;
   installKind: "git" | "package" | "unknown";
   reason: string;
@@ -245,101 +245,6 @@ export class UnreportedUpdateAdmissionOutcome extends Error {
     super(report.message ?? report.reason);
     this.name = "UnreportedUpdateAdmissionOutcome";
   }
-}
-
-export async function reportUnreportedUpdateAdmissionOutcome(error: unknown): Promise<never> {
-  const candidates = collectNestedErrorCandidates(error);
-  const outcome = candidates.find(
-    (candidate): candidate is UnreportedUpdateAdmissionOutcome =>
-      candidate instanceof UnreportedUpdateAdmissionOutcome,
-  );
-  if (!outcome) {
-    throw error;
-  }
-  const cleanupFailed = error !== outcome;
-  const params = cleanupFailed
-    ? {
-        ...outcome.report,
-        reason: "update-admission-cleanup-failed",
-        message: candidates
-          .filter((candidate): candidate is Error => candidate instanceof Error)
-          .slice(0, 8)
-          .map((candidate) => formatErrorMessage(candidate).slice(0, 2_000))
-          .join("\n"),
-      }
-    : outcome.report;
-  const result = await publishPreMutationUpdateOutcome(params, async () => ({
-    status: !cleanupFailed && outcome.skipped ? "skipped" : "error",
-    ...(cleanupFailed
-      ? { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } }
-      : {}),
-  }));
-  if (!cleanupFailed && outcome.skipped) {
-    return exitCliAfterOutput(defaultRuntime, outcome.skipped.exitCode);
-  }
-  return exitCliAfterOutput(
-    defaultRuntime,
-    cleanupFailed ? 1 : resolveManagedServiceUpdateFailureExitCode(result),
-  );
-}
-
-export async function reportPreMutationUpdateFailure(
-  params: UpdateAdmissionReportParams,
-): Promise<never> {
-  const result = await publishPreMutationUpdateOutcome(params, async () => ({
-    status: "error",
-    ...(params.opts.dryRun !== true
-      ? {
-          recovery: await (params.installKind === "git"
-            ? readCurrentGitUpdateRecovery(params.root)
-            : verifyPackageUpdateRecovery(params.root)),
-        }
-      : {}),
-  }));
-  throw new UpdateCommandFailure(
-    result,
-    resolveManagedServiceUpdateFailureExitCode(result),
-    params.message,
-  );
-}
-
-async function publishPreMutationUpdateOutcome(
-  params: UpdateAdmissionReportParams,
-  prepareOutcome: () => Promise<Pick<UpdateRunResult, "status" | "recovery">>,
-): Promise<UpdateRunResult> {
-  const run = params.opts.run;
-  const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
-  if (run && active && params.message) {
-    recordUpdateRunPhase(
-      run.runId,
-      active.phase,
-      { origin: { nextAction: params.message } },
-      { env: run.env },
-    );
-  }
-  const result = completeUpdateCommandRun(
-    {
-      ...(await prepareOutcome()),
-      mode: params.installKind === "git" ? "git" : "unknown",
-      root: params.root,
-      reason: params.reason,
-      steps: [],
-      durationMs: 0,
-    },
-    params.opts.run,
-  );
-  if (params.opts.dryRun !== true) {
-    await writeControlPlaneUpdateRestartSentinelBestEffort({
-      meta: params.controlPlaneUpdateSentinelMeta,
-      result,
-      jsonMode: Boolean(params.opts.json),
-    });
-  }
-  if (params.opts.json && params.message) {
-    defaultRuntime.error(params.message);
-  }
-  printResult(result, params.opts, { nextAction: params.message });
-  return result;
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

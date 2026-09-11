@@ -48,6 +48,12 @@ const dirs = createTempDirTracker();
 let root: string;
 let databasePath: string;
 let managedServiceNodeRunner: string | undefined;
+const inheritedRunIds = [
+  undefined,
+  "f9ccab65-df92-4ba2-84b9-d15c9c37c9a0",
+  "  1c5a25f3-f46a-408b-a87f-a0f0d1f80ee7  ",
+  " \t ",
+] as const;
 const targetMetadata = {
   target: "2026.9.2",
   version: "2026.9.2",
@@ -375,9 +381,22 @@ describe("update command admission with fresh state", () => {
     expect(staged.close).toHaveBeenCalledOnce();
   });
 
-  it.each(["healthy", "release-failure", "stage-cleanup-failure"] as const)(
-    "settles fresh initialization before terminal publication (%s)",
-    async (fault) => {
+  it.each([
+    ...inheritedRunIds.map((inheritedRunId) => ({ fault: "healthy", inheritedRunId })),
+    { fault: "release-failure", inheritedRunId: undefined },
+    { fault: "stage-cleanup-failure", inheritedRunId: undefined },
+  ])(
+    "settles fresh initialization before terminal publication ($fault, inherited run: $inheritedRunId)",
+    async ({ fault, inheritedRunId }) => {
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunId);
+      let executorRunId: string | undefined;
+      const withExecutor = executorOwner.withUpdateCommandExecutor;
+      vi.spyOn(executorOwner, "withUpdateCommandExecutor").mockImplementation(
+        (runId, operation) => {
+          executorRunId = runId;
+          return withExecutor(runId, operation);
+        },
+      );
       vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
         ok: true,
         value: {},
@@ -429,6 +448,7 @@ describe("update command admission with fresh state", () => {
       };
       vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
       vi.spyOn(initialization, "initializeUpdateStateFromTarget").mockImplementation(async () => {
+        expect(fs.existsSync(databasePath)).toBe(false);
         createSelectedTargetStateDatabase();
       });
       vi.spyOn(execution, "executeMutableUpdate").mockImplementation(async (params) => {
@@ -469,6 +489,11 @@ describe("update command admission with fresh state", () => {
         (error: unknown) => error,
       );
 
+      expect(initialization.initializeUpdateStateFromTarget).toHaveBeenCalledOnce();
+      assert(admittedRun);
+      expect(admittedRun.runId).toBe(executorRunId);
+      expect(admittedRun.runId.trim()).not.toBe("");
+      expect(admittedRun.runId).toBe(inheritedRunId?.trim() || executorRunId);
       expect(outputAtCleanup).toBe(0);
       expect(historyAtCleanup).toBe("running");
       expect(staged.close).toHaveBeenCalledOnce();
@@ -485,19 +510,23 @@ describe("update command admission with fresh state", () => {
     },
   );
 
-  it("previews an older stable without creating the current runtime database or staging it", async () => {
-    await updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false });
+  it.each(inheritedRunIds)(
+    "previews an older stable without runtime state (inherited run: %s)",
+    async (inheritedRunId) => {
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunId);
+      await updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false });
 
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dryRun: true,
-        currentVersion: "2026.9.3",
-        targetVersion: "2026.9.2",
-        downgradeRisk: true,
-      }),
-    );
-    expectFreshStatePreserved();
-  });
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dryRun: true,
+          currentVersion: "2026.9.3",
+          targetVersion: "2026.9.2",
+          downgradeRisk: true,
+        }),
+      );
+      expectFreshStatePreserved();
+    },
+  );
 
   it.each([{ channel: "stable" }, { tag: "latest" }])(
     "refuses unresolved registry metadata for %j before creating runtime state",
@@ -519,26 +548,30 @@ describe("update command admission with fresh state", () => {
     },
   );
 
-  it("reports exact package metadata failure without creating runtime state", async () => {
-    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
-      target: "2026.9.2",
-      version: null,
-      nodeEngine: null,
-      error: "registry unavailable",
-    });
+  it.each(inheritedRunIds)(
+    "reports exact package metadata failure without runtime state (inherited run: %s)",
+    async (inheritedRunId) => {
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunId);
+      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
+        target: "2026.9.2",
+        version: null,
+        nodeEngine: null,
+        error: "registry unavailable",
+      });
 
-    await expect(
-      updateCommand({ tag: "2026.9.2", yes: true, json: true, restart: false }),
-    ).rejects.toMatchObject({ code: 1 });
+      await expect(
+        updateCommand({ tag: "2026.9.2", yes: true, json: true, restart: false }),
+      ).rejects.toMatchObject({ code: 1 });
 
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "error", reason: "target-metadata-preflight" }),
-    );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("registry unavailable"),
-    );
-    expectFreshStatePreserved();
-  });
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "error", reason: "target-metadata-preflight" }),
+      );
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("registry unavailable"),
+      );
+      expectFreshStatePreserved();
+    },
+  );
 
   it.each([
     { owned: true, restart: true, expectedFallback: "/current/node" },

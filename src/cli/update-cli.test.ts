@@ -6879,11 +6879,11 @@ describe("update-cli", () => {
         vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       }
       const root = await mockPackageInstallAtCaseDir();
-      await writeOpenClawPackageFixture(root, "2026.9.3");
+      await writeOpenClawPackageFixture(root, VERSION);
       mockFileBackedPathExists();
       vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
-      readPackageVersion.mockResolvedValue("2026.9.3");
-      primeNpmChannelTag("latest", "2026.9.3");
+      readPackageVersion.mockResolvedValue(VERSION);
+      primeNpmChannelTag("latest", VERSION);
       if (running) {
         mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
       }
@@ -6968,7 +6968,7 @@ describe("update-cli", () => {
 
       expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
       expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
-        expect.objectContaining({ coreVersion: "2026.9.3", syncOfficialPluginInstalls: true }),
+        expect.objectContaining({ coreVersion: VERSION, syncOfficialPluginInstalls: true }),
       );
       expect(lastWriteJsonCall()).toMatchObject({
         status: "ok",
@@ -7068,9 +7068,9 @@ describe("update-cli", () => {
     "reports retained pins on an already-current core (json=%s)",
     async (json) => {
       const root = await mockPackageInstallAtCaseDir();
-      await writeOpenClawPackageFixture(root, "2026.9.3");
-      readPackageVersion.mockResolvedValue("2026.9.3");
-      primeNpmChannelTag("latest", "2026.9.3");
+      await writeOpenClawPackageFixture(root, VERSION);
+      readPackageVersion.mockResolvedValue(VERSION);
+      primeNpmChannelTag("latest", VERSION);
       mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
       const installPath = createCaseDir("current-core-pin");
       await fs.mkdir(installPath, { recursive: true });
@@ -11342,9 +11342,9 @@ describe("update-cli", () => {
     async ({ fallback, restart, writable, refreshFails }) => {
       const servicePrefix = tempDirs.make("openclaw-current-runtime-");
       const { nodeModules, root, serviceNode, serviceNpm, serviceNpmReal, entrypoint } =
-        await setupServicePackageAtPrefix({ prefix: servicePrefix, version: "2026.9.3" });
+        await setupServicePackageAtPrefix({ prefix: servicePrefix, version: VERSION });
       mockPackageInstallStatus(root);
-      readPackageVersion.mockResolvedValue("2026.9.3");
+      readPackageVersion.mockResolvedValue(VERSION);
       primeServiceCommand([serviceNode, entrypoint, "gateway"]);
       serviceLoaded.mockResolvedValue(true);
       if (!writable) {
@@ -11358,9 +11358,9 @@ describe("update-cli", () => {
         pid: gatewayFixturePid,
         state: "running",
       });
-      primeNpmChannelTag("latest", "2026.9.3");
+      primeNpmChannelTag("latest", VERSION);
       vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-        packageTargetStatus({ version: "2026.9.3", nodeEngine: ">=24.16.0 <25 || >=26.1.0" }),
+        packageTargetStatus({ version: VERSION, nodeEngine: ">=24.16.0 <25 || >=26.1.0" }),
       );
       nodeVersionSatisfiesEngine.mockImplementation(
         (version) => fallback && version === process.versions.node,
@@ -11387,7 +11387,7 @@ describe("update-cli", () => {
       mockServicePackageCommands({
         nodeModules,
         packageRoot: root,
-        targetVersion: "2026.9.3",
+        targetVersion: VERSION,
         npmCommands: [serviceNpm, serviceNpmReal!],
         nodeVersions: {
           [serviceNode]: "v22.23.1",
