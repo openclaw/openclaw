@@ -329,6 +329,47 @@ describe("registerPreActionHooks", () => {
     await preActionHook(program, actionCommand);
   }
 
+  async function runNativeExecutorPreAction(primary: string, action: string, args: string[]) {
+    const parser = new Command().name("openclaw");
+    const invoke = vi.fn();
+    parser
+      .command(primary)
+      .command(action)
+      .option("--update-executor <mode>")
+      .option("--token <token>")
+      .action(invoke);
+    registerPreActionHooks(parser, "9.9.9-test");
+    process.argv = ["node", "openclaw", primary, action, ...args];
+    await parser.parseAsync(process.argv);
+    expect(invoke).toHaveBeenCalledOnce();
+  }
+
+  it.each(
+    ["gateway", "daemon"].flatMap((primary) =>
+      ["install", "restart", "stop"].map((action) => [primary, action]),
+    ),
+  )(
+    "keeps the %s %s native capability probe outside stateful bootstrap",
+    async (primary, action) => {
+      await runNativeExecutorPreAction(primary, action, ["--update-executor", "check"]);
+
+      expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+      expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+      expect(emitCliBannerMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { label: "ordinary install", args: [] },
+    { label: "native execution", args: ["--update-executor", "run"] },
+    { label: "invalid mode", args: ["--update-executor", "invalid"] },
+    { label: "check text in another option's value", args: ["--token", "--update-executor=check"] },
+  ])("retains config bootstrap for $label", async ({ args }) => {
+    await runNativeExecutorPreAction("gateway", "install", args);
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledOnce();
+  });
+
   it("applies shared skip policy to routed reads on the Commander path", async () => {
     const processTitleSetSpy = vi.spyOn(process, "title", "set");
     await runPreAction({

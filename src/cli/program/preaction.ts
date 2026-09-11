@@ -151,10 +151,19 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     ) {
       return;
     }
+    const commandPath = getCommanderCommandPath(actionCommand);
+    if (
+      commandPath.length === 2 &&
+      (commandPath[0] === "gateway" || commandPath[0] === "daemon") &&
+      ["install", "restart", "stop"].includes(commandPath[1] ?? "") &&
+      actionCommand.getOptionValue("updateExecutor") === "check"
+    ) {
+      // Capability discovery must not migrate the still-serving Gateway's state.
+      return;
+    }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
     const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
     applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
-    const commandPath = getCommanderCommandPath(actionCommand);
     const startupPolicy = resolveCliStartupPolicy({
       argv,
       commandPath,
