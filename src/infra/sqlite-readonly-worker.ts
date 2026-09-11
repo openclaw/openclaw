@@ -65,7 +65,8 @@ export function resolveAggregateSqliteInspectionTimeoutMs(
   return Math.max(SQLITE_INSPECTION_TIMEOUT_MS, timeoutMs);
 }
 
-export function readSqliteInspectionSizeBytes(pathname: string): bigint | undefined {
+// Include source sidecars when choosing this worker's snapshot deadline.
+function readSqliteInspectionSizeBytes(pathname: string): bigint | undefined {
   let sizeBytes: bigint;
   try {
     sizeBytes = fs.statSync(pathname, { bigint: true }).size;

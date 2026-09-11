@@ -272,6 +272,11 @@ import fs from "node:fs";
 import path from "node:path";
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
+// This fixture has no source databases; only the schema worker should hang.
+if (process.argv.includes("--eval")) {
+  console.log("[]");
+  process.exit(0);
+}
 const { stagingRoot } = JSON.parse(input);
 fs.mkdirSync(path.join(stagingRoot, "partial"), { recursive: true });
 fs.writeFileSync(path.join(stagingRoot, "partial", "database.sqlite"), "partial");

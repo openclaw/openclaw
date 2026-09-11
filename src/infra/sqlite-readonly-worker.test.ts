@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
-  readSqliteInspectionSizeBytes,
   resolveAggregateSqliteInspectionTimeoutMs,
   resolveSqliteInspectionBudget,
   runSqliteReadOnlyWorker,
@@ -102,7 +101,21 @@ it("includes WAL and rollback-journal sidecars in inspection size", () => {
   fs.truncateSync(`${source}-wal`, 3_489_660_928);
   fs.truncateSync(`${source}-journal`, 4 * 1024);
 
-  expect(readSqliteInspectionSizeBytes(source)).toBe(3_556_773_888n);
+  const stagingRoot = tempDirs.make("openclaw-snapshot-size-staging-");
+  // Isolate deadline selection from copying these deliberately sparse sidecars.
+  vi.mocked(spawnSync).mockReturnValueOnce({
+    pid: 1,
+    output: [null, '{"ok":true,"location":"private.sqlite"}', ""],
+    stdout: '{"ok":true,"location":"private.sqlite"}',
+    stderr: "",
+    status: 0,
+    signal: null,
+  });
+  expect(runSqliteReadOnlyWorkerSync(source, stagingRoot)).toBe("private.sqlite");
+  expect(vi.mocked(spawnSync).mock.calls[0]?.[2]).toMatchObject({
+    timeout: 137_000,
+    killSignal: "SIGKILL",
+  });
 });
 
 describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)", (mode) => {

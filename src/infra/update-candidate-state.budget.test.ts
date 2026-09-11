@@ -6,9 +6,16 @@ import { runCommandBuffered } from "../process/exec.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 
-vi.mock("../process/exec.js", () => ({ runCommandBuffered: vi.fn() }));
+const inspectionWorker = vi.hoisted(() => vi.fn<typeof runCommandBuffered>());
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec.js")>();
+  return {
+    runCommandBuffered: (...args: Parameters<typeof runCommandBuffered>) =>
+      args[0].includes("--eval") ? actual.runCommandBuffered(...args) : inspectionWorker(...args),
+  };
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => vi.mocked(runCommandBuffered).mockReset());
+beforeEach(() => inspectionWorker.mockReset());
 
 function result(value: unknown, error?: string): Awaited<ReturnType<typeof runCommandBuffered>> {
   return {
@@ -43,18 +50,16 @@ it.each([false, true])("budgets the discovered registry inventory (legacy=%s)", 
     sharedVersion,
   };
   if (legacy) {
-    vi.mocked(runCommandBuffered).mockResolvedValueOnce(
-      result(null, "Unknown update state inspection mode"),
-    );
-    vi.mocked(runCommandBuffered).mockImplementationOnce(async (_argv, options) => {
+    inspectionWorker.mockResolvedValueOnce(result(null, "Unknown update state inspection mode"));
+    inspectionWorker.mockImplementationOnce(async (_argv, options) => {
       const location = path.join(String(options?.env?.XDG_CACHE_HOME), "database.sqlite");
       fs.copyFileSync(shared, location);
       return result({ ok: true, location });
     });
   } else {
-    vi.mocked(runCommandBuffered).mockResolvedValueOnce(result(discovery));
+    inspectionWorker.mockResolvedValueOnce(result(discovery));
   }
-  vi.mocked(runCommandBuffered).mockResolvedValueOnce(
+  inspectionWorker.mockResolvedValueOnce(
     result([sharedVersion, { path: external, userVersion: 7 }]),
   );
 
@@ -62,7 +67,7 @@ it.each([false, true])("budgets the discovered registry inventory (legacy=%s)", 
     path: external,
     userVersion: 7,
   });
-  const calls = vi.mocked(runCommandBuffered).mock.calls;
+  const calls = inspectionWorker.mock.calls;
   expect(calls).toHaveLength(legacy ? 3 : 2);
   expect(calls[0]?.[1]?.timeoutMs).toBe(31_000);
   // 134 seconds for the database plus 2 for its WAL; legacy also recopies shared.
@@ -74,12 +79,12 @@ it.each([false, true])("budgets the discovered registry inventory (legacy=%s)", 
 });
 
 it("rejects a versions array as a discovery response", async () => {
-  vi.mocked(runCommandBuffered).mockResolvedValueOnce(result([]));
+  inspectionWorker.mockResolvedValueOnce(result([]));
   await expect(
     readUpdateStateSchemaVersions({
       stateDir: tempDirs.make("openclaw-invalid-discovery-"),
       config: {},
     }),
   ).rejects.toThrow();
-  expect(runCommandBuffered).toHaveBeenCalledTimes(1);
+  expect(inspectionWorker).toHaveBeenCalledTimes(1);
 });
