@@ -28,12 +28,13 @@ describe("evidence summary", () => {
             primary: ["channels.dm"],
             secondary: ["channels.qa-channel"],
           },
-          runtimeParityTier: "standard",
+          runtimePairLane: "core",
           docsRefs: ["docs/channels/qa-channel.md"],
           codeRefs: ["extensions/qa-channel/src/gateway.ts"],
         },
       ],
       channelId: "qa-channel",
+      channelDriver: "local-shim",
       env: {
         OPENCLAW_QA_CHANNEL_DRIVER: "local-shim",
         OPENCLAW_QA_REF: "abc123",
@@ -79,7 +80,7 @@ describe("evidence summary", () => {
           path: "extensions/qa-channel/src/gateway.ts",
         },
       ],
-      runtimeParityTier: "standard",
+      runtimePairLane: "core",
       execution: {
         runner: "host",
         provider: {
@@ -122,6 +123,162 @@ describe("evidence summary", () => {
       },
     });
   });
+
+  it("records complete structured RTT provenance and gives it canonical timing precedence", () => {
+    const rttMeasurement = {
+      finalMatchedReplyRttMs: 1750,
+      requestStartedAt: "2026-09-03T00:00:00.000Z",
+      responseObservedAt: "2026-09-03T00:00:01.750Z",
+      source: "request-to-observed-message",
+    };
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [],
+      channelId: "slack",
+      generatedAt: "2026-09-03T00:00:02.000Z",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      scenarioDefinitions: [{ id: "slack-canary", title: "Slack canary" }],
+      scenarioResults: [
+        {
+          name: "Slack canary",
+          status: "pass",
+          timing: { rttMs: 999 },
+          rttMeasurement,
+        },
+      ],
+    });
+
+    expect(evidence.schemaVersion).toBe(2);
+    expect(evidence.entries[0]?.result).toMatchObject({
+      status: "pass",
+      timing: { rttMs: 1750 },
+      rttMeasurement,
+    });
+    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+  });
+
+  it.each([
+    ["timing only", { timing: { rttMs: 1750 } }],
+    [
+      "incomplete measurement",
+      { rttMeasurement: { finalMatchedReplyRttMs: 1750, source: "summary-rtt" } },
+    ],
+  ])("does not fabricate structured RTT provenance from %s input", (_label, resultInput) => {
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [],
+      channelId: "slack",
+      generatedAt: "2026-09-03T00:00:02.000Z",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      scenarioDefinitions: [{ id: "slack-canary", title: "Slack canary" }],
+      scenarioResults: [{ name: "Slack canary", status: "pass", ...resultInput }],
+    });
+
+    expect(evidence.entries[0]?.result.timing).toEqual({ rttMs: 1750 });
+    expect(evidence.entries[0]?.result.rttMeasurement).toBeUndefined();
+  });
+
+  it("validates structured RTT measurements as strict schema-v2 objects", () => {
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [],
+      channelId: "slack",
+      generatedAt: "2026-09-03T00:00:02.000Z",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      scenarioDefinitions: [{ id: "slack-canary", title: "Slack canary" }],
+      scenarioResults: [
+        {
+          name: "Slack canary",
+          status: "pass",
+          rttMeasurement: {
+            finalMatchedReplyRttMs: 1750,
+            requestStartedAt: "2026-09-03T00:00:00.000Z",
+            responseObservedAt: "2026-09-03T00:00:01.750Z",
+            source: "request-to-observed-message",
+          },
+        },
+      ],
+    });
+    const invalidEvidence = structuredClone(evidence) as unknown as {
+      entries: Array<{ result: { rttMeasurement?: Record<string, unknown> } }>;
+    };
+    const invalidEntry = expectDefined(invalidEvidence.entries[0], "QA evidence entry");
+    const invalidMeasurement = expectDefined(invalidEntry.result.rttMeasurement, "RTT measurement");
+    invalidMeasurement.extra = true;
+
+    expect(() => validateQaEvidenceSummaryJson(invalidEvidence)).toThrow();
+  });
+
+  it.each([
+    ["live Discord transport", "discord", "live", undefined, "live", true],
+    ["live Matrix transport", "matrix", "live", undefined, "live", true],
+    ["live Slack transport", "slack", "live", undefined, "live", true],
+    ["live Telegram transport", "telegram", "live", undefined, "live", true],
+    ["live WhatsApp transport", "whatsapp", "live", undefined, "live", true],
+    [
+      "live transport without a bundled channel identity",
+      "custom-live-transport",
+      "live",
+      undefined,
+      "live",
+      true,
+    ],
+    [
+      "synthetic driver for a real channel identity",
+      "telegram",
+      "qa-channel",
+      undefined,
+      "qa-channel",
+      false,
+    ],
+    [
+      "Crabline driver for a real channel identity",
+      "telegram",
+      "crabline",
+      undefined,
+      "crabline",
+      false,
+    ],
+    [
+      "explicit synthetic driver ignores requested environment metadata",
+      "telegram",
+      "qa-channel",
+      { OPENCLAW_QA_CHANNEL_DRIVER: "live" },
+      "qa-channel",
+      false,
+    ],
+    [
+      "transport without a resolved driver",
+      "custom-live-transport",
+      undefined,
+      undefined,
+      undefined,
+      false,
+    ],
+  ] as const)(
+    "records actual channel liveness for %s independently of model liveness",
+    (_label, channelId, channelDriver, env, expectedDriver, expectedLive) => {
+      const evidence = buildQaSuiteEvidenceSummary({
+        artifactPaths: [],
+        channelId,
+        channelDriver,
+        env,
+        generatedAt: "2026-07-25T00:00:00.000Z",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        providerMode: "mock-openai",
+        scenarioDefinitions: [{ id: "channel-liveness", title: "Channel liveness" }],
+        scenarioResults: [{ name: "Channel liveness", status: "pass" }],
+      });
+
+      expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+      expect(evidence.entries[0]?.execution?.channel).toEqual({
+        id: channelId,
+        live: expectedLive,
+        driver: expectedDriver,
+      });
+      expect(evidence.entries[0]?.execution?.provider.live).toBe(false);
+    },
+  );
 
   it("prefers the checked-out ref over an inherited GitHub event SHA", () => {
     const repoRoot = process.cwd();

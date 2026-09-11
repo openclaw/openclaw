@@ -1,7 +1,12 @@
 /**
  * Embedded-agent run orchestration implementation.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  createAgentLifecycleTerminalBackstop,
+  resolveAgentLifecycleTerminalMetadata,
+} from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,55 +25,77 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import {
+  AsyncWorkScope,
+  captureAsyncWorkTracker,
+  getAsyncWorkSignal,
+} from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
+  resolveModelFallbackAvailability,
+  resolveRunModelFallbacksOverride,
 } from "../agent-scope.js";
-import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
+import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
+import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
+import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
+import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../prepared-model-runtime-generation-scope.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
+} from "../prepared-model-runtime.js";
+import { resolveProjectKey } from "../project-memory-scope.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
-import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import {
   resolveSessionSuspensionTarget,
   suspendSession,
   type SessionSuspensionParams,
 } from "../session-suspension.js";
+import { SessionManager } from "../sessions/session-manager.js";
+import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { executePreparedEmbeddedRun } from "./run-execution.js";
+import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
 } from "./run/attempt-stage-timing.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
-import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
+import { buildEmbeddedFailureSuspension } from "./run/failure-suspension.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
 } from "./run/internal-params.js";
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
-import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { bindRunToPreparedModelRuntime } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 import { assertAgentHarnessRunAdmission, backfillSessionKey } from "./run/session-bootstrap.js";
+import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 
 export function runEmbeddedAgent(
-  paramsInput: RunEmbeddedAgentParams,
+  internalParamsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const internalParamsInput = paramsInput as RunEmbeddedAgentInternalParams;
   const requestedProvider = normalizeOptionalString(internalParamsInput.provider);
   const requestedModel = normalizeOptionalString(internalParamsInput.model);
   const needsConfiguredDefault =
@@ -79,11 +106,19 @@ export function runEmbeddedAgent(
   const lifecycleGeneration =
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
+  // Isolated probes acquire their own read-only runtime snapshot. Carrying the caller's
+  // ambient generation makes the admission guard reject that independent snapshot.
+  const pluginGeneration =
+    internalParamsInput.pluginGeneration ??
+    (internalParamsInput.preparedModelRuntimeMode === "isolated-read-only"
+      ? undefined
+      : getPreparedModelRuntimePluginGeneration());
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     runEmbeddedAgentInternal({
       ...internalParamsInput,
       config,
       lifecycleGeneration,
+      ...(pluginGeneration ? { pluginGeneration } : {}),
     }),
   );
 }
@@ -91,6 +126,9 @@ export function runEmbeddedAgent(
 async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
+  const contextEngineAgentId =
+    normalizeOptionalString(paramsInput.sessionTarget?.agentId) ??
+    normalizeOptionalString(paramsInput.agentId);
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
     ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
@@ -105,26 +143,45 @@ async function runEmbeddedAgentInternal(
     sessionKey: paramsBase.sessionKey,
     agentId: paramsBase.agentId,
   });
-  assertAgentHarnessRunAdmission({ ...paramsBase, sessionKey: effectiveSessionKey });
+  const sessionAdmission = assertAgentHarnessRunAdmission({
+    ...paramsBase,
+    sessionKey: effectiveSessionKey,
+  });
   const runSessionTarget = await resolveAgentRunSessionTarget({
     ...paramsBase,
+    missingSessionKey: "create",
     sessionKey: effectiveSessionKey,
   });
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
-    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    // Establish one detached transcript owner for CLI dispatch and every retry.
+    sessionManager:
+      paramsBase.sessionManager ??
+      (paramsBase.sessionPersistence === "detached"
+        ? SessionManager.inMemory(paramsBase.cwd ?? paramsBase.workspaceDir)
+        : undefined),
+    agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
-    sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
-    sessionFile: runSessionTarget.sessionFile,
+    sessionKey: runSessionTarget.sessionKey,
+    sessionTarget: runSessionTarget,
+    sessionFile: runSessionTarget.sessionKey,
     skillWorkshopProposalMutationBudget,
   });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another
   // candidate remains. Direct and final-candidate runs suspend normally.
-  const failureSuspension = resolveSessionSuspensionTarget();
-  const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
-    const suspension = { ...suspensionParams, laneId: globalLane };
+  // Detached runs neither write durable metadata nor claim the outer deferral.
+  const failureSuspension =
+    params.sessionPersistence === "detached" ? undefined : resolveSessionSuspensionTarget();
+  const suspendForFailure = (suspensionParams: SessionSuspensionParams) => {
+    if (!failureSuspension) {
+      return;
+    }
+    const suspension = buildEmbeddedFailureSuspension({
+      suspension: suspensionParams,
+      runAgentId: params.agentId,
+    });
     if (failureSuspension.mode === "defer") {
       failureSuspension.defer(suspension);
       return;
@@ -168,11 +225,13 @@ async function runEmbeddedAgentInternal(
     // Same-session reads below must see any prior deferred transcript rewrite.
     // Checkpoint before the global lane so unrelated sessions can still start
     // while this session waits on its own maintenance lane.
-    params.replyOperation?.markWaitingForDeferredMaintenance();
-    try {
-      await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
-    } finally {
-      params.replyOperation?.markDeferredMaintenanceWaitEnded();
+    if (!params.sessionManager || params.sessionManager.getSessionTarget()) {
+      params.replyOperation?.markWaitingForDeferredMaintenance();
+      try {
+        await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
+      } finally {
+        params.replyOperation?.markDeferredMaintenanceWaitEnded();
+      }
     }
     throwIfAborted();
     return enqueueGlobal(async () => {
@@ -180,7 +239,11 @@ async function runEmbeddedAgentInternal(
       // Subscription-scoped claude-cli auth executes via the CLI backend;
       // resolved post-admission so dispatched runs obey the same lifecycle,
       // placement, and concurrency gates as native embedded runs.
-      const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible(params);
+      const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible({
+        ...params,
+        // Preserve the admitted writer claim alongside the already resolved storage identity.
+        sessionTarget: { ...params.sessionTarget, ...runSessionTarget },
+      });
       if (cliDispatched) {
         return cliDispatched;
       }
@@ -192,162 +255,371 @@ async function runEmbeddedAgentInternal(
         agentId: params.agentId,
         config: params.config,
       });
+      startupStages.mark("workspace");
       const config = params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG;
       const requestedAgentDir =
         params.agentDir ?? resolveAgentDir(config, requestedWorkspaceResolution.agentId);
       const retainIdleRunOwner = params.config === undefined;
+      const requestedRuntimeSelection = resolveInitialEmbeddedRunModel({
+        config,
+        agentId: requestedWorkspaceResolution.agentId,
+        provider: params.provider,
+        model: params.model,
+      });
+      const explicitHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
+      const requestedHarnessRuntime =
+        explicitHarnessRuntime ?? params.agentHarnessRuntimePreparationHint;
+      const runtimePluginFallbacksOverride =
+        params.modelFallbacksOverride ??
+        resolveRunModelFallbacksOverride({
+          cfg: config,
+          agentId: requestedWorkspaceResolution.agentId,
+          sessionKey: params.sessionKey,
+        });
+      const pluginMetadataSnapshot =
+        params.pluginGeneration?.pluginMetadataSnapshot ??
+        loadPluginMetadataSnapshot({
+          config,
+          workspaceDir: requestedWorkspaceResolution.workspaceDir,
+          env: process.env,
+        });
+      const runtimePluginSelections = resolveModelCandidateChain({
+        cfg: config,
+        agentId: requestedWorkspaceResolution.agentId,
+        manifestPlugins: pluginMetadataSnapshot,
+        provider: requestedRuntimeSelection.provider,
+        model: requestedRuntimeSelection.modelId,
+        requestedRouteResolution: params.requestedRouteResolution,
+        fallbacksOverride: runtimePluginFallbacksOverride,
+      }).map((candidate, index) =>
+        requestedHarnessRuntime &&
+        // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+        (index === 0 || explicitHarnessRuntime)
+          ? {
+              provider: candidate.provider,
+              modelId: candidate.model,
+              runtime: requestedHarnessRuntime,
+              agentId: requestedWorkspaceResolution.agentId,
+            }
+          : {
+              provider: candidate.provider,
+              modelId: candidate.model,
+              agentId: requestedWorkspaceResolution.agentId,
+            },
+      );
       const preparedInput = {
         config,
         agentId: requestedWorkspaceResolution.agentId,
         agentDir: requestedAgentDir,
-        inheritedAuthDir: resolveDefaultAgentDir(config),
+        // Shared credential inheritance stays anchored to its compatibility owner;
+        // the selected session agent already owns this prepared runtime.
+        inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
         workspaceDir: requestedWorkspaceResolution.workspaceDir,
         preserveWorkspaceDirOnRefresh: !requestedWorkspaceResolution.isCanonicalWorkspace,
+        ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+        ...(params.preparedModelRuntimeMode === "isolated-read-only"
+          ? { loadRuntimePlugins: true }
+          : {}),
+        runtimePluginSelections,
       };
-      // Configless direct hosts reuse one bounded idle generation. Gateway and explicitly
-      // configured runs release dynamic workspaces so one-off paths cannot accumulate owners.
-      const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(preparedInput, {
-        retainIdleRunOwner,
-      });
-      const preparedModelRuntime = preparedModelRuntimeLease.snapshot;
-      try {
-        // A reload may complete while admission waits. The committed generation owns config,
-        // directories, model selection, hooks, fallbacks, and every later run projection.
-        const rebound = bindRunToPreparedModelRuntime({
-          runParams: params,
-          requestedWorkspaceResolution,
-          preparedModelRuntime,
+      startupStages.mark("harness-selection");
+      const callerResult = createDeferredCore<EmbeddedAgentRunResult>();
+      const trackOwner = captureAsyncWorkTracker();
+      const parentSignal = getAsyncWorkSignal();
+      const work = new AsyncWorkScope();
+      let context = work.run(() => AsyncLocalStorage.snapshot());
+      let releasePreparedRuntime: (() => void) | undefined;
+      const runPreparedCandidate = async () => {
+        // Configless direct hosts reuse one idle generation. The prepared-runtime lifecycle keeps
+        // gateway run generations in its own bounded cache so one-off paths cannot accumulate.
+        // Runtime acquisition owns its build bound before the attempt budget starts.
+        // Suspend lane-idle inference without inventing progress; Stop still cancels admission.
+        laneController.setLaneTaskDeadline({ kind: "unlimited" });
+        const preparedModelRuntimeLease = await (
+          params.preparedModelRuntimeMode === "isolated-read-only"
+            ? // Probe homes outlive only the attempt client, not independent live catalog clients.
+              acquireReadOnlyPreparedModelRuntime(preparedInput, {
+                abortSignal: laneController.abortSignal,
+                catalogMode: "static",
+              })
+            : acquireAgentRunPreparedModelRuntime(preparedInput, {
+                retainIdleRunOwner,
+                // Turns need only configured admission facts. Full live model inventory remains
+                // available through the snapshot's lazy control-plane loader.
+                catalogMode: "static",
+                ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
+                abortSignal: laneController.abortSignal,
+              })
+        ).finally(() => {
+          noteLaneTaskProgress();
+          laneController.setLaneTaskDeadline(undefined);
         });
-        params = rebound.runParams;
-        const workspaceResolution = rebound.workspaceResolution;
-        const preparedAgentId = workspaceResolution.agentId;
-        const resolvedWorkspace = workspaceResolution.workspaceDir;
-        const agentDir = preparedModelRuntime.agentDir;
-        const progressController = createEmbeddedRunProgressController({
-          attempt: params,
-          noteLaneTaskProgress,
-          startedAtMs: started,
-        });
-        const { notifyExecutionPhase } = progressController;
-        const emitStartupStageSummary = createEmbeddedRunStageSummaryEmitter({
-          label: "startup stages",
-          log,
-          runId: params.runId,
-          sessionId: params.sessionId,
-          tracker: startupStages,
-        });
-        params.onExecutionStarted?.({ lifecycleGeneration });
-        notifyExecutionPhase("runner_entered");
-        const canonicalWorkspace = resolveUserPath(
-          resolveAgentWorkspaceDir(preparedModelRuntime.config, preparedAgentId),
-        );
-        const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
-        const redactedSessionId = redactRunIdentifier(params.sessionId);
-        const redactedSessionKey = redactRunIdentifier(params.sessionKey);
-        const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
-        if (requestedWorkspaceResolution.usedFallback) {
-          log.warn(
-            `[workspace-fallback] caller=runEmbeddedAgent reason=${requestedWorkspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${preparedAgentId} workspace=${redactedWorkspace}`,
+        releasePreparedRuntime = () => preparedModelRuntimeLease.release();
+        startupStages.mark("prepared-runtime");
+        const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
+        let preparedLeaseActive = true;
+        try {
+          throwIfAborted();
+          if (
+            params.pluginGeneration &&
+            preparedModelRuntimeOwnerSnapshot.metadataSnapshot !==
+              params.pluginGeneration.pluginMetadataSnapshot
+          ) {
+            throw new Error("prepared model runtime replaced the admitted plugin generation");
+          }
+          // A reload may complete while admission waits. The committed generation owns config,
+          // directories, model selection, hooks, fallbacks, and every later run projection.
+          const rebound = bindRunToPreparedModelRuntime({
+            runParams: params,
+            requestedWorkspaceResolution,
+            preparedModelRuntime: preparedModelRuntimeOwnerSnapshot,
+          });
+          params = rebound.runParams;
+          const workspaceResolution = rebound.workspaceResolution;
+          const repoRoot =
+            resolveSystemPromptRepoRoot({
+              config: rebound.runParams.config,
+              workspaceDir: workspaceResolution.workspaceDir,
+              cwd: rebound.runParams.cwd,
+            }) ?? null;
+          const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
+          const activeProjectKeys = prepareEmbeddedSessionActiveProjectKeys(
+            params.sessionId,
+            projectKey,
           );
-        }
-        startupStages.mark("workspace");
-        notifyExecutionPhase("workspace");
-        ensureRuntimePluginsLoaded({
-          config: preparedModelRuntime.config,
-          workspaceDir: resolvedWorkspace,
-          ...(params.allowGatewaySubagentBinding !== undefined
-            ? { allowGatewaySubagentBinding: params.allowGatewaySubagentBinding }
-            : {}),
-        });
-        startupStages.mark("runtime-plugins");
-        notifyExecutionPhase("runtime_plugins");
+          const preparedModelRuntime = Object.freeze({
+            ...preparedModelRuntimeOwnerSnapshot,
+            repoRoot,
+            projectKey,
+            activeProjectKeys,
+          });
+          const runPrepared = async () => {
+            const preparedAgentId = workspaceResolution.agentId;
+            const resolvedWorkspace = workspaceResolution.workspaceDir;
+            const agentDir = preparedModelRuntime.agentDir;
+            const progressController = createEmbeddedRunProgressController({
+              attempt: params,
+              noteLaneTaskProgress,
+              startedAtMs: started,
+            });
+            const { notifyExecutionPhase } = progressController;
+            const emitStartupStageSummary = createEmbeddedRunStageSummaryEmitter({
+              label: "startup stages",
+              log,
+              runId: params.runId,
+              sessionId: params.sessionId,
+              tracker: startupStages,
+            });
+            params.onExecutionStarted?.({ lifecycleGeneration });
+            notifyExecutionPhase("runner_entered");
+            const canonicalWorkspace = resolveUserPath(
+              resolveAgentWorkspaceDir(preparedModelRuntime.config, preparedAgentId),
+            );
+            const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
+            const redactedSessionId = redactRunIdentifier(params.sessionId);
+            const redactedSessionKey = redactRunIdentifier(params.sessionKey);
+            const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
+            if (requestedWorkspaceResolution.usedFallback) {
+              log.warn(
+                `[workspace-fallback] caller=runEmbeddedAgent reason=${requestedWorkspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${preparedAgentId} workspace=${redactedWorkspace}`,
+              );
+            }
+            startupStages.mark("runtime-context");
+            notifyExecutionPhase("workspace");
+            startupStages.mark("runtime-plugins");
+            notifyExecutionPhase("runtime_plugins");
 
-        const { provider, modelId } = resolveInitialEmbeddedRunModel({
-          config: params.config,
-          agentId: workspaceResolution.agentId,
-          provider: params.provider,
-          model: params.model,
-        });
-        const normalizedSessionKey = params.sessionKey?.trim();
-        const fallbackConfigured = hasEmbeddedRunConfiguredModelFallbacks({
-          cfg: params.config,
-          agentId: params.agentId,
-          sessionKey: normalizedSessionKey,
-          modelFallbacksOverride: params.modelFallbacksOverride,
-        });
-        const resolvedSessionKey =
-          normalizedSessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId;
-        const hookRunner = getGlobalHookRunner();
-        const hookCtx = {
-          runId: params.runId,
-          jobId: params.jobId,
-          agentId: workspaceResolution.agentId,
-          sessionKey: resolvedSessionKey,
-          sessionId: params.sessionId,
-          workspaceDir: resolvedWorkspace,
-          modelProviderId: provider,
-          modelId,
-          trigger: params.trigger,
-          ...buildAgentHookContextChannelFields(params),
-          ...buildAgentHookContextIdentityFields({
-            trigger: params.trigger,
-            senderId: params.senderId,
-            chatId: params.chatId,
-            channelContext: params.channelContext,
-          }),
-        };
-        const hookResult = await runBeforeAgentReplyForTurn({
-          runId: params.runId,
-          trigger: params.trigger,
-          event: { cleanedBody: params.prompt },
-          context: hookCtx,
-          onDispatch: () =>
-            notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
-          onDeclined: () => notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
-        });
-        if (hookResult?.handled) {
-          return {
-            payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
-            meta: {
-              durationMs: Date.now() - started,
-              agentMeta: {
-                sessionId: params.sessionId,
-                provider,
-                model: modelId,
-              },
-              finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-              finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-            },
+            const { provider, modelId } = resolveInitialEmbeddedRunModel({
+              config: params.config,
+              agentId: workspaceResolution.agentId,
+              provider: params.provider,
+              model: params.model,
+            });
+            const normalizedSessionKey = params.sessionKey?.trim();
+            const modelFallbackAvailability =
+              params.modelFallbackAvailability ??
+              resolveModelFallbackAvailability({
+                cfg: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
+                agentId: workspaceResolution.agentId,
+                sessionKey: normalizedSessionKey,
+                hasSessionModelOverride: false,
+                modelFallbacksOverride: params.modelFallbacksOverride,
+              });
+            const fallbackConfigured = modelFallbackAvailability.kind === "active";
+            if (modelFallbackAvailability.kind === "disabled_by_model_override") {
+              log.warn(
+                `[model-fallback] configured fallbacks disabled by user model override run=${params.runId} session=${redactedSessionId}`,
+              );
+            }
+            const resolvedSessionKey = normalizedSessionKey ?? runSessionTarget.sessionKey;
+            const hookRunner = getGlobalHookRunner();
+            const hookCtx = {
+              runId: params.runId,
+              jobId: params.jobId,
+              agentId: workspaceResolution.agentId,
+              sessionKey: resolvedSessionKey,
+              sessionId: params.sessionId,
+              workspaceDir: resolvedWorkspace,
+              activeProjectKeys: [...activeProjectKeys],
+              modelProviderId: provider,
+              modelId,
+              trigger: params.trigger,
+              ...buildAgentHookContextChannelFields(params),
+              ...buildAgentHookContextIdentityFields({
+                trigger: params.trigger,
+                senderId: params.senderId,
+                chatId: params.chatId,
+                channelContext: params.channelContext,
+              }),
+            };
+            const hookResult = await runBeforeAgentReplyForTurn({
+              runId: params.runId,
+              trigger: params.trigger,
+              event: { cleanedBody: params.prompt },
+              context: hookCtx,
+              onDispatch: () =>
+                notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
+              onDeclined: () =>
+                notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
+            });
+            if (hookResult?.handled) {
+              return {
+                payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: params.sessionId,
+                    provider,
+                    model: modelId,
+                  },
+                  finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+                  finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+                },
+              };
+            }
+
+            const assistantErrorTranscript =
+              params.assistantErrorTranscript ?? createAssistantErrorTranscript(params);
+            const terminal =
+              (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
+                ? undefined
+                : createAgentLifecycleTerminalBackstop({
+                    runId: params.runId,
+                    sessionKey: params.sessionKey,
+                    startedAt: started,
+                    getLifecycleGeneration: () => lifecycleGeneration,
+                    resolveTerminationFields: (error) =>
+                      resolveAgentRunErrorLifecycleFields(error, params.abortSignal),
+                    onTerminalEvent: (event) =>
+                      runBestEffortCallback({
+                        callback: () => params.onAgentEvent?.(event),
+                        label: "lifecycle agent event",
+                        log,
+                      }),
+                  });
+            try {
+              let failed = true;
+              let result: EmbeddedAgentRunResult;
+              try {
+                result = await runPreparedEmbeddedLoop({
+                  runParams: {
+                    ...params,
+                    assistantErrorTranscript,
+                    deferTerminalLifecycle: true,
+                    onAgentEvent: terminal
+                      ? (event) => {
+                          terminal.note(event);
+                          return params.onAgentEvent?.(event);
+                        }
+                      : params.onAgentEvent,
+                  },
+                  sessionAdmission,
+                  contextEngineAgentId,
+                  provider,
+                  modelId,
+                  agentDir,
+                  workspaceResolution,
+                  workspaceDir: resolvedWorkspace,
+                  bootstrapWorkspaceDir: canonicalWorkspace,
+                  isCanonicalWorkspace,
+                  globalLane,
+                  hookRunner,
+                  hookContext: hookCtx,
+                  fallbackConfigured,
+                  isProbeSession,
+                  resolvedSessionKey,
+                  resolvedToolResultFormat,
+                  startedAtMs: started,
+                  startupStages,
+                  emitStartupStageSummary,
+                  progressController,
+                  laneController,
+                  lifecycleGeneration,
+                  suspendForFailure,
+                  preparedModelRuntime,
+                });
+                failed = Boolean(result.meta.error) || result.meta.stopReason === "error";
+              } finally {
+                // Settle the fenced error append before publishing this logical run's terminal.
+                if (!params.assistantErrorTranscript) {
+                  await assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted);
+                }
+              }
+              const error = result.meta.error?.message ?? terminal?.getDeferredError();
+              terminal?.emit(
+                error ? "error" : "end",
+                error ? new Error(error) : result,
+                resolveAgentLifecycleTerminalMetadata(result.meta),
+              );
+              return result;
+            } catch (error) {
+              terminal?.emit("error", error);
+              throw error;
+            }
           };
+          const runWithPreparedRuntime = () =>
+            withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
+              context = AsyncLocalStorage.snapshot();
+              return runPrepared();
+            });
+          return params.pluginGeneration
+            ? await withPreparedModelRuntimePluginGenerationScope(
+                preparedModelRuntimeLease.pluginGeneration,
+                runWithPreparedRuntime,
+                () => (preparedLeaseActive ? preparedModelRuntimeOwnerSnapshot : undefined),
+              )
+            : await runWithPreparedRuntime();
+        } finally {
+          preparedLeaseActive = false;
         }
-
-        return await executePreparedEmbeddedRun({
-          runParams: params,
-          provider,
-          modelId,
-          agentDir,
-          workspaceResolution,
-          workspaceDir: resolvedWorkspace,
-          isCanonicalWorkspace,
-          globalLane,
-          hookRunner,
-          hookContext: hookCtx,
-          fallbackConfigured,
-          isProbeSession,
-          resolvedSessionKey,
-          resolvedToolResultFormat,
-          startedAtMs: started,
-          startupStages,
-          emitStartupStageSummary,
-          progressController,
-          laneController,
-          lifecycleGeneration,
-          suspendForFailure,
-          preparedModelRuntime,
-        });
-      } finally {
-        preparedModelRuntimeLease.release();
-      }
+      };
+      // The lane reports its existing result while this owner retains actual cleanup work.
+      void trackOwner(async () => {
+        const closeWork = () => context(() => work.beginClose(parentSignal?.reason));
+        parentSignal?.addEventListener("abort", closeWork, { once: true });
+        if (parentSignal?.aborted) {
+          closeWork();
+        }
+        try {
+          callerResult.resolve(await work.track(runPreparedCandidate));
+        } catch (error) {
+          callerResult.reject(error);
+        } finally {
+          try {
+            await AsyncWorkScope.runWhenAllIdle(
+              () => [work],
+              () => context(() => work.drain()),
+            );
+          } finally {
+            try {
+              releasePreparedRuntime?.();
+            } finally {
+              parentSignal?.removeEventListener("abort", closeWork);
+            }
+          }
+        }
+      }).catch(callerResult.reject);
+      return await callerResult.promise;
     });
   }).finally(() => {
     revokeMessageActionTurnCapability(recoveryMessageActionTurnCapability);

@@ -17,6 +17,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
@@ -39,27 +40,118 @@ import androidx.wear.input.RemoteInputIntentHelper
 import kotlinx.coroutines.delay
 import java.util.Locale
 
+internal const val extraWearLaunchTarget = "openclaw.wear.launchTarget"
+
+internal enum class WearLaunchTarget(
+  val rawValue: String,
+  val initialPage: WearHomePage,
+) {
+  Chat("chat", WearHomePage.Chat),
+  Voice("voice", WearHomePage.Voice),
+  ;
+
+  companion object {
+    fun fromRawValue(raw: String?): WearLaunchTarget = entries.firstOrNull { target -> target.rawValue == raw?.trim()?.lowercase() } ?: Chat
+  }
+}
+
+internal fun parseWearLaunchTarget(intent: Intent?): WearLaunchTarget = WearLaunchTarget.fromRawValue(intent?.getStringExtra(extraWearLaunchTarget))
+
+internal fun consumeWearLaunchTarget(intent: Intent?): WearLaunchTarget =
+  parseWearLaunchTarget(intent).also {
+    intent?.removeExtra(extraWearLaunchTarget)
+  }
+
+internal data class WearNavigationRequest(
+  val id: Int,
+  val target: WearLaunchTarget,
+)
+
+internal data class WearLaunchState(
+  val initialTarget: WearLaunchTarget = WearLaunchTarget.Chat,
+  val navigationRequest: WearNavigationRequest? = null,
+  val nextRequestId: Int = 0,
+) {
+  fun next(intent: Intent?): WearLaunchState {
+    val requestId = nextRequestId + 1
+    return copy(
+      navigationRequest =
+        WearNavigationRequest(
+          id = requestId,
+          target = consumeWearLaunchTarget(intent),
+        ),
+      nextRequestId = requestId,
+    )
+  }
+
+  fun handled(requestId: Int): WearLaunchState = if (navigationRequest?.id == requestId) copy(navigationRequest = null) else this
+
+  companion object {
+    fun initial(intent: Intent?): WearLaunchState = WearLaunchState(initialTarget = consumeWearLaunchTarget(intent))
+  }
+}
+
+@Composable
+internal fun WearLaunchContent(
+  launchState: WearLaunchState,
+  content: @Composable (WearHomePage, WearNavigationRequest?) -> Unit,
+) {
+  // Warm launches are pager events. Keeping this composition identity stable preserves
+  // pending-reply, autospeak, and real-time UI state owned below this boundary.
+  content(launchState.initialTarget.initialPage, launchState.navigationRequest)
+}
+
+internal fun shouldRecreateForScreenshotMode(
+  currentScene: WearScreenshotScene?,
+  intent: Intent?,
+  screenshotModeEnabled: Boolean,
+): Boolean =
+  screenshotModeEnabled &&
+    (currentScene != null || parseWearScreenshotModeIntent(intent) != null)
+
 class MainActivity : ComponentActivity() {
   private val viewModel: WearViewModel by viewModels()
   private var screenshotScene: WearScreenshotScene? = null
+  private var launchState by mutableStateOf(WearLaunchState())
+
+  private val screenshotModeEnabled: Boolean
+    get() = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+    if (screenshotModeEnabled) {
       screenshotScene = parseWearScreenshotModeIntent(intent)
     }
+    launchState = WearLaunchState.initial(intent)
     setContent {
       val scene = screenshotScene
       if (scene == null) {
-        OpenClawWearApp(
-          viewModel = viewModel,
-          settingsStore = remember { WearSettingsStore(applicationContext) },
-          speaker = remember { WearReplySpeaker(applicationContext) },
-        )
+        WearLaunchContent(launchState) { initialPage, navigationRequest ->
+          OpenClawWearApp(
+            viewModel = viewModel,
+            settingsStore = remember { WearSettingsStore(applicationContext) },
+            speaker = remember { WearReplySpeaker(applicationContext) },
+            initialPage = initialPage,
+            navigationRequest = navigationRequest,
+            onNavigationRequestHandled = { requestId ->
+              launchState = launchState.handled(requestId)
+            },
+          )
+        }
       } else {
         OpenClawWearScreenshotApp(scene)
       }
     }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    if (shouldRecreateForScreenshotMode(screenshotScene, intent, screenshotModeEnabled)) {
+      recreate()
+      return
+    }
+    launchState = launchState.next(intent)
   }
 
   override fun onStart() {
@@ -82,6 +174,9 @@ internal fun OpenClawWearApp(
   viewModel: WearViewModel,
   settingsStore: WearSettingsStore,
   speaker: WearReplySpeaker,
+  initialPage: WearHomePage = WearHomePage.Chat,
+  navigationRequest: WearNavigationRequest? = null,
+  onNavigationRequestHandled: (Int) -> Unit = {},
 ) {
   val state by viewModel.state.collectAsState()
   val snapshot = state.toConversationSnapshot()
@@ -109,6 +204,9 @@ internal fun OpenClawWearApp(
   val messageLabel = stringResource(R.string.message)
   val messageTitle = stringResource(R.string.message_agent)
   val sendLabel = stringResource(R.string.send)
+  val sessionSearchTitle = stringResource(R.string.search_sessions_title)
+  val modelSearchTitle = stringResource(R.string.search_models_title)
+  val searchLabel = stringResource(R.string.search)
 
   fun submitMessage(rawMessage: String) {
     val message = rawMessage.trim()
@@ -160,6 +258,42 @@ internal fun OpenClawWearApp(
         interaction = WearInteractionState.READY
       }
     }
+  val sessionSearchLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      val query =
+        result.data
+          ?.let(RemoteInput::getResultsFromIntent)
+          ?.getCharSequence(REMOTE_INPUT_KEY)
+          ?.toString()
+      if (result.resultCode == Activity.RESULT_OK && !query.isNullOrBlank()) {
+        viewModel.searchSessions(query)
+      }
+    }
+  val modelSearchLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      val query =
+        result.data
+          ?.let(RemoteInput::getResultsFromIntent)
+          ?.getCharSequence(REMOTE_INPUT_KEY)
+          ?.toString()
+      if (result.resultCode == Activity.RESULT_OK && !query.isNullOrBlank()) {
+        viewModel.searchModels(query)
+      }
+    }
+
+  fun launchSearchInput(
+    title: String,
+    launcher: ActivityResultLauncher<Intent>,
+  ) {
+    val remoteInput = RemoteInput.Builder(REMOTE_INPUT_KEY).setLabel(searchLabel).build()
+    val intent =
+      RemoteInputIntentHelper.createActionRemoteInputIntent().also { inputIntent ->
+        RemoteInputIntentHelper.putRemoteInputsExtra(inputIntent, listOf(remoteInput))
+        RemoteInputIntentHelper.putTitleExtra(inputIntent, title)
+        RemoteInputIntentHelper.putConfirmLabelExtra(inputIntent, searchLabel)
+      }
+    launcher.launch(intent)
+  }
 
   fun startRealtimeTalk() {
     speaker.stop()
@@ -322,6 +456,9 @@ internal fun OpenClawWearApp(
         themeMode = themeMode,
         autoSpeak = autoSpeak,
         notificationsGranted = notificationsGranted,
+        initialPage = initialPage,
+        navigationRequest = navigationRequest,
+        onNavigationRequestHandled = onNavigationRequestHandled,
         onTalk = {
           if (!state.connected || snapshot?.activeSessionId == null) return@OpenClawWearScreens
           interaction = WearInteractionState.LISTENING
@@ -369,15 +506,25 @@ internal fun OpenClawWearApp(
           viewModel.selectAgent(agentId)
         },
         onSelectSession = { sessionKey ->
-          state.sessions.firstOrNull { it.key == sessionKey }?.let { session ->
+          (
+            state.sessionSearchResults.firstOrNull { it.key == sessionKey }
+              ?: state.sessions.firstOrNull { it.key == sessionKey }
+          )?.let { session ->
             leaveConversationContext()
             viewModel.openSession(session)
           }
         },
+        onSearchSessions = { launchSearchInput(sessionSearchTitle, sessionSearchLauncher) },
+        onLoadMoreSessionSearch = viewModel::loadMoreSessionSearch,
+        onClearSessionSearch = viewModel::clearSessionSearch,
         onSelectModel = { modelRef ->
           leaveConversationContext()
           viewModel.selectModel(modelRef)
         },
+        onSearchModels = { launchSearchInput(modelSearchTitle, modelSearchLauncher) },
+        onClearModelSearch = viewModel::clearModelSearch,
+        onAgentPulseVisibilityChanged = viewModel::setAgentPulseVisible,
+        onAgentPulseRefresh = viewModel::refreshAgentPulse,
         onRefresh = viewModel::refresh,
         onGatewayEnabledChange = { enabled ->
           speaker.stop()

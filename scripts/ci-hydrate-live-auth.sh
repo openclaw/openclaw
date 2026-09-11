@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 profile_path="${1:-${RUNNER_TEMP:-/tmp}/openclaw-live.profile}"
@@ -70,6 +74,7 @@ for env_key in \
   BYTEPLUS_API_KEY \
   CEREBRAS_API_KEY \
   DEEPINFRA_API_KEY \
+  DEEPSEEK_API_KEY \
   DASHSCOPE_API_KEY \
   GROQ_API_KEY \
   KIMI_API_KEY \

@@ -1,312 +1,28 @@
+import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
+import {
+  MAX_WORKSPACE_HASH_MEMO_BYTES,
+  selectWorkerWorkspaceHashMemoEntries,
+  workspaceStatIdentity,
+} from "./workspace-hash-memo.js";
+import {
+  MAX_WORKSPACE_GIT_CANDIDATES,
+  MAX_WORKSPACE_INVENTORY_ENTRIES,
+  MAX_WORKSPACE_INVENTORY_PATH_BYTES,
+  MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
+  MAX_WORKSPACE_MANIFEST_BYTES,
+} from "./workspace-inventory-limits.js";
 import {
   REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
   REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
 } from "./workspace-manifest-remote-script.js";
-export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-manifest-remote-script.js";
+import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 import {
-  DERIVED_WORKSPACE_DIRECTORY_NAMES,
-  DERIVED_WORKSPACE_FILE_NAMES,
-  DERIVED_WORKSPACE_FILE_SUFFIXES,
-  isDerivedWorkspacePath,
+  WORKSPACE_PATH_EXCLUSIONS_JS,
+  WORKSPACE_STAGED_INPUT_OWNERSHIP_JS,
 } from "./workspace-path-exclusions.js";
+export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-accepted-remote-script.js";
+export { REMOTE_GIT_WORKSPACE_RETRY_RESET_JS } from "./workspace-mutation-remote-script.js";
 export { REMOTE_WORKSPACE_SETUP_SCRIPT } from "./workspace-sync-setup-script.js";
-
-export const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`const childProcess = require("node:child_process");
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const root = fs.realpathSync(process.argv[1]);
-if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
-const uid = process.getuid();
-if (uid === 0) throw new Error("workspace quiescence refuses root-owned worker sessions");
-const sleeper = new Int32Array(new SharedArrayBuffer(4));
-const leaseDirectory = path.join(os.homedir(), ".openclaw-worker", "quiescence");
-fs.mkdirSync(leaseDirectory, { recursive: true, mode: 0o700 });
-fs.chmodSync(leaseDirectory, 0o700);
-const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
-const nonce = crypto.randomBytes(16).toString("hex");
-const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
-const watchdogTimeoutMs = Number(process.argv[2] || 12 * 60 * 1000);
-if (!Number.isSafeInteger(watchdogTimeoutMs) || watchdogTimeoutMs < 1) throw new Error("invalid watchdog timeout");
-function processes() {
-  const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
-    encoding: "utf8",
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  const rows = new Map();
-  for (const line of output.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/);
-    if (!match) continue;
-    rows.set(Number(match[1]), {
-      ppid: Number(match[2]),
-      uid: Number(match[3]),
-      state: match[4],
-      start: match[5],
-    });
-  }
-  return rows;
-}
-function ancestors(rows) {
-  const result = new Set();
-  let pid = process.pid;
-  while (pid > 0 && !result.has(pid)) {
-    result.add(pid);
-    pid = rows.get(pid)?.ppid || 0;
-  }
-  return result;
-}
-const frozen = new Map();
-let watchdogReference = null;
-function processIdentity(pid) {
-  try {
-    const start = childProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-      encoding: "utf8",
-      maxBuffer: 4096,
-    }).trim();
-    return start || null;
-  } catch (error) {
-    if (error && error.status === 1) return null;
-    throw error;
-  }
-}
-function validProcessReference(value) {
-  return value && Number.isSafeInteger(value.pid) && value.pid > 0 && typeof value.start === "string" && value.start.length > 0 && value.start.length <= 128;
-}
-function parseLease(raw, expectedNonce) {
-  const lease = JSON.parse(raw);
-  if (
-    !lease ||
-    lease.version !== 1 ||
-    lease.nonce !== expectedNonce ||
-    !Array.isArray(lease.processes) ||
-    lease.processes.length > 4096 ||
-    lease.processes.some((entry) => !validProcessReference(entry)) ||
-    (lease.watchdog !== null && !validProcessReference(lease.watchdog)) ||
-    !Number.isSafeInteger(lease.expiresAtMs) ||
-    lease.expiresAtMs < 1
-  ) {
-    throw new Error("invalid workspace quiescence lease");
-  }
-  return lease;
-}
-function persistLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
-  const temporary = leasePath + "." + process.pid + "." + crypto.randomBytes(8).toString("hex");
-  const processes = [...frozen].map(([pid, start]) => ({ pid, start }));
-  fs.writeFileSync(temporary, JSON.stringify({ version: 1, nonce, processes, watchdog: watchdogReference, expiresAtMs }), { mode: 0o600, flag: "wx" });
-  fs.renameSync(temporary, leasePath);
-}
-function resumeProcesses(entries) {
-  for (const entry of entries) {
-    if (processIdentity(entry.pid) !== entry.start) continue;
-    try {
-      process.kill(entry.pid, "SIGCONT");
-    } catch (error) {
-      if (!error || error.code !== "ESRCH") throw error;
-    }
-  }
-}
-const orphanNames = fs.readdirSync(leaseDirectory).filter((name) =>
-  name.startsWith(workspaceKey + ".") && name.endsWith(".json"),
-);
-if (orphanNames.length > 16) throw new Error("too many workspace quiescence leases");
-for (const name of orphanNames) {
-  const match = name.match(/^[a-f0-9]{64}\.([a-f0-9]{32})\.json$/);
-  if (!match) continue;
-  const orphanPath = path.join(leaseDirectory, name);
-  const lease = parseLease(fs.readFileSync(orphanPath, "utf8"), match[1]);
-  if (lease.watchdog !== null && processIdentity(lease.watchdog.pid) === lease.watchdog.start) {
-    try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
-  }
-  resumeProcesses(lease.processes);
-  fs.unlinkSync(orphanPath);
-}
-persistLease();
-const watchdog = childProcess.spawn(
-  process.execPath,
-  ["-e", "(" + watchdogMain.toString() + ")(process.argv[1], process.argv[2])", leasePath, nonce],
-  { detached: true, stdio: "ignore" },
-);
-watchdog.unref();
-if (!Number.isSafeInteger(watchdog.pid) || watchdog.pid < 1) {
-  fs.unlinkSync(leasePath);
-  throw new Error("workspace quiescence watchdog did not start");
-}
-let watchdogStart = null;
-for (let attempt = 0; attempt < 100 && !watchdogStart; attempt += 1) {
-  watchdogStart = processIdentity(watchdog.pid);
-  if (!watchdogStart) Atomics.wait(sleeper, 0, 0, 10);
-}
-if (!watchdogStart) {
-  try { process.kill(watchdog.pid, "SIGTERM"); } catch {}
-  fs.unlinkSync(leasePath);
-  throw new Error("workspace quiescence watchdog identity was not observable");
-}
-watchdogReference = { pid: watchdog.pid, start: watchdogStart };
-persistLease();
-let quietScans = 0;
-try {
-  for (let attempt = 0; attempt < 250 && quietScans < 3; attempt += 1) {
-    const before = processes();
-    const preserved = ancestors(before);
-    const candidates = [...before.entries()].filter(
-      ([pid, row]) =>
-        row.uid === uid &&
-        !preserved.has(pid) &&
-        row.ppid !== process.pid &&
-        pid !== watchdog.pid &&
-        !frozen.has(pid) &&
-        !row.state.startsWith("T") &&
-        !row.state.startsWith("Z") &&
-        !row.state.startsWith("X"),
-    );
-    if (candidates.length + frozen.size > 4096) {
-      throw new Error("too many worker processes to quiesce safely");
-    }
-    for (const [pid, row] of candidates) {
-      try {
-        frozen.set(pid, row.start);
-        persistLease();
-        if (processIdentity(pid) !== row.start) {
-          frozen.delete(pid);
-          persistLease();
-          continue;
-        }
-        process.kill(pid, "SIGSTOP");
-      } catch (error) {
-        if (!error || error.code !== "ESRCH") throw error;
-      }
-    }
-    Atomics.wait(sleeper, 0, 0, 20);
-    const after = processes();
-    const afterPreserved = ancestors(after);
-    const writable = [...after.entries()].some(
-      ([pid, row]) =>
-        row.uid === uid &&
-        !afterPreserved.has(pid) &&
-        row.ppid !== process.pid &&
-        pid !== watchdog.pid &&
-        !row.state.startsWith("T") &&
-        !row.state.startsWith("Z") &&
-        !row.state.startsWith("X"),
-    );
-    quietScans = writable ? 0 : quietScans + 1;
-  }
-  if (quietScans < 3) {
-    throw new Error("worker processes did not reach a quiescent state");
-  }
-} catch (error) {
-  if (processIdentity(watchdog.pid) === watchdogStart) {
-    try { process.kill(watchdog.pid, "SIGTERM"); } catch (killError) { if (!killError || killError.code !== "ESRCH") throw killError; }
-  }
-  resumeProcesses([...frozen].map(([pid, start]) => ({ pid, start })));
-  try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
-  throw error;
-}
-function watchdogMain(watchedLeasePath, watchedNonce) {
-  const check = () => {
-    try {
-      const watchdogFs = require("node:fs");
-      const lease = JSON.parse(watchdogFs.readFileSync(watchedLeasePath, "utf8"));
-      if (
-        !lease ||
-        lease.version !== 1 ||
-        lease.nonce !== watchedNonce ||
-        !Array.isArray(lease.processes) ||
-        !Number.isSafeInteger(lease.expiresAtMs)
-      ) return;
-      const remainingMs = lease.expiresAtMs - Date.now();
-      if (remainingMs > 0) {
-        setTimeout(check, Math.min(remainingMs, 60 * 1000));
-        return;
-      }
-      // Re-read at expiry so a renewal that raced this wake-up wins before SIGCONT.
-      const latest = JSON.parse(watchdogFs.readFileSync(watchedLeasePath, "utf8"));
-      if (
-        latest &&
-        latest.version === 1 &&
-        latest.nonce === watchedNonce &&
-        Array.isArray(latest.processes) &&
-        Number.isSafeInteger(latest.expiresAtMs) &&
-        latest.expiresAtMs > Date.now()
-      ) {
-        setTimeout(check, Math.min(latest.expiresAtMs - Date.now(), 60 * 1000));
-        return;
-      }
-      const watchdogChildProcess = require("node:child_process");
-      const identity = (pid) => {
-        try {
-          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim() || null;
-        } catch (error) {
-          if (error && error.status === 1) return null;
-          throw error;
-        }
-      };
-      for (const entry of lease.processes) {
-        if (
-          !entry ||
-          !Number.isSafeInteger(entry.pid) ||
-          entry.pid < 1 ||
-          typeof entry.start !== "string" ||
-          identity(entry.pid) !== entry.start
-        ) continue;
-        try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
-      }
-      watchdogFs.unlinkSync(watchedLeasePath);
-    } catch (error) {
-      if (!error || error.code !== "ENOENT") process.exitCode = 1;
-    }
-  };
-  check();
-}
-process.stdout.write("quiesced " + nonce + "\n");
-`;
-
-export const REMOTE_WORKSPACE_RESUME_JS = String.raw`const crypto = require("node:crypto");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
-const root = fs.realpathSync(process.argv[1]);
-const nonce = process.argv[2];
-if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
-const leasePath = path.join(os.homedir(), ".openclaw-worker", "quiescence", crypto.createHash("sha256").update(root).digest("hex") + "." + nonce + ".json");
-let raw;
-try { raw = fs.readFileSync(leasePath, "utf8"); } catch (error) {
-  if (error && error.code === "ENOENT") process.exit(0);
-  throw error;
-}
-const input = JSON.parse(raw);
-if (
-  !input ||
-  input.version !== 1 ||
-  input.nonce !== nonce ||
-  !Array.isArray(input.processes) ||
-  input.processes.length > 4096 ||
-  input.processes.some((entry) => !entry || !Number.isSafeInteger(entry.pid) || entry.pid < 1 || typeof entry.start !== "string" || !entry.start || entry.start.length > 128) ||
-  (input.watchdog !== null && (!input.watchdog || !Number.isSafeInteger(input.watchdog.pid) || input.watchdog.pid < 1 || typeof input.watchdog.start !== "string" || !input.watchdog.start || input.watchdog.start.length > 128)) ||
-  !Number.isSafeInteger(input.expiresAtMs) ||
-  input.expiresAtMs < 1
-) {
-  throw new Error("invalid workspace quiescence lease");
-}
-function identity(pid) {
-  try {
-    return require("node:child_process").execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim() || null;
-  } catch (error) {
-    if (error && error.status === 1) return null;
-    throw error;
-  }
-}
-if (input.watchdog !== null && identity(input.watchdog.pid) === input.watchdog.start) {
-  try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
-}
-for (const entry of input.processes) {
-  if (identity(entry.pid) !== entry.start) continue;
-  try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
-}
-fs.unlinkSync(leasePath);
-`;
 
 export const REMOTE_GIT_WORKSPACE_SETUP_SCRIPT = String.raw`set -eu
 workspace=$1
@@ -360,22 +76,82 @@ export const REMOTE_WORKSPACE_MANIFEST_JS = String.raw`const crypto = require("n
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
-const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
-const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
-const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
-const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};
+${WORKSPACE_PATH_EXCLUSIONS_JS}
+const workspaceStatIdentity = ${workspaceStatIdentity.toString()};
+const selectWorkerWorkspaceHashMemoEntries = ${selectWorkerWorkspaceHashMemoEntries.toString()};
+const MAX_RECONCILIATION_ENTRIES = ${MAX_RECONCILIATION_ENTRIES};
+const MAX_WORKSPACE_HASH_MEMO_BYTES = ${MAX_WORKSPACE_HASH_MEMO_BYTES};
 const root = fs.realpathSync(process.argv[1]);
+${WORKSPACE_STAGED_INPUT_OWNERSHIP_JS}
 const requestedBaseCommit = process.argv[2] || null;
 const eligibleOnly = process.argv[3] === "eligible";
 const requestedManifestDigest = process.argv[3] === "resolve" ? process.argv[4] : null;
 const publishedManifestDigest = process.argv[3] === "publish" ? process.argv[4] : null;
-const legacyGatewayLocale = requestedManifestDigest ? process.argv[5] : null;
-const priorManifestDigests = [...new Set(process.argv.slice(4).filter(Boolean))];
+const memoMode = process.argv.at(-1) === "memo-v1";
+const priorManifestDigests = [
+  ...new Set(process.argv.slice(4).filter((value) => value && value !== "memo-v1")),
+];
+const MAX_WORKSPACE_GIT_CANDIDATES = ${MAX_WORKSPACE_GIT_CANDIDATES};
+const MAX_WORKSPACE_INVENTORY_ENTRIES = ${MAX_WORKSPACE_INVENTORY_ENTRIES};
+const MAX_WORKSPACE_INVENTORY_PATH_BYTES = ${MAX_WORKSPACE_INVENTORY_PATH_BYTES};
+const MAX_WORKSPACE_INVENTORY_TOTAL_BYTES = ${MAX_WORKSPACE_INVENTORY_TOTAL_BYTES};
+const MAX_WORKSPACE_MANIFEST_BYTES = ${MAX_WORKSPACE_MANIFEST_BYTES};
 const entriesByPath = new Map();
+let inventoryPathBytes = 0;
+let eligibleBytes = 0;
+const usedHashMemo = new Map();
+const metrics = {
+  contentHashCount: 0,
+  contentHashDurationMs: 0,
+  memoHitCount: 0,
+  memoTruncatedCount: 0,
+};
+const startedAt = performance.now();
 function fail(message) {
   throw new Error(message);
 }
+function readHashMemo() {
+  if (!memoMode) return new Map();
+  const raw = fs.readFileSync(0, "utf8");
+  if (Buffer.byteLength(raw) > MAX_WORKSPACE_HASH_MEMO_BYTES) {
+    fail("workspace hash memo exceeds its byte limit");
+  }
+  let entries;
+  try {
+    entries = JSON.parse(raw);
+  } catch {
+    fail("invalid workspace hash memo");
+  }
+  if (
+    !Array.isArray(entries) ||
+    entries.length > MAX_RECONCILIATION_ENTRIES
+  ) {
+    fail("invalid workspace hash memo");
+  }
+  return new Map(entries);
+}
+const hashMemo = readHashMemo();
 ${REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS}
+function recordEntry(relative, entry) {
+  if (entriesByPath.has(relative)) return;
+  if (entriesByPath.size + 1 > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+    fail("worker workspace manifest has too many entries");
+  }
+  inventoryPathBytes += Buffer.byteLength(relative);
+  if (inventoryPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+    fail("worker workspace manifest paths exceed their byte limit");
+  }
+  eligibleBytes +=
+    entry.type === "file"
+      ? entry.size
+      : entry.type === "symlink"
+        ? Buffer.byteLength(entry.target)
+        : 0;
+  if (eligibleBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+    fail("worker workspace manifest exceeds its eligible byte limit");
+  }
+  entriesByPath.set(relative, entry);
+}
 function addEntry(relative) {
   if (
     !relative ||
@@ -386,7 +162,7 @@ function addEntry(relative) {
   ) {
     fail("unsafe worker workspace path: " + relative);
   }
-  if (isDerivedWorkspacePath(relative)) return;
+  if (isDerivedWorkspacePath(relative, isStagedInput(relative))) return;
   if (entriesByPath.has(relative)) return;
   const absolute = path.join(root, relative);
   let stats;
@@ -398,9 +174,9 @@ function addEntry(relative) {
   }
   const mode = stats.mode & 0o777;
   if (stats.isDirectory()) {
-    entriesByPath.set(relative, { path: relative, type: "directory", mode });
+    recordEntry(relative, { path: relative, type: "directory", mode });
   } else if (stats.isFile()) {
-    entriesByPath.set(relative, { path: relative, type: "file", mode, size: stats.size, sha256: null });
+    recordEntry(relative, { path: relative, type: "file", mode, size: stats.size, sha256: null });
   } else if (stats.isSymbolicLink()) {
     const target = fs.readlinkSync(absolute);
     if (target.includes("\\") || path.posix.isAbsolute(target) || path.win32.parse(target).root) {
@@ -410,13 +186,13 @@ function addEntry(relative) {
     if (resolvedTarget !== root && !resolvedTarget.startsWith(root + path.sep)) {
       fail("worker workspace symlink escapes the sync root: " + relative);
     }
-    entriesByPath.set(relative, { path: relative, type: "symlink", mode, target });
+    recordEntry(relative, { path: relative, type: "symlink", mode, target });
   } else {
     fail("unsupported worker workspace entry: " + relative);
   }
 }
 function addWithParents(relative) {
-  if (isDerivedWorkspacePath(relative)) return;
+  if (isDerivedWorkspacePath(relative, isStagedInput(relative))) return;
   const segments = relative.split("/");
   for (let index = 1; index < segments.length; index += 1) {
     addEntry(segments.slice(0, index).join("/"));
@@ -425,20 +201,34 @@ function addWithParents(relative) {
 }
 function walk(relativeDirectory) {
   const absoluteDirectory = relativeDirectory ? path.join(root, relativeDirectory) : root;
-  for (const name of fs.readdirSync(absoluteDirectory).sort()) {
-    if (!relativeDirectory && name === ".git") {
-      continue;
+  const names = [];
+  const directory = fs.opendirSync(absoluteDirectory);
+  try {
+    for (;;) {
+      const entry = directory.readSync();
+      if (!entry) break;
+      const relative = relativeDirectory ? relativeDirectory + "/" + entry.name : entry.name;
+      if ((!relativeDirectory && entry.name === ".git") || isDerivedWorkspacePath(relative, isStagedInput(relative))) {
+        continue;
+      }
+      names.push(entry.name);
+      if (names.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+        fail("worker workspace directory has too many entries");
+      }
     }
+  } finally {
+    directory.closeSync();
+  }
+  for (const name of names.sort()) {
     const relative = relativeDirectory ? relativeDirectory + "/" + name : name;
-    if (isDerivedWorkspacePath(relative)) continue;
     const absolute = path.join(root, relative);
     const stats = fs.lstatSync(absolute);
     const mode = stats.mode & 0o777;
     if (stats.isDirectory()) {
-      entriesByPath.set(relative, { path: relative, type: "directory", mode });
+      recordEntry(relative, { path: relative, type: "directory", mode });
       walk(relative);
     } else if (stats.isFile()) {
-      entriesByPath.set(relative, {
+      recordEntry(relative, {
         path: relative,
         type: "file",
         mode,
@@ -454,25 +244,54 @@ function walk(relativeDirectory) {
       if (resolvedTarget !== root && !resolvedTarget.startsWith(root + path.sep)) {
         fail("worker workspace symlink escapes the sync root: " + relative);
       }
-      entriesByPath.set(relative, { path: relative, type: "symlink", mode, target });
+      recordEntry(relative, { path: relative, type: "symlink", mode, target });
     } else {
       fail("unsupported worker workspace entry: " + relative);
     }
   }
 }
 function nulPaths(args) {
-  const value = childProcess.execFileSync("git", ["-C", root, "ls-files", ...args, "-z"], {
+  const value = childProcess.execFileSync("git", ["-C", root, "ls-files", "-z", ...args], {
     encoding: "buffer",
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer: MAX_WORKSPACE_INVENTORY_PATH_BYTES,
   });
-  return value.toString("utf8").split("\0").filter(Boolean);
+  const paths = value.toString("utf8").split("\0").filter(Boolean);
+  if (paths.length > MAX_WORKSPACE_GIT_CANDIDATES) {
+    fail("worker workspace has too many Git path candidates");
+  }
+  return paths;
 }
 function eligiblePaths() {
-  const selected = new Set(nulPaths(["--full-name", "--cached", "--others", "--exclude-standard"]));
-  selected.delete(".openclaw-base.pack");
+  const selected = new Set();
+  let selectedPathBytes = 0;
+  function addSelected(relative) {
+    if (selected.has(relative)) return;
+    if (selected.size + 1 > MAX_WORKSPACE_GIT_CANDIDATES) {
+      fail("worker workspace has too many Git path candidates");
+    }
+    selectedPathBytes += Buffer.byteLength(relative) + 1;
+    if (selectedPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+      fail("worker workspace Git path candidates exceed their byte limit");
+    }
+    selected.add(relative);
+  }
+  function removeSelected(relative) {
+    if (!selected.delete(relative)) return;
+    selectedPathBytes -= Buffer.byteLength(relative) + 1;
+  }
+  for (const relative of nulPaths(["--full-name", "--cached", "--others", "--exclude-standard"])) {
+    addSelected(relative);
+  }
+  removeSelected(".openclaw-base.pack");
   const includePath = path.join(root, ".worktreeinclude");
-  if (fs.existsSync(includePath) && fs.lstatSync(includePath).isFile()) {
-    const ignored = new Set(nulPaths(["--full-name", "--others", "--ignored", "--exclude-standard"]));
+  const hasIncludes = fs.existsSync(includePath) && fs.lstatSync(includePath).isFile();
+  const ignored = new Set(nulPaths(["--full-name", "--others", "--ignored", "--exclude-standard",
+    ...(hasIncludes ? [] : ["--", ${JSON.stringify(STAGED_INPUT_GIT_PATHSPEC)}]),
+  ]));
+  for (const candidate of ignored) {
+    if (isStagedInput(candidate)) addSelected(candidate);
+  }
+  if (hasIncludes) {
     // Keep standard excludes out of this query. Their union would select every
     // ignored path instead of only explicit .worktreeinclude matches.
     for (const candidate of nulPaths([
@@ -481,43 +300,136 @@ function eligiblePaths() {
       "--ignored",
       "--exclude-from=" + includePath,
     ])) {
-      if (ignored.has(candidate)) selected.add(candidate);
+      if (ignored.has(candidate)) addSelected(candidate);
     }
   }
   for (const priorManifestDigest of priorManifestDigests) {
     if (!/^[a-f0-9]{64}$/.test(priorManifestDigest)) fail("invalid prior workspace manifest digest");
     const priorPath = path.join(process.env.HOME, ".openclaw-worker", "manifests", priorManifestDigest + ".json");
-    const priorRaw = fs.readFileSync(priorPath, "utf8");
+    const priorRaw = readManifestFile(priorPath);
     if (crypto.createHash("sha256").update(priorRaw).digest("hex") !== priorManifestDigest) {
       fail("prior workspace manifest digest mismatch");
     }
     const prior = JSON.parse(priorRaw);
-    if (!prior || prior.version !== 1 || !Array.isArray(prior.entries)) {
+    if (
+      !prior ||
+      prior.version !== 1 ||
+      !Array.isArray(prior.entries) ||
+      prior.entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES
+    ) {
       fail("invalid prior workspace manifest");
     }
     for (const entry of prior.entries) {
       if (!entry || typeof entry.path !== "string") fail("invalid prior workspace manifest entry");
-      if (entry.path !== ".openclaw-base.pack" && !isDerivedWorkspacePath(entry.path)) {
-        selected.add(entry.path);
+      if (entry.path !== ".openclaw-base.pack" && !isDerivedWorkspacePath(entry.path, isStagedInput(entry.path))) {
+        addSelected(entry.path);
       }
     }
   }
-  return [...selected].filter((relative) => !isDerivedWorkspacePath(relative)).sort();
-}
-async function hashFiles() {
-  const entries = [...entriesByPath.values()];
-  for (const entry of entries) {
-    if (entry.type !== "file") {
-      continue;
-    }
-    const hash = crypto.createHash("sha256");
-    const stream = fs.createReadStream(path.join(root, entry.path));
-    for await (const chunk of stream) {
-      hash.update(chunk);
-    }
-    entry.sha256 = hash.digest("hex");
+  const paths = [...selected].filter((relative) => !isDerivedWorkspacePath(relative, isStagedInput(relative))).sort();
+  if (paths.length > MAX_WORKSPACE_GIT_CANDIDATES) {
+    fail("worker workspace has too many Git path candidates");
   }
-  return entries;
+  let pathBytes = 0;
+  for (const relative of paths) {
+    pathBytes += Buffer.byteLength(relative) + 1;
+    if (pathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+      fail("worker workspace eligible paths exceed their byte limit");
+    }
+  }
+  return paths;
+}
+function assertSerializedManifestBudget(baseCommit, entries) {
+  let bytes = Buffer.byteLength(JSON.stringify({ version: 1, baseCommit, entries: [] }));
+  for (const [index, entry] of entries.entries()) {
+    const projected =
+      entry.type === "file" ? { ...entry, sha256: "0".repeat(64) } : entry;
+    bytes += Buffer.byteLength(JSON.stringify(canonicalEntry(projected)));
+    if (index > 0) bytes += 1;
+    if (bytes > MAX_WORKSPACE_MANIFEST_BYTES) {
+      fail("worker workspace manifest exceeds its serialized byte limit");
+    }
+  }
+}
+async function hashFiles(entries) {
+  // Inventory file sizes can change before open; reserve their actual sizes below.
+  let openedBytes = entries.reduce(
+    (bytes, entry) => bytes + (entry.type === "symlink" ? Buffer.byteLength(entry.target) : 0),
+    0,
+  );
+  let next = 0;
+  let failure;
+  const controller = new AbortController();
+  const stop = (error) => {
+    if (!failure) {
+      failure = { error };
+      controller.abort(error);
+    }
+  };
+  async function worker() {
+    while (!failure && next < entries.length) {
+      const entry = entries[next++];
+      if (entry.type !== "file") {
+        continue;
+      }
+      const absolute = path.join(root, entry.path);
+      let handle;
+      try {
+        handle = await fs.promises.open(
+          absolute,
+          fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+        );
+        controller.signal.throwIfAborted();
+        const before = await handle.stat({ bigint: true });
+        controller.signal.throwIfAborted();
+        if (!before.isFile()) fail("worker workspace file changed while it was being read");
+        const openedSize = Number(before.size);
+        openedBytes += openedSize;
+        if (openedBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+          fail("worker workspace manifest exceeds its eligible byte limit");
+        }
+        const identity = workspaceStatIdentity("worker", before);
+        let sha256 = hashMemo.get(identity);
+        if (sha256) {
+          metrics.memoHitCount += 1;
+        } else {
+          const hashStartedAt = performance.now();
+          const hash = crypto.createHash("sha256");
+          const stream = handle.createReadStream({ autoClose: false, signal: controller.signal });
+          let bytes = 0;
+          for await (const chunk of stream) {
+            bytes += chunk.length;
+            if (bytes > openedSize) fail("worker workspace file changed while it was being read");
+            hash.update(chunk);
+          }
+          sha256 = hash.digest("hex");
+          metrics.contentHashCount += 1;
+          // Concurrent samples overlap; their sum is hashing effort, not wall time.
+          metrics.contentHashDurationMs += performance.now() - hashStartedAt;
+        }
+        const after = await handle.stat({ bigint: true });
+        if (workspaceStatIdentity("worker", after) !== identity) {
+          fail("worker workspace file changed while it was being read");
+        }
+        entry.mode = Number(after.mode & 0o777n);
+        entry.size = Number(after.size);
+        entry.sha256 = sha256;
+        usedHashMemo.set(identity, sha256);
+      } catch (error) {
+        stop(error);
+      } finally {
+        try {
+          await handle?.close();
+        } catch (error) {
+          stop(error);
+        }
+      }
+    }
+  }
+  // The standalone child cannot import the shared pool. Stop admission on the
+  // first failure and join every reader before publishing or returning it.
+  await Promise.all(Array.from({ length: Math.min(4, entries.length) }, worker));
+  if (failure) throw failure.error;
 }
 function ensurePrivateDirectory(directory) {
   try {
@@ -535,13 +447,58 @@ function ensurePrivateDirectory(directory) {
   fs.chmodSync(directory, 0o700);
 }
 ${REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS}
+async function readPublishedManifest() {
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of process.stdin) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += value.byteLength;
+    if (bytes > MAX_WORKSPACE_MANIFEST_BYTES) {
+      fail("published workspace manifest exceeds its byte limit");
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+function preserveWindowsFileModes(entries, manifestRoot) {
+  if (process.platform !== "win32" || priorManifestDigests.length === 0) return;
+  const modes = new Map();
+  for (const digest of priorManifestDigests) {
+    if (!/^[a-f0-9]{64}$/.test(digest)) fail("invalid prior workspace manifest digest");
+    const raw = readManifestFile(path.join(manifestRoot, digest + ".json"));
+    if (crypto.createHash("sha256").update(raw).digest("hex") !== digest) {
+      fail("prior workspace manifest digest mismatch");
+    }
+    const prior = JSON.parse(raw);
+    if (
+      !prior ||
+      prior.version !== 1 ||
+      !Array.isArray(prior.entries) ||
+      prior.entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES
+    ) {
+      fail("invalid prior workspace manifest");
+    }
+    for (const entry of prior.entries) {
+      if (entry.type === "file" && !modes.has(entry.path)) {
+        if (entry.mode !== 0o644 && entry.mode !== 0o755) {
+          fail("invalid prior workspace file mode");
+        }
+        modes.set(entry.path, entry.mode);
+      }
+    }
+  }
+  // Windows cannot persist POSIX execute bits; the authenticated prior manifest owns them.
+  for (const entry of entries) {
+    if (entry.type === "file" && modes.has(entry.path)) entry.mode = modes.get(entry.path);
+  }
+}
 async function main() {
   const workerRoot = path.join(process.env.HOME, ".openclaw-worker");
   const manifestRoot = path.join(workerRoot, "manifests");
   ensurePrivateDirectory(workerRoot);
   ensurePrivateDirectory(manifestRoot);
   if (publishedManifestDigest) {
-    const manifest = fs.readFileSync(0, "utf8");
+    const manifest = await readPublishedManifest();
     if (crypto.createHash("sha256").update(manifest).digest("hex") !== publishedManifestDigest) {
       fail("published workspace manifest digest mismatch");
     }
@@ -560,11 +517,29 @@ async function main() {
   } else {
     walk("");
   }
-  const entries = await hashFiles();
+  const entries = [...entriesByPath.values()];
+  assertSerializedManifestBudget(requestedBaseCommit, entries);
+  await hashFiles(entries);
+  preserveWindowsFileModes(entries, manifestRoot);
   const baseCommit = requestedBaseCommit;
   const manifest = serializeManifest(baseCommit, entries);
   const digest = publishManifest(manifestRoot, manifest);
-  process.stdout.write("sha256:" + digest + "\n");
+  const manifestRef = "sha256:" + digest;
+  if (memoMode) {
+    const memo = selectWorkerWorkspaceHashMemoEntries(
+      usedHashMemo, MAX_RECONCILIATION_ENTRIES, MAX_WORKSPACE_HASH_MEMO_BYTES,
+    );
+    metrics.memoTruncatedCount = usedHashMemo.size - memo.length;
+    const measured = { ...metrics, totalDurationMs: performance.now() - startedAt };
+    process.stdout.write(JSON.stringify({
+      version: 1,
+      manifestRef,
+      memo,
+      metrics: measured,
+    }) + "\n");
+  } else {
+    process.stdout.write(manifestRef + "\n");
+  }
 }
 main().catch((error) => {
   process.stderr.write(String(error && error.stack ? error.stack : error) + "\n");

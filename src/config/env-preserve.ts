@@ -2,6 +2,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isPlainObject } from "../infra/plain-object.js";
+import { isRecord } from "../utils.js";
+import { containsEnvVarReference, resolveConfigEnvVars } from "./env-substitution.js";
 
 /**
  * Preserves `${VAR}` environment variable references during config write-back.
@@ -62,17 +64,13 @@ function collectAuthoredEnvRefs(value: string): AuthoredEnvRef[] {
   return refs;
 }
 
-function hasUnescapedEnvVarRef(value: string): boolean {
-  return collectAuthoredEnvRefs(value).some((ref) => ref.kind === "unescaped");
-}
-
 function hasEscapedEnvVarRef(value: string): boolean {
   return collectAuthoredEnvRefs(value).some((ref) => ref.kind === "escaped");
 }
 
 function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
   if (typeof value === "string") {
-    return hasUnescapedEnvVarRef(value);
+    return containsEnvVarReference(value);
   }
   if (Array.isArray(value)) {
     return value.some((item) => containsAuthoredUnescapedEnvTemplate(item));
@@ -133,7 +131,12 @@ function countResolvedActiveEnvRefsByPath(
   const countsByName = new Map<string, Map<string, number>>();
   const visit = (incomingItem: unknown, parsedItem: unknown, path: string[]) => {
     if (typeof incomingItem === "string" && typeof parsedItem === "string") {
-      if (!isDeepStrictEqual(incomingItem, tryResolveString(parsedItem, env))) {
+      if (
+        !isDeepStrictEqual(
+          incomingItem,
+          resolveConfigEnvVars(parsedItem, env, { onMissing: () => {} }),
+        )
+      ) {
         return;
       }
       for (const ref of collectAuthoredEnvRefs(parsedItem)) {
@@ -650,62 +653,9 @@ function matchAuthoredEscapedTemplateArrayItems(params: {
   return matches;
 }
 
-/**
- * Resolve `${VAR}` references in a single string using the given env.
- * Preserves missing references so matching remains aligned with config reads.
- *
- * Mirrors the substitution semantics of `substituteString` in env-substitution.ts:
- * - `${VAR}` → env value (returns null if missing)
- * - `$${VAR}` → literal `${VAR}` (escape sequence)
- */
-function tryResolveString(template: string, env: NodeJS.ProcessEnv): string {
-  const chunks: string[] = [];
-
-  for (let i = 0; i < template.length; i++) {
-    if (template[i] === "$") {
-      // Escaped: $${VAR} -> literal ${VAR}
-      if (template[i + 1] === "$" && template[i + 2] === "{") {
-        const start = i + 3;
-        const end = template.indexOf("}", start);
-        if (end !== -1) {
-          const name = template.slice(start, end);
-          if (ENV_VAR_NAME_PATTERN.test(name)) {
-            chunks.push(`\${${name}}`);
-            i = end;
-            continue;
-          }
-        }
-      }
-
-      // Substitution: ${VAR} -> env value
-      if (template[i + 1] === "{") {
-        const start = i + 2;
-        const end = template.indexOf("}", start);
-        if (end !== -1) {
-          const name = template.slice(start, end);
-          if (ENV_VAR_NAME_PATTERN.test(name)) {
-            const val = env[name];
-            if (val === undefined || val === "") {
-              chunks.push(`\${${name}}`);
-              i = end;
-              continue;
-            }
-            chunks.push(val);
-            i = end;
-            continue;
-          }
-        }
-      }
-    }
-    chunks.push(template.charAt(i));
-  }
-
-  return chunks.join("");
-}
-
 function resolveEnvVarRefsForComparison(value: unknown, env: NodeJS.ProcessEnv): unknown {
   if (typeof value === "string") {
-    return hasEnvVarRef(value) ? tryResolveString(value, env) : value;
+    return hasEnvVarRef(value) ? resolveConfigEnvVars(value, env, { onMissing: () => {} }) : value;
   }
   if (Array.isArray(value)) {
     return value.map((item) => resolveEnvVarRefsForComparison(item, env));
@@ -740,7 +690,7 @@ export function restoreEnvVarRefs(
   // String leaf: check if parsed was a ${VAR} template that resolves to incoming
   if (typeof incoming === "string" && typeof parsed === "string") {
     if (hasEnvVarRef(parsed)) {
-      const resolved = tryResolveString(parsed, env);
+      const resolved = resolveConfigEnvVars(parsed, env, { onMissing: () => {} });
       if (resolved === incoming) {
         // The incoming value matches what the env var resolves to — restore the reference
         return parsed;
@@ -832,5 +782,103 @@ export function restoreEnvVarRefs(
 
   // Mismatched types or primitives — keep incoming
   return incoming;
+}
+
+function parentPath(value: string): string {
+  if (!value) {
+    return "";
+  }
+  if (value.endsWith("]")) {
+    const index = value.lastIndexOf("[");
+    return index > 0 ? value.slice(0, index) : "";
+  }
+  const index = value.lastIndexOf(".");
+  return index >= 0 ? value.slice(0, index) : "";
+}
+
+function isPathChanged(path: string, changedPaths: Set<string>): boolean {
+  if (changedPaths.has(path)) {
+    return true;
+  }
+  let current = parentPath(path);
+  while (current) {
+    if (changedPaths.has(current)) {
+      return true;
+    }
+    current = parentPath(current);
+  }
+  return changedPaths.has("");
+}
+
+export function restoreEnvRefsFromMap(
+  value: unknown,
+  path: string,
+  envRefMap: Map<string, string>,
+  changedPaths: Set<string>,
+  identityRestoredPaths: ReadonlySet<string> = new Set(),
+): unknown {
+  if (typeof value === "string") {
+    if (identityRestoredPaths.has(path)) {
+      return value;
+    }
+    if (!isPathChanged(path, changedPaths)) {
+      const original = envRefMap.get(path);
+      if (original !== undefined) {
+        return original;
+      }
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item, index) => {
+      const updated = restoreEnvRefsFromMap(
+        item,
+        `${path}[${index}]`,
+        envRefMap,
+        changedPaths,
+        identityRestoredPaths,
+      );
+      if (updated !== item) {
+        changed = true;
+      }
+      return updated;
+    });
+    return changed ? next : value;
+  }
+  if (isRecord(value)) {
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = path ? `${path}.${key}` : key;
+      const updated = restoreEnvRefsFromMap(
+        child,
+        childPath,
+        envRefMap,
+        changedPaths,
+        identityRestoredPaths,
+      );
+      if (updated !== child) {
+        changed = true;
+      }
+      next[key] = updated;
+    }
+    return changed ? next : value;
+  }
+  return value;
+}
+
+export function resolveWriteEnvSnapshotForPath(params: {
+  actualConfigPath: string;
+  expectedConfigPath?: string;
+  envSnapshotForRestore?: Record<string, string | undefined>;
+}): Record<string, string | undefined> | undefined {
+  if (
+    params.expectedConfigPath === undefined ||
+    params.expectedConfigPath === params.actualConfigPath
+  ) {
+    return params.envSnapshotForRestore;
+  }
+  return undefined;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

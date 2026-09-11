@@ -1,16 +1,29 @@
 /**
  * CLI session persistence helpers.
- * Keeps provider-keyed session bindings, reuse fingerprints, and legacy
- * Claude CLI state in one normalized session-store contract.
+ * Keeps provider-keyed session bindings and reuse fingerprints in one
+ * normalized session-store contract.
  */
 import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
-export { getCliSessionBinding, getCliSessionId } from "../config/sessions/cli-session-binding.js";
+import { readErrorName } from "../infra/errors.js";
+import { isFailoverError } from "./failover-error.js";
+import type { FailoverReason } from "./failover/signal.js";
+export {
+  clearAllCliSessions,
+  getCliSessionBinding,
+} from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+
+/** Whether a failover proves the provider-side conversation can no longer be resumed. */
+export function isCliSessionInvalidatingFailoverReason(reason: FailoverReason): boolean {
+  // Auth identity changes are handled by the reuse fingerprint's auth epoch.
+  // Other execution failures say nothing about the persisted transcript.
+  return reason === "session_expired";
+}
 
 /** Hash CLI session-sensitive text so reuse checks can compare stable fingerprints. */
 export function hashCliSessionText(value: string | undefined): string | undefined {
@@ -21,12 +34,40 @@ export function hashCliSessionText(value: string | undefined): string | undefine
   return crypto.createHash("sha256").update(trimmed).digest("hex");
 }
 
-/** Store a reusable CLI session ID without extra reuse guards. */
-export function setCliSessionId(entry: SessionEntry, provider: string, sessionId: string): void {
-  setCliSessionBinding(entry, provider, { sessionId });
+/** Projects explicit native continuity; diagnostic sessionId can name the local session. */
+export function applyCliSessionBindingResult(
+  entry: SessionEntry,
+  provider: string,
+  meta?: {
+    cliSessionBinding?: CliSessionBinding;
+    clearCliSessionBinding?: boolean;
+  },
+): boolean {
+  if (meta?.clearCliSessionBinding === true) {
+    clearCliSession(entry, provider);
+  } else if (meta?.cliSessionBinding?.sessionId.trim()) {
+    setCliSessionBinding(entry, provider, meta.cliSessionBinding);
+  } else {
+    return false;
+  }
+  return true;
 }
 
-/** Store a CLI session binding and mirror it to legacy/simple session-id fields. */
+/** Revalidates the exact turn owner at native continuity's synchronous commit edge. */
+export function assertCliSessionBindingResultCommitAllowed(
+  meta: { clearCliSessionBinding?: boolean } | undefined,
+  assertSettlementCurrent: () => void,
+  abortSignal?: AbortSignal,
+): void {
+  assertSettlementCurrent();
+  // Explicit invalidation is owner cleanup: abort may clear an unusable
+  // handle, but never through a closed, released, or replaced turn.
+  if (meta?.clearCliSessionBinding !== true) {
+    abortSignal?.throwIfAborted();
+  }
+}
+
+/** Store a CLI session binding and mirror it to the provider-keyed session-id map. */
 export function setCliSessionBinding(
   entry: SessionEntry,
   provider: string,
@@ -47,6 +88,9 @@ export function setCliSessionBinding(
     ...entry.cliSessionBindings,
     [normalized]: {
       sessionId: trimmed,
+      ...(normalizeOptionalString(binding.resumeCheckpointId)
+        ? { resumeCheckpointId: normalizeOptionalString(binding.resumeCheckpointId) }
+        : {}),
       ...(binding.forceReuse === true ? { forceReuse: true } : {}),
       ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
       ...(normalizeOptionalString(binding.authProfileId)
@@ -80,9 +124,6 @@ export function setCliSessionBinding(
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    entry.claudeCliSessionId = trimmed;
-  }
 }
 
 /** Remove the stored CLI session binding for one provider. */
@@ -103,16 +144,29 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   }
 }
 
-type MutableCliSessionFields = Pick<
-  SessionEntry,
-  "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId"
->;
+/** Decide whether a failed CLI turn invalidates the binding it tried to resume. */
+export function shouldClearFailedCliSessionBinding(params: {
+  error: unknown;
+  binding?: CliSessionBinding;
+  hasNewGeneratedMediaTask?: boolean;
+}): boolean {
+  if (!normalizeOptionalString(params.binding?.sessionId)) {
+    return false;
+  }
+  // Detached media delivers back into this run later and still needs the binding.
+  if (params.hasNewGeneratedMediaTask === true) {
+    return false;
+  }
+  if (isFailoverError(params.error)) {
+    return isCliSessionInvalidatingFailoverReason(params.error.reason);
+  }
+  // A pre-successor fork abort keeps its one-shot marker for the next turn.
+  return params.binding?.forkNextResume !== true && readErrorName(params.error) === "AbortError";
+}
 
-/** Remove every CLI session binding from a session entry. */
-export function clearAllCliSessions(entry: Partial<MutableCliSessionFields>): void {
-  entry.cliSessionBindings = undefined;
-  entry.cliSessionIds = undefined;
-  entry.claudeCliSessionId = undefined;
+/** Stable reason used when recording why a failed reused CLI session was cleared. */
+export function resolveCliSessionClearReason(error: unknown): string {
+  return isFailoverError(error) ? error.reason : (readErrorName(error) ?? "error");
 }
 
 type CliSessionInvalidatedReason = "auth-profile" | "auth-epoch" | "message-policy" | "cwd" | "mcp";
@@ -128,6 +182,30 @@ export type CliSessionReuseResult =
       drift: { reasons: CliSessionContentDriftReason[] };
     }
   | { mode: "invalidate"; invalidatedReason: CliSessionInvalidatedReason };
+
+const CLI_SESSION_DRIFT_NOTE_PREFIX =
+  "OpenClaw resumed this CLI session after prompt content changed.";
+
+/** User-turn note telling a resumed CLI session that its prompt content drifted. */
+export function buildCliSessionDriftNote(reasons: readonly CliSessionContentDriftReason[]): string {
+  return `${CLI_SESSION_DRIFT_NOTE_PREFIX} Follow the current turn's instructions; changed=${reasons.join(",")}.`;
+}
+
+const CLI_SESSION_DRIFT_NOTE_PREFIXES = [
+  buildCliSessionDriftNote(["system-prompt"]),
+  buildCliSessionDriftNote(["prompt-tools"]),
+  buildCliSessionDriftNote(["system-prompt", "prompt-tools"]),
+].map((note) => `${note}\n\n`);
+
+// Match only complete notes the producer emits; similar native user text is not context.
+export function stripCliSessionDriftNote(text: string): string {
+  for (const prefix of CLI_SESSION_DRIFT_NOTE_PREFIXES) {
+    if (text.startsWith(prefix)) {
+      return text.slice(prefix.length);
+    }
+  }
+  return text;
+}
 
 /** Decide whether a stored CLI session can be reused for the current auth/prompt/cwd/MCP state. */
 export function resolveCliSessionReuse(params: {

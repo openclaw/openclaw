@@ -1,6 +1,8 @@
 // Feishu plugin module implements post behavior.
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isRecord } from "./comment-shared.js";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
 const FALLBACK_POST_TEXT = "[Rich text message]";
@@ -8,8 +10,9 @@ const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+\-!|>~])/g;
 
 type PostParseResult = {
   textContent: string;
-  imageKeys: string[];
-  mediaKeys: Array<{ fileKey: string; fileName?: string }>;
+  attachments: Array<
+    { kind: "image"; key: string } | { kind: "file"; key: string; fileName?: string }
+  >;
   mentionedOpenIds: string[];
 };
 
@@ -26,17 +29,6 @@ function escapeMarkdownText(text: string): string {
   return text.replace(MARKDOWN_SPECIAL_CHARS, "\\$1");
 }
 
-function toBoolean(value: unknown): boolean {
-  return value === true || value === 1 || value === "true";
-}
-
-function isStyleEnabled(style: Record<string, unknown> | undefined, key: string): boolean {
-  if (!style) {
-    return false;
-  }
-  return toBoolean(style[key]);
-}
-
 function wrapInlineCode(text: string): string {
   const maxRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(maxRun + 1);
@@ -49,36 +41,26 @@ function sanitizeFenceLanguage(language: string): string {
   return language.trim().replace(/[^A-Za-z0-9_+#.-]/g, "");
 }
 
-function renderTextElement(element: Record<string, unknown>): string {
-  const text = toStringOrEmpty(element.text);
-  const style = isRecord(element.style) ? element.style : undefined;
-
-  if (isStyleEnabled(style, "code")) {
-    return wrapInlineCode(text);
+function applyInlineStyles(text: string, style: unknown): string {
+  // Keep boundary whitespace outside Markdown emphasis delimiters.
+  const content = text.trim();
+  if (!content || !Array.isArray(style)) {
+    return text;
   }
-
-  let rendered = escapeMarkdownText(text);
-  if (!rendered) {
-    return "";
-  }
-
-  if (isStyleEnabled(style, "bold")) {
+  let rendered = content;
+  if (style.includes("bold")) {
     rendered = `**${rendered}**`;
   }
-  if (isStyleEnabled(style, "italic")) {
+  if (style.includes("italic")) {
     rendered = `*${rendered}*`;
   }
-  if (isStyleEnabled(style, "underline")) {
+  if (style.includes("underline")) {
     rendered = `<u>${rendered}</u>`;
   }
-  if (
-    isStyleEnabled(style, "strikethrough") ||
-    isStyleEnabled(style, "line_through") ||
-    isStyleEnabled(style, "lineThrough")
-  ) {
+  if (style.includes("lineThrough")) {
     rendered = `~~${rendered}~~`;
   }
-  return rendered;
+  return text.replace(content, () => rendered);
 }
 
 function renderLinkElement(element: Record<string, unknown>): string {
@@ -127,8 +109,7 @@ function renderCodeBlockElement(element: Record<string, unknown>): string {
 
 function renderElement(
   element: unknown,
-  imageKeys: string[],
-  mediaKeys: Array<{ fileKey: string; fileName?: string }>,
+  attachments: PostParseResult["attachments"],
   mentionedOpenIds: string[],
   renderMediaPlaceholders: boolean,
 ): string {
@@ -139,9 +120,9 @@ function renderElement(
   const tag = normalizeLowercaseStringOrEmpty(toStringOrEmpty(element.tag));
   switch (tag) {
     case "text":
-      return renderTextElement(element);
+      return applyInlineStyles(escapeMarkdownText(toStringOrEmpty(element.text)), element.style);
     case "a":
-      return renderLinkElement(element);
+      return applyInlineStyles(renderLinkElement(element), element.style);
     case "at":
       {
         const mentioned = toStringOrEmpty(element.open_id) || toStringOrEmpty(element.user_id);
@@ -150,11 +131,11 @@ function renderElement(
           mentionedOpenIds.push(normalizedMention);
         }
       }
-      return renderMentionElement(element);
+      return applyInlineStyles(renderMentionElement(element), element.style);
     case "img": {
       const imageKey = normalizeFeishuExternalKey(toStringOrEmpty(element.image_key));
       if (imageKey) {
-        imageKeys.push(imageKey);
+        attachments.push({ kind: "image", key: imageKey });
       }
       return renderMediaPlaceholders ? "![image]" : "";
     }
@@ -162,7 +143,7 @@ function renderElement(
       const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(element.file_key));
       if (fileKey) {
         const fileName = toStringOrEmpty(element.file_name) || undefined;
-        mediaKeys.push({ fileKey, fileName });
+        attachments.push({ kind: "file", key: fileKey, ...(fileName ? { fileName } : {}) });
       }
       return renderMediaPlaceholders ? "[media]" : "";
     }
@@ -242,14 +223,12 @@ export function parsePostContent(
     if (!payload) {
       return {
         textContent: FALLBACK_POST_TEXT,
-        imageKeys: [],
-        mediaKeys: [],
+        attachments: [],
         mentionedOpenIds: [],
       };
     }
 
-    const imageKeys: string[] = [];
-    const mediaKeys: Array<{ fileKey: string; fileName?: string }> = [];
+    const attachments: PostParseResult["attachments"] = [];
     const mentionedOpenIds: string[] = [];
     const paragraphs: string[] = [];
 
@@ -261,8 +240,7 @@ export function parsePostContent(
       for (const element of paragraph) {
         renderedParagraph += renderElement(
           element,
-          imageKeys,
-          mediaKeys,
+          attachments,
           mentionedOpenIds,
           options.renderMediaPlaceholders !== false,
         );
@@ -276,11 +254,10 @@ export function parsePostContent(
 
     return {
       textContent: textContent || (options.emptyTextFallback ?? FALLBACK_POST_TEXT),
-      imageKeys,
-      mediaKeys,
+      attachments,
       mentionedOpenIds,
     };
   } catch {
-    return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mediaKeys: [], mentionedOpenIds: [] };
+    return { textContent: FALLBACK_POST_TEXT, attachments: [], mentionedOpenIds: [] };
   }
 }

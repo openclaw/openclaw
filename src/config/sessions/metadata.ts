@@ -7,12 +7,15 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import {
   deliveryContextFromChannelRoute,
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  normalizeSessionDeliveryFields,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
@@ -23,12 +26,8 @@ import {
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
-function isSystemEventProvider(provider?: string): boolean {
-  return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
-}
-
 // Origin updates merge sparse channel metadata without deleting previously known fields.
-const mergeOrigin = (
+const mergeSessionOrigin = (
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
 ): SessionOrigin | undefined => {
@@ -44,8 +43,7 @@ const mergeOrigin = (
   const nextIsDeliverableChannel =
     nextProvider != null &&
     nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(nextProvider) &&
-    !isSystemEventProvider(nextProvider);
+    !isInternalNonDeliveryChannel(nextProvider);
   const channelChanged =
     existing != null &&
     nextIsDeliverableChannel &&
@@ -57,6 +55,7 @@ const mergeOrigin = (
   if (channelChanged) {
     delete merged.nativeChannelId;
     delete merged.nativeDirectUserId;
+    delete merged.avatar;
     delete merged.accountId;
     delete merged.threadId;
   }
@@ -84,6 +83,9 @@ const mergeOrigin = (
   if (next?.nativeDirectUserId) {
     merged.nativeDirectUserId = next.nativeDirectUserId;
   }
+  if (next?.avatar) {
+    merged.avatar = next.avatar;
+  }
   if (next?.accountId) {
     merged.accountId = next.accountId;
   }
@@ -98,7 +100,7 @@ export function deriveSessionOrigin(
   ctx: MsgContext,
   opts?: { skipSystemEventOrigin?: boolean },
 ): SessionOrigin | undefined {
-  if (opts?.skipSystemEventOrigin && isSystemEventProvider(ctx.Provider)) {
+  if (opts?.skipSystemEventOrigin && ctx.InternalTurnSource !== undefined) {
     return undefined;
   }
   const label = normalizeOptionalString(resolveConversationLabel(ctx));
@@ -115,6 +117,7 @@ export function deriveSessionOrigin(
   );
   const nativeChannelId = normalizeOptionalString(ctx.NativeChannelId);
   const nativeDirectUserId = normalizeOptionalString(ctx.NativeDirectUserId);
+  const avatar = normalizeOptionalString(ctx.ConversationAvatar);
   const accountId = normalizeOptionalString(ctx.AccountId);
   const threadId = ctx.MessageThreadId ?? undefined;
 
@@ -143,6 +146,9 @@ export function deriveSessionOrigin(
   if (nativeDirectUserId) {
     origin.nativeDirectUserId = nativeDirectUserId;
   }
+  if (avatar) {
+    origin.avatar = avatar;
+  }
   if (accountId) {
     origin.accountId = accountId;
   }
@@ -151,13 +157,6 @@ export function deriveSessionOrigin(
   }
 
   return Object.keys(origin).length > 0 ? origin : undefined;
-}
-
-export function snapshotSessionOrigin(entry?: SessionEntry): SessionOrigin | undefined {
-  if (!entry?.origin) {
-    return undefined;
-  }
-  return { ...entry.origin };
 }
 
 function deriveGroupSessionPatch(params: {
@@ -172,7 +171,8 @@ function deriveGroupSessionPatch(params: {
   }
 
   const channel = resolution.channel;
-  const subject = params.ctx.GroupSubject?.trim();
+  const subject = normalizeOptionalString(params.ctx.GroupSubject);
+  const topicName = normalizeOptionalString(params.ctx.TopicName);
   const space = params.ctx.GroupSpace?.trim();
   const explicitChannel = params.ctx.GroupChannel?.trim();
   const subjectLooksChannel = Boolean(subject?.startsWith("#"));
@@ -193,23 +193,30 @@ function deriveGroupSessionPatch(params: {
 
   const patch: Partial<SessionEntry> = {
     chatType: resolution.chatType ?? "group",
-    channel,
     groupId: resolution.id,
   };
   if (nextSubject) {
     patch.subject = nextSubject;
+    // These fields are alternate presentations of the same chat. Clear the stale channel title
+    // when ingress now owns a human subject, or an old opaque route id will keep winning in UI.
+    patch.groupChannel = undefined;
   }
   if (nextGroupChannel) {
     patch.groupChannel = nextGroupChannel;
+    patch.subject = undefined;
   }
   if (space) {
     patch.space = space;
   }
+  if (topicName) {
+    patch.topicName = topicName;
+  }
 
   const displayName = buildGroupDisplayName({
     provider: channel,
-    subject: nextSubject ?? params.existing?.subject,
-    groupChannel: nextGroupChannel ?? params.existing?.groupChannel,
+    subject: nextSubject ?? (nextGroupChannel ? undefined : params.existing?.subject),
+    topicName: topicName ?? params.existing?.topicName,
+    groupChannel: nextGroupChannel ?? (nextSubject ? undefined : params.existing?.groupChannel),
     space: space ?? params.existing?.space,
     id: resolution.id,
     key: params.sessionKey,
@@ -226,6 +233,7 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
+  preserveExistingDeliveryRoute?: boolean;
   skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
@@ -237,19 +245,59 @@ export function deriveSessionMetaPatch(params: {
   }
 
   const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
-  const mergedOrigin = mergeOrigin(params.existing?.origin, origin);
+  const existingOrigin = sessionDeliveryOrigin(params.existing);
+  const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
   if (mergedOrigin) {
-    patch.origin = mergedOrigin;
+    if (!patch.chatType && mergedOrigin.chatType) {
+      patch.chatType = mergedOrigin.chatType;
+    }
+    const nextProvider = origin?.provider;
+    const nextOwnsExternalRoute = Boolean(
+      nextProvider &&
+      nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
+      !isInternalNonDeliveryChannel(nextProvider),
+    );
+    const existingRoute = sessionDeliveryRoute(params.existing);
+    const existingRouteAccountId =
+      existingRoute?.accountId ?? deliveryContextFromSession(params.existing)?.accountId;
+    const freshRouteOwnsNextProvider =
+      params.preserveExistingDeliveryRoute === true &&
+      nextProvider != null &&
+      existingRoute?.channel === nextProvider &&
+      (origin?.accountId == null || existingRouteAccountId === origin.accountId);
+    const deliveryIdentityChanged =
+      nextOwnsExternalRoute &&
+      !freshRouteOwnsNextProvider &&
+      (!existingOrigin ||
+        (existingOrigin.provider != null && nextProvider !== existingOrigin.provider) ||
+        (existingOrigin.surface != null &&
+          origin?.surface != null &&
+          origin.surface !== existingOrigin.surface) ||
+        (existingOrigin.accountId != null &&
+          origin?.accountId != null &&
+          origin.accountId !== existingOrigin.accountId));
+    patch.delivery = normalizeSessionDeliveryState({
+      route: deliveryIdentityChanged ? undefined : sessionDeliveryRoute(params.existing),
+      context: deliveryIdentityChanged
+        ? {
+            channel: mergedOrigin.provider,
+            to: mergedOrigin.to,
+            accountId: mergedOrigin.accountId,
+            threadId: mergedOrigin.threadId,
+          }
+        : deliveryContextFromSession(params.existing),
+      origin: mergedOrigin,
+    });
   }
 
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
-function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
-  if (!context || context.threadId == null) {
-    return context;
+function withoutThread<T extends { threadId?: string | number }>(identity?: T): T | undefined {
+  if (!identity || identity.threadId == null) {
+    return identity;
   }
-  const next: DeliveryContext = { ...context };
+  const next: T = { ...identity };
   delete next.threadId;
   return next;
 }
@@ -261,11 +309,11 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
  * store and the SQLite accessor so both backends apply one routing policy.
  */
 export function deriveLastRoutePatch(params: {
-  channel?: SessionEntry["lastChannel"];
+  channel?: string;
   to?: string;
   accountId?: string;
   threadId?: string | number;
-  route?: SessionEntry["route"];
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: GroupKeyResolution | null;
@@ -303,33 +351,32 @@ export function deriveLastRoutePatch(params: {
   );
   const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
   const fallbackContext = clearThreadFromFallback
-    ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
+    ? withoutThread(deliveryContextFromSession(existing))
     : deliveryContextFromSession(existing);
+  const existingOrigin = sessionDeliveryOrigin(existing);
+  // Explicit thread absence owns both fallbacks, so origin cannot restore a stale thread.
+  const fallbackOrigin = clearThreadFromFallback ? withoutThread(existingOrigin) : existingOrigin;
   const merged = mergeDeliveryContext(mergedInput, fallbackContext);
-  const normalized = normalizeSessionDeliveryFields({
+  const delivery = normalizeSessionDeliveryState({
     route: params.route,
-    deliveryContext: {
+    context: {
       channel: merged?.channel,
       to: merged?.to,
       accountId: merged?.accountId,
       threadId: merged?.threadId,
     },
+    origin: fallbackOrigin,
   });
+  const nextEntry = existing ? { ...existing, delivery } : ({ delivery } as SessionEntry);
   const metaPatch = ctx
     ? deriveSessionMetaPatch({
         ctx,
         sessionKey: params.sessionKey,
-        existing,
+        existing: nextEntry,
         groupResolution: params.groupResolution,
+        preserveExistingDeliveryRoute: routeContext != null,
       })
     : null;
-  const basePatch: Partial<SessionEntry> = {
-    route: normalized.route,
-    deliveryContext: normalized.deliveryContext,
-    lastChannel: normalized.lastChannel,
-    lastTo: normalized.lastTo,
-    lastAccountId: normalized.lastAccountId,
-    lastThreadId: normalized.lastThreadId,
-  };
+  const basePatch: Partial<SessionEntry> = { delivery };
   return metaPatch ? { ...basePatch, ...metaPatch } : basePatch;
 }

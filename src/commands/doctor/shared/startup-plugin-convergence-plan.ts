@@ -1,12 +1,14 @@
 // Plans first-start plugin convergence without loading the repair/catalog runtime.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { inspectBundledPluginStartupMetadata } from "../../../plugins/bundled-plugin-startup-metadata.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "../../../plugins/embedding-provider-config.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-record-reader.js";
+import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
 import {
   hasOfficialExternalChannelTarget,
   hasOfficialExternalContractTarget,
@@ -31,7 +33,10 @@ function hasPotentialPluginConfig(config: OpenClawConfig, env: NodeJS.ProcessEnv
     return false;
   }
   return Object.entries(entries).some(([pluginId, entry]) => {
-    if (isRecord(entry) && entry.enabled === false) {
+    if (
+      (isRecord(entry) && entry.enabled === false) ||
+      isNativeSessionCatalogOptOutOnly(pluginId, entry)
+    ) {
       return false;
     }
     return !inspectBundledPluginStartupMetadata({ pluginId, env });
@@ -51,17 +56,18 @@ function collectConfiguredMemoryEmbeddingProviderIds(config: OpenClawConfig): Re
       providerIds.add(ownerId);
     }
   };
-  const defaults = config.agents?.defaults?.memorySearch;
+  const defaults = config.memory?.search;
   if (defaults?.enabled !== false) {
     add(defaults?.provider);
     add(defaults?.fallback);
   }
-  for (const agent of config.agents?.list ?? []) {
-    if (agent.memorySearch?.enabled === false) {
+  for (const agent of listAgentEntries(config)) {
+    const override = agent.memory?.search;
+    if (override?.enabled === false) {
       continue;
     }
-    add(agent.memorySearch?.provider ?? defaults?.provider);
-    add(agent.memorySearch?.fallback ?? defaults?.fallback);
+    add(override?.provider ?? defaults?.provider);
+    add(override?.fallback ?? defaults?.fallback);
   }
   return providerIds;
 }
@@ -71,7 +77,7 @@ function hasConfiguredCapabilityPlugin(config: OpenClawConfig, env: NodeJS.Proce
   if (memoryEmbeddingProviderIds.size > 0) {
     if (
       hasOfficialExternalContractTarget({
-        contract: "memoryEmbeddingProviders",
+        contract: "embeddingProviders",
         providerIds: memoryEmbeddingProviderIds,
       })
     ) {

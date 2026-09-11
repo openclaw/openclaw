@@ -1,9 +1,7 @@
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -14,26 +12,22 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { root as openFsRoot } from "@openclaw/fs-safe/root";
-import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mjs";
+import { validatePackageSourceDir } from "../../package-source-preflight.mjs";
+import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mts";
 import type { CandidateBuild, LaneCommandParams, LaneState, PackageJson } from "./config.ts";
 import {
   CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES,
   INSTALL_STAGE_DEBRIS_DIR_PATTERN,
   OMITTED_QA_EXTENSION_PREFIXES,
-  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   PUBLISHED_INSTALLER_BASE_URL,
   installTimeoutMs,
   resolvePackDestinationTarball,
-  shouldRunBundledPluginPostinstall,
 } from "./config.ts";
 import { readLogTextWindow } from "./logs.ts";
 import { runCommand } from "./process.ts";
 import { logPhase } from "./reporting.ts";
-import { formatError, resolveCommandPath, shellEscapeForSh } from "./shared.ts";
-
-type PackageDistFsRoot = Awaited<ReturnType<typeof openFsRoot>>;
+import { resolveCommandPath, shellEscapeForSh } from "./shared.ts";
 
 export async function prepareCandidate(params: {
   outputDir: string;
@@ -41,6 +35,7 @@ export async function prepareCandidate(params: {
   logsDir: string;
 }): Promise<CandidateBuild> {
   logPhase("prepare", "resolve-source-sha");
+  validatePackageSourceDir(params.sourceDir, { allowUnreleasedChangelog: true });
   const packageJson = readPackageJson(params.sourceDir);
   const hasUiBuildScript = packageJsonHasScript(packageJson, "ui:build");
   const sourceSha = (
@@ -263,94 +258,11 @@ function assertNoLegacyPluginDependencyStagingDebris(packageRoot: string) {
   );
 }
 
-function collectPackagedDistSymlinkPaths(packageRoot: string, inventory: string[]) {
-  const symlinks: string[] = [];
-  const seen = new Set<string>();
-  for (const relativePath of inventory) {
-    const parts = normalizeRelativePath(relativePath).split("/");
-    let current = packageRoot;
-    for (const part of parts) {
-      current = join(current, part);
-      const symlinkPath = normalizeRelativePath(relative(packageRoot, current));
-      if (seen.has(symlinkPath)) {
-        continue;
-      }
-      seen.add(symlinkPath);
-      try {
-        const stats = lstatSync(current);
-        if (stats.isSymbolicLink()) {
-          symlinks.push(symlinkPath);
-          break;
-        }
-      } catch (error) {
-        if (isNotFoundError(error)) {
-          break;
-        }
-        throw error;
-      }
-    }
-  }
-  return symlinks.toSorted((left, right) => left.localeCompare(right));
-}
-
-function assertNoPackagedDistSymlinks(packageRoot: string, inventory: string[]) {
-  const symlinks = collectPackagedDistSymlinkPaths(packageRoot, inventory);
-  if (symlinks.length === 0) {
-    return;
-  }
-  throw new Error(`unsafe package dist symlink: ${symlinks.join(", ")}`);
-}
-
-function assertSafePackageDistInventoryWriteRoots(packageRoot: string) {
-  // npm can omit a symlinked dist root from its dry-run inventory. Recheck the
-  // write roots so generated inventories cannot follow it outside sourceDir.
-  const packageRootStats = lstatSync(packageRoot);
-  if (packageRootStats.isSymbolicLink() || !packageRootStats.isDirectory()) {
-    throw new Error("unsafe package inventory write root");
-  }
-  try {
-    const distRootStats = lstatSync(join(packageRoot, "dist"));
-    if (distRootStats.isSymbolicLink() || !distRootStats.isDirectory()) {
-      throw new Error("unsafe package dist inventory write root");
-    }
-  } catch (error) {
-    if (!isNotFoundError(error)) {
-      throw error;
-    }
-  }
-}
-
-function assertSafePackageDistInventoryWriteDestination(packageRoot: string, relativePath: string) {
-  try {
-    const stats = lstatSync(join(packageRoot, relativePath));
-    if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink > 1) {
-      throw new Error(`unsafe package dist inventory write destination: ${relativePath}`);
-    }
-  } catch (error) {
-    if (!isNotFoundError(error)) {
-      throw error;
-    }
-  }
-}
-
-async function writePackageDistInventoryMetadata(
-  packageFs: PackageDistFsRoot,
-  packageRoot: string,
-  relativePath: string,
-  content: string,
-) {
-  assertSafePackageDistInventoryWriteDestination(packageRoot, relativePath);
-  await packageFs.write(relativePath, content, { mode: 0o644 });
-}
-
 function isPackagedDistPath(relativePath: string) {
   if (!relativePath.startsWith("dist/")) {
     return false;
   }
   if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
-    return false;
-  }
-  if (relativePath === PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH) {
     return false;
   }
   if (isLocalBuildMetadataDistPath(relativePath)) {
@@ -368,29 +280,10 @@ function isPackagedDistPath(relativePath: string) {
   return true;
 }
 
-function buildPackageDistContentInventory(packageRoot: string, inventory: string[]) {
-  return inventory
-    .map((relativePath) => {
-      const filePath = join(packageRoot, relativePath);
-      const stats = lstatSync(filePath);
-      if (!stats.isFile() || stats.isSymbolicLink()) {
-        throw new Error(`unsafe package dist path: ${relativePath}`);
-      }
-      return {
-        path: relativePath,
-        sha256: createHash("sha256").update(readFileSync(filePath)).digest("hex"),
-        mode: stats.mode & 0o777,
-        size: stats.size,
-      };
-    })
-    .toSorted((left, right) => left.path.localeCompare(right.path));
-}
-
 export async function writePackageDistInventoryForCandidate(params: {
   sourceDir: string;
   logPath: string;
 }) {
-  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     pnpmCommand(),
@@ -417,24 +310,9 @@ export async function writePackageDistInventoryForCandidate(params: {
       return isPackagedDistPath(relativePath) ? [relativePath] : [];
     })
     .toSorted((left, right) => left.localeCompare(right));
-  assertNoPackagedDistSymlinks(params.sourceDir, inventory);
   const inventoryPath = join(params.sourceDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   mkdirSync(dirname(inventoryPath), { recursive: true });
-  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
-  const packageFs = await openFsRoot(params.sourceDir, { mkdir: true });
-  await writePackageDistInventoryMetadata(
-    packageFs,
-    params.sourceDir,
-    PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-    `${JSON.stringify(inventory, null, 2)}\n`,
-  );
-  await writePackageDistInventoryMetadata(
-    packageFs,
-    params.sourceDir,
-    PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
-    `${JSON.stringify(buildPackageDistContentInventory(params.sourceDir, inventory), null, 2)}\n`,
-  );
+  writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
 }
 
 export function readProvidedCandidate(params: {
@@ -521,10 +399,7 @@ export async function installTarballPackage(params: {
     timeoutMs: params.timeoutMs,
     ignoreScripts: params.ignoreScripts,
   });
-  if (
-    params.restoreBundledPluginPostinstall !== false &&
-    shouldRunBundledPluginPostinstall({ lane: params.lane })
-  ) {
+  if (params.restoreBundledPluginPostinstall !== false) {
     await runBundledPluginPostinstall({
       lane: params.lane,
       env: params.env,
@@ -548,7 +423,7 @@ export async function installPackageSpec(params: {
     npm_config_prefix: params.lane.prefixDir,
   };
   rmSync(installedPackageRoot(params.lane.prefixDir), { force: true, recursive: true });
-  try {
+  await withNpmDiagnostics(params.lane.homeDir, params.logPath, installEnv, async () => {
     await runCommand(
       npmCommand(),
       buildNpmGlobalInstallArgs(params.packageSpec, { ignoreScripts: params.ignoreScripts }),
@@ -559,44 +434,119 @@ export async function installPackageSpec(params: {
         timeoutMs: params.timeoutMs ?? installTimeoutMs(),
       },
     );
-  } catch (error) {
-    const debugTail = appendLatestNpmDebugLogTail(params.lane.homeDir, params.logPath, installEnv);
-    if (!debugTail) {
-      throw error;
+  });
+}
+
+const NPM_DIAGNOSTIC_LOG_LIMIT = 8;
+const NPM_DIAGNOSTIC_ERROR_CODES = new Set([
+  "EACCES",
+  "EBADENGINE",
+  "EBUSY",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EEXIST",
+  "EINTEGRITY",
+  "EISDIR",
+  "ENOENT",
+  "ENOSPC",
+  "ENOTEMPTY",
+  "ENOTFOUND",
+  "EPERM",
+  "ERESOLVE",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "E401",
+  "E403",
+  "E404",
+]);
+
+export async function withNpmDiagnostics<T>(
+  homeDir: string,
+  logPath: string,
+  env: NodeJS.ProcessEnv,
+  run: () => Promise<T>,
+) {
+  const findLogs = () => resolveNpmDebugLogDirs(homeDir, env).flatMap(findNpmDebugLogs);
+  const before = new Map(findLogs().map((file) => [file.path, file]));
+  try {
+    return await run();
+  } finally {
+    try {
+      const changed = [...new Map(findLogs().map((file) => [file.path, file])).values()]
+        .filter((file) => {
+          const previous = before.get(file.path);
+          return !previous || file.size !== previous.size || file.mtimeMs !== previous.mtimeMs;
+        })
+        .toSorted(
+          (left, right) => left.mtimeMs - right.mtimeMs || left.path.localeCompare(right.path),
+        );
+      // Capture before the next npm invocation rotates logs. Never export npm's
+      // free text: its redactor does not cover provider keys or URL query secrets.
+      const logs = changed.slice(-NPM_DIAGNOSTIC_LOG_LIMIT).map((file) => {
+        const previousSize = before.get(file.path)?.size ?? 0;
+        const offsetBytes = previousSize <= file.size ? previousSize : 0;
+        const maxBytes = CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES / NPM_DIAGNOSTIC_LOG_LIMIT;
+        const truncated = file.size - offsetBytes > maxBytes;
+        const window = readLogTextWindow(file.path, { maxBytes, offsetBytes });
+        const text = truncated ? window.replace(/^[^\n]*(?:\n|$)/u, "") : window;
+        return Object.assign(projectNpmDebugLog(text), { truncated });
+      });
+      appendFileSync(
+        logPath,
+        `\n[release-checks] npm-diagnostics ${JSON.stringify({
+          logs,
+          truncated: changed.length > NPM_DIAGNOSTIC_LOG_LIMIT,
+        })}\n`,
+        "utf8",
+      );
+    } catch {
+      // Diagnostics must not replace the install result or original failure.
     }
-    throw new Error(`${formatError(error)}\n\nnpm debug log tail:\n${debugTail}`, { cause: error });
   }
 }
 
-export function appendLatestNpmDebugLogTail(
-  homeDir: string,
-  logPath: string,
-  env = process.env,
-  platform = process.platform,
-) {
-  try {
-    const candidates = resolveNpmDebugLogDirs(homeDir, env, platform)
-      .flatMap(findNpmDebugLogs)
-      .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
-    const latest = candidates.at(-1);
-    if (!latest) {
-      return "";
+function projectNpmDebugLog(text: string) {
+  const fetch = { count: 0, cacheHits: 0, cacheMisses: 0, durationMs: 0, maxDurationMs: 0 };
+  const errorCodes = new Set<string>();
+  let command: string | null = null;
+  let exitCode: number | null = null;
+  let lastActivity: string | null = null;
+  for (const line of text.split(/\r?\n/u)) {
+    command =
+      line.match(
+        /^\d+ verbose title npm (install|i|root|view|pack|exec|rebuild|run-script|--version)(?:\s|$)/u,
+      )?.[1] ?? command;
+    lastActivity =
+      line.match(
+        /^\d+ (?:silly|verbose|http|info|warn|error) (fetch manifest|idealTree|reify|tar|run|fetch|cache)\b/u,
+      )?.[1] ?? lastActivity;
+    const exit = line.match(/^\d+ verbose exit (-?\d{1,3})$/u);
+    if (exit) {
+      exitCode = Number(exit[1]);
     }
-
-    const tail = readLogTextWindow(latest.path, { maxBytes: CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES });
-    if (!tail.trim()) {
-      return "";
+    const code = line.match(/^\d+ (?:error|verbose) code (\S+)$/u)?.[1];
+    if (code && NPM_DIAGNOSTIC_ERROR_CODES.has(code)) {
+      errorCodes.add(code);
     }
-
-    appendFileSync(
-      logPath,
-      `\n${new Date().toISOString()} npm-debug-log path=${latest.path}\n${tail}\n`,
-      "utf8",
+    // npm-registry-fetch emits both network and cache reads; summed durations
+    // describe this bounded tail and may overlap, so they are not wall time.
+    const request = line.match(
+      /^\d+ http (?:fetch|cache) .+ (\d+)ms(?: attempt #\d+)?(?: \(cache (hit|miss|updated|revalidated|stale)\))?$/u,
     );
-    return tail;
-  } catch {
-    return "";
+    if (request && isNpmTiming(Number(request[1]))) {
+      const durationMs = Number(request[1]);
+      fetch.count++;
+      fetch.cacheHits += Number(request[2] === "hit");
+      fetch.cacheMisses += Number(request[2] === "miss");
+      fetch.durationMs += durationMs;
+      fetch.maxDurationMs = Math.max(fetch.maxDurationMs, durationMs);
+    }
   }
+  return { command, exitCode, lastActivity, errorCodes: [...errorCodes], fetch };
+}
+
+function isNpmTiming(value: number) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 60 * 60 * 1000;
 }
 
 export function resolveNpmDebugLogDirs(
@@ -641,24 +591,22 @@ function normalizeNpmCacheLogDir(logDir: string) {
 }
 
 function findNpmDebugLogs(logsDir: string) {
-  if (!existsSync(logsDir)) {
-    return [];
-  }
-
-  return readdirSync(logsDir)
-    .flatMap((fileName) => {
-      if (!fileName.endsWith("-debug-0.log")) {
+  try {
+    return readdirSync(logsDir).flatMap((fileName) => {
+      if (!/-debug-\d+\.log$/u.test(fileName)) {
         return [];
       }
       const path = join(logsDir, fileName);
       try {
         const stat = statSync(path);
-        return stat.isFile() ? [{ path, mtimeMs: stat.mtimeMs }] : [];
+        return stat.isFile() ? [{ path, mtimeMs: stat.mtimeMs, size: stat.size }] : [];
       } catch {
         return [];
       }
-    })
-    .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
+    });
+  } catch {
+    return [];
+  }
 }
 
 export function buildNpmGlobalInstallArgs(

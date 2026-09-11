@@ -22,7 +22,7 @@ describe("AppSidebar session catalog pagination", () => {
         {
           defaultId: "main",
           mainKey: "main",
-          scope: "agent",
+          scope: "per-sender",
           agents: [{ id: "main" }, { id: "research" }],
         },
       );
@@ -44,7 +44,7 @@ describe("AppSidebar session catalog pagination", () => {
       selection.scopeId = "research";
       sidebar.requestUpdate();
       await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
 
       expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
         agentId: "research",
@@ -187,7 +187,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(claudeSection?.querySelectorAll("[data-session-catalog-host]")).toHaveLength(0);
       expect(
         codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title"),
-      ).toContain("Settings > Automation > Plugins");
+      ).toContain("Settings > Plugins");
       expect(codexSection?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
       expect(claudeSection?.querySelector('[data-session-catalog-error="claude"]')).not.toBeNull();
     } finally {
@@ -263,8 +263,8 @@ describe("AppSidebar session catalog pagination", () => {
       expect(
         section()?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
       ).toContain("Second page unavailable");
-      expect(sidebar.sessionCatalogs[0]?.error?.code).toBe("UNAVAILABLE");
-      expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+      expect(sidebar.sessionData.sessionCatalogs[0]?.error?.code).toBe("UNAVAILABLE");
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
       expect(loadMore()?.disabled).toBe(false);
 
       loadMore()?.click();
@@ -274,6 +274,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
         agentId: "main",
         catalogId: "codex",
+        hostIds: ["gateway:local"],
         cursors: { "gateway:local": "page-2" },
       });
       expect(section()?.querySelector('[data-session-catalog-error="codex"]')).toBeNull();

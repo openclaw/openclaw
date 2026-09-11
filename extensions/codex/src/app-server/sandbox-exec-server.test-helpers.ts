@@ -4,12 +4,14 @@
  */
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { vi } from "vitest";
-import WebSocket from "ws";
+import type { RawData, WebSocket } from "ws";
+import { websocket } from "./sandbox-exec-server.websocket.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 type RpcResponse = {
   id: number;
   result?: unknown;
-  error?: { message: string };
+  error?: { code: number; message: string };
 };
 
 /** Builds a minimal enabled sandbox context with overridable backend and fs bridge hooks. */
@@ -20,6 +22,9 @@ export function createSandboxContext(overrides: {
   mkdirp?: NonNullable<SandboxContext["fsBridge"]>["mkdirp"];
   readFile?: NonNullable<SandboxContext["fsBridge"]>["readFile"];
   remove?: NonNullable<SandboxContext["fsBridge"]>["remove"];
+  resolvePinnedMutationTarget?: NonNullable<
+    SandboxContext["fsBridge"]
+  >["resolvePinnedMutationTarget"];
   runShellCommand?: NonNullable<SandboxContext["backend"]>["runShellCommand"];
   stat?: NonNullable<SandboxContext["fsBridge"]>["stat"];
   writeFile?: NonNullable<SandboxContext["fsBridge"]>["writeFile"];
@@ -68,6 +73,7 @@ export function createSandboxContext(overrides: {
       mkdirp: overrides.mkdirp ?? (async () => undefined),
       remove: overrides.remove ?? (async () => undefined),
       rename: async () => undefined,
+      resolvePinnedMutationTarget: overrides.resolvePinnedMutationTarget,
       stat:
         overrides.stat ??
         (async ({ filePath }) => ({
@@ -82,7 +88,7 @@ export function createSandboxContext(overrides: {
 /** Creates a fake Codex app-server client with a configurable server version. */
 export function createClient(options: { serverVersion?: string } = {}) {
   return {
-    getServerVersion: vi.fn(() => options.serverVersion ?? "0.132.0"),
+    getServerVersion: vi.fn(() => options.serverVersion ?? CODEX_APP_SERVER_VERSION),
     request: vi.fn(async (_method: string, _params?: unknown) => ({})),
   };
 }
@@ -146,7 +152,7 @@ export function globPath(pattern: string): unknown {
 /** Opens a WebSocket connection and resolves only after the socket is ready. */
 export function openSocket(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
+    const socket = new websocket.WebSocket(url);
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
   });
@@ -235,14 +241,14 @@ export async function waitForHttpBodyDeltas(
 export function rpc(socket: WebSocket, method: string, params: unknown): Promise<unknown> {
   const id = Math.floor(Math.random() * 1_000_000);
   return new Promise((resolve, reject) => {
-    const onMessage = (data: WebSocket.RawData) => {
+    const onMessage = (data: RawData) => {
       const response = JSON.parse(Buffer.from(data as Buffer).toString("utf8")) as RpcResponse;
       if (response.id !== id) {
         return;
       }
       socket.off("message", onMessage);
       if (response.error) {
-        reject(new Error(response.error.message));
+        reject(Object.assign(new Error(response.error.message), { code: response.error.code }));
         return;
       }
       resolve(response.result);

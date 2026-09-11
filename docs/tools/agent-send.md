@@ -11,6 +11,9 @@ inbound chat message. Use it for scripted workflows, testing, and
 programmatic delivery. Full flag and behavior reference:
 [Agent CLI reference](/cli/agent).
 
+For strict, ephemeral CI or coding automation that should own setup, cleanup,
+output projection, and process status, use [`openclaw agent exec`](/cli/agent#agent-exec).
+
 ## Quick start
 
 <Steps>
@@ -132,7 +135,7 @@ openclaw agent --agent ops --message-file ./task.md
 # Exact session key
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
 
-# Legacy key scoped to an agent
+# Bare key scoped to an agent
 openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
 
 # Deliver to a different channel than the session
@@ -151,7 +154,13 @@ openclaw agent --agent ops --message "Alert" --deliver --reply-channel telegram 
   <Card title="Sessions" href="/concepts/session" icon="comments">
     How session keys work and how `--to`, `--agent`, and `--session-id` resolve them.
   </Card>
+  <Card title="Reactions" href="/tools/reactions" icon="thumbs-up">
+    Emoji reaction semantics for the `react` action, per channel.
+  </Card>
   <Card title="Slash commands" href="/tools/slash-commands" icon="slash">
     Native command catalog used inside agent sessions.
+  </Card>
+  <Card title="ACP agents" href="/tools/acp-agents" icon="robot">
+    External agents reachable over ACP.
   </Card>
 </CardGroup>

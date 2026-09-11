@@ -1,5 +1,5 @@
 // Tlon tests cover channel runtime behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./urbit/auth.js";
 import { urbitFetch } from "./urbit/fetch.js";
 
@@ -11,7 +11,7 @@ vi.mock("./urbit/fetch.js", () => ({
   urbitFetch: vi.fn(),
 }));
 
-import { probeTlonAccount } from "./channel.runtime.js";
+import { probeTlonAccount, tlonRuntimeOutbound } from "./channel.runtime.js";
 
 const account = {
   accountId: "default",
@@ -20,6 +20,45 @@ const account = {
   url: "https://example.com",
   code: "sample-code",
 } as never;
+
+const sendText = tlonRuntimeOutbound.sendText;
+if (!sendText) {
+  throw new Error("Tlon runtime outbound sendText is unavailable");
+}
+
+describe("tlonRuntimeOutbound", () => {
+  it.each([
+    {
+      name: "all default account fields",
+      cfg: { channels: { tlon: {} } },
+      accountId: "default",
+      expected: "Tlon account default not configured (missing ship, url, code)",
+    },
+    {
+      name: "one inherited named account field",
+      cfg: {
+        channels: {
+          tlon: {
+            ship: "~zod",
+            url: "https://example.com",
+            accounts: { work: { code: "" } },
+          },
+        },
+      },
+      accountId: "work",
+      expected: "Tlon account work not configured (missing code)",
+    },
+  ])("reports $name when outbound setup is incomplete", async ({ cfg, accountId, expected }) => {
+    await expect(
+      sendText({
+        cfg,
+        to: "~sampel-palnet",
+        text: "hello",
+        accountId,
+      }),
+    ).rejects.toThrow(expected);
+  });
+});
 
 function responseWithCancelableBody(
   status: number,
@@ -34,6 +73,10 @@ function responseWithCancelableBody(
 }
 
 describe("probeTlonAccount", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.mocked(authenticate).mockReset();
     vi.mocked(urbitFetch).mockReset();
@@ -48,17 +91,22 @@ describe("probeTlonAccount", () => {
     const cancelBody = vi.fn(() => {
       events.push("cancel");
     });
+    const response = responseWithCancelableBody(status, cancelBody);
     const release = vi.fn(async () => {
+      void response.body?.cancel().catch(() => undefined);
       events.push("release");
     });
     vi.mocked(urbitFetch).mockResolvedValue({
-      response: responseWithCancelableBody(status, cancelBody),
+      response,
       finalUrl: "https://example.com/~/name",
       release,
       refreshTimeout: vi.fn(),
     });
 
-    await expect(probeTlonAccount(account)).resolves.toEqual(expected);
+    await expect(probeTlonAccount(account)).resolves.toEqual({
+      ...expected,
+      elapsedMs: expect.any(Number),
+    });
 
     expect(cancelBody).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
@@ -73,6 +121,7 @@ describe("probeTlonAccount", () => {
       throw new Error("cancel failed");
     });
     const release = vi.fn(async () => {
+      void response.body?.cancel().catch(() => undefined);
       events.push("release");
     });
     vi.mocked(urbitFetch).mockResolvedValue({
@@ -82,9 +131,22 @@ describe("probeTlonAccount", () => {
       refreshTimeout: vi.fn(),
     });
 
-    await expect(probeTlonAccount(account)).resolves.toEqual({ ok: true });
+    await expect(probeTlonAccount(account)).resolves.toEqual({
+      ok: true,
+      elapsedMs: expect.any(Number),
+    });
     expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(events).toEqual(["cancel", "release"]);
+  });
+
+  it("honors the status adapter timeout", async () => {
+    vi.useFakeTimers();
+    vi.mocked(authenticate).mockReturnValueOnce(new Promise(() => {}));
+
+    const pending = probeTlonAccount(account, 50);
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: "timeout", elapsedMs: 50 });
   });
 });

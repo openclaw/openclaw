@@ -5,8 +5,11 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   attachChatRealtimeActions,
   createInitialChatRealtimeState,
+  dismissRealtimeTalkError,
+  stopChatRealtimeTalk,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
+import { RealtimeTalkSelectedMicrophoneError } from "./realtime-talk-input.ts";
 import type { RealtimeTalkCallbacks } from "./realtime-talk-shared.ts";
 import { RealtimeTalkSession } from "./realtime-talk.ts";
 
@@ -71,6 +74,93 @@ describe("chat realtime actions", () => {
     expect(inspectSession(state).localOptions.inputDeviceId).toBe("usb-mic");
     expect(inspectSession(state).localOptions.videoDeviceId).toBe("desk-camera");
     expect(startSpy).toHaveBeenCalledOnce();
+  });
+
+  it("requires explicit one-shot consent and preserves the saved microphone for later calls", async () => {
+    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
+    startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const retry = state.realtimeTalkUseSystemDefault;
+    expect(retry).toBeTypeOf("function");
+    expect(startSpy).toHaveBeenCalledOnce();
+    expect(state.realtimeTalkActive).toBe(false);
+    await Promise.all([retry!(), retry!()]);
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(inspectSession(state).localOptions.inputDeviceId).toBeUndefined();
+    expect(state.realtimeTalkUseSystemDefault).toBeNull();
+    expect(loadSettings().realtimeTalkInputDeviceId).toBe("usb-mic");
+    await state.toggleRealtimeTalk();
+    await state.toggleRealtimeTalk();
+    expect(inspectSession(state).localOptions.inputDeviceId).toBe("usb-mic");
+  });
+
+  it.each(["dismiss", "route", "disconnect", "reconnect", "replacement"] as const)(
+    "revokes retained microphone recovery after %s",
+    async (event) => {
+      startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
+      const state = createState();
+      await state.toggleRealtimeTalk();
+      const retry = state.realtimeTalkUseSystemDefault!;
+      if (event === "dismiss") {
+        dismissRealtimeTalkError(state);
+      } else if (event === "route") {
+        state.sessionKey = "another-session";
+      } else if (event === "disconnect") {
+        state.connected = false;
+      } else if (event === "reconnect") {
+        stopChatRealtimeTalk(state);
+        state.connected = true;
+      } else {
+        await state.toggleRealtimeTalk();
+      }
+      const calls = startSpy.mock.calls.length;
+      await retry();
+      // A rejected stale activation stays consumed even if the context returns.
+      state.connected = true;
+      state.sessionKey = "main";
+      await retry();
+      expect(startSpy).toHaveBeenCalledTimes(calls);
+    },
+  );
+
+  it.each(["failed", "cancelled", "succeeded"] as const)(
+    "does not overwrite a newer preference when explicit recovery %s",
+    async (outcome) => {
+      saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
+      startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
+      const state = createState();
+      await state.toggleRealtimeTalk();
+      let finish!: () => void;
+      startSpy.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            finish = () =>
+              outcome === "failed" ? reject(new Error("Microphone access is blocked")) : resolve();
+          }),
+      );
+      const retry = state.realtimeTalkUseSystemDefault!();
+      expect(inspectSession(state).localOptions.inputDeviceId).toBeUndefined();
+      saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "newer-mic" });
+      if (outcome === "cancelled") {
+        stopChatRealtimeTalk(state);
+      }
+      finish();
+      await retry;
+      expect(loadSettings().realtimeTalkInputDeviceId).toBe("newer-mic");
+      expect(state.realtimeTalkUseSystemDefault).toBeNull();
+      if (outcome === "failed") {
+        expect(state.realtimeTalkDetail).toBe("Microphone access is blocked");
+      }
+    },
+  );
+
+  it("does not infer microphone recovery from error text", async () => {
+    startSpy.mockRejectedValueOnce(new Error(new RealtimeTalkSelectedMicrophoneError().message));
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    expect(state.realtimeTalkStatus).toBe("error");
+    expect(state.realtimeTalkUseSystemDefault).toBeNull();
   });
 
   it("enables camera only after a video-capable voice session starts", async () => {
@@ -458,6 +548,44 @@ describe("chat realtime actions", () => {
     ]);
   });
 
+  it("clears partial realtime state when session startup fails", async () => {
+    let rejectStart: (error: Error) => void = () => undefined;
+    startSpy.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((_resolve, reject) => {
+          rejectStart = reject;
+        }),
+    );
+    const state = createState();
+
+    const starting = state.toggleRealtimeTalk();
+    await vi.waitFor(() => expect(state.realtimeTalkSession).not.toBeNull());
+    const session = inspectSession(state);
+    session.callbacks.onStatus?.("listening");
+    session.callbacks.onVideoCapability?.(true);
+    session.callbacks.onInputLevel?.(0.8);
+    session.callbacks.onTranscript?.({ role: "user", text: "partial", final: false });
+    session.callbacks.onVideoStream?.({} as MediaStream);
+    state.realtimeTalkCameraDevices = [{ deviceId: "camera", label: "Camera" }];
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = true;
+
+    rejectStart(new Error("startup failed"));
+    await starting;
+
+    expect(state.realtimeTalkSession).toBeNull();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("error");
+    expect(state.realtimeTalkDetail).toBe("startup failed");
+    expect(state.realtimeTalkInputLevel.value).toBe(0);
+    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalkCameraDevices).toEqual([]);
+    expect(state.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalkVideoPending).toBe(false);
+    expect(state.realtimeTalkCameraError).toBe(false);
+  });
+
   it("ignores a stopped session that rejects after its replacement starts", async () => {
     let rejectFirstStart: (error: Error) => void = () => undefined;
     startSpy.mockImplementationOnce(
@@ -478,14 +606,38 @@ describe("chat realtime actions", () => {
 
     rejectFirstStart(new Error("late setup failure"));
     await firstStart;
+    firstCallbacks.onVideoCapability?.(true);
     firstCallbacks.onInputLevel?.(0.9);
     firstCallbacks.onTranscript?.({ role: "user", text: "stale", final: true });
+    firstCallbacks.onVideoStream?.({} as MediaStream);
+    firstCallbacks.onVideoError?.(new Error("stale camera failure"));
     firstCallbacks.onStatus?.("error", "stale failure");
 
     expect(state.realtimeTalkSession).toBe(secondSession);
     expect(state.realtimeTalkActive).toBe(true);
     expect(state.realtimeTalkStatus).toBe("listening");
+    expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkInputLevel.value).toBe(0);
     expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalkCameraError).toBe(false);
+  });
+
+  it("retires callback ownership before stopping a session", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const firstSession = inspectSession(state);
+    const stop = vi
+      .spyOn(RealtimeTalkSession.prototype, "stop")
+      .mockImplementationOnce(() => firstSession.callbacks.onStatus?.("error", "late stop"));
+
+    await state.toggleRealtimeTalk();
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.realtimeTalkSession).toBeNull();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
   });
 });

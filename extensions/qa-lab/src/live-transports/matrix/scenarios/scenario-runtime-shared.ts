@@ -2,7 +2,11 @@
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
-import type { MatrixQaFaultProxyObserver } from "../substrate/fault-proxy.js";
+import type {
+  MatrixQaFaultProxyObserver,
+  MatrixQaFaultProxyRule,
+  MatrixQaFaultProxyRuleHandle,
+} from "../substrate/fault-proxy.js";
 import { createMatrixQaRoomObserver } from "../substrate/sync.js";
 import type { MatrixQaProvisionedTopology } from "../substrate/topology.js";
 import { resolveMatrixQaScenarioRoomId } from "./scenario-contract.js";
@@ -31,6 +35,7 @@ export type MatrixQaScenarioContext = {
   driverUserId: string;
   faultProxyObserver?: MatrixQaFaultProxyObserver;
   faultProxyTargetBaseUrl?: string;
+  installFaultRule?: (rule: MatrixQaFaultProxyRule) => MatrixQaFaultProxyRuleHandle;
   observedEvents: MatrixQaObservedEvent[];
   observerAccessToken: string;
   observerDeviceId?: string;
@@ -104,6 +109,7 @@ export {
   buildMatrixToolProgressPrompt,
   buildMatrixToolProgressTaskContent,
   buildMentionPrompt,
+  MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY,
   MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME,
 } from "./scenario-runtime-prompts.js";
 
@@ -144,14 +150,6 @@ export function buildMatrixReplyArtifact(
     relatesTo: event.relatesTo,
     sender: event.sender,
     ...(token ? { tokenMatched: doesMatrixQaReplyBodyMatchToken(event, token) } : {}),
-  };
-}
-
-export function buildMatrixNoticeArtifact(event: MatrixQaObservedEvent) {
-  return {
-    bodyPreview: truncateMatrixQaPreview(event.body?.trim()),
-    eventId: event.eventId,
-    sender: event.sender,
   };
 }
 
@@ -430,22 +428,6 @@ export async function runConfigurableTopLevelScenario(params: {
   };
 }
 
-async function runTopLevelMentionScenario(params: {
-  accessToken: string;
-  actorId: MatrixQaActorId;
-  baseUrl: string;
-  observedEvents: MatrixQaObservedEvent[];
-  roomId: string;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
-  sutUserId: string;
-  timeoutMs: number;
-  tokenPrefix: string;
-  withMention?: boolean;
-}) {
-  return await runConfigurableTopLevelScenario(params);
-}
-
 export async function runDriverTopLevelMentionScenario(params: {
   baseUrl: string;
   driverAccessToken: string;
@@ -457,7 +439,7 @@ export async function runDriverTopLevelMentionScenario(params: {
   timeoutMs: number;
   tokenPrefix: string;
 }) {
-  return await runTopLevelMentionScenario({
+  return await runConfigurableTopLevelScenario({
     accessToken: params.driverAccessToken,
     actorId: "driver",
     baseUrl: params.baseUrl,
@@ -542,7 +524,7 @@ export async function runTopologyScopedTopLevelScenario(params: {
   withMention?: boolean;
 }) {
   const roomId = resolveMatrixQaScenarioRoomId(params.context, params.roomKey);
-  const result = await runTopLevelMentionScenario({
+  const result = await runConfigurableTopLevelScenario({
     accessToken: params.accessToken,
     actorId: params.actorId,
     baseUrl: params.context.baseUrl,
@@ -641,6 +623,9 @@ export async function runNoReplyExpectedScenario(params: {
         ...buildMatrixReplyDetails("unexpected reply", unexpectedReply),
       ].join("\n"),
     );
+  }
+  if (!observedTriggerEvent) {
+    throw new Error("Matrix no-reply observation did not observe the trigger event");
   }
   advanceMatrixQaActorCursor({
     actorId: params.actorId,

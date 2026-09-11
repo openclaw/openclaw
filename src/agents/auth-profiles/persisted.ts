@@ -5,35 +5,43 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveOAuthPath } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
-import { loadJsonFile } from "../../infra/json-file.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { asBoolean } from "../../utils/boolean.js";
-import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
+import { oauthCredentialMetadataSchema } from "./credential-schema.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   hasOAuthIdentity,
-  hasUsableOAuthCredential,
   isSafeToAdoptMainStoreOAuthIdentity,
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-shared.js";
-import { resolveLegacyAuthStorePath } from "./paths.js";
-import { readPersistedAuthProfileStoreRaw } from "./sqlite.js";
 import {
-  coerceAuthProfileState,
-  loadPersistedAuthProfileState,
-  mergeAuthProfileState,
-} from "./state.js";
+  getRuntimeExternalCliProfileIds,
+  removePersonalAuthProfileReferences,
+  setRuntimeExternalCliProfileIds,
+} from "./runtime-external-profile-references.js";
+import {
+  inspectAuthProfileJsonCellReadOnly,
+  readPersistedAuthProfileStateRaw,
+  readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStateRaw,
+  readPersistedSharedAuthProfileStoreRaw,
+  type AuthProfileDatabase,
+} from "./sqlite.js";
+import { coerceAuthProfileState, mergeAuthProfileState } from "./state.js";
+import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import type {
   AuthProfileCredential,
   AuthProfileSecretsStore,
   AuthProfileStore,
   RuntimeAuthProfileStore,
   OAuthCredential,
-  OAuthCredentials,
+  SavedSetupCredential,
 } from "./types.js";
 
 /** Legacy auth.json store shape before auth-profiles.json/SQLite. */
@@ -41,22 +49,26 @@ type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
 type LoadPersistedAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
-  database?: OpenClawAgentDatabase;
+  database?: AuthProfileDatabase;
 };
 
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
+const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
+
+function isRetainedUsageStatsId(
+  profileId: string,
+  profiles: AuthProfileStore["profiles"],
+): boolean {
+  return Boolean(profiles[profileId]) || profileId.startsWith(INLINE_API_KEY_USAGE_ID_PREFIX);
+}
 
 // Persisted credential normalization accepts old field names and SecretRef-ish
 // values, then emits the current credential discriminated union.
 function normalizeOptionalCredentialString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? value : undefined;
+  return readNonBlankString(value);
 }
 
 function normalizeExpiryField(value: unknown): number | undefined {
@@ -77,6 +89,30 @@ function normalizeCredentialMetadata(value: unknown): Record<string, string> | u
     }
   }
   return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function normalizeSavedSetupCredential(value: unknown): SavedSetupCredential | undefined {
+  if (!isRecord(value) || typeof value.replacement !== "boolean") {
+    return undefined;
+  }
+  const modelRef = readNonBlankString(value.modelRef);
+  const configJson = readNonBlankString(value.configJson);
+  if (!modelRef || !configJson) {
+    return undefined;
+  }
+  const authChoice = readNonBlankString(value.authChoice);
+  const pluginId = readNonBlankString(value.pluginId);
+  return {
+    replacement: value.replacement,
+    modelRef,
+    configJson,
+    ...(value.apiKeyHeader === true ? { apiKeyHeader: true } : {}),
+    ...(readNonBlankString(value.agentRuntimeId)
+      ? { agentRuntimeId: readNonBlankString(value.agentRuntimeId) }
+      : {}),
+    ...(authChoice ? { authChoice } : {}),
+    ...(pluginId ? { pluginId } : {}),
+  };
 }
 
 // Secret-backed key/token fields may have been stored in the value field by old
@@ -101,6 +137,10 @@ function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record
   const normalized: Record<string, unknown> = {
     provider: typeof entry.provider === "string" ? normalizeProviderId(entry.provider) : "",
   };
+  const setup = normalizeSavedSetupCredential(entry.setup);
+  if (setup) {
+    normalized.setup = setup;
+  }
   const copyToAgents = asBoolean(entry.copyToAgents);
   if (copyToAgents !== undefined) {
     normalized.copyToAgents = copyToAgents;
@@ -181,13 +221,8 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
     for (const field of [
       "access",
       "refresh",
-      "idToken",
-      "clientId",
-      "enterpriseUrl",
-      "projectId",
-      "accountId",
-      "chatgptPlanType",
-    ] as const) {
+      ...Object.keys(oauthCredentialMetadataSchema.shape),
+    ]) {
       const value = normalizeOptionalCredentialString(entry[field]);
       if (value !== undefined) {
         normalized[field] = value;
@@ -227,6 +262,15 @@ function parseCredentialEntry(
   };
 }
 
+/** Normalizes a single legacy credential entry into a canonical credential. */
+export function parseLegacyCredentialEntry(
+  raw: unknown,
+  fallbackProvider?: string,
+): AuthProfileCredential | null {
+  const parsed = parseCredentialEntry(raw, fallbackProvider);
+  return parsed.ok ? parsed.credential : null;
+}
+
 function warnRejectedCredentialEntries(source: string, rejected: RejectedCredentialEntry[]): void {
   if (rejected.length === 0) {
     return;
@@ -238,7 +282,7 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
     },
     {},
   );
-  log.warn("ignored invalid auth profile entries during store load", {
+  authProfilesLog.warn("ignored invalid auth profile entries during store load", {
     source,
     dropped: rejected.length,
     reasons,
@@ -442,6 +486,7 @@ function findMainStoreOAuthReplacement(params: {
       if (
         profileId === params.legacyProfileId ||
         credential.type !== "oauth" ||
+        credential.setup?.replacement ||
         normalizeProviderId(credential.provider) !== providerKey
       ) {
         return [];
@@ -543,7 +588,7 @@ function replaceMergedProfileReferences(params: {
     }
   }
 
-  return {
+  const next = {
     ...store,
     profiles,
     ...(order && Object.keys(order).length > 0 ? { order } : { order: undefined }),
@@ -552,6 +597,13 @@ function replaceMergedProfileReferences(params: {
       ? { usageStats }
       : { usageStats: undefined }),
   };
+  setRuntimeExternalCliProfileIds(
+    next,
+    getRuntimeExternalCliProfileIds(store).map(
+      (profileId) => replacements.get(profileId) ?? profileId,
+    ),
+  );
+  return next;
 }
 
 function reconcileMainStoreOAuthProfileDrift(params: {
@@ -595,9 +647,11 @@ export function mergeAuthProfileStores(
     !override.usageStats &&
     override.runtimePersistedProfileIds === undefined &&
     override.runtimeLocalProfileIds === undefined &&
+    override.runtimeLocalOrderProviderIds === undefined &&
     override.runtimeInheritsMainState === undefined &&
     override.runtimeExternalProfileIds === undefined &&
-    override.runtimeExternalProfileIdsAuthoritative !== true
+    override.runtimeExternalProfileIdsAuthoritative !== true &&
+    getRuntimeExternalCliProfileIds(override).length === 0
   ) {
     return base;
   }
@@ -645,7 +699,9 @@ export function mergeAuthProfileStores(
   const mergedUsageStats = mergeRecord(base.usageStats, override.usageStats);
   const usageStats = mergedUsageStats
     ? Object.fromEntries(
-        Object.entries(mergedUsageStats).filter(([profileId]) => profiles[profileId]),
+        Object.entries(mergedUsageStats).filter(([profileId]) =>
+          isRetainedUsageStatsId(profileId, profiles),
+        ),
       )
     : undefined;
   const merged = {
@@ -691,7 +747,14 @@ export function mergeAuthProfileStores(
             : {}),
         }
       : {};
-  return reconcileMainStoreOAuthProfileDrift({
+  const runtimeExternalCliProfileIds = [
+    ...getRuntimeExternalCliProfileIds(base).filter(
+      (profileId) =>
+        !overrideProfileIds.has(profileId) && !removedRuntimeExternalProfileIds.has(profileId),
+    ),
+    ...getRuntimeExternalCliProfileIds(override),
+  ];
+  const result = reconcileMainStoreOAuthProfileDrift({
     base,
     override,
     merged: {
@@ -700,12 +763,31 @@ export function mergeAuthProfileStores(
         ? { runtimePersistedProfileIds: [...new Set(runtimePersistedProfileIds)] }
         : {}),
       ...(runtimeLocalProfileIds ? { runtimeLocalProfileIds } : {}),
+      ...(override.runtimeLocalOrderProviderIds !== undefined
+        ? { runtimeLocalOrderProviderIds: [...override.runtimeLocalOrderProviderIds] }
+        : {}),
       ...(override.runtimeInheritsMainState !== undefined
         ? { runtimeInheritsMainState: override.runtimeInheritsMainState }
         : {}),
       ...runtimeExternalProfileMetadata,
     },
   }) as RuntimeAuthProfileStore;
+  setRuntimeExternalCliProfileIds(result, runtimeExternalCliProfileIds);
+  if (base.runtimeCredentialSources || override.runtimeCredentialSources) {
+    // Reconciliation can select main's OAuth row instead of the local override.
+    result.runtimeCredentialSources = Object.fromEntries(
+      Object.entries(result.profiles).flatMap(([profileId, credential]) => {
+        const source =
+          credential === override.profiles[profileId]
+            ? override.runtimeCredentialSources?.[profileId]
+            : credential === base.profiles[profileId]
+              ? base.runtimeCredentialSources?.[profileId]
+              : undefined;
+        return source ? [[profileId, source]] : [];
+      }),
+    );
+  }
+  return result;
 }
 
 /** Builds the persisted secrets store, stripping resolved literals when refs exist. */
@@ -718,6 +800,9 @@ export function buildPersistedAuthProfileSecretsStore(
 ): AuthProfileSecretsStore {
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).flatMap(([profileId, credential]) => {
+      if (isUserModelAuthProfileId(profileId)) {
+        return [];
+      }
       if (shouldPersistProfile && !shouldPersistProfile({ profileId, credential })) {
         return [];
       }
@@ -744,66 +829,25 @@ export function buildPersistedAuthProfileSecretsStore(
 /** Applies legacy auth.json credentials into an auth profile store. */
 export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuthStore): void {
   for (const [provider, cred] of Object.entries(legacy)) {
-    const profileId = `${provider}:default`;
-    const credentialProvider = cred.provider ?? provider;
-    if (cred.type === "api_key") {
-      store.profiles[profileId] = {
-        type: "api_key",
-        provider: credentialProvider,
-        key: cred.key,
-        ...(cred.email ? { email: cred.email } : {}),
-      };
-      continue;
-    }
-    if (cred.type === "token") {
-      store.profiles[profileId] = {
-        type: "token",
-        provider: credentialProvider,
-        token: cred.token,
-        ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
-        ...(cred.email ? { email: cred.email } : {}),
-      };
-      continue;
-    }
-    store.profiles[profileId] = {
-      type: "oauth",
-      provider: credentialProvider,
-      access: cred.access,
-      refresh: cred.refresh,
-      expires: cred.expires,
-      ...(cred.enterpriseUrl ? { enterpriseUrl: cred.enterpriseUrl } : {}),
-      ...(cred.projectId ? { projectId: cred.projectId } : {}),
-      ...(cred.accountId ? { accountId: cred.accountId } : {}),
-      ...(cred.email ? { email: cred.email } : {}),
+    store.profiles[`${provider}:default`] = {
+      ...cred,
+      provider: cred.provider ?? provider,
     };
   }
 }
 
-/** Imports the legacy oauth.json file into missing default OAuth profiles. */
-export function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
-  const oauthPath = resolveOAuthPath();
-  const oauthRaw = loadJsonFile(oauthPath);
-  if (!oauthRaw || typeof oauthRaw !== "object") {
-    return false;
+function mergePersistedAuthProfileState(
+  raw: unknown,
+  readState: () => unknown,
+): AuthProfileStore | null {
+  const store = coercePersistedAuthProfileStore(raw);
+  if (!store) {
+    return null;
   }
-  const oauthEntries = oauthRaw as Record<string, OAuthCredentials>;
-  let mutated = false;
-  for (const [provider, creds] of Object.entries(oauthEntries)) {
-    if (!creds || typeof creds !== "object") {
-      continue;
-    }
-    const profileId = `${provider}:default`;
-    if (store.profiles[profileId]) {
-      continue;
-    }
-    store.profiles[profileId] = {
-      type: "oauth",
-      provider,
-      ...creds,
-    };
-    mutated = true;
-  }
-  return mutated;
+  return removePersonalAuthProfileReferences({
+    ...store,
+    ...mergeAuthProfileState(coerceAuthProfileState(raw), coerceAuthProfileState(readState())),
+  });
 }
 
 /** Loads the persisted auth profile store and merges runtime state. */
@@ -811,23 +855,42 @@ export function loadPersistedAuthProfileStore(
   agentDir?: string,
   options?: LoadPersistedAuthProfileStoreOptions,
 ): AuthProfileStore | null {
-  const raw = readPersistedAuthProfileStoreRaw(agentDir, options?.database);
-  const store = coercePersistedAuthProfileStore(raw);
-  if (!store) {
-    return null;
-  }
-  const merged = {
-    ...store,
-    ...mergeAuthProfileState(
-      coerceAuthProfileState(raw),
-      loadPersistedAuthProfileState(agentDir, options?.database),
-    ),
-  };
-  return merged;
+  return mergePersistedAuthProfileState(
+    readPersistedAuthProfileStoreRaw(agentDir, options?.database),
+    () => readPersistedAuthProfileStateRaw(agentDir, options?.database),
+  );
 }
 
-/** Loads the legacy auth.json auth profile store if present. */
-export function loadLegacyAuthProfileStore(agentDir?: string): LegacyAuthStore | null {
-  return coerceLegacyAuthStore(loadJsonFile(resolveLegacyAuthStorePath(agentDir)));
+/** Read an already selected owner without rediscovering an environment or opening a writer. */
+export function loadPersistedAuthProfileStoreAtDatabasePath(
+  databasePath: string,
+  kind: "agent" | "shared-state",
+): AuthProfileStore | null {
+  const target = { path: databasePath, kind };
+  const credentials = inspectAuthProfileJsonCellReadOnly(target, "store");
+  if (credentials.status === "missing") {
+    return null;
+  }
+  if (credentials.status === "unreadable") {
+    throw new AuthProfileStoreUnreadableError(databasePath);
+  }
+  const state = inspectAuthProfileJsonCellReadOnly(target, "state");
+  const store = mergePersistedAuthProfileState(credentials.raw, () =>
+    state.status === "readable" ? state.raw : null,
+  );
+  if (!store) {
+    throw new AuthProfileStoreUnreadableError(databasePath);
+  }
+  return store;
 }
+
+/** Load the shared auth store from an explicit state root. */
+export function loadPersistedSharedAuthProfileStore(
+  env: NodeJS.ProcessEnv,
+): AuthProfileStore | null {
+  return mergePersistedAuthProfileState(readPersistedSharedAuthProfileStoreRaw(env), () =>
+    readPersistedSharedAuthProfileStateRaw(env),
+  );
+}
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

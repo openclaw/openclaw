@@ -2,7 +2,7 @@
  * Tests gateway talk runtime wiring for speech provider execution.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODE_HEAVY_SPOKEN_FALLBACK } from "../../packages/speech-core/src/speech-text.js";
+import { CODE_HEAVY_SPOKEN_FALLBACK } from "../tts/speech-text.js";
 import {
   invokeTalkSpeakDirect,
   type TalkSpeakTestPayload,
@@ -23,6 +23,8 @@ const synthesizeSpeechMock = vi.hoisted(() =>
 vi.mock("../tts/tts.js", () => ({
   synthesizeSpeech: synthesizeSpeechMock,
 }));
+
+vi.mock("../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: synthesizeSpeechMock }));
 
 type SpeechProvider = Parameters<typeof withSpeechProviders>[0][number]["provider"];
 
@@ -149,14 +151,12 @@ describe("gateway talk runtime", () => {
         expect(synthesizeParams.disableFallback).toBe(true);
         const ttsConfig = (
           synthesizeParams.cfg as {
-            messages?: {
-              tts?: {
-                provider?: string;
-                providers?: Record<string, { resolvedBy?: string; voiceId?: string }>;
-              };
+            tts?: {
+              provider?: string;
+              providers?: Record<string, { resolvedBy?: string; voiceId?: string }>;
             };
           }
-        ).messages?.tts;
+        ).tts;
         expect(ttsConfig?.provider).toBe("acme");
         expect(ttsConfig?.providers?.acme?.resolvedBy).toBe("acme-test-provider");
         expect(ttsConfig?.providers?.acme?.voiceId).toBe("plugin-voice");
@@ -183,6 +183,24 @@ describe("gateway talk runtime", () => {
         expect((res?.payload as TalkSpeakTestPayload | undefined)?.audioBase64).toBe(
           Buffer.from([7, 8, 9]).toString("base64"),
         );
+      },
+    );
+  });
+
+  it.each(["```printf```", "> ```\n> x"])("preserves talk.speak prose after %s", async (prefix) => {
+    await setAcmeTalkConfig();
+    const text = `${prefix}\n\nThis explanation is ordinary prose and should be spoken in full.`;
+    await withAcmeSpeechProvider(
+      async () => ({
+        audioBuffer: Buffer.from([7, 8, 9]),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      }),
+      async () => {
+        const res = await invokeTalkSpeakDirect({ text });
+        expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
+        expect(expectSingleSynthesizeSpeechCall().text).toBe(text);
       },
     );
   });

@@ -45,6 +45,7 @@ async function runWriteOpenRace(params: {
   runWrite: () => Promise<void>;
 }): Promise<void> {
   await withRealpathSymlinkRebindRace({
+    realpathApi: "native-sync",
     shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "target.txt")),
     symlinkPath: params.slotPath,
     symlinkTarget: params.outsideDir,
@@ -151,8 +152,27 @@ describe("fs-safe", () => {
       },
     });
 
-    expect(result.path).toBe(path.join(dir, "artifact.txt"));
+    expect(result).toEqual({ path: path.join(dir, "artifact.txt") });
     await expect(fs.readFile(path.join(dir, "artifact.txt"), "utf8")).resolves.toBe("artifact");
+  });
+
+  it.each([
+    ["fallbackFileName", { fallbackFileName: "safe-output.bin" }],
+    ["tempPrefix", { tempPrefix: "safe-output.bin" }],
+  ] as const)("maps %s onto the upstream portable fallback name", async (_label, naming) => {
+    const dir = await tempDirs.make("openclaw-fs-safe-output-name-");
+
+    const result = await writeExternalFileWithinRoot({
+      rootDir: dir,
+      path: "\u0001",
+      ...naming,
+      write: async (tempPath) => {
+        await fs.writeFile(tempPath, "artifact");
+      },
+    });
+
+    expect(result).toEqual({ path: path.join(dir, "safe-output.bin") });
+    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("artifact");
   });
 
   it("enforces maxBytes", async () => {
@@ -551,6 +571,7 @@ describe("fs-safe", () => {
       });
 
       await withRealpathSymlinkRebindRace({
+        realpathApi: "native-sync",
         shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
         symlinkPath: slot,
         symlinkTarget: outside,
@@ -581,6 +602,7 @@ describe("fs-safe", () => {
       });
 
       await withRealpathSymlinkRebindRace({
+        realpathApi: "native-sync",
         shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
         symlinkPath: slot,
         symlinkTarget: outside,

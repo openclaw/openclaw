@@ -1,15 +1,18 @@
-// Gateway TLS runtime loads configured certificates or generates a local
-// self-signed pair, returning server-ready options plus client fingerprint.
+// Public certificate inspection is read-only; server startup alone provisions TLS material.
 import { X509Certificate } from "node:crypto";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { runExec } from "../../process/exec.js";
-import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
-import { pathExists } from "../fs-safe.js";
+import { CONFIG_DIR, resolveUserPath, shortenHomeInString } from "../../utils.js";
+import { ensureDurableDirectory, publishFileNoClobber } from "../directory-durability.js";
+import { sameFileIdentity } from "../fs-safe-advanced.js";
+import { canonicalPathFromExistingAncestor, pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
-import { normalizeFingerprint } from "./fingerprint.js";
 
 const GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS = 30_000;
 
@@ -22,48 +25,64 @@ type GatewayTlsDegradation = {
   event: "gateway.tls.degraded";
   ownerKind: "gateway";
   ownerId: "tls";
-  reason: "atomic hard-link publication unavailable";
+  reason: "atomic hard-link publication unavailable" | "directory durability unavailable";
   state: "best-effort";
 };
 
-const GATEWAY_TLS_DEGRADATION: GatewayTlsDegradation = {
-  event: "gateway.tls.degraded",
-  ownerKind: "gateway",
-  ownerId: "tls",
-  reason: "atomic hard-link publication unavailable",
-  state: "best-effort",
-};
-
-function isHardLinkUnsupportedError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EPERM";
+function gatewayTlsDegradation(reason: GatewayTlsDegradation["reason"]): GatewayTlsDegradation {
+  return {
+    event: "gateway.tls.degraded",
+    ownerKind: "gateway",
+    ownerId: "tls",
+    reason,
+    state: "best-effort",
+  };
 }
+
+type PublishedGeneratedTlsOutput = {
+  degradationReasons: GatewayTlsDegradation["reason"][];
+  identity: Stats;
+};
 
 async function publishGeneratedTlsOutput(
   stagedPath: string,
   finalPath: string,
-  contents: string,
-): Promise<boolean> {
+): Promise<PublishedGeneratedTlsOutput> {
+  const degradationReasons: GatewayTlsDegradation["reason"][] = [];
+  const stagedHandle = await fs.open(stagedPath, "r+");
+  let stagedIdentity: Stats;
   try {
-    await fs.link(stagedPath, finalPath);
-    return false;
-  } catch (error) {
-    if (!isHardLinkUnsupportedError(error)) {
-      throw error;
-    }
-  }
-
-  // Some supported filesystems cannot publish with hard links. An exclusive handle keeps
-  // no-overwrite semantics without pathname cleanup that could delete concurrent output;
-  // a failed best-effort write may leave this attempt's partial file for operator cleanup.
-  const handle = await fs.open(finalPath, "wx", 0o600);
-  try {
-    await handle.writeFile(contents, "utf8");
-    await handle.sync();
+    await stagedHandle.sync();
+    stagedIdentity = await stagedHandle.stat();
   } finally {
-    await handle.close();
+    await stagedHandle.close();
   }
-  return true;
+  const publication = await publishFileNoClobber(stagedPath, finalPath, {
+    strategy: "link-or-copy",
+    durability: "degrade",
+  });
+  if (publication.method === "exclusive-copy") {
+    degradationReasons.push("atomic hard-link publication unavailable");
+  }
+  if (publication.durability === "degraded") {
+    degradationReasons.push("directory durability unavailable");
+  }
+  const [currentStagedIdentity, currentPublishedIdentity] = await Promise.all([
+    fs.lstat(stagedPath),
+    fs.lstat(finalPath),
+  ]);
+  const hardlinkChanged =
+    publication.method === "hardlink" && !sameFileIdentity(stagedIdentity, publication.identity);
+  if (
+    !currentStagedIdentity.isFile() ||
+    !currentPublishedIdentity.isFile() ||
+    !sameFileIdentity(stagedIdentity, currentStagedIdentity) ||
+    !sameFileIdentity(publication.identity, currentPublishedIdentity) ||
+    hardlinkChanged
+  ) {
+    throw new Error(`Generated TLS output changed during publication: ${finalPath}`);
+  }
+  return { degradationReasons, identity: publication.identity };
 }
 
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
@@ -84,12 +103,11 @@ async function generateSelfSignedCert(params: {
   keyPath: string;
   log?: GatewayTlsLog;
 }): Promise<void> {
-  const certDir = path.dirname(params.certPath);
-  const keyDir = path.dirname(params.keyPath);
-  await ensureDir(certDir);
-  if (keyDir !== certDir) {
-    await ensureDir(keyDir);
-  }
+  const certDir = await canonicalPathFromExistingAncestor(path.dirname(params.certPath));
+  const keyDir = await canonicalPathFromExistingAncestor(path.dirname(params.keyPath));
+  const certDirectory = await ensureDurableDirectory({ directoryPath: certDir });
+  const keyDirectory =
+    keyDir === certDir ? certDirectory : await ensureDurableDirectory({ directoryPath: keyDir });
   const opensslBin = resolveSystemBin("openssl");
   if (!opensslBin) {
     throw new Error(
@@ -134,18 +152,29 @@ async function generateSelfSignedCert(params: {
       fs.readFile(stagedKeyPath, "utf8"),
     ]);
     tls.createSecureContext({ cert, key, minVersion: "TLSv1.3" });
-    let usedBestEffortPublication = await publishGeneratedTlsOutput(
+    const degradationReasons = new Set<GatewayTlsDegradation["reason"]>();
+    if (
+      certDirectory.parentSync.status === "unsupported" ||
+      keyDirectory.parentSync.status === "unsupported"
+    ) {
+      degradationReasons.add("directory durability unavailable");
+    }
+    const certPublication = await publishGeneratedTlsOutput(
       stagedCertPath,
-      params.certPath,
-      cert,
+      path.join(certDirectory.path, path.basename(params.certPath)),
     );
-    usedBestEffortPublication =
-      (await publishGeneratedTlsOutput(stagedKeyPath, params.keyPath, key)) ||
-      usedBestEffortPublication;
-    if (usedBestEffortPublication) {
+    certPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
+    // Preserve the published certificate on key failure: conditional pathname removal is not atomic.
+    const keyPublication = await publishGeneratedTlsOutput(
+      stagedKeyPath,
+      path.join(keyDirectory.path, path.basename(params.keyPath)),
+    );
+    keyPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
+    for (const reason of degradationReasons) {
+      const degradation = gatewayTlsDegradation(reason);
       params.log?.warn?.(
-        `[GATEWAY_TLS_DEGRADED] best-effort gateway:tls: ${GATEWAY_TLS_DEGRADATION.reason}.`,
-        GATEWAY_TLS_DEGRADATION,
+        `[GATEWAY_TLS_DEGRADED] best-effort gateway:tls: ${degradation.reason}.`,
+        degradation,
       );
     }
     params.log?.info?.(
@@ -160,8 +189,35 @@ async function generateSelfSignedCert(params: {
   }
 }
 
-/** Load or generate gateway TLS material and return server-ready TLS options. */
-export async function loadGatewayTlsRuntime(
+function resolveGatewayTlsCertPath(certPath: string | undefined): string {
+  // Blank paths use the default; resolveUserPath owns trimming and home expansion.
+  return resolveUserPath(
+    typeof certPath === "string" && certPath.trim()
+      ? certPath
+      : path.join(CONFIG_DIR, "gateway", "tls", "gateway-cert.pem"),
+  );
+}
+
+/** Read only public certificate bytes. Inspection never provisions or requires server secrets. */
+export async function inspectGatewayTlsCertificate(
+  cfg: Pick<GatewayTlsConfig, "enabled" | "certPath"> | undefined,
+): Promise<Result<{ cert: string; fingerprintSha256: string }, string>> {
+  if (cfg?.enabled !== true) {
+    return err("gateway tls is disabled");
+  }
+  try {
+    const cert = await fs.readFile(resolveGatewayTlsCertPath(cfg.certPath), "utf8");
+    const fingerprintSha256 = normalizeTlsFingerprint(new X509Certificate(cert).fingerprint256);
+    return fingerprintSha256
+      ? ok({ cert, fingerprintSha256 })
+      : err("gateway tls: unable to compute certificate fingerprint");
+  } catch (error) {
+    return err(`gateway tls: failed to load cert (${String(error)})`);
+  }
+}
+
+/** Server startup only: load or provision TLS material and return listener options. */
+export async function loadGatewayTlsServerRuntime(
   cfg: GatewayTlsConfig | undefined,
   log?: GatewayTlsLog,
 ): Promise<GatewayTlsRuntime> {
@@ -175,11 +231,7 @@ export async function loadGatewayTlsRuntime(
   // passed through verbatim so resolveUserPath owns all normalization (it trims
   // and expands ~); trimming here would duplicate it and silently rewrite paths
   // that contain leading/trailing spaces.
-  const certPath = resolveUserPath(
-    typeof cfg.certPath === "string" && cfg.certPath.trim()
-      ? cfg.certPath
-      : path.join(baseDir, "gateway-cert.pem"),
-  );
+  const certPath = resolveGatewayTlsCertPath(cfg.certPath);
   const keyPath = resolveUserPath(
     typeof cfg.keyPath === "string" && cfg.keyPath.trim()
       ? cfg.keyPath
@@ -193,13 +245,13 @@ export async function loadGatewayTlsRuntime(
   if (!hasCert && !hasKey && autoGenerate) {
     try {
       await generateSelfSignedCert({ certPath, keyPath, log });
-    } catch (err) {
+    } catch (error) {
       return {
         enabled: false,
         required: true,
         certPath,
         keyPath,
-        error: `gateway tls: failed to generate cert (${String(err)})`,
+        error: `gateway tls: failed to generate cert (${String(error)})`,
       };
     }
   }
@@ -219,7 +271,7 @@ export async function loadGatewayTlsRuntime(
     const key = await fs.readFile(keyPath, "utf8");
     const ca = caPath ? await fs.readFile(caPath, "utf8") : undefined;
     const x509 = new X509Certificate(cert);
-    const fingerprintSha256 = normalizeFingerprint(x509.fingerprint256 ?? "");
+    const fingerprintSha256 = normalizeTlsFingerprint(x509.fingerprint256 ?? "");
 
     if (!fingerprintSha256) {
       return {
@@ -246,14 +298,14 @@ export async function loadGatewayTlsRuntime(
         minVersion: "TLSv1.3",
       },
     };
-  } catch (err) {
+  } catch (error) {
     return {
       enabled: false,
       required: true,
       certPath,
       keyPath,
       caPath,
-      error: `gateway tls: failed to load cert (${String(err)})`,
+      error: `gateway tls: failed to load cert (${String(error)})`,
     };
   }
 }

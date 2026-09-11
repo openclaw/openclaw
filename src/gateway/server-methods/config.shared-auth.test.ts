@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -17,6 +18,7 @@ import {
 const readConfigFileSnapshotForWriteMock = vi.fn();
 const writeConfigFileMock = vi.fn();
 const persistedConfigResultMock = vi.fn((config: OpenClawConfig) => config);
+const runtimeApplication = { claimed: true };
 const validateConfigObjectWithPluginsMock = vi.fn();
 const prepareSecretsRuntimeSnapshotMock = vi.fn();
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
@@ -35,13 +37,16 @@ vi.mock("../../config/config.js", async () => {
     ...actual,
     createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
     writeConfigFile: writeConfigFileMock,
-    replaceConfigFile: async (params: { nextConfig: OpenClawConfig; writeOptions?: unknown }) => {
-      await writeConfigFileMock(params.nextConfig, params.writeOptions);
-      const persistedConfig = persistedConfigResultMock(params.nextConfig);
+    replaceConfigFile: async (params: { sourceConfig: OpenClawConfig; writeOptions?: object }) => {
+      await writeConfigFileMock(params.sourceConfig, params.writeOptions);
+      if (params.writeOptions && runtimeApplication.claimed) {
+        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+      }
+      const persistedConfig = persistedConfigResultMock(params.sourceConfig);
       return {
         path: "/tmp/openclaw.json",
         previousHash: "base-hash",
-        snapshot: createConfigWriteSnapshot(params.nextConfig),
+        snapshot: createConfigWriteSnapshot(params.sourceConfig),
         nextConfig: persistedConfig,
         persistedHash: "next-hash",
         afterWrite: { mode: "auto" },
@@ -79,7 +84,7 @@ vi.mock("../../secrets/runtime.js", () => ({
 }));
 
 vi.mock("../../secrets/runtime-state.js", () => ({
-  getActiveSecretsRuntimeSnapshot: () => null,
+  getActiveSecretsRuntimeSnapshotState: () => null,
 }));
 
 vi.mock("../../infra/restart.js", () => ({
@@ -196,6 +201,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  runtimeApplication.claimed = true;
   validateConfigObjectWithPluginsMock.mockImplementation((config: OpenClawConfig) => ({
     ok: true,
     config,
@@ -210,6 +216,47 @@ beforeEach(() => {
 });
 
 describe("config shared auth disconnects", () => {
+  it.each([
+    { method: "config.patch", claimed: true },
+    { method: "config.apply", claimed: true },
+    { method: "config.patch", claimed: false },
+    { method: "config.apply", claimed: false },
+    { method: "config.set", claimed: false },
+  ] as const)(
+    "keeps $method auth reconciliation with its owner (claimed=$claimed)",
+    async ({ method, claimed }) => {
+      runtimeApplication.claimed = claimed;
+      const nextConfig = tokenAuthConfig("new-token");
+      mockPreviousConfig(tokenAuthConfig("old-token"));
+      const enforceGeneration = vi.fn();
+      const { options, respond, disconnectClientsUsingSharedGatewayAuth } =
+        createConfigHandlerHarness({
+          method,
+          params: { raw: JSON.stringify(nextConfig), baseHash: "base-hash" },
+          contextOverrides: { enforceSharedGatewayAuthGenerationForConfigWrite: enforceGeneration },
+        });
+
+      await expectDefined(configHandlers[method], method)(options);
+      await flushConfigHandlerMicrotasks();
+
+      expect(respond).toHaveBeenCalledWith(
+        claimed || method === "config.set",
+        claimed || method === "config.set" ? expect.objectContaining({ ok: true }) : undefined,
+        claimed || method === "config.set"
+          ? undefined
+          : expect.objectContaining({ message: expect.stringContaining("unclaimed") }),
+      );
+      expect(enforceGeneration).toHaveBeenCalledTimes(claimed ? 0 : 1);
+      expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(
+        !claimed && method !== "config.set" ? 1 : 0,
+      );
+      if (!claimed) {
+        expect(enforceGeneration).toHaveBeenCalledWith(nextConfig);
+        expect(respond).toHaveBeenCalledBefore(enforceGeneration);
+      }
+    },
+  );
+
   it("returns the persisted config from config.set write results", async () => {
     const prevConfig: OpenClawConfig = {
       gateway: {
@@ -287,12 +334,10 @@ describe("config shared auth disconnects", () => {
 
   it("accepts an unresolved isolatable TTS SecretRef and reports the cold owner", async () => {
     const submittedConfig: OpenClawConfig = {
-      messages: {
-        tts: {
-          providers: {
-            elevenlabs: {
-              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
-            },
+      tts: {
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
           },
         },
       },
@@ -306,7 +351,7 @@ describe("config shared auth disconnects", () => {
           ownerId: "tts",
           state: "unavailable",
           degradationState: "cold",
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:ELEVENLABS_API_KEY"],
           reason: "secret reference was not found",
         },
@@ -355,12 +400,10 @@ describe("config shared auth disconnects", () => {
     "secret reference is not allowed for this provider",
   ])("rejects non-retryable SecretRef degradation before config writes: %s", async (reason) => {
     const submittedConfig: OpenClawConfig = {
-      messages: {
-        tts: {
-          providers: {
-            elevenlabs: {
-              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
-            },
+      tts: {
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
           },
         },
       },
@@ -374,7 +417,7 @@ describe("config shared auth disconnects", () => {
           ownerId: "tts",
           state: "unavailable",
           degradationState: "cold",
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:ELEVENLABS_API_KEY"],
           reason,
         },
@@ -425,7 +468,7 @@ describe("config shared auth disconnects", () => {
     expectNoDirectRestart();
   });
 
-  it("lets the config reloader own hybrid-mode auth restarts", async () => {
+  it("lets the config reloader own shared auth rotation", async () => {
     mockPreviousConfig(tokenAuthConfig("old-token"));
 
     const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch({
@@ -433,8 +476,46 @@ describe("config shared auth disconnects", () => {
     });
 
     expectNoDirectRestart();
-    expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
+    expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
+
+  it.each(["config.patch", "config.apply"] as const)(
+    "%s hot-applies same-mode credentials and retains restart ownership for mode switches",
+    async (method) => {
+      for (const mode of ["token", "password"] as const) {
+        for (const changesMode of [false, true]) {
+          const previous = { gateway: { auth: { mode, [mode]: "old-credential" } } };
+          const nextMode = changesMode ? (mode === "token" ? "password" : "token") : mode;
+          const next = { gateway: { auth: { mode: nextMode, [nextMode]: "new-credential" } } };
+          mockPreviousConfig(previous);
+          const { options, respond, disconnectClientsUsingSharedGatewayAuth } =
+            createConfigHandlerHarness({
+              method,
+              params: { baseHash: "base-hash", raw: JSON.stringify(next) },
+            });
+
+          await expectDefined(configHandlers[method], method)(options);
+          await flushConfigHandlerMicrotasks();
+
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              restart: undefined,
+              sentinel: expect.objectContaining({
+                payload: expect.objectContaining({
+                  stats: expect.objectContaining({ requiresRestart: changesMode }),
+                }),
+              }),
+            }),
+            undefined,
+          );
+          expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(
+            changesMode ? 1 : 0,
+          );
+        }
+      }
+    },
+  );
 
   it("does not disconnect shared-auth clients when config.patch changes only inactive password auth", async () => {
     mockPreviousConfig(tokenAuthConfig("old-token"));
@@ -519,14 +600,13 @@ describe("config shared auth disconnects", () => {
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
-  it("still schedules a direct restart for hot mode when the reloader cannot apply the change", async () => {
+  it("defers restart-required changes to the watcher after legacy hot mode normalizes", async () => {
     mockPreviousConfig(hotReloadConfig());
 
     await runConfigPatch({ gateway: { port: 19001 } });
 
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
-    expect(payload?.stats?.requiresRestart).toBe(true);
+    expectNoDirectRestart();
+    expect(restartSentinelMocks.writeRestartSentinel).not.toHaveBeenCalled();
   });
 
   it("does not schedule a direct restart for hot-mode browser profile config.patch writes", async () => {
@@ -568,7 +648,7 @@ describe("config shared auth disconnects", () => {
     );
 
     const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
-    expect(payload?.sessionKey).toBe("agent:main:main");
+    expect(payload?.sessionKey).toBeUndefined();
     expect(payload?.continuation).toBeUndefined();
   });
 });

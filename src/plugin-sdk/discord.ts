@@ -13,7 +13,7 @@ import type { MessageReceipt } from "./channel-outbound.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
   createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
 } from "./facade-loader.js";
 import { getRuntimeConfig, getRuntimeConfigSnapshot } from "./runtime-config-snapshot.js";
 
@@ -42,7 +42,6 @@ export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
 } from "./channel-status.js";
-export { DiscordConfigSchema } from "../config/zod-schema.providers-core.js";
 
 /** Discord channel config shape for one account in OpenClaw config. */
 export type DiscordAccountConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["discord"]>;
@@ -199,14 +198,14 @@ type DiscordRuntimeFacadeModule = {
 };
 
 function loadDiscordApiFacadeModule(): DiscordApiFacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<DiscordApiFacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSyncCore<DiscordApiFacadeModule>({
     dirName: "discord",
     artifactBasename: "api.js",
   });
 }
 
 function loadDiscordRuntimeFacadeModule(): DiscordRuntimeFacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<DiscordRuntimeFacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSyncCore<DiscordRuntimeFacadeModule>({
     dirName: "discord",
     artifactBasename: "runtime-api.js",
   });

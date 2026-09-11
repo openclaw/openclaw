@@ -1,6 +1,6 @@
 // Rotates config backup files while preserving recent recovery points.
 import path from "node:path";
-import { logVerbose } from "../globals.js";
+import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 const CONFIG_BACKUP_COUNT = 5;
 
@@ -8,7 +8,6 @@ interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
   chmod?: (path: string, mode: number) => Promise<void>;
-  readdir?: (path: string) => Promise<string[]>;
 }
 
 interface BackupMaintenanceFs extends BackupRotationFs {
@@ -21,21 +20,31 @@ interface BackupMaintenanceFs extends BackupRotationFs {
  * Missing slots are ignored so interrupted writes or first-run configs do not
  * block the next config write.
  */
-async function rotateConfigBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
+async function rotateConfigBackups(
+  configPath: string,
+  ioFs: BackupRotationFs,
+  assertCurrent: () => void,
+): Promise<void> {
   if (CONFIG_BACKUP_COUNT <= 1) {
     return;
   }
   const backupBase = `${configPath}.bak`;
   const maxIndex = CONFIG_BACKUP_COUNT - 1;
+  assertCurrent();
   await ioFs.unlink(`${backupBase}.${maxIndex}`).catch(() => {
+    assertCurrent();
     // best-effort
   });
   for (let index = maxIndex - 1; index >= 1; index -= 1) {
+    assertCurrent();
     await ioFs.rename(`${backupBase}.${index}`, `${backupBase}.${index + 1}`).catch(() => {
+      assertCurrent();
       // best-effort
     });
   }
+  assertCurrent();
   await ioFs.rename(backupBase, `${backupBase}.1`).catch(() => {
+    assertCurrent();
     // best-effort
   });
 }
@@ -46,58 +55,25 @@ async function rotateConfigBackups(configPath: string, ioFs: BackupRotationFs): 
  * Backups are copied on mixed filesystems, so copy mode preservation is not a
  * portable security guarantee.
  */
-async function hardenBackupPermissions(configPath: string, ioFs: BackupRotationFs): Promise<void> {
+async function hardenBackupPermissions(
+  configPath: string,
+  ioFs: BackupRotationFs,
+  assertCurrent: () => void,
+): Promise<void> {
   if (!ioFs.chmod) {
     return;
   }
   const backupBase = `${configPath}.bak`;
+  assertCurrent();
   await ioFs.chmod(backupBase, 0o600).catch(() => {
+    assertCurrent();
     // best-effort
   });
   for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
+    assertCurrent();
     await ioFs.chmod(`${backupBase}.${i}`, 0o600).catch(() => {
+      assertCurrent();
       // best-effort
-    });
-  }
-}
-
-/** Prunes stale `.bak.*` files that are outside the managed numbered ring. */
-async function cleanOrphanBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
-  if (!ioFs.readdir) {
-    return;
-  }
-  const dir = path.dirname(configPath);
-  const base = path.basename(configPath);
-  const bakPrefix = `${base}.bak.`;
-
-  const validSuffixes = new Set<string>();
-  for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
-    validSuffixes.add(String(i));
-  }
-
-  let entries: string[];
-  try {
-    entries = await ioFs.readdir(dir);
-  } catch (error) {
-    // best-effort: surface the reason so operators can see why orphan cleanup
-    // did not run instead of silently accumulating backups (#105199).
-    logVerbose(`config orphan backup cleanup skipped: cannot read ${dir}: ${String(error)}`);
-    return;
-  }
-
-  for (const entry of entries) {
-    if (!entry.startsWith(bakPrefix)) {
-      continue;
-    }
-    const suffix = entry.slice(bakPrefix.length);
-    if (validSuffixes.has(suffix)) {
-      continue;
-    }
-    const orphanPath = path.join(dir, entry);
-    await ioFs.unlink(orphanPath).catch((error: unknown) => {
-      // best-effort: log so a locked/undeletable orphan does not accumulate
-      // silently and slowly exhaust disk without any operator signal (#105199).
-      logVerbose(`config orphan backup cleanup failed to remove ${orphanPath}: ${String(error)}`);
     });
   }
 }
@@ -147,15 +123,22 @@ export async function createPreUpdateConfigSnapshot(params: {
   }
 }
 
-/** Runs rotation, primary copy, permission hardening, then orphan pruning. */
+/** Runs rotation, primary copy, and permission hardening. */
 export async function maintainConfigBackups(
   configPath: string,
   ioFs: BackupMaintenanceFs,
+  assertConfigPathForWrite?: () => void,
 ): Promise<void> {
-  await rotateConfigBackups(configPath, ioFs);
+  const sourceGuard = captureConfigWriteLockGuard(configPath);
+  const assertCurrent = () => {
+    sourceGuard?.();
+    assertConfigPathForWrite?.();
+  };
+  await rotateConfigBackups(configPath, ioFs, assertCurrent);
+  assertCurrent();
   await ioFs.copyFile(configPath, `${configPath}.bak`).catch(() => {
+    assertCurrent();
     // best-effort
   });
-  await hardenBackupPermissions(configPath, ioFs);
-  await cleanOrphanBackups(configPath, ioFs);
+  await hardenBackupPermissions(configPath, ioFs, assertCurrent);
 }

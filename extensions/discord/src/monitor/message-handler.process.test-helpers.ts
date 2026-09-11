@@ -10,6 +10,27 @@ import {
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 
+type AutomaticSourceDeliveryOverrides = Parameters<typeof createAutomaticSourceDeliveryContext>[0];
+
+export async function createAutomaticDraftContext(
+  overrides: AutomaticSourceDeliveryOverrides = {},
+): Promise<Awaited<ReturnType<typeof createAutomaticSourceDeliveryContext>>> {
+  const cfg = (overrides.cfg ?? {}) as {
+    messages?: Record<string, unknown>;
+  } & Record<string, unknown>;
+  // Draft tests own preview behavior; keep reaction timers out of their fake-clock lifecycle.
+  return await createAutomaticSourceDeliveryContext({
+    ...overrides,
+    cfg: {
+      ...cfg,
+      messages: {
+        ...cfg.messages,
+        statusReactions: { enabled: false },
+      },
+    },
+  });
+}
+
 export function getReactionEmojis(): string[] {
   return (
     sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
@@ -55,7 +76,6 @@ function expectAckReactionRuntimeOptions(
   params?: {
     accountId?: string;
     ackReaction?: string;
-    removeAckAfterReply?: boolean;
   },
 ) {
   const optionRecord = requireRecord(options, "reaction runtime options");
@@ -66,9 +86,6 @@ function expectAckReactionRuntimeOptions(
   const messages: Record<string, unknown> = {};
   if (params?.ackReaction) {
     messages.ackReaction = params.ackReaction;
-  }
-  if (params?.removeAckAfterReply !== undefined) {
-    messages.removeAckAfterReply = params.removeAckAfterReply;
   }
   if (Object.keys(messages).length > 0) {
     const cfg = requireRecord(optionRecord.cfg, "reaction config");
@@ -94,7 +111,6 @@ function expectReactionCallAt(
   params?: {
     accountId?: string;
     ackReaction?: string;
-    removeAckAfterReply?: boolean;
     channelId?: string;
     messageId?: string;
   },
@@ -125,24 +141,9 @@ export function expectReactAckCallAt(
     messageId?: string;
     accountId?: string;
     ackReaction?: string;
-    removeAckAfterReply?: boolean;
   },
 ) {
   expectReactionCallAt(sendMocks.reactMessageDiscord, index, emoji, params);
-}
-
-export function expectRemoveAckCallAt(
-  index: number,
-  emoji: string,
-  params?: {
-    channelId?: string;
-    messageId?: string;
-    accountId?: string;
-    ackReaction?: string;
-    removeAckAfterReply?: boolean;
-  },
-) {
-  expectReactionCallAt(sendMocks.removeReactionDiscord, index, emoji, params);
 }
 
 export function createMockDraftStreamForTest() {
@@ -163,16 +164,10 @@ export function getDeliveredFinalTexts(): string[] {
   });
 }
 
-export function expectFinalWithProgressReceipt(answer: string, ...parts: string[]) {
-  const text = getDeliveredFinalTexts()[0] ?? "";
-  const receiptStart = text.lastIndexOf("\n-# ");
-  expect(receiptStart).toBeGreaterThan(-1);
-  expect(text.slice(0, receiptStart)).toBe(answer);
-  const receipt = text.slice(receiptStart + 1);
-  for (const part of parts) {
-    expect(receipt).toContain(part);
-  }
-  expect(receipt).toContain("⏱️");
+// The final answer is delivered on its own: no synthesized activity receipt is
+// ever appended beneath it.
+export function expectFinalAnswerText(answer: string) {
+  expect(getDeliveredFinalTexts()[0] ?? "").toBe(answer);
 }
 
 export function expectFreshFinalText(text: string) {
@@ -187,7 +182,8 @@ export function expectFreshFinalText(text: string) {
 export function useProgressDraftStartDelay() {
   vi.useFakeTimers();
   return async () => {
-    await vi.advanceTimersByTimeAsync(5_000);
+    // Mirrors core's DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS.
+    await vi.advanceTimersByTimeAsync(1_500);
   };
 }
 
@@ -197,7 +193,7 @@ export async function runSingleChunkFinalScenario(discordConfig: Record<string, 
     return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
   });
 
-  const ctx = await createAutomaticSourceDeliveryContext({
+  const ctx = await createAutomaticDraftContext({
     discordConfig,
   });
 
@@ -207,7 +203,7 @@ export async function runSingleChunkFinalScenario(discordConfig: Record<string, 
 export async function createBlockModeContext(
   discordConfig: Record<string, unknown> = { streaming: { mode: "block" } },
 ) {
-  return await createAutomaticSourceDeliveryContext({
+  return await createAutomaticDraftContext({
     cfg: {
       messages: { ackReaction: "👀" },
       session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },

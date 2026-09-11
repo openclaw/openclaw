@@ -1,95 +1,30 @@
 // Defines hook configuration matching and command types.
-export type HookMappingMatch = {
-  path?: string;
-  source?: string;
-};
+import type { InstallRecordBase } from "./types.installs.js";
+import type {
+  HookMappingConfigInput,
+  HooksGmailConfigInput,
+  InternalHooksConfigInput,
+} from "./zod-schema.hooks.js";
 
-export type HookMappingTransform = {
-  module: string;
-  export?: string;
-};
-
-export type HookMappingConfig = {
-  id?: string;
-  match?: HookMappingMatch;
-  action?: "wake" | "agent";
-  wakeMode?: "now" | "next-heartbeat";
-  name?: string;
-  /** Route this hook to a specific agent (unknown ids fall back to the default agent). */
-  agentId?: string;
-  sessionKey?: string;
-  messageTemplate?: string;
-  textTemplate?: string;
-  deliver?: boolean;
-  /** DANGEROUS: Disable external content safety wrapping for this hook. */
-  allowUnsafeExternalContent?: boolean;
-  /**
-   * "last" or any runtime channel id (including plugin channels).
-   * Validation against configured/registered channels happens in gateway hooks runtime.
-   */
+export type HookMappingConfig = Omit<HookMappingConfigInput, "channel"> & {
+  /** Preserve channel-id autocomplete while allowing runtime plugin channels. */
   channel?: "last" | (string & {});
-  to?: string;
-  /** Override model for this hook (provider/model or alias). */
-  model?: string;
-  thinking?: string;
-  timeoutSeconds?: number;
-  transform?: HookMappingTransform;
 };
 
-export type HooksGmailTailscaleMode = "off" | "serve" | "funnel";
-
-export type HooksGmailConfig = {
-  account?: string;
-  label?: string;
-  topic?: string;
-  subscription?: string;
-  pushToken?: string;
-  hookUrl?: string;
-  includeBody?: boolean;
-  maxBytes?: number;
-  renewEveryMinutes?: number;
-  /** DANGEROUS: Disable external content safety wrapping for Gmail hooks. */
-  allowUnsafeExternalContent?: boolean;
-  serve?: {
-    bind?: string;
-    port?: number;
-    path?: string;
-  };
-  tailscale?: {
-    mode?: HooksGmailTailscaleMode;
-    path?: string;
-    /** Optional tailscale serve/funnel target (port, host:port, or full URL). */
-    target?: string;
-  };
-  /** Optional model override for Gmail hook processing (provider/model or alias). */
-  model?: string;
-  /** Optional thinking level override for Gmail hook processing. */
-  thinking?: "off" | "minimal" | "low" | "medium" | "high";
-};
-
-export type HookConfig = {
-  enabled?: boolean;
-  env?: Record<string, string>;
-  [key: string]: unknown;
-};
+export type HookMappingMatch = NonNullable<HookMappingConfigInput["match"]>;
+export type HookMappingTransform = NonNullable<HookMappingConfigInput["transform"]>;
+export type HookSessionMode = NonNullable<HookMappingConfigInput["sessionMode"]>;
+export type HooksGmailConfig = HooksGmailConfigInput;
+export type HooksGmailTailscaleMode = NonNullable<
+  NonNullable<HooksGmailConfigInput["tailscale"]>["mode"]
+>;
+export type HookConfig = NonNullable<NonNullable<InternalHooksConfigInput["entries"]>[string]>;
 
 export type HookInstallRecord = InstallRecordBase & {
   hooks?: string[];
 };
 
-export type InternalHooksConfig = {
-  /** Enable hooks system */
-  enabled?: boolean;
-  /** Per-hook configuration overrides */
-  entries?: Record<string, HookConfig>;
-  /** Load configuration */
-  load?: {
-    /** Additional hook directories to scan */
-    extraDirs?: string[];
-  };
-  /** Install records for hook packs or hooks */
-  installs?: Record<string, HookInstallRecord>;
-};
+export type InternalHooksConfig = InternalHooksConfigInput;
 
 export type HooksConfig = {
   enabled?: boolean;
@@ -101,7 +36,7 @@ export type HooksConfig = {
    */
   defaultSessionKey?: string;
   /**
-   * Allow `sessionKey` from external `/hooks/agent` request payloads.
+   * Allow `sessionKey` from external `/hooks/agent` and `/hooks/wake` request payloads.
    * Default: false.
    */
   allowRequestSessionKey?: boolean;
@@ -123,4 +58,3 @@ export type HooksConfig = {
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };
-import type { InstallRecordBase } from "./types.installs.js";

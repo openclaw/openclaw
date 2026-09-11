@@ -9,26 +9,21 @@ import {
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { resolveFirstGithubToken } from "./auth.js";
+import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { wrapCopilotProviderStream } from "./stream.js";
-import { resolveCopilotApiToken } from "./token.js";
 
 const LIVE =
   process.env.OPENCLAW_LIVE_TEST === "1" ||
   process.env.LIVE === "1" ||
   process.env.GITHUB_COPILOT_LIVE_TEST === "1";
 const ENV_GITHUB_TOKEN =
-  process.env.OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN ??
-  process.env.COPILOT_GITHUB_TOKEN ??
-  process.env.GH_TOKEN ??
-  process.env.GITHUB_TOKEN ??
-  "";
+  process.env.OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN ?? process.env.COPILOT_GITHUB_TOKEN ?? "";
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_GITHUB_COPILOT_MODEL?.trim() || "gpt-5.4";
 const describeLive = LIVE ? describe : describe.skip;
 const TOOL_ARGUMENT_MARKER = `copilot-stream-arguments-${"x".repeat(128)}`;
 
-type CopilotApiToken = {
-  token: string;
-  expiresAt: number;
+type CopilotRuntimeAuth = {
+  apiKey: string;
   source: string;
   baseUrl: string;
 };
@@ -137,39 +132,39 @@ async function resolveGithubTokenCandidates(): Promise<Array<{ source: string; t
 }
 
 describeLive("github-copilot connection-bound Responses IDs live", () => {
-  it("rewrites replayed item IDs and preserves streamed tool arguments", async () => {
+  it("rewrites replayed item IDs and preserves streamed tool arguments", async ({ skip }) => {
     logProgress("start");
     const candidates = await resolveGithubTokenCandidates();
     if (candidates.length === 0) {
-      logProgress("skip (no GitHub Copilot token found in env or auth profile)");
+      skip(
+        "No GitHub Copilot token found in env vars OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN / COPILOT_GITHUB_TOKEN or the github-copilot auth profile",
+      );
       return;
     }
 
-    let token: CopilotApiToken | undefined;
+    let token: CopilotRuntimeAuth | undefined;
     const failures: string[] = [];
     for (const candidate of candidates) {
       try {
-        logProgress(`exchanging ${candidate.source} GitHub token for Copilot token`);
+        logProgress(`validating ${candidate.source} GitHub token for Copilot`);
         token = await withTimeout(
-          "Copilot token exchange",
-          resolveCopilotApiToken({
+          "Copilot authentication",
+          resolveCopilotRuntimeAuth({
             githubToken: candidate.token,
             fetchImpl: fetchWithTimeout,
           }),
           15_000,
         );
-        logProgress(
-          `token ok via ${candidate.source} (${token.source.startsWith("cache:") ? "cache" : "fetched"})`,
-        );
+        logProgress(`token ok via ${candidate.source}`);
         break;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         failures.push(`${candidate.source}: ${message}`);
-        logProgress(`token exchange failed via ${candidate.source} (${message})`);
+        logProgress(`token validation failed via ${candidate.source} (${message})`);
       }
     }
     if (!token) {
-      throw new Error(`Copilot token exchange failed for all candidates: ${failures.join("; ")}`);
+      throw new Error(`Copilot authentication failed for all candidates: ${failures.join("; ")}`);
     }
 
     const model = buildModel(token.baseUrl);
@@ -206,7 +201,7 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
       model as never,
       context as never,
       {
-        apiKey: token.token,
+        apiKey: token.apiKey,
         maxTokens: 256,
         onPayload: (payload: unknown) => {
           capturedPayload = {

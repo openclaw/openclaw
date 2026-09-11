@@ -4,7 +4,9 @@ import type { WorkboardStore } from "./store.js";
 
 const WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = 1000;
 
-export function createWorkboardChangeEventService(store: WorkboardStore): OpenClawPluginService {
+export function createWorkboardChangeEventService(
+  store: WorkboardStore,
+): OpenClawPluginService & { stop: () => void } {
   let unsubscribe: (() => void) | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -12,7 +14,7 @@ export function createWorkboardChangeEventService(store: WorkboardStore): OpenCl
     id: "workboard-change-events",
     start(ctx) {
       const gatewayEvents = ctx.gatewayEvents;
-      if (!gatewayEvents) {
+      if (!gatewayEvents || unsubscribe) {
         return;
       }
       const emit = (change: WorkboardChange) => {

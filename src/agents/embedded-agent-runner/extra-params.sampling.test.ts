@@ -238,7 +238,7 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(callOptions?.temperature).toBe(0.4);
   });
 
-  it("lets request responseFormat override configured response_format", () => {
+  it("threads a run-scoped responseFormat schema ahead of configured response_format", () => {
     const underlying = vi.fn(() => ({
       push: vi.fn(),
       result: vi.fn(async () => undefined),
@@ -248,6 +248,12 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     })) as unknown as StreamFn;
     const agent: { streamFn?: StreamFn } = { streamFn: underlying };
 
+    const responseFormat = {
+      type: "object",
+      properties: { reply: { type: "string" } },
+      required: ["reply"],
+      additionalProperties: false,
+    };
     applyExtraParamsToAgent(
       agent,
       {
@@ -266,7 +272,7 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       "openai",
       "gpt-5.4",
       {
-        responseFormat: { type: "json_object" },
+        responseFormat,
       },
     );
 
@@ -282,10 +288,10 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
 
     const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
       .calls[0]?.[2] as { responseFormat?: Record<string, unknown> } | undefined;
-    expect(callOptions?.responseFormat).toEqual({ type: "json_object" });
+    expect(callOptions?.responseFormat).toEqual(responseFormat);
   });
 
-  it("keeps request-scoped response_format out of prepared extra params cache", () => {
+  it("keeps request-scoped response_format out of prepared extra params", () => {
     const prepareProviderExtraParams = vi.fn((params) => ({
       ...params.context.extraParams,
       prepared: true,
@@ -322,14 +328,14 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       },
     });
 
-    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(1);
-    expect(first).toBe(second);
+    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(2);
+    expect(first).toEqual(second);
     expect(first).not.toHaveProperty("response_format");
     expect(first).not.toHaveProperty("responseFormat");
     expect(first.temperature).toBe(0.4);
   });
 
-  it("keeps request-scoped stop out of prepared extra params cache", () => {
+  it("keeps request-scoped stop out of prepared extra params", () => {
     const prepareProviderExtraParams = vi.fn((params) => ({
       ...params.context.extraParams,
       prepared: true,
@@ -354,8 +360,8 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       extraParamsOverride: { temperature: 0.4, stop: ["Assistant:", "\n\n"] },
     });
 
-    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(1);
-    expect(first).toBe(second);
+    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(2);
+    expect(first).toEqual(second);
     expect(first).not.toHaveProperty("stop");
     expect(first.temperature).toBe(0.4);
   });
@@ -479,7 +485,7 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(callOptions?.presencePenalty).toBe(0.7);
   });
 
-  it("keeps dynamic fast mode overrides out of prepared extra params cache", () => {
+  it("preserves each request's dynamic fast mode override", () => {
     const prepareProviderExtraParams = vi.fn((params) => ({
       ...params.context.extraParams,
       prepared: true,

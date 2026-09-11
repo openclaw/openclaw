@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
 import { defaultRuntime } from "../runtime.js";
-import { getSetupAppRecommendations } from "./setup-app-recommendations.js";
+import { getSetupAppRecommendations, type SetupAppScanPhase } from "./setup-app-recommendations.js";
 
 /** Force an "ok" result so the returned candidate `groups` can be asserted. */
 function completeMatching(
@@ -33,6 +33,64 @@ function officialEntry(params: {
 }
 
 describe("setup app recommendation candidates", () => {
+  it("reports candidate and matching phases for the normalized app inventory", async () => {
+    const phases: SetupAppScanPhase[] = [];
+
+    await getSetupAppRecommendations({
+      inventorySource: async () => [
+        { label: "Zulu" },
+        { label: "alpha" },
+        { label: "Echo" },
+        { label: "Bravo" },
+      ],
+      runtime: defaultRuntime,
+      onPhase: (phase) => phases.push(phase),
+      deps: {
+        listPlugins: () => [],
+        listChannels: () => [],
+        listProviders: () => [],
+        searchSkills: async ({ query }) => [
+          {
+            registry: "https://clawhub.ai",
+            score: 1,
+            slug: `${query.toLocaleLowerCase("en-US")}-tools`,
+            installRef: `@demo-owner/${query.toLocaleLowerCase("en-US")}-tools`,
+            ownerHandle: "demo-owner",
+            displayName: `${query} Tools`,
+          },
+        ],
+        complete: completeMatching([{ appLabel: "alpha", candidateId: "@demo-owner/alpha-tools" }]),
+      },
+    });
+
+    expect(phases).toEqual([
+      {
+        kind: "candidates",
+        appCount: 4,
+        sampleLabels: ["alpha", "Bravo", "Echo"],
+      },
+      { kind: "matching", appCount: 4 },
+    ]);
+  });
+
+  it.each([
+    {
+      reason: "unsupported",
+      inventory: { status: "unsupported" as const, platform: "linux" as const, apps: [] as [] },
+    },
+    { reason: "no-apps", inventory: [] },
+  ])("does not report phases when the scan skips for $reason", async ({ inventory }) => {
+    const onPhase = vi.fn();
+
+    await getSetupAppRecommendations({
+      inventorySource: async () => inventory,
+      runtime: defaultRuntime,
+      onPhase,
+    });
+
+    expect(onPhase).not.toHaveBeenCalled();
+  });
+
   it("preserves the ClawHub publisher in candidate ids", async () => {
     const result = await getSetupAppRecommendations({
       inventorySource: async () => [{ label: "Notes" }],
@@ -43,20 +101,26 @@ describe("setup app recommendation candidates", () => {
         listProviders: () => [],
         searchSkills: async () => [
           {
+            registry: "https://clawhub.ai",
             score: 1,
             slug: "notes-tools",
+            installRef: "@demo-owner/notes-tools",
             ownerHandle: "demo-owner",
             displayName: "Notes Tools",
           },
           {
+            registry: "https://clawhub.ai",
             score: 0.9,
             slug: "notes-tools",
+            installRef: "@other-owner/notes-tools",
             ownerHandle: "other-owner",
             displayName: "Other Notes Tools",
           },
           {
+            registry: "https://clawhub.ai",
             score: 0.8,
             slug: "legacy-notes-tools",
+            installRef: "legacy-notes-tools",
             displayName: "Ownerless Notes Tools",
           },
         ],
@@ -88,14 +152,18 @@ describe("setup app recommendation candidates", () => {
     });
     const searchSkills = vi.fn(async () => [
       {
+        registry: "https://clawhub.ai",
         score: 2,
         slug: "notes-tools",
+        installRef: "@demo-owner/notes-tools",
         ownerHandle: "demo-owner",
         displayName: "Duplicate notes",
       },
       {
+        registry: "https://clawhub.ai",
         score: 1,
         slug: "notes-tools",
+        installRef: "@demo-owner/notes-tools",
         ownerHandle: "demo-owner",
         displayName: "Notes Tools",
         summary: "Work with notes",
@@ -131,7 +199,16 @@ describe("setup app recommendation candidates", () => {
       if (query === "Broken") {
         throw new Error("offline");
       }
-      return [{ score: 1, slug: "working", ownerHandle: "demo-owner", displayName: "Working" }];
+      return [
+        {
+          registry: "https://clawhub.ai",
+          score: 1,
+          slug: "working",
+          installRef: "@demo-owner/working",
+          ownerHandle: "demo-owner",
+          displayName: "Working",
+        },
+      ];
     });
     const result = await getSetupAppRecommendations({
       inventorySource: async () => [{ label: "Broken" }, { label: "Working" }],
@@ -191,8 +268,10 @@ describe("setup app recommendation matcher", () => {
     listProviders: () => [],
     searchSkills: async () => [
       {
+        registry: "https://clawhub.ai",
         score: 1,
         slug: "notes-tools",
+        installRef: "@demo-owner/notes-tools",
         ownerHandle: "demo-owner",
         displayName: "Notes Tools",
         summary: "Work with notes",

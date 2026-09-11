@@ -1,29 +1,50 @@
 import { describe, expect, it, vi } from "vitest";
-import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import {
+  runInstrumentedWorkspaceReconcile,
+  verifyReconciledWorkspaceFinal,
+} from "./workspace-finalize.js";
+
+const workspaceDebug = vi.hoisted(() => vi.fn());
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/worker-workspace"
+        ? { ...logger, debug: workspaceDebug }
+        : logger;
+    },
+  };
+});
 
 describe("final worker workspace fences", () => {
   it("rechecks remote and local stability after the final quiescence renewal", async () => {
     const log: string[] = [];
-    await verifyReconciledWorkspaceFinal(
-      {
-        manifestRef: "sha256:" + "a".repeat(64),
-        changed: true,
-        verifyStable: async () => {
-          log.push("remote");
-        },
-        verifyLocalStable: async () => {
-          log.push("local");
-        },
+    workspaceDebug.mockClear();
+    const reconciliation = await runInstrumentedWorkspaceReconcile(async () => ({
+      manifestRef: "sha256:" + "a".repeat(64),
+      changed: true,
+      verifyStable: async () => {
+        log.push("remote");
       },
-      {
-        assertActive: async () => {
-          log.push("quiescence");
-        },
-        resume: async () => {},
+      verifyLocalStable: async () => {
+        log.push("local");
       },
-    );
+    }));
+    expect(workspaceDebug).not.toHaveBeenCalled();
+    await verifyReconciledWorkspaceFinal(reconciliation, {
+      assertActive: async () => {
+        log.push("quiescence");
+      },
+      resume: async () => {},
+    });
 
     expect(log).toEqual(["remote", "local", "quiescence", "remote", "local"]);
+    expect(workspaceDebug).toHaveBeenCalledExactlyOnceWith(
+      "worker workspace reconcile completed",
+      expect.objectContaining({ outcome: "succeeded" }),
+    );
   });
 
   it("rejects a remote write observed after the final quiescence renewal", async () => {
@@ -43,11 +64,33 @@ describe("final worker workspace fences", () => {
         },
         { assertActive: async () => {}, resume: async () => {} },
       ),
-    ).rejects.toThrow("late remote write");
+    ).rejects.toMatchObject({
+      message: "late remote write",
+      reclaimDisposition: "preserve-result",
+    });
     expect(remoteVerifications).toBe(2);
   });
 
-  it("publishes between remote stability fences under quiescence", async () => {
+  it("keeps unchanged reconciliation fence failures retryable", async () => {
+    await expect(
+      verifyReconciledWorkspaceFinal(
+        {
+          manifestRef: "sha256:" + "a".repeat(64),
+          changed: false,
+          verifyStable: async () => {
+            throw new Error("late remote write");
+          },
+          verifyLocalStable: async () => {},
+        },
+        { assertActive: async () => {}, resume: async () => {} },
+      ),
+    ).rejects.toMatchObject({
+      message: "late remote write",
+      reclaimDisposition: "retry",
+    });
+  });
+
+  it.each([true, false])("publishes under quiescence with local apply %s", async (applyLocally) => {
     const log: string[] = [];
     await verifyReconciledWorkspaceFinal(
       {
@@ -59,9 +102,13 @@ describe("final worker workspace fences", () => {
         verifyLocalStable: async () => {
           log.push("local");
         },
-        applyPreparedStagedResult: async () => {
-          log.push("apply-prepared");
-        },
+        ...(applyLocally
+          ? {
+              applyPreparedStagedResult: async () => {
+                log.push("apply-prepared");
+              },
+            }
+          : {}),
         publishStagedResult: async () => {
           log.push("publish");
         },
@@ -77,7 +124,7 @@ describe("final worker workspace fences", () => {
       "remote",
       "quiescence",
       "remote",
-      "apply-prepared",
+      ...(applyLocally ? ["apply-prepared"] : []),
       "local",
       "quiescence",
       "remote",
@@ -121,7 +168,10 @@ describe("final worker workspace fences", () => {
           resume: async () => {},
         },
       ),
-    ).rejects.toThrow("quiescence expired during finalization");
+    ).rejects.toMatchObject({
+      message: "quiescence expired during finalization",
+      reclaimDisposition: "preserve-result",
+    });
     expect(log).toEqual([
       "remote",
       "quiescence",
@@ -131,6 +181,33 @@ describe("final worker workspace fences", () => {
       "quiescence",
       "discard-prepared",
     ]);
+  });
+
+  it("rejects a late write enrolled by the pre-apply renewal before applying", async () => {
+    let remoteVerifications = 0;
+    const apply = vi.fn(async () => {});
+    await expect(
+      verifyReconciledWorkspaceFinal(
+        {
+          manifestRef: "sha256:" + "c".repeat(64),
+          changed: true,
+          verifyStable: async () => {
+            remoteVerifications += 1;
+            if (remoteVerifications === 2) {
+              throw new Error("writer mutated before SIGSTOP");
+            }
+          },
+          verifyLocalStable: async () => {},
+          applyPreparedStagedResult: apply,
+          publishStagedResult: async () => {},
+        },
+        { assertActive: async () => {}, resume: async () => {} },
+      ),
+    ).rejects.toMatchObject({
+      message: "writer mutated before SIGSTOP",
+      reclaimDisposition: "retry",
+    });
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it("discards a prepared result when the final remote fence fails", async () => {

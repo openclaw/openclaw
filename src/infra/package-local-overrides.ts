@@ -3,7 +3,6 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { getFsSafePythonConfig } from "@openclaw/fs-safe/config";
 import { formatErrorMessage } from "./errors.js";
 import { root as openFsRoot } from "./fs-safe.js";
 import type { PackageDistContentInventoryEntry } from "./package-dist-inventory.js";
@@ -38,37 +37,21 @@ export type {
 } from "./package-local-overrides-shared.js";
 
 const execFileAsync = promisify(execFile);
-// fs-safe's helper mode is process-global, so fail-closed replay operations run
-// in an isolated process instead of changing the parent configuration.
+// Native replay policy is isolated; the operator's process-global fs-safe defaults stay intact.
 const REQUIRED_FS_SAFE_OPERATION_SCRIPT = `
-const [configUrl, rootUrl, operation, rootDir, sourcePath, relativePath, pythonPath] =
-  process.argv.slice(1);
-const { configureFsSafePython } = await import(configUrl);
-configureFsSafePython({ mode: "require", ...(pythonPath ? { pythonPath } : {}) });
+const [configUrl, rootUrl, rootDir, sourcePath, relativePath] = process.argv.slice(1);
+const { configureFsSafeNative } = await import(configUrl);
+configureFsSafeNative({ mode: "require" });
 const { root } = await import(rootUrl);
 const packageFs = await root(rootDir, { hardlinks: "reject", symlinks: "reject" });
-if (operation === "stat") {
-  await packageFs.stat(".");
-} else if (operation === "move") {
-  await packageFs.move(sourcePath, relativePath, { overwrite: false });
-} else {
-  throw new Error("unsupported required fs-safe operation");
-}
+await packageFs.move(sourcePath, relativePath, { overwrite: false });
 `;
 
-async function runRequiredFsSafePythonOperation(
-  params:
-    | { operation: "stat"; packageFs: LocalOverridePackageRoot }
-    | {
-        operation: "move";
-        packageFs: LocalOverridePackageRoot;
-        sourcePath: string;
-        relativePath: string;
-      },
-): Promise<void> {
-  const pythonPath = getFsSafePythonConfig().pythonPath ?? "";
-  const sourcePath = params.operation === "move" ? params.sourcePath : "";
-  const relativePath = params.operation === "move" ? params.relativePath : "";
+async function runRequiredFsSafeMove(params: {
+  packageFs: LocalOverridePackageRoot;
+  sourcePath: string;
+  relativePath: string;
+}): Promise<void> {
   await execFileAsync(
     process.execPath,
     [
@@ -77,11 +60,9 @@ async function runRequiredFsSafePythonOperation(
       REQUIRED_FS_SAFE_OPERATION_SCRIPT,
       import.meta.resolve("@openclaw/fs-safe/config"),
       import.meta.resolve("@openclaw/fs-safe/root"),
-      params.operation,
       params.packageFs.rootReal,
-      sourcePath,
-      relativePath,
-      pythonPath,
+      params.sourcePath,
+      params.relativePath,
     ],
     { timeout: 30_000, windowsHide: true },
   );
@@ -113,13 +94,7 @@ async function moveLocalOverrideTargetNoReplace(params: {
   sourcePath: string;
   relativePath: string;
 }): Promise<void> {
-  if (process.platform === "win32") {
-    await params.packageFs.move(params.sourcePath, params.relativePath, { overwrite: false });
-    return;
-  }
-  // Executable override replay fails closed instead of using fs-safe's path-based
-  // Node fallback for the final no-clobber publish.
-  await runRequiredFsSafePythonOperation({ operation: "move", ...params });
+  await runRequiredFsSafeMove(params);
 }
 
 async function writeRollbackBackup(params: {
@@ -218,11 +193,11 @@ async function moveExpectedLocalOverrideTarget(params: {
   const movedPath = createLocalOverrideMutationPath(params.relativePath, "previous");
   let targetMoved = false;
   try {
-    if (process.platform !== "win32") {
-      // Verify the required publish/restore backend before moving the target aside.
-      await runRequiredFsSafePythonOperation({ operation: "stat", packageFs: params.packageFs });
-    }
-    await params.packageFs.move(params.relativePath, movedPath);
+    await moveLocalOverrideTargetNoReplace({
+      packageFs: params.packageFs,
+      sourcePath: params.relativePath,
+      relativePath: movedPath,
+    });
     targetMoved = true;
     const moved = await params.packageFs.read(movedPath, {
       hardlinks: "reject",
@@ -385,6 +360,10 @@ export async function applyLocalPackageOverrides(params: {
 }): Promise<LocalPackageOverridesResult> {
   if (!params.plan) {
     return emptyResult("none");
+  }
+
+  if (params.plan.changes.length === 0) {
+    return params.plan.result;
   }
 
   if (!params.reapply) {

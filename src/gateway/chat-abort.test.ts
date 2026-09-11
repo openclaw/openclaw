@@ -1,8 +1,11 @@
 // Chat abort tests protect in-flight run tracking, stop-command parsing, provider
 // abort fanout, history snapshots, and cleanup of buffered streaming state.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
@@ -16,33 +19,13 @@ import {
   resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "./chat-abort.js";
-
-type ChatAbortPayload = {
-  runId: string;
-  sessionKey: string;
-  agentId?: string;
-  seq: number;
-  state: "aborted";
-  stopReason?: string;
-  errorMessage?: string;
-  message?: {
-    role: "assistant";
-    content: Array<{ type: "text"; text: string }>;
-    timestamp: number;
-  };
-};
+import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
+import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
 
 type CreatedChatAbortOps = ChatAbortOps & {
   broadcast: ReturnType<typeof vi.fn>;
   nodeSendToSession: ReturnType<typeof vi.fn>;
   removeChatRun: ReturnType<typeof vi.fn>;
-  clearedState: {
-    chatDeltaSentAt: Map<string, number>;
-    chatDeltaLastBroadcastLen: Map<string, number>;
-    chatDeltaLastBroadcastText: Map<string, string>;
-    agentDeltaSentAt: Map<string, number>;
-    bufferedAgentEvents: Map<string, unknown>;
-  };
 };
 
 afterEach(() => {
@@ -69,51 +52,34 @@ function createOps(params: {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const removeChatRun = vi.fn();
-  const chatRunBuffers = new Map(buffer !== undefined ? [[runId, buffer]] : []);
-  const chatDeltaSentAt = new Map([[runId, Date.now()]]);
-  const chatDeltaLastBroadcastLen = new Map([[runId, buffer?.length ?? 0]]);
-  const chatDeltaLastBroadcastText = new Map(buffer !== undefined ? [[runId, buffer]] : []);
-  const agentDeltaSentAt = new Map([[`${runId}:assistant`, Date.now()]]);
-  const bufferedAgentEvents = new Map<string, unknown>([
-    [
-      `${runId}:assistant`,
-      {
-        payload: {
-          runId,
-          seq: 1,
-          stream: "assistant",
-          ts: Date.now(),
-          data: { text: "buffer", delta: "buffer" },
+  const chatRunState = createChatRunState();
+  Object.assign(chatRunState.getOrCreate(runId), {
+    ...(buffer !== undefined ? { buffer, deltaLastBroadcastText: buffer } : {}),
+    deltaSentAt: Date.now(),
+    assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
+    agentText: {
+      assistant: {
+        lastSentAt: Date.now(),
+        bufferedEvent: {
+          payload: {
+            runId,
+            seq: 1,
+            stream: "assistant",
+            ts: Date.now(),
+            data: { text: "buffer", delta: "buffer" },
+          },
         },
       },
-    ],
-  ]);
+    },
+  });
 
   return {
     chatAbortControllers: new Map([[runId, entry]]),
-    chatRunBuffers,
-    chatAbortedRuns: new Map(),
-    clearChatRunState: (id: string) => {
-      chatRunBuffers.delete(id);
-      chatDeltaSentAt.delete(id);
-      chatDeltaLastBroadcastLen.delete(id);
-      chatDeltaLastBroadcastText.delete(id);
-      for (const key of [id, `${id}:assistant`, `${id}:thinking`]) {
-        agentDeltaSentAt.delete(key);
-        bufferedAgentEvents.delete(key);
-      }
-    },
+    chatRunState,
     removeChatRun,
     agentRunSeq: new Map(),
     broadcast,
     nodeSendToSession,
-    clearedState: {
-      chatDeltaSentAt,
-      chatDeltaLastBroadcastLen,
-      chatDeltaLastBroadcastText,
-      agentDeltaSentAt,
-      bufferedAgentEvents,
-    },
   };
 }
 
@@ -180,39 +146,28 @@ describe("isChatStopCommandText", () => {
 });
 
 describe("registerChatAbortController", () => {
-  it("expires registrations immediately when the process clock is invalid", () => {
-    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const registration = registerChatAbortController({
-      chatAbortControllers,
-      runId: "run-invalid-clock",
-      sessionId: "sess-1",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-      now: Number.NaN,
-    });
+  it.each([
+    [Number.NaN, undefined, 0],
+    [1_800_000_000_000, Number.POSITIVE_INFINITY, 1_800_000_000_000],
+  ] as const)(
+    "expires registrations for invalid clock %s or expiry %s",
+    (now, expiresAtMs, startedAtMs) => {
+      const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId: "run-invalid-time",
+        sessionId: "sess-1",
+        sessionKey: "main",
+        timeoutMs: 60_000,
+        now,
+        expiresAtMs,
+      });
 
-    expect(registration.registered).toBe(true);
-    expect(registration.entry).toMatchObject({
-      startedAtMs: 0,
-      expiresAtMs: 0,
-    });
-    expect(chatAbortControllers.get("run-invalid-clock")?.expiresAtMs).toBe(0);
-  });
-
-  it("expires registrations immediately when explicit expiry is invalid", () => {
-    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const registration = registerChatAbortController({
-      chatAbortControllers,
-      runId: "run-invalid-expiry",
-      sessionId: "sess-1",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-      now: 1_800_000_000_000,
-      expiresAtMs: Number.POSITIVE_INFINITY,
-    });
-
-    expect(registration.entry?.expiresAtMs).toBe(0);
-  });
+      expect(registration.registered).toBe(true);
+      expect(registration.entry).toMatchObject({ startedAtMs, expiresAtMs: 0 });
+      expect(chatAbortControllers.get("run-invalid-time")?.expiresAtMs).toBe(0);
+    },
+  );
 
   it("bounds default and agent run expiry calculations to valid Date timestamps", () => {
     expect(resolveChatRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
@@ -237,6 +192,114 @@ describe("registerChatAbortController", () => {
       kind: "agent",
     });
     expect(chatAbortControllers.get("run-internal-agent")?.controlUiVisible).toBe(false);
+  });
+
+  it("re-arms agent expiry from execution admission exactly once", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-queued-agent",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 120_000,
+      kind: "agent",
+    });
+    const startedAtMs = registration.entry?.startedAtMs;
+
+    vi.advanceTimersByTime(90_000);
+    registration.markExecutionStarted();
+    const executionExpiresAtMs = resolveAgentRunExpiresAtMs({
+      now: Date.now(),
+      timeoutMs: 120_000,
+    });
+
+    expect(registration.entry?.startedAtMs).toBe(startedAtMs);
+    expect(registration.entry?.expiresAtMs).toBe(executionExpiresAtMs);
+
+    vi.advanceTimersByTime(30_000);
+    registration.markExecutionStarted();
+    expect(registration.entry?.expiresAtMs).toBe(executionExpiresAtMs);
+  });
+
+  it("does not re-arm an agent after its unswept queue deadline", () => {
+    vi.useFakeTimers();
+    for (const [runId, offsetMs] of [
+      ["run-agent-at-queue-deadline", 0],
+      ["run-agent-after-queue-deadline", 1],
+    ] as const) {
+      vi.setSystemTime(1_800_000_000_000);
+      const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId,
+        sessionId: "sess-1",
+        sessionKey: "main",
+        timeoutMs: 120_000,
+        kind: "agent",
+      });
+      const queueExpiresAtMs = registration.entry?.expiresAtMs;
+      const startedAtMs = registration.entry?.startedAtMs;
+      expect(queueExpiresAtMs).toBeTypeOf("number");
+
+      vi.setSystemTime((queueExpiresAtMs as number) + offsetMs);
+      registration.markExecutionStarted();
+      registration.markExecutionStarted();
+
+      expect(registration.entry?.startedAtMs).toBe(startedAtMs);
+      expect(registration.entry?.expiresAtMs).toBe(queueExpiresAtMs);
+      expect(registration.controller.signal.aborted).toBe(false);
+    }
+  });
+
+  it("does not re-arm stale, aborted, or non-agent registrations", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+
+    const staleControllers = new Map<string, ChatAbortControllerEntry>();
+    const stale = registerChatAbortController({
+      chatAbortControllers: staleControllers,
+      runId: "run-stale",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      kind: "agent",
+    });
+    const staleExpiry = stale.entry?.expiresAtMs;
+    staleControllers.delete("run-stale");
+
+    const abortedControllers = new Map<string, ChatAbortControllerEntry>();
+    const aborted = registerChatAbortController({
+      chatAbortControllers: abortedControllers,
+      runId: "run-aborted",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      kind: "agent",
+    });
+    const abortedExpiry = aborted.entry?.expiresAtMs;
+    aborted.controller.abort();
+
+    const chatControllers = new Map<string, ChatAbortControllerEntry>();
+    const chat = registerChatAbortController({
+      chatAbortControllers: chatControllers,
+      runId: "run-chat",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      kind: "chat-send",
+    });
+    const chatExpiry = chat.entry?.expiresAtMs;
+
+    vi.advanceTimersByTime(30_000);
+    stale.markExecutionStarted();
+    aborted.markExecutionStarted();
+    chat.markExecutionStarted();
+
+    expect(stale.entry?.expiresAtMs).toBe(staleExpiry);
+    expect(aborted.entry?.expiresAtMs).toBe(abortedExpiry);
+    expect(chat.entry?.expiresAtMs).toBe(chatExpiry);
   });
 
   it("retains completed registrations until terminal persistence succeeds", async () => {
@@ -291,7 +354,7 @@ describe("registerChatAbortController", () => {
     expect(registration.entry?.registrationCleanupRequested).toBe(true);
   });
 
-  it("force-cleans registrations when dispatch fails before lifecycle starts", () => {
+  it("cleans registrations when dispatch fails before lifecycle starts", () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const registration = registerChatAbortController({
       chatAbortControllers,
@@ -301,7 +364,7 @@ describe("registerChatAbortController", () => {
       timeoutMs: 60_000,
     });
 
-    registration.cleanup({ force: true });
+    registration.cleanup();
 
     expect(chatAbortControllers.has("run-before-dispatch")).toBe(false);
   });
@@ -358,6 +421,30 @@ describe("abortChatRunById", () => {
     }
   });
 
+  it("preserves the owning session identity when synchronous abort cleanup clears run context", () => {
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
+      runId: "run-pre-reset-abort",
+    });
+    registerAgentRunContext(runId, { sessionKey, sessionId: entry.sessionId });
+    entry.controller.signal.addEventListener("abort", () => clearAgentRunContext(runId));
+    const events: Array<{ sessionId?: string }> = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.runId === runId && event.stream === "lifecycle") {
+        events.push({ sessionId: event.sessionId });
+      }
+    });
+
+    try {
+      expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "rpc" })).toEqual({
+        aborted: true,
+      });
+      expect(events).toEqual([{ sessionId: entry.sessionId }]);
+    } finally {
+      unsubscribe();
+      clearAgentRunContext(runId);
+    }
+  });
+
   it("broadcasts aborted payload with partial message when buffered text exists", () => {
     const now = new Date("2026-01-02T03:04:05.000Z");
     const { runId, sessionKey, entry, ops } = createAbortRunFixture({
@@ -371,18 +458,17 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
 
     expectRunAborted({ result, entry, ops, runId });
-    expect(ops.chatRunBuffers.has(runId)).toBe(false);
-    expect(ops.clearedState.chatDeltaSentAt.has(runId)).toBe(false);
-    expect(ops.clearedState.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
-    expect(ops.clearedState.chatDeltaLastBroadcastText.has(runId)).toBe(false);
-    expect(ops.clearedState.agentDeltaSentAt.has(`${runId}:assistant`)).toBe(false);
-    expect(ops.clearedState.bufferedAgentEvents.has(`${runId}:assistant`)).toBe(false);
+    expect(ops.chatRunState.runs.get(runId)?.buffer).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.deltaSentAt).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.assistantScope).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastText).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);
 
     expect(ops.broadcast).toHaveBeenCalledTimes(1);
-    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+    const payload = firstBroadcastPayload(ops) as ChatEvent;
     expect(payload).toEqual({
       runId,
       sessionKey,
@@ -399,10 +485,7 @@ describe("abortChatRunById", () => {
   });
 
   it("omits aborted message when buffered text is empty", () => {
-    const runId = "run-1";
-    const sessionKey = "main";
-    const entry = createActiveEntry(sessionKey);
-    const ops = createOps({ runId, entry, buffer: "   " });
+    const { runId, sessionKey, ops } = createAbortRunFixture({ buffer: "   " });
 
     const result = abortChatRunById(ops, { runId, sessionKey });
 
@@ -443,8 +526,8 @@ describe("abortChatRunById", () => {
     expect(result).toEqual({ aborted: false });
     expect(entry.controller.signal.aborted).toBe(false);
     expect(ops.chatAbortControllers.get(runId)).toBe(entry);
-    expect(ops.chatRunBuffers.get(runId)).toBe("completed reply");
-    expect(ops.chatAbortedRuns.has(runId)).toBe(false);
+    expect(ops.chatRunState.runs.get(runId)?.buffer).toBe("completed reply");
+    expect(ops.chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
     expect(ops.removeChatRun).not.toHaveBeenCalled();
     expect(ops.broadcast).not.toHaveBeenCalled();
     expect(ops.nodeSendToSession).not.toHaveBeenCalled();
@@ -471,32 +554,39 @@ describe("abortChatRunById", () => {
       name: "fans out default-agent global aborts to scoped and legacy global subscribers",
       runId: "run-main-global",
       createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
+      abort: abortChatRunById,
     },
     {
       name: "resolves unscoped global aborts to the default agent subscribers",
       runId: "run-unscoped-global",
       createEntry: () => createActiveEntry("global"),
+      abort: abortChatRunById,
+    },
+    {
+      name: "preserves default-agent global delivery through tracked maintenance aborts",
+      runId: "run-tracked-global",
+      createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
+      abort: abortChatRunById,
     },
   ]) {
     it(testCase.name, () => {
       const ops = createOps({ runId: testCase.runId, entry: testCase.createEntry() });
       ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
 
-      const result = abortChatRunById(ops, { runId: testCase.runId, sessionKey: "global" });
+      const result = testCase.abort(ops, { runId: testCase.runId, sessionKey: "global" });
 
       expect(result).toEqual({ aborted: true });
-      const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+      const payload = firstBroadcastPayload(ops) as ChatEvent;
       expect(payload.agentId).toBe("main");
+      const delivery = { sessionKeys: ["agent:main:global", "global"] };
+      expect(ops.broadcast).toHaveBeenCalledWith("chat", payload, delivery);
       expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
       expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
     });
   }
 
   it("tags maintenance timeouts as timeout abort reasons", () => {
-    const runId = "run-timeout";
-    const sessionKey = "main";
-    const entry = createActiveEntry(sessionKey);
-    const ops = createOps({ runId, entry });
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({ runId: "run-timeout" });
 
     const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "timeout" });
 
@@ -508,10 +598,7 @@ describe("abortChatRunById", () => {
   });
 
   it("tags restart abort signals with a restart-specific reason", () => {
-    const runId = "run-restart";
-    const sessionKey = "main";
-    const entry = createActiveEntry(sessionKey);
-    const ops = createOps({ runId, entry });
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({ runId: "run-restart" });
 
     const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "restart" });
 
@@ -519,35 +606,64 @@ describe("abortChatRunById", () => {
     expect(isAgentRunRestartAbortReason(entry.controller.signal.reason)).toBe(true);
   });
 
-  it("preserves partial message even when abort listeners clear buffers synchronously", () => {
-    const now = new Date("2026-01-02T03:04:05.000Z");
-    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
-      buffer: "streamed text",
-      now,
-    });
+  it.each([
+    ["streamed text", true, true],
+    ["", true, true],
+    ["NO_REPLY", true, false],
+    ["stale text", false, false],
+  ] as const)(
+    "snapshots completed widgets before synchronous abort cleanup (%j, current=%j)",
+    (buffer, current, visible) => {
+      let ownsBuffer = current;
+      const now = new Date("2026-01-02T03:04:05.000Z");
+      const { runId, sessionKey, entry, ops } = createAbortRunFixture({
+        buffer,
+        now,
+      });
+      const widget: ChatCanvasBlock = {
+        type: "canvas",
+        preview: {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          url: "/__openclaw__/canvas/documents/finished/index.html",
+          viewId: "finished",
+          sandbox: "scripts",
+        },
+        rawText: null,
+      };
+      Object.assign(ops.chatRunState.getOrCreate(runId), {
+        canvasBlocks: [widget],
+        bufferIsCurrent: () => ownsBuffer,
+      });
 
-    // Simulate synchronous cleanup triggered by AbortController listeners.
-    entry.controller.signal.addEventListener("abort", () => {
-      ops.chatRunBuffers.delete(runId);
-    });
+      entry.controller.signal.addEventListener("abort", () => {
+        ownsBuffer = false;
+        ops.chatRunState.clearRun(runId);
+      });
 
-    const result = abortChatRunById(ops, { runId, sessionKey });
+      const result = abortChatRunById(ops, { runId, sessionKey });
 
-    expect(result).toEqual({ aborted: true });
-    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
-    expect(payload).toEqual({
-      runId,
-      sessionKey,
-      seq: 1,
-      state: "aborted",
-      stopReason: undefined,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "streamed text" }],
-        timestamp: now.getTime(),
-      },
-    });
-  });
+      expect(result).toEqual({ aborted: true });
+      const payload = firstBroadcastPayload(ops) as ChatEvent;
+      expect(payload).toEqual({
+        runId,
+        sessionKey,
+        seq: 1,
+        state: "aborted",
+        stopReason: undefined,
+        message: visible
+          ? {
+              role: "assistant",
+              content: [...(buffer ? [{ type: "text", text: buffer }] : []), widget],
+              timestamp: now.getTime(),
+            }
+          : undefined,
+      });
+      expect(ops.nodeSendToSession).toHaveBeenCalledWith(sessionKey, "chat", payload);
+      expect(ops.chatRunState.runs.get(runId)?.canvasBlocks).toBeUndefined();
+    },
+  );
 });
 
 describe("abortChatRunsForProvider", () => {
@@ -565,7 +681,7 @@ describe("abortChatRunsForProvider", () => {
       authProviderId: "openrouter",
     });
     const result = abortChatRunsForProvider(ops, {
-      cfg: {},
+      cfg: { agents: { list: [{ id: "main" }, { id: "writer" }] } },
       providerId: "openrouter",
       stopReason: "auth-revoked",
     });
@@ -593,7 +709,7 @@ describe("abortChatRunsForProvider", () => {
     ops.chatAbortControllers.set("run-main", mainEntry);
 
     const result = abortChatRunsForProvider(ops, {
-      cfg: { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } },
+      cfg: { agents: { list: [{ id: "main" }, { id: "writer" }] } },
       providerId: "openrouter",
       agentId: "writer",
       stopReason: "auth-revoked",
@@ -638,32 +754,46 @@ describe("resolveInFlightRunSnapshot", () => {
 
   // Most cases request with requestedKey === canonicalKey; default canonical to
   // the requested key unless a case exercises the requested/canonical split.
-  const snap = (p: {
+  const resolveSnap = (p: {
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
     chatRunBuffers: Map<string, string>;
-    chatRunPlanSnapshots?: Parameters<typeof resolveInFlightRunSnapshot>[0]["chatRunPlanSnapshots"];
+    chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
     sessionKey: string;
     canonicalSessionKey?: string;
     agentId?: string;
     defaultAgentId?: string;
-  }) =>
-    resolveInFlightRunSnapshot({
+  }) => {
+    const chatRunState = createChatRunState();
+    for (const [runId, buffer] of p.chatRunBuffers ?? []) {
+      chatRunState.getOrCreate(runId).buffer = buffer;
+    }
+    for (const [runId, plan] of p.chatRunPlanSnapshots ?? []) {
+      chatRunState.getOrCreate(runId).planSnapshot = plan;
+    }
+    return resolveInFlightRunSnapshot({
       chatAbortControllers: p.chatAbortControllers,
-      chatRunBuffers: p.chatRunBuffers,
-      chatRunPlanSnapshots: p.chatRunPlanSnapshots,
+      chatRunState,
       requestedSessionKey: p.sessionKey,
       canonicalSessionKey: p.canonicalSessionKey ?? p.sessionKey,
       agentId: p.agentId,
       defaultAgentId: p.defaultAgentId,
     });
+  };
+  const snap = (p: Parameters<typeof resolveSnap>[0]) => {
+    const result = resolveSnap(p);
+    if (result) {
+      Reflect.deleteProperty(result, "startedAt");
+    }
+    return result;
+  };
 
-  it("returns the live assistant text of a matching active run", () => {
-    const result = snap({
-      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:tui-x")]]),
+  it("returns live assistant text with the authoritative run start timestamp", () => {
+    const result = resolveSnap({
+      chatAbortControllers: new Map([["run-1", inFlightEntry("s", { startedAtMs: 1_234 })]]),
       chatRunBuffers: new Map([["run-1", "partial answer so far"]]),
-      sessionKey: "agent:main:tui-x",
+      sessionKey: "s",
     });
-    expect(result).toEqual({ runId: "run-1", text: "partial answer so far" });
+    expect(result).toEqual({ runId: "run-1", text: "partial answer so far", startedAt: 1_234 });
   });
 
   it("returns the active run plan snapshot with buffered text", () => {
@@ -880,11 +1010,11 @@ describe("resolveInFlightRunSnapshot", () => {
     };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "partial", plan },
+        snapshot: { runId: "run-1", text: "partial", startedAt: 1_000, plan },
         messages: [],
         maxBytes: 1_000,
       }),
-    ).toEqual({ runId: "run-1", text: "partial", plan });
+    ).toEqual({ runId: "run-1", text: "partial", startedAt: 1_000, plan });
   });
 
   it("drops oversized in-flight text but keeps the run id for adoption", () => {
@@ -893,11 +1023,24 @@ describe("resolveInFlightRunSnapshot", () => {
     };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "x".repeat(1_000), plan },
+        snapshot: { runId: "run-1", text: "x".repeat(1_000), startedAt: 1_000, plan },
         messages: [],
         maxBytes: 200,
       }),
-    ).toEqual({ runId: "run-1", text: "", plan });
+    ).toEqual({ runId: "run-1", text: "", startedAt: 1_000, plan });
+  });
+
+  it("drops startedAt when the former minimal fallback exactly fills the budget", () => {
+    const messages = [{ role: "user", content: "near budget" }];
+    const minimal = { runId: "run-1", text: "" };
+    const maxBytes = jsonUtf8Bytes(messages) + jsonUtf8Bytes(minimal);
+    const result = boundInFlightRunSnapshotForChatHistory({
+      snapshot: { runId: "run-1", text: "x", startedAt: 1_000 },
+      messages,
+      maxBytes,
+    });
+    expect(result).toEqual(minimal);
+    expect(jsonUtf8Bytes(messages) + jsonUtf8Bytes(result)).toBeLessThanOrEqual(maxBytes);
   });
 
   it("drops an oversized plan after dropping text", () => {
@@ -932,5 +1075,41 @@ describe("resolveInFlightRunSnapshot", () => {
         maxBytes: 200,
       }),
     ).toEqual({ runId: "run-1", text: "short answer", plan: { steps: [] } });
+  });
+
+  it("prioritizes active progress and explicitly clears budget-dropped projections", () => {
+    const event = {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool" as const,
+      ts: 1_000,
+      data: { phase: "start", name: "read", toolCallId: "tool-1", args: {} },
+    };
+    const expected = {
+      runId: "run-1",
+      text: "",
+      events: [event],
+      plan: { steps: [] },
+    };
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: {
+          runId: "run-1",
+          text: "x".repeat(1_000),
+          events: [event],
+          plan: { steps: [{ step: "y".repeat(1_000), status: "in_progress" }] },
+        },
+        messages: [],
+        maxBytes: jsonUtf8Bytes([]) + jsonUtf8Bytes(expected),
+      }),
+    ).toEqual(expected);
+
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: { runId: "run-1", text: "", events: [event] },
+        messages: [],
+        maxBytes: jsonUtf8Bytes([]) + jsonUtf8Bytes({ runId: "run-1", text: "", events: [] }),
+      }),
+    ).toEqual({ runId: "run-1", text: "", events: [] });
   });
 });

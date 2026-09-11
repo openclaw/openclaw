@@ -4,6 +4,7 @@ read_when:
   - You want to use Gemini for web_search
   - You need a GEMINI_API_KEY or models.providers.google.apiKey
   - You want Google Search grounding
+  - Your Gemini gateway requires request headers
 title: "Gemini search"
 ---
 
@@ -41,7 +42,15 @@ citations.
           webSearch: {
             apiKey: "AIza...", // optional if GEMINI_API_KEY or models.providers.google.apiKey is set
             baseUrl: "https://generativelanguage.googleapis.com/v1beta", // optional; falls back to models.providers.google.baseUrl
-            model: "gemini-2.5-flash", // default
+            headers: {
+              "X-Routing-Target": "staging",
+              "X-Gateway-Token": {
+                source: "env",
+                provider: "default",
+                id: "GEMINI_GATEWAY_TOKEN",
+              },
+            },
+            model: "gemini-3.6-flash", // default
           },
         },
       },
@@ -64,6 +73,30 @@ then `models.providers.google.apiKey`. For base URLs, the dedicated
 `models.providers.google.baseUrl`.
 
 For a gateway install, put env keys in `~/.openclaw/.env`.
+
+### Request headers
+
+Set `plugins.entries.google.config.webSearch.headers` when an operator gateway
+needs extra request metadata. Plain string values use normal config handling;
+they are not automatically treated as secret merely because they are headers.
+When a header contains a secret, use a [SecretRef](/gateway/secrets) value as
+shown above. OpenClaw resolves that value at runtime and applies the existing
+secret redaction path to it.
+
+The Gemini request keeps ownership of `Content-Type`, `x-goog-api-key`, and
+`x-goog-api-client`; those values override same-named configured headers.
+`models.providers.google.headers` are not inherited because they belong to the
+model provider endpoint, which can differ from the web-search endpoint.
+
+Empty plain-string values are valid. Invalid fields and transport-owned or
+framing names such as `Content-Length`, `Host`, and `Transfer-Encoding` fail the
+current search before cache lookup or network I/O.
+
+Effective header names and values partition the in-memory search cache through a
+digest, so two routing targets do not share results. Configured values for the
+provider-owned names above are ignored and do not partition the cache. On a
+cross-origin redirect, the guarded fetch path retains only its standard safe
+redirect headers.
 
 ## How it works
 
@@ -94,9 +127,13 @@ query instead of a hard 24-hour range. `week`, `month`, `year`, and explicit
 
 ## Model selection
 
-The default model is `gemini-2.5-flash` (fast and cost-effective). Any Gemini
-model that supports grounding can be used via
-`plugins.entries.google.config.webSearch.model`.
+The default model is the stable `gemini-3.6-flash`. Omitting
+`plugins.entries.google.config.webSearch.model` uses this default; an explicit
+model stays pinned. You can select any Gemini model that supports grounding and
+is available to your API key.
+
+Gemini 3 grounding is billed per search query, while Gemini 2.5 grounding is
+billed per prompt. See [Google Search grounding pricing](https://ai.google.dev/gemini-api/docs/google-search#pricing).
 
 ## Base URL overrides
 
@@ -111,4 +148,5 @@ as provided after trimming trailing slashes.
 
 - [Web Search overview](/tools/web) -- all providers and auto-detection
 - [Brave Search](/tools/brave-search) -- structured results with snippets
-- [Perplexity Search](/tools/perplexity-search) -- structured results + content extraction
+- [Perplexity Search](/tools/perplexity-search) -- structured results with domain filtering
+- [Kimi search](/tools/kimi-search) -- Kimi web search via Moonshot

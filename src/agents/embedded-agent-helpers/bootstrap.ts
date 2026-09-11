@@ -1,8 +1,6 @@
 /**
  * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
  */
-import fs from "node:fs/promises";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
@@ -10,7 +8,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
-import type { EmbeddedContextFile } from "./types.js";
+import type { EmbeddedContextFile } from "./context-file.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;
@@ -90,7 +88,9 @@ export function stripThoughtSignatures<T>(
 
 const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
-const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "always";
+// USER.md stays directive-sized so profile guidance cannot crowd out project
+// rules or durable facts from the shared bootstrap budget.
+export const USER_BOOTSTRAP_MAX_CHARS = 4_000;
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 // Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.
 // The marker and "\n" separators are already reserved before this split runs; these ratios
@@ -100,10 +100,15 @@ const BOOTSTRAP_HEAD_RATIO = 0.75;
 const BOOTSTRAP_TAIL_RATIO = 0.25;
 const MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS = 16;
 const AGENTS_BOOTSTRAP_FILENAME = "AGENTS.md";
+const USER_BOOTSTRAP_FILENAME = "USER.md";
 const AGENTS_POLICY_DIGEST_RATIO = 0.35;
 const AGENTS_POLICY_HEAD_RATIO = 0.45;
 const AGENTS_POLICY_TAIL_RATIO = 0.15;
 const AGENTS_POLICY_DIGEST_MAX_LINE_CHARS = 240;
+const AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN =
+  /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|owner|security|secret|credential|test|validation|command|commit|push|github|pr)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿|必須|務必|一律|紅線)/iu;
+const AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN =
+  /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|security|secret|credential)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿)/iu;
 
 type TrimBootstrapResult = {
   content: string;
@@ -112,59 +117,58 @@ type TrimBootstrapResult = {
   originalLength: number;
 };
 
+type PolicyDigestCandidate = { text: string; highPriority: boolean };
+
 type PolicyDigest = {
   text: string;
   omittedLines: number;
 };
 
-export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
+function resolveBootstrapCharLimit(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | null | undefined,
+  key: "bootstrapMaxChars" | "bootstrapTotalMaxChars",
+  fallback: number,
+): number {
   const raw =
     cfg && agentId
-      ? (resolveAgentConfig(cfg, agentId)?.bootstrapMaxChars ??
-        cfg.agents?.defaults?.bootstrapMaxChars)
-      : cfg?.agents?.defaults?.bootstrapMaxChars;
+      ? (resolveAgentConfig(cfg, agentId)?.[key] ?? cfg.agents?.defaults?.[key])
+      : cfg?.agents?.defaults?.[key];
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
   }
-  return DEFAULT_BOOTSTRAP_MAX_CHARS;
+  return fallback;
+}
+
+export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
+  return resolveBootstrapCharLimit(cfg, agentId, "bootstrapMaxChars", DEFAULT_BOOTSTRAP_MAX_CHARS);
 }
 
 export function resolveBootstrapTotalMaxChars(
   cfg?: OpenClawConfig,
   agentId?: string | null,
 ): number {
-  const raw =
-    cfg && agentId
-      ? (resolveAgentConfig(cfg, agentId)?.bootstrapTotalMaxChars ??
-        cfg.agents?.defaults?.bootstrapTotalMaxChars)
-      : cfg?.agents?.defaults?.bootstrapTotalMaxChars;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
-}
-
-export function resolveBootstrapPromptTruncationWarningMode(
-  cfg?: OpenClawConfig,
-): "off" | "once" | "always" {
-  const raw = cfg?.agents?.defaults?.bootstrapPromptTruncationWarning;
-  if (raw === "off" || raw === "once" || raw === "always") {
-    return raw;
-  }
-  return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
+  return resolveBootstrapCharLimit(
+    cfg,
+    agentId,
+    "bootstrapTotalMaxChars",
+    DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  );
 }
 
 function isAgentsBootstrapFile(fileName: string | undefined): boolean {
   return fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
 }
 
+function isUserBootstrapFile(fileName: string | undefined): boolean {
+  return fileName?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase();
+}
+
 function isPolicyDigestCandidate(line: string): boolean {
   if (/^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line)) {
     return true;
   }
-  return /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|owner|security|secret|credential|test|validation|command|commit|push|github|pr)\b/iu.test(
-    line,
-  );
+  return AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line);
 }
 
 function normalizePolicyDigestLine(line: string): string {
@@ -175,64 +179,75 @@ function normalizePolicyDigestLine(line: string): string {
   return `${truncateUtf16Safe(normalized, AGENTS_POLICY_DIGEST_MAX_LINE_CHARS - 1)}…`;
 }
 
-function buildAgentsPolicyDigest(content: string, budget: number): PolicyDigest {
+function buildAgentsPolicyDigest(
+  candidates: readonly PolicyDigestCandidate[],
+  budget: number,
+): PolicyDigest {
   if (budget <= 0) {
     return { text: "", omittedLines: 0 };
   }
 
-  const candidates = content
-    .split(/\r?\n/u)
-    .map((line, index) => ({ index, line: normalizePolicyDigestLine(line) }))
-    .filter(({ line }) => line.length > 0 && isPolicyDigestCandidate(line));
-  const highPriorityPattern =
-    /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|security|secret|credential)\b/iu;
-  const selected = new Set<number>();
+  const selected = new Set<PolicyDigestCandidate>();
   let used = 0;
-  const trySelect = (candidate: { index: number; line: string }) => {
+  const trySelect = (candidate: PolicyDigestCandidate) => {
     const separatorChars = selected.size > 0 ? 1 : 0;
-    if (used + separatorChars + candidate.line.length > budget) {
+    if (used + separatorChars + candidate.text.length > budget) {
       return;
     }
-    selected.add(candidate.index);
-    used += separatorChars + candidate.line.length;
+    selected.add(candidate);
+    used += separatorChars + candidate.text.length;
   };
 
   for (const candidate of candidates) {
-    if (highPriorityPattern.test(candidate.line)) {
+    if (candidate.highPriority) {
       trySelect(candidate);
     }
   }
   for (const candidate of candidates) {
-    if (!selected.has(candidate.index)) {
+    if (!selected.has(candidate)) {
       trySelect(candidate);
     }
   }
 
   const lines = candidates
-    .filter((candidate) => selected.has(candidate.index))
-    .toSorted((a, b) => a.index - b.index)
-    .map((candidate) => candidate.line);
+    .filter((candidate) => selected.has(candidate))
+    .map((candidate) => candidate.text);
   return {
     text: lines.join("\n"),
-    omittedLines: Math.max(0, candidates.length - lines.length),
+    omittedLines: Math.max(0, candidates.length - selected.size),
   };
 }
 
-function trimAgentsBootstrapContent(content: string, maxChars: number): TrimBootstrapResult {
-  const trimmed = content.trimEnd();
-  if (trimmed.length <= maxChars) {
-    return {
-      content: trimmed,
-      truncated: false,
-      maxChars,
-      originalLength: trimmed.length,
-    };
-  }
-
+function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBootstrapResult {
   let headChars = Math.floor(maxChars * AGENTS_POLICY_HEAD_RATIO);
   let tailChars = Math.floor(maxChars * AGENTS_POLICY_TAIL_RATIO);
   let digestBudget = Math.floor(maxChars * AGENTS_POLICY_DIGEST_RATIO);
-  let digest = buildAgentsPolicyDigest(trimmed, digestBudget);
+  // Budget refinement reselects these distinct source-ordered lines without reparsing them.
+  const candidates: PolicyDigestCandidate[] = [];
+  if (!(digestBudget <= 0)) {
+    let lastProseLine: string | null = null;
+    for (const sourceLine of trimmed.split(/\r?\n/u)) {
+      const line = normalizePolicyDigestLine(sourceLine);
+      if (line.length === 0) {
+        lastProseLine = null;
+        continue;
+      }
+      if (/^\s*(?:`{3,}|~{3,})/u.test(line)) {
+        // Framing cannot cross a fence boundary.
+        lastProseLine = null;
+      } else if (isPolicyDigestCandidate(line)) {
+        candidates.push({
+          // Select framing and its candidate as one indivisible text unit.
+          text: lastProseLine === null ? line : `${lastProseLine}\n${line}`,
+          highPriority: AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN.test(line),
+        });
+        lastProseLine = null;
+      } else {
+        lastProseLine = line;
+      }
+    }
+  }
+  let digest = buildAgentsPolicyDigest(candidates, digestBudget);
   const render = () =>
     [
       sliceUtf16Safe(trimmed, 0, headChars),
@@ -255,7 +270,7 @@ function trimAgentsBootstrapContent(content: string, maxChars: number): TrimBoot
       headChars = Math.max(1, headChars - overflow);
     } else {
       digestBudget = Math.max(0, digestBudget - overflow);
-      digest = buildAgentsPolicyDigest(trimmed, digestBudget);
+      digest = buildAgentsPolicyDigest(candidates, digestBudget);
     }
     rendered = render();
   }
@@ -283,7 +298,7 @@ function trimBootstrapContent(
     };
   }
   if (isAgentsBootstrapFile(fileName)) {
-    return trimAgentsBootstrapContent(content, maxChars);
+    return trimAgentsBootstrapContent(trimmed, maxChars);
   }
 
   const markerTemplate = (headChars: number, tailChars: number) =>
@@ -383,33 +398,6 @@ function clampToBudget(content: string, budget: number): string {
   return `${truncateUtf16Safe(content, safe)}…`;
 }
 
-export async function ensureSessionHeader(params: {
-  sessionFile: string;
-  sessionId: string;
-  cwd: string;
-}) {
-  const file = params.sessionFile;
-  try {
-    await fs.stat(file);
-    return;
-  } catch {
-    // create
-  }
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const sessionVersion = 2;
-  const entry = {
-    type: "session",
-    version: sessionVersion,
-    id: params.sessionId,
-    timestamp: new Date().toISOString(),
-    cwd: params.cwd,
-  };
-  await fs.writeFile(file, `${JSON.stringify(entry)}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-}
-
 export function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
   opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
@@ -451,7 +439,10 @@ export function buildBootstrapContextFiles(
       );
       break;
     }
-    const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
+    const fileBudget = isUserBootstrapFile(file.name)
+      ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
+      : maxChars;
+    const fileMaxChars = Math.max(1, Math.min(fileBudget, remainingTotalChars));
     const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
     if (!contentWithinBudget) {

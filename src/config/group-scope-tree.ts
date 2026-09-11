@@ -1,7 +1,8 @@
 // Resolves canonical group policy scopes prepared by channel plugins.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
-import { resolveChannelGroups, resolveToolsBySender } from "./group-policy.js";
+import { resolveChannelGroups } from "./channel-groups.js";
+import { resolveToolsBySender } from "./tools-by-sender.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -126,14 +127,16 @@ export function resolveScopeToolsPolicy(
     tree: params.tree,
     path: params.path,
     resolveNode: (node) =>
-      resolveToolsBySender({
-        toolsBySender: node.toolsBySender,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-        messageProvider: params.messageProvider,
-      }) ?? node.tools,
+      (params.senderPolicyMode === "never"
+        ? undefined
+        : resolveToolsBySender({
+            toolsBySender: node.toolsBySender,
+            senderId: params.senderId,
+            senderName: params.senderName,
+            senderUsername: params.senderUsername,
+            senderE164: params.senderE164,
+            messageProvider: params.messageProvider,
+          })) ?? node.tools,
   });
 }
 

@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createUsageAccumulator,
+  mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
   toNormalizedUsage,
 } from "./usage-accumulator.js";
@@ -15,6 +16,7 @@ const FIRST_USAGE: UsageInput = {
   reasoningTokens: 12,
   cacheRead: 80_000,
   cacheWrite: 5_000,
+  cacheWrite1h: 3_000,
   total: 85_150,
 };
 
@@ -60,7 +62,41 @@ describe("usage-accumulator", () => {
       expect(acc.reasoningTokens).toBe(19);
       expect(acc.cacheRead).toBe(246_000);
       expect(acc.cacheWrite).toBe(5_000);
+      expect(toNormalizedUsage(acc)).toMatchObject({ cacheWrite1h: 3_000 });
       expect(acc.total).toBe(251_490);
+    });
+
+    it.each([
+      { name: "all priced calls", costs: [0.125, 0.25], expected: { total: 0.375 } },
+      { name: "explicit zero prices", costs: [0, 0], expected: { total: 0 } },
+      { name: "missing later price", costs: [0.125, undefined], expected: undefined },
+      { name: "missing earlier price", costs: [undefined, 0.125], expected: undefined },
+    ])("carries only complete cost for $name", ({ costs, expected }) => {
+      const acc = createAccumulatorWithUsage(
+        ...costs.map((total) => ({
+          input: 150_000,
+          output: 100,
+          ...(total !== undefined ? { cost: { total } } : {}),
+        })),
+      );
+
+      expect(toNormalizedUsage(acc)).toMatchObject({ input: 300_000, output: 200 });
+      expect(toNormalizedUsage(acc)?.cost).toEqual(expected);
+    });
+
+    it("carries complete costs across attempts without claiming provider provenance", () => {
+      const firstAttempt = createAccumulatorWithUsage({
+        input: 150_000,
+        cost: { total: 0.125, totalOrigin: "provider-billed" },
+      });
+      const secondAttempt = createAccumulatorWithUsage({ input: 150_000, cost: { total: 0.5 } });
+      const run = createUsageAccumulator();
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(firstAttempt));
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(secondAttempt));
+
+      expect(toNormalizedUsage(run)?.cost).toEqual({ total: 0.625 });
+      mergeUsageIntoAccumulator(run, { input: 1 });
+      expect(toNormalizedUsage(run)?.cost).toBeUndefined();
     });
 
     it("ignores undefined or zero-only usage", () => {
@@ -79,9 +115,53 @@ describe("usage-accumulator", () => {
     });
   });
 
+  describe("mergeAttemptRunStatsIntoAccumulator", () => {
+    it("accumulates turns and bridge calls across retry/fallback attempts", () => {
+      const acc = createUsageAccumulator();
+
+      // First attempt makes bridge calls, then a retry/fallback attempt runs.
+      mergeAttemptRunStatsIntoAccumulator(acc, {
+        assistantTurns: 2,
+        bridgeCalls: { search: 1, describe: 2, call: 3 },
+      });
+      mergeAttemptRunStatsIntoAccumulator(acc, {
+        assistantTurns: 1,
+        bridgeCalls: { search: 0, describe: 1, call: 4 },
+      });
+
+      expect(acc.assistantTurns).toBe(3);
+      expect(acc.bridgeCalls).toEqual({ search: 1, describe: 3, call: 7 });
+    });
+
+    it("keeps bridgeCalls absent for catalog-less attempts", () => {
+      const acc = createUsageAccumulator();
+
+      mergeAttemptRunStatsIntoAccumulator(acc, { assistantTurns: 1 });
+
+      expect(acc.assistantTurns).toBe(1);
+      expect(acc.bridgeCalls).toBeUndefined();
+    });
+  });
+
   describe("toNormalizedUsage", () => {
     it("returns undefined for an empty accumulator", () => {
       expect(toNormalizedUsage(createUsageAccumulator())).toBeUndefined();
+    });
+
+    it("preserves reported zero cache counters across attempt and run totals", () => {
+      const attempt = createAccumulatorWithUsage({ input: 100, cacheRead: 0, cacheWrite: 0 });
+      const run = createUsageAccumulator();
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+      expect(toNormalizedUsage(run)).toMatchObject({
+        input: 100,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 100,
+      });
+      expect(toNormalizedUsage(createAccumulatorWithUsage({ input: 100 }))).toMatchObject({
+        cacheRead: undefined,
+        cacheWrite: undefined,
+      });
     });
 
     it("returns accumulated totals for billing", () => {

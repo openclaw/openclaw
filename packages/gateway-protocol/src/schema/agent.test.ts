@@ -29,6 +29,7 @@ type AgentInternalEvent = {
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  modelRouteChange?: string;
   attachments?: unknown[];
   mediaUrls?: string[];
   replyInstruction?: string;
@@ -61,6 +62,8 @@ const musicCompletionEvent: AgentInternalEvent = {
       path: "/tmp/openclaw/generated-release-anthem.mp3",
       mimeType: "audio/mpeg",
       name: "generated-release-anthem.mp3",
+      sizeBytes: 1_024,
+      durationMs: 30_000,
     },
   ],
   mediaUrls: ["/tmp/openclaw/generated-release-anthem.mp3"],
@@ -92,6 +95,15 @@ describe("AgentParamsSchema", () => {
 
   it("accepts generated music attachments on internal completion events", () => {
     const params = makeAgentParamsWithInternalEvent(musicCompletionEvent);
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+  });
+
+  it("accepts a producer model-route fact on internal completion events", () => {
+    const params = makeAgentParamsWithInternalEvent({
+      ...musicCompletionEvent,
+      modelRouteChange: "Model route changed: requested/model → actual/model.",
+    });
 
     expect(Value.Check(AgentParamsSchema, params)).toBe(true);
   });
@@ -148,6 +160,23 @@ describe("MessageActionParamsSchema", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("validates closed reply routing facts", () => {
+    for (const reply of [
+      { replyToId: "message-1", source: "explicit" },
+      { replyToId: "message-1", source: "implicit", mode: "first" },
+      { replyToId: "message-1", source: "implicit", mode: "all" },
+    ]) {
+      expect(Value.Check(MessageActionParamsSchema, { ...baseParams, reply })).toBe(true);
+    }
+    for (const reply of [
+      { replyToId: "message-1", source: "explicit", mode: "off" },
+      { replyToId: "message-1", source: "implicit" },
+      { replyToId: "message-1", source: "implicit", mode: "batched" },
+    ]) {
+      expect(Value.Check(MessageActionParamsSchema, { ...baseParams, reply })).toBe(false);
+    }
   });
 });
 

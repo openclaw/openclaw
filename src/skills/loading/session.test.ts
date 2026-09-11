@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { parseFrontmatter, resolveOpenClawMetadata } from "./frontmatter.js";
+import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
+import { parseSkillFrontmatter, resolveSkillManifestMetadata } from "./frontmatter.js";
+import { loadSingleSkillDirectory, type LocalSkillLoadDiagnostic } from "./local-loader.js";
 import { loadSkills } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -12,6 +14,125 @@ function loadSkillsFromPath(dir: string) {
 }
 
 describe("loadSkills", () => {
+  it.each([
+    ["LF", "---", "---", "\n"],
+    ["CRLF", "---", "---", "\r\n"],
+    ["BOM", "\uFEFF---", "---", "\n"],
+    ["opening delimiter whitespace", "---   ", "---", "\n"],
+    ["closing delimiter whitespace", "---", "---\t", "\n"],
+    ["CR", "---", "---", "\r"],
+  ])("uses the body title after accepted %s frontmatter", async (_label, opening, closing, eol) => {
+    const skillDir = tempDirs.make("openclaw-skill-title-");
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      [
+        opening,
+        "name: change-log",
+        "description: Summarize changes",
+        "# Metadata comment",
+        closing,
+        "# Release Notes",
+      ].join(eol),
+    );
+    const session = loadSkillsFromPath(skillDir);
+    const diagnostics: LocalSkillLoadDiagnostic[] = [];
+    const local = loadSingleSkillDirectory({
+      skillDir,
+      source: "workspace",
+      rootRealPath: await fs.realpath(skillDir),
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    });
+
+    expect(session.diagnostics).toEqual([]);
+    expect(diagnostics).toEqual([]);
+    expect(session.skills[0]?.displayName).toBe("Release Notes");
+    expect(local?.skill.displayName).toBe("Release Notes");
+  });
+
+  it("humanizes the identifier when the skill has no H1", async () => {
+    const skillDir = tempDirs.make("openclaw-skill-title-");
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: daily-brief\ndescription: Summarize updates\n---\nSkill body without a title.\n",
+    );
+
+    expect(loadSkillsFromPath(skillDir).skills[0]?.displayName).toBe("Daily Brief");
+  });
+
+  it.each(["user", "project", "path"] as const)(
+    "preserves %s session provenance and its untrimmed fallback name beside local loading",
+    async (source) => {
+      const root = tempDirs.make("openclaw-skill-materialization-");
+      const agentDir = path.join(root, "agent");
+      const cwd = path.join(root, "project");
+      const skillRoot =
+        source === "user"
+          ? path.join(agentDir, "skills")
+          : source === "project"
+            ? path.join(cwd, ".openclaw", "skills")
+            : path.join(root, "selected");
+      const skillDir = path.join(skillRoot, " padded-name");
+      const filePath = path.join(skillDir, "SKILL.md");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        filePath,
+        '---\ndescription: "  Padded metadata.  "\ndisable-model-invocation: true\n---\n# Shared Title\n',
+      );
+
+      const session = loadSkills({ cwd, agentDir, skillPaths: [filePath], includeDefaults: false });
+      expect(session.skills).toEqual([
+        {
+          name: " padded-name",
+          displayName: "Shared Title",
+          description: "Padded metadata.",
+          filePath,
+          baseDir: skillDir,
+          source,
+          sourceInfo: {
+            path: filePath,
+            source: "local",
+            scope: source === "path" ? "temporary" : source,
+            origin: "top-level",
+            baseDir: skillDir,
+          },
+          disableModelInvocation: true,
+        },
+      ]);
+      expect(session.diagnostics).toEqual([
+        {
+          type: "warning",
+          path: filePath,
+          message: "name contains invalid characters (must be lowercase a-z, 0-9, hyphens only)",
+        },
+      ]);
+
+      const diagnostics: LocalSkillLoadDiagnostic[] = [];
+      const local = loadSingleSkillDirectory({
+        skillDir,
+        source: "workspace",
+        rootRealPath: await fs.realpath(skillDir),
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+      expect(local?.skill).toEqual({
+        name: "padded-name",
+        displayName: "Shared Title",
+        description: "Padded metadata.",
+        filePath,
+        baseDir: skillDir,
+        source: "workspace",
+        sourceInfo: {
+          path: filePath,
+          source: "workspace",
+          scope: "project",
+          origin: "top-level",
+          baseDir: skillDir,
+        },
+        disableModelInvocation: true,
+      });
+      expect(diagnostics).toEqual([]);
+    },
+  );
+
   it("reports directory scan failures as diagnostics", async () => {
     const tempDir = tempDirs.make("openclaw-skill-scan-");
     const regularFile = path.join(tempDir, "not-a-directory");
@@ -74,18 +195,19 @@ disable-model-invocation: true
     );
 
     const result = loadSkillsFromPath(tempDir);
-    const frontmatter = parseFrontmatter(await fs.readFile(skillFile, "utf-8"));
+    const frontmatter = parseSkillFrontmatter(await fs.readFile(skillFile, "utf-8"));
 
     expect(result.diagnostics).toEqual([]);
     expect(result.skills).toEqual([
       expect.objectContaining({
         name: "json5-metadata",
+        displayName: "JSON5 Metadata",
         description: "Skill with JSON5-style metadata.",
         disableModelInvocation: true,
         filePath: skillFile,
       }),
     ]);
-    expect(resolveOpenClawMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
+    expect(resolveSkillManifestMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
   });
 
   it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {
@@ -124,5 +246,26 @@ description: Valid sibling
         message: expect.stringContaining("invalid frontmatter: BAD_INDENT"),
       }),
     ]);
+  });
+
+  it("keeps case-variant Windows project skill paths in project scope", async () => {
+    const root = tempDirs.make("openclaw-skill-scan-");
+    const projectDir = path.join(root, "project");
+    const skillDir = path.join(projectDir, ".openclaw", "skills", "project-skill");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(skillFile, "---\nname: project-skill\ndescription: Project skill.\n---\n");
+
+    expect(
+      withMockedWindowsPlatform(
+        () =>
+          loadSkills({
+            cwd: path.join(root, "PROJECT"),
+            agentDir: path.join(root, "agent"),
+            skillPaths: [skillFile],
+            includeDefaults: false,
+          }).skills[0]?.source,
+      ),
+    ).toBe("project");
   });
 });

@@ -13,7 +13,8 @@ vi.mock("../../config/sessions/session-transcript-search.js", () => ({
 }));
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
-  listSessionEntries: (...args: unknown[]) => listSessionEntriesMock(...args),
+  listSessionEntriesCore: (...args: unknown[]) => listSessionEntriesMock(...args),
+  listSessionEntriesReadOnly: (...args: unknown[]) => listSessionEntriesMock(...args),
 }));
 vi.mock("../../config/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions.js")>()),
@@ -21,23 +22,41 @@ vi.mock("../../config/sessions.js", async (importOriginal) => ({
     resolveExistingAgentSessionStoreTargetsSyncMock(...args),
 }));
 
-import { sessionsHandlers } from "./sessions.js";
+import { sessionReadHandlers } from "./sessions-read.js";
 
 let cfg: Record<string, unknown> = {
   agents: { list: [{ id: "main", default: true }, { id: "work" }] },
 };
 
-async function callSearch(params: Record<string, unknown>): Promise<ReturnType<typeof vi.fn>> {
+async function callSearch(
+  params: Record<string, unknown>,
+  scopes?: string[],
+  profileId?: string,
+): Promise<ReturnType<typeof vi.fn>> {
   const respond = vi.fn();
   await expectDefined(
-    sessionsHandlers["sessions.search"],
-    'sessionsHandlers["sessions.search"] test invariant',
+    sessionReadHandlers["sessions.search"],
+    'sessionReadHandlers["sessions.search"] test invariant',
   )({
     req: { id: "req-search" } as never,
     params,
     respond: respond as unknown as RespondFn,
     context: { getRuntimeConfig: () => cfg } as unknown as GatewayRequestContext,
-    client: null,
+    client: scopes
+      ? ({
+          connect: { scopes },
+          ...(profileId
+            ? {
+                authenticatedUserProfile: {
+                  profileId,
+                  displayName: null,
+                  hasAvatar: false,
+                  updatedAt: 1,
+                },
+              }
+            : {}),
+        } as never)
+      : null,
     isWebchatConnect: () => false,
   });
   return respond;
@@ -71,41 +90,155 @@ describe("sessions.search gateway method", () => {
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
   });
 
-  it("derives one agent and canonical filters from sessionKeys", async () => {
-    searchSessionTranscriptsMock.mockReturnValue({
-      hits: [
-        {
-          sessionKey: "agent:work:main",
-          sessionId: "session-work",
-          messageId: "message-1",
-          role: "assistant",
-          timestamp: 123,
-          snippet: "needle",
-          score: 1,
-        },
-      ],
-      indexing: true,
-      truncated: true,
-    });
+  it.each([undefined, "/stores/shared/sessions.sqlite", "/stores/{agentId}.json"])(
+    "derives one agent and canonical filters from sessionKeys with store %s",
+    async (storePath) => {
+      if (storePath) {
+        cfg = { ...cfg, session: { store: storePath } };
+      }
+      searchSessionTranscriptsMock.mockReturnValue({
+        hits: [
+          {
+            sessionKey: "agent:work:main",
+            sessionId: "session-work",
+            messageId: "message-1",
+            role: "assistant",
+            timestamp: 123,
+            snippet: "needle",
+            score: 1,
+          },
+        ],
+        indexing: true,
+        truncated: true,
+      });
+
+      const respond = await callSearch({
+        query: " needle ",
+        sessionKeys: ["agent:work:main", "agent:work:other"],
+        limit: 5,
+      });
+
+      expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
+        agentId: "work",
+        query: "needle",
+        limit: 5,
+        sessionKeys: ["agent:work:main", "agent:work:other"],
+        storePath: storePath?.replace("{agentId}", "work") ?? expect.any(String),
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          indexing: true,
+          truncated: true,
+          results: [expect.objectContaining({ score: 1 })],
+        }),
+      );
+    },
+  );
+
+  it("rejects a bare fixed-store key scoped to a non-owner before transcript lookup", async () => {
+    cfg = {
+      session: { store: "/stores/shared/sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
 
     const respond = await callSearch({
-      query: " needle ",
-      sessionKeys: ["agent:work:main", "agent:work:other"],
-      limit: 5,
+      agentId: "research",
+      query: "needle",
+      sessionKeys: ["global"],
     });
 
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: 'agent "research" does not match session key agent "ops"',
+      }),
+    );
+    expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
+  });
+
+  it("retains the inferred fixed-store owner for a bare key search", async () => {
+    cfg = {
+      session: { store: "/stores/shared/sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    await callSearch({ query: "needle", sessionKeys: ["global"] });
+
     expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
-      agentId: "work",
+      agentId: "ops",
       query: "needle",
-      limit: 5,
-      sessionKeys: ["agent:work:main", "agent:work:other"],
+      limit: undefined,
+      sessionKeys: ["global"],
+      storePath: "/stores/shared/sessions.sqlite",
+    });
+  });
+
+  it("filters incognito candidates before applying a non-admin result limit", async () => {
+    const incognitoKey = "agent:main:dashboard:incognito-newer";
+    const durableKey = "agent:main:dashboard:durable";
+    const incognitoHit = {
+      sessionKey: incognitoKey,
+      sessionId: "session-incognito",
+      messageId: "message-incognito",
+      role: "user",
+      timestamp: 200,
+      snippet: "needle private",
+      score: 10,
+    };
+    const durableHit = {
+      sessionKey: durableKey,
+      sessionId: "session-durable",
+      messageId: "message-durable",
+      role: "user",
+      timestamp: 100,
+      snippet: "needle durable",
+      score: 1,
+    };
+    searchSessionTranscriptsMock.mockImplementation(
+      (params: { limit?: number; sessionKeys?: string[] }) => {
+        const candidates = [incognitoHit, durableHit].filter((hit) =>
+          params.sessionKeys?.includes(hit.sessionKey),
+        );
+        return {
+          hits: candidates.slice(0, params.limit),
+          indexing: false,
+          truncated: candidates.length > (params.limit ?? candidates.length),
+        };
+      },
+    );
+    listSessionEntriesMock.mockReturnValue([
+      { sessionKey: incognitoKey, entry: { incognito: true } },
+      { sessionKey: durableKey, entry: {} },
+    ]);
+
+    const respond = await callSearch(
+      { query: "needle", limit: 1 },
+      ["operator.read"],
+      "viewer@example.com",
+    );
+
+    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
+      agentId: "main",
+      query: "needle",
+      limit: 1,
+      sessionKeys: [durableKey],
+      storePath: expect.any(String),
     });
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
-        indexing: true,
-        truncated: true,
-        results: [expect.objectContaining({ score: 1 })],
+        results: [expect.objectContaining({ sessionKey: durableKey })],
       }),
     );
   });
@@ -135,6 +268,7 @@ describe("sessions.search gateway method", () => {
       query: "needle",
       limit: undefined,
       sessionKeys: ["agent:work:main", "global"],
+      storePath: expect.any(String),
     });
   });
 
@@ -144,6 +278,7 @@ describe("sessions.search gateway method", () => {
       agentId: "main",
       query: "needle",
       limit: undefined,
+      storePath: expect.any(String),
     });
   });
 
@@ -209,27 +344,25 @@ describe("sessions.search gateway method", () => {
     );
   });
 
-  it("scopes omitted filters to the requested agent in a fixed store", async () => {
-    cfg = {
-      agents: { list: [{ id: "main", default: true }] },
-      session: { store: "/stores/shared/sessions.json" },
-    };
-    resolveExistingAgentSessionStoreTargetsSyncMock.mockReturnValue([
-      { agentId: "retired", storePath: "/stores/shared/sessions.json" },
-    ]);
-    listSessionEntriesMock.mockReturnValue([
-      { sessionKey: "agent:retired:mine", entry: {} },
-      { sessionKey: "agent:other:secret", entry: {} },
-    ]);
+  it.each(["main", "retired"])(
+    "delegates omitted-filter namespace selection to search for %s in a fixed store",
+    async (agentId) => {
+      cfg = {
+        agents: { list: [{ id: "main", default: true }] },
+        session: { store: "/stores/shared/sessions.sqlite" },
+      };
+      resolveExistingAgentSessionStoreTargetsSyncMock.mockReturnValue([
+        { agentId: "retired", storePath: "/stores/shared/sessions.sqlite" },
+      ]);
+      await callSearch({ ...(agentId === "retired" ? { agentId } : {}), query: "needle" });
 
-    await callSearch({ agentId: "retired", query: "needle" });
-
-    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
-      agentId: "retired",
-      query: "needle",
-      limit: 25,
-      sessionKeys: ["agent:retired:mine"],
-      storePath: "/stores/shared/sessions.json",
-    });
-  });
+      expect(listSessionEntriesMock).not.toHaveBeenCalled();
+      expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
+        agentId,
+        query: "needle",
+        limit: agentId === "retired" ? 25 : undefined,
+        storePath: "/stores/shared/sessions.sqlite",
+      });
+    },
+  );
 });

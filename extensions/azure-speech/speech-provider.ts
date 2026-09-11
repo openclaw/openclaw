@@ -9,12 +9,12 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumber,
-  asObject,
-  resolveSpeechProviderApiKey,
-  trimToUndefined,
-} from "openclaw/plugin-sdk/speech-core";
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   azureSpeechTTS,
   DEFAULT_AZURE_SPEECH_AUDIO_FORMAT,
@@ -27,8 +27,6 @@ import {
   listAzureSpeechVoices,
   normalizeAzureSpeechBaseUrl,
 } from "./tts.js";
-
-const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
 
 type AzureSpeechProviderConfig = {
   apiKey?: string;
@@ -69,12 +67,12 @@ function readAzureSpeechEnvEndpoint(): string | undefined {
 function resolveAzureSpeechConfigRecord(
   rawConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers = asObject(rawConfig.providers);
+  const providers = asOptionalRecord(rawConfig.providers);
   return (
-    asObject(providers?.["azure-speech"]) ??
-    asObject(providers?.azure) ??
-    asObject(rawConfig["azure-speech"]) ??
-    asObject(rawConfig.azure)
+    asOptionalRecord(providers?.["azure-speech"]) ??
+    asOptionalRecord(providers?.azure) ??
+    asOptionalRecord(rawConfig["azure-speech"]) ??
+    asOptionalRecord(rawConfig.azure)
   );
 }
 
@@ -92,7 +90,7 @@ function normalizeAzureSpeechProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.azure-speech.apiKey",
+      path: "tts.providers.azure-speech.apiKey",
     }),
     region,
     endpoint,
@@ -188,16 +186,6 @@ function resolveTimeoutMs(config: AzureSpeechProviderConfig, timeoutMs: number):
   return config.timeoutMs ?? timeoutMs;
 }
 
-function resolveGeneratedAudioMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
-}
-
 /** Build the Azure Speech provider descriptor for the speech-core runtime. */
 export function buildAzureSpeechProvider(): SpeechProviderPlugin {
   return {
@@ -285,6 +273,8 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       const outputFormat =
         overrides.outputFormat ??
         (req.target === "voice-note" ? config.voiceNoteOutputFormat : config.outputFormat);
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       const audioBuffer = await azureSpeechTTS({
         text: req.text,
         apiKey,
@@ -295,7 +285,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         lang: overrides.lang ?? config.lang,
         outputFormat,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return {
         audioBuffer,
@@ -312,6 +302,8 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         throw new Error("Azure Speech API key missing");
       }
       const sampleRate = 8_000;
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       const audioBuffer = await azureSpeechTTS({
         text: req.text,
         apiKey,
@@ -322,7 +314,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         lang: overrides.lang ?? config.lang,
         outputFormat: DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return {
         audioBuffer,

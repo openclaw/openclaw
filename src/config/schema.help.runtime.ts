@@ -11,8 +11,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allows macOS hosts to import cookies from a local Chrome-family system profile into a managed OpenClaw browser profile. Disable this to prevent browser profile cookie import and its macOS Keychain consent prompt.",
   "browser.cdpUrl":
     "CDP/DevTools endpoint URL used to attach to an externally managed browser instance. Use this for centralized browser hosts, tunnels, or existing-session attachment, and keep URL access restricted to trusted network paths.",
-  "browser.color":
-    "Default accent color used for browser profile/UI cues where colored identity hints are displayed. Use consistent colors to help operators identify active browser profile context quickly.",
   "browser.executablePath":
     "Explicit browser executable path when auto-discovery is insufficient for your host environment. Use an absolute stable path, or a path starting with ~ for your OS home directory, so launch behavior stays deterministic across restarts.",
   "browser.headless":
@@ -36,15 +34,13 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "browser.profiles.*.mcpArgs":
     "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection.",
   "browser.profiles.*.driver":
-    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, "existing-session" for Chrome DevTools MCP attachment, or "extension" for the authenticated Chrome extension relay.',
   "browser.profiles.*.executablePath":
     "Per-profile browser executable path for locally launched managed browser profiles. Overrides browser.executablePath and accepts paths starting with ~ for the OS home directory.",
   "browser.profiles.*.headless":
     "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
   "browser.profiles.*.attachOnly":
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
-  "browser.profiles.*.color":
-    "Per-profile accent color for visual differentiation in dashboards and browser-related UI hints. Use distinct colors for high-signal operator recognition of active profiles.",
   "browser.evaluateEnabled":
     "Enables browser-side evaluate helpers for runtime script evaluation capabilities where supported. Keep disabled unless your workflows require evaluate semantics beyond snapshots/navigation.",
   "browser.snapshotDefaults":
@@ -55,28 +51,34 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
   "browser.tabCleanup.enabled":
     "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+  "browser.extensionRelay":
+    "Chrome extension relay authentication compatibility settings. Keep the legacy window only while older paired extensions or external CDP clients still need it.",
+  "browser.extensionRelay.allowLegacyAuth":
+    "Temporarily accepts legacy Bearer, Basic, and token-subprotocol relay authentication. Default: true for one migration window. Set false after every extension and external CDP client uses Browser Relay Authentication v2.",
   "browser.ssrfPolicy":
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
     "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
   "browser.ssrfPolicy.allowedHostnames":
-    "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
-  "browser.ssrfPolicy.hostnameAllowlist":
-    "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
+    "Exact hostnames or IP literals allowed by browser SSRF policy checks. Keep the list minimal.",
+  "browser.ssrfPolicy.blockedHostnames":
+    'Hostname patterns denied before DNS and allow rules, even with private-network access enabled. Supports exact hosts and "*.example.com" for subdomains only; add "example.com" separately to block the apex. Empty or unset adds no denials.',
+  "browser.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for trusted fake-IP proxy environments.",
+  "browser.ssrfPolicy.allowIpv6UniqueLocalRange":
+    "Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy environments.",
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   discovery:
     "Service discovery settings for local mDNS advertisement and optional wide-area presence signaling. Keep discovery scoped to expected networks to avoid leaking service metadata.",
   "discovery.wideArea":
     "Wide-area discovery configuration group for exposing discovery signals beyond local-link scopes. Enable only in deployments that intentionally aggregate gateway presence across sites.",
-  "discovery.wideArea.enabled":
-    "Enables wide-area discovery signaling when your environment needs non-local gateway discovery. Keep disabled unless cross-network discovery is operationally required.",
   "discovery.wideArea.domain":
     "Optional unicast DNS-SD domain for wide-area discovery, such as openclaw.internal. Use this when you intentionally publish gateway discovery beyond local mDNS scopes.",
   "discovery.mdns":
     "mDNS discovery configuration group for local network advertisement and discovery behavior tuning. Keep minimal mode for routine LAN discovery unless extra metadata is required.",
   tools:
-    "Global tool access policy and capability configuration across web, exec, media, messaging, and elevated surfaces. Use this section to constrain risky capabilities before broad rollout.",
+    "Tool infrastructure and cross-agent defaults. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
   "tools.allow":
     "Absolute tool allowlist that replaces profile-derived defaults for strict environments. Use this only when you intentionally run a tightly curated subset of tool capabilities.",
   "tools.deny":
@@ -85,6 +87,16 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Web-tool policy grouping for search/fetch providers, limits, and fallback behavior tuning. Keep enabled settings aligned with API key availability and outbound networking policy.",
   "tools.exec":
     "Exec-tool policy grouping for shell execution host, security mode, approval behavior, and runtime bindings. Keep conservative defaults in production and tighten elevated execution paths.",
+  "tools.github":
+    "Managed local GitHub CLI profile and optional Git author for agent tools. Omit this object to preserve the Gateway runtime user's native account and author; repository remote credentials are never overridden.",
+  "tools.github.profileId":
+    "Opaque generated profile version used to switch managed credentials atomically.",
+  "tools.github.kind":
+    "Marks a managed OAuth profile whose rotating refresh credential is owned by the Gateway. Omitted profiles use a personal access token.",
+  "tools.github.gitAuthor.name": "Optional process-local Git author and committer name.",
+  "tools.github.gitAuthor.email": "Optional process-local Git author and committer email.",
+  "agents.entries.*.tools.github":
+    "Complete managed GitHub CLI identity and Git author override for this agent. Omit it to inherit the system identity.",
   "tools.exec.host":
     'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
   "tools.exec.mode":
@@ -95,24 +107,18 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional provider/model override for the exec reviewer agent. Omit to reuse the configured primary model for the target agent.",
   "tools.exec.reviewer.timeoutMs":
     "Per-stage exec reviewer timeout in milliseconds for model preparation and completion before falling back to human approval (default: 30000).",
-  "tools.exec.security":
-    "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
-  "tools.exec.ask":
-    "Approval strategy for when exec commands require human confirmation before running. Use stricter ask behavior in shared channels and lower-friction settings in private operator contexts.",
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
   "tools.agentToAgent":
-    "Policy for allowing agent-to-agent tool calls and constraining which target agents can be reached. Keep disabled or tightly scoped unless cross-agent orchestration is intentionally enabled.",
+    "Policy for cross-agent session tool calls: sends, list, history, search, and status reads (default: enabled). Use allow to restrict agent pairs; enabled=false blocks ordinary cross-agent access. Requester-owned native subagent and ACP child sessions stay reachable under tree or all visibility. For strict separation, set tools.sessions.visibility to agent or self (tree still admits requester-owned native/ACP children), or use separate gateways.",
   "tools.agentToAgent.enabled":
-    "Enables the agent_to_agent tool surface so one agent can invoke another agent at runtime. Keep off in simple deployments and enable only when orchestration value outweighs complexity.",
+    "Enables cross-agent session tool access (default: true); omitted or empty allow permits every agent pair. Set false to block ordinary cross-agent access; requester-owned native subagent and ACP child sessions stay reachable under tree or all visibility. For strict separation, set tools.sessions.visibility to agent or self (tree still admits requester-owned native/ACP children), or use separate gateways.",
   "tools.agentToAgent.allow":
-    "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
-  "tools.experimental":
-    "Experimental built-in tool flags. Use each tool's switch to opt in or out of its documented default.",
-  "tools.experimental.planTool":
-    "Structured `update_plan` checklist tool for non-trivial multi-step work. Enabled by default for embedded models; set false to opt out.",
+    "Agent ids or * patterns that may take part in cross-agent calls; the requesting and target agent must both match. Cross-agent access is on by default, and omitted or empty allow permits every pair. Set an explicit list to restrict access; blank entries deny.",
+  "tools.updatePlan":
+    "Unified `progress_card` status tool for durable plans and narrative notes in parent sessions. Enabled by default; set false to opt out. Always unavailable to subagents.",
   "tools.toolSearch":
-    "Compact large OpenClaw, MCP, and client tool catalogs. Set to true for the default code bridge or use the object form to choose structured controls or a compact visible tool directory.",
+    "Compact large OpenClaw, MCP, and client tool catalogs. Supported local runtimes use structured Tool Search automatically when unset. Set false to disable it, true for the code bridge, or use the object form to choose a mode.",
   "tools.toolSearch.enabled":
     "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind `tool_search_code` or structured search/describe/call tools during embedded runtime runs.",
   "tools.toolSearch.mode":
@@ -126,7 +132,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode":
     "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
   "tools.codeMode.enabled":
-    "Enables generic code mode. Default is off. When explicitly enabled, OpenClaw fails closed if the runtime is unavailable instead of exposing the full tool list.",
+    'Global OpenClaw Code Mode default. Off when omitted, including objects without `enabled`. `"auto"` engages catalog-preferred models; `true` engages tool-capable runs. Agent and model activation overrides take precedence. An engaged run fails closed if the runtime is unavailable instead of exposing the full tool list.',
   "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',
@@ -142,12 +148,13 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode.snapshotTtlSeconds":
     "How long suspended code-mode snapshots can be resumed with `wait` before they expire.",
   "tools.codeMode.searchDefaultLimit":
-    "Default number of hidden catalog search results returned by `tools.search` inside code mode.",
+    "Default number of hidden catalog search results returned by `catalog.search` inside code mode.",
   "tools.codeMode.maxSearchLimit":
     "Maximum number of hidden catalog search results a code-mode program can request.",
   "tools.swarm":
-    "Collector-mode subagent orchestration. Default is off; enable it to expose agents_wait and swarm spawn options.",
-  "tools.swarm.enabled": "Enables collector-mode subagents and agents_wait. Default is off.",
+    "Collector-mode subagent orchestration. Enabled by default; set false to opt out. Tool permissions still apply to agents_wait and swarm spawn options.",
+  "tools.swarm.enabled":
+    "Enables collector-mode subagents and agents_wait. Default is on; set false to opt out.",
   "tools.swarm.maxConcurrent": "Maximum concurrently running collector children per swarm group.",
   "tools.swarm.maxChildrenPerGroup": "Maximum live collector children per swarm group.",
   "tools.swarm.maxTotalPerGroup": "Maximum lifetime collector spawns per swarm group.",
@@ -163,55 +170,64 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.subagents":
     "Tool policy wrapper for spawned subagents to restrict or expand tool availability compared to parent defaults. Use this to keep delegated agent capabilities scoped to task intent.",
   "tools.subagents.tools":
-    "Allow/deny tool policy applied to spawned subagent runtimes for per-subagent hardening. Keep this narrower than parent scope when subagents run semi-autonomous workflows.",
+    "Allow/deny tool policy applied to spawned subagent runtimes. Keep this narrower than parent scope. Parent-owned tools such as progress_card are always denied, including through allow/alsoAllow.",
   "tools.sandbox":
     "Tool policy wrapper for sandboxed agent executions so sandbox runs can have distinct capability boundaries. Use this to enforce stronger safety in sandbox contexts.",
   "tools.sandbox.tools":
     "Allow/deny tool policy applied when agents run in sandboxed execution environments. Keep policies minimal so sandbox tasks cannot escalate into unnecessary external actions.",
-  web: "Web channel runtime settings for operating web-based chat surfaces. Use this section to control the built-in web channel.",
-  "web.enabled":
-    "Enables the web channel runtime and related websocket lifecycle behavior. Keep disabled when web chat is unused to reduce active connection management overhead.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
   "gateway.auth.token":
-    "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
-  "gateway.auth.password": "Required for Tailscale funnel.",
+    "Shared secret selected by gateway.auth.mode=token, the default for new local onboarding. Clients may send it in either auth.token or auth.password. Non-loopback binds require an enabled authentication mode.",
+  "gateway.auth.password":
+    "Shared secret selected by gateway.auth.mode=password. Clients may send it in either auth.token or auth.password. Password mode is required for Tailscale Funnel.",
   "agents.defaults.sandbox.browser.network":
-    "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
-  "agents.list[].sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",
+    'Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Use the dedicated default or a custom bridge network; "none" is unsupported because browser control requires published CDP ports.',
+  "agents.entries.*.sandbox.browser.network":
+    'Per-agent override for the sandbox browser Docker network. Use a bridge network; "none" is unsupported because browser control requires published CDP ports.',
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
-  "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
+  "agents.entries.*.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
   "agents.defaults.sandbox.docker.gpus":
     'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
-  "agents.list[].sandbox.docker.gpus":
+  "agents.entries.*.sandbox.docker.gpus":
     "Per-agent Docker GPU passthrough override for sandbox containers.",
   "agents.defaults.sandbox.browser.cdpSourceRange":
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
-  "agents.list[].sandbox.browser.cdpSourceRange":
+  "agents.entries.*.sandbox.browser.cdpSourceRange":
     "Per-agent override for CDP source CIDR allowlist.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
-  "gateway.controlUi.toolTitles":
-    "Opt-in AI purpose titles for tool calls in Control UI chat (default off). When enabled, the chat.toolTitles method generates short titles for complex tool calls with the agent's utility model (an explicit utilityModel may route bounded tool arguments to the operator-chosen provider like every utility task; the derived default stays on the session's provider) and caches them in the per-agent state database. Setting utilityModel to an empty string disables titles too. Leave off to keep tool rendering fully deterministic with no background model calls.",
+  "gateway.controlUi.experimental":
+    "Opt-in Control UI experiments. These capabilities may change between releases and remain disabled unless explicitly enabled.",
+  "gateway.controlUi.experimental.customPlugins":
+    "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Restart the Gateway and reload open Control UI pages after changing this setting.",
+  "gateway.controlUi.environment":
+    "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
+  "gateway.controlUi.environment.label":
+    "Environment label displayed in the Control UI and browser tab; surrounding whitespace is trimmed and the label must contain 1 to 24 characters.",
+  "gateway.controlUi.environment.color":
+    "Named environment color ramp: teal, amber, purple, coral, pink, blue, green, red, or gray.",
+  "gateway.controlUi.communityInvite":
+    "Show the Discord community invitation in the Control UI served by this Gateway (default on). Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect; re-enabling preserves browser-local dismissals.",
+  "gateway.controlUi.github.token":
+    "SecretRef-backed service credential for Control UI project discovery and GitHub hover previews without a managed identity. Hover previews prefer the selected agent's configured GitHub identity, inheriting the system identity when there is no override. Prefer explicit configuration for clear service ownership. Omit it to retain the GH_TOKEN/GITHUB_TOKEN fallback from the shared Gateway process environment. An explicitly configured but unavailable credential fails closed.",
   "gateway.controlUi.sessionObserver":
     "Produce live session status digests for subscribed Control UI clients with each agent's utility model (default on). Set false to disable observer model calls gateway-wide; setting agents.defaults.utilityModel to an empty string disables utility-model observation for agents that do not override it.",
   "gateway.controlUi.embedSandbox":
     'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
   "gateway.controlUi.allowExternalEmbedUrls":
     "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
-  "gateway.controlUi.chatMessageMaxWidth":
-    'Optional CSS max-width for the centered Control UI chat transcript, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
+  "gateway.controlUi.automaticallyFetchFavicons":
+    "Fetch link favicons through the Gateway (default on). The Gateway requests only HTTPS /favicon.ico from public destinations, applies strict SSRF checks to every DNS result and redirect, and validates bounded image bytes. Set false to prevent all favicon route requests and destination fetches.",
   "gateway.controlUi.allowedOrigins":
     'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
-  "gateway.controlUi.allowInsecureAuth":
-    "Loosens strict browser auth checks for Control UI when you must run a non-standard setup. Keep this off unless you trust your network and proxy path, because impersonation risk is higher.",
-  "gateway.controlUi.dangerouslyDisableDeviceAuth":
-    "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
+  "gateway.publicOrigin":
+    "Externally reachable HTTPS origin of the Gateway. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the Control UI and Gateway routes.",
   "mcp.apps":
     "MCP Apps UI support. When enabled, configured MCP servers may provide interactive HTML views for their tool results.",
   "mcp.apps.enabled":
@@ -247,20 +263,22 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.http.endpoints.chatCompletions.images.timeoutMs":
     "Timeout in milliseconds for `image_url` URL fetches (default: 10000).",
   "gateway.reload.mode":
-    'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
+    'Controls how config edits are applied: "off" ignores live edits and "hybrid" applies hot-safe changes then restarts when required.',
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.pairing":
     "Node pairing policy settings. SSH-verified auto-approval is enabled by default; CIDR auto-approval stays disabled unless explicit trusted CIDR/IP allowlists are configured.",
+  "gateway.nodes.pairing.autoApproveLocal":
+    "Silently approve trusted local pairing and access upgrades (default: true); set false to trade convenience for explicit approval of every device.",
   "gateway.nodes.pairing.autoApproveCidrs":
     "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
   "gateway.nodes.pairing.sshVerify":
     "SSH-verified auto-approval for first-time node-role device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only when the remote `openclaw node identity` output matches the pending device key. Set false to disable SSH verification (independent of autoApproveCidrs, which stays active); for manual-only pairing also unset autoApproveCidrs. Pass an object to override user/identity/timeoutMs/cidrs.",
   ...NODE_CAPABILITY_FIELD_HELP,
-  "gateway.nodes.allowCommands":
+  "gateway.nodes.commands.allow":
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
-  "gateway.nodes.denyCommands":
+  "gateway.nodes.commands.deny":
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
@@ -270,6 +288,16 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Controls whether this headless node host may advertise Claude CLI agent turns to the gateway.",
   "nodeHost.agentRuns.claude.enabled":
     "Advertise paired-node Claude session continuation when the local claude binary is available (default: false). Runs still require node exec approval.",
+  "nodeHost.workerRuns":
+    "Opt in to full OpenClaw worker session hosting from Gateway-managed bundles. Disabled by default.",
+  "nodeHost.workerRuns.enabled":
+    "Allow this paired node to host sessions from exact bundles installed by its Gateway (default: false).",
+  "nodeHost.workerRuns.capacity":
+    "Maximum concurrent worker sessions hosted by this node (default: the number of available CPU cores). Must be an integer from 1 through 1024.",
+  "nodeHost.workerRuns.isolation":
+    'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine and never falls back to host execution.',
+  "nodeHost.workerRuns.containerImage":
+    'Optional Node 24.16+ or 26.1+ image for container-isolated workers (default: "node:24.19.0-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":
@@ -284,12 +312,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Use this section to publish skills installed in ~/.openclaw/skills from the headless node host. Restart the node host after changing skill files.",
   "nodeHost.skills.enabled":
     "Scan and publish node-hosted skills after connecting (default: true). Set false to disable node skill publication.",
-  media:
-    "Top-level media behavior shared across providers and tools that handle inbound files. Keep defaults unless you need stable filenames for external processing pipelines or longer-lived inbound media retention.",
-  "media.preserveFilenames":
-    "When enabled, uploaded media keeps its original filename instead of a generated temp-safe name. Turn this on when downstream automations depend on stable names, and leave off to reduce accidental filename leakage.",
-  "media.ttlHours":
-    "Optional retention window in hours for persisted media cleanup across the full media tree. Leave unset to disable automatic cleanup (media writes never prune), or set values like 24 (1 day) or 168 (7 days) to periodically remove media older than the window.",
+  attachments:
+    "Top-level retention behavior shared across providers and tools that persist media. Use ttlHours when general staged media needs bounded cleanup.",
+  "attachments.ttlHours":
+    "Optional retention window in hours for persisted media handled by the general mtime sweep. Leave unset to disable that sweep, or set values like 24 (1 day) or 168 (7 days) to periodically remove older staged media. Managed outgoing media (chat-generated attachments) is excluded and follows its own SQLite- and transcript-aware retention.",
   bindings:
     "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.",
   "bindings[].type":
@@ -300,6 +326,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional route session overrides for conversations matched by this binding. Use this when a narrow route should keep the same agent but isolate session continuity differently.",
   "bindings[].session.dmScope":
     'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
+  "bindings[].session.groupScope":
+    'Optional group/channel session scope override for this route binding. "per-group" keeps matched rooms separate and ambiently watched by the agent main session regardless of dmScope; "main" merges their context into main and needs no watch.',
   "bindings[].match":
     "Match rule object for deciding when a binding applies, including channel and optional account/peer constraints. Keep rules narrow to avoid accidental agent takeover across contexts.",
   "bindings[].match.channel":
@@ -319,7 +347,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "bindings[].match.roles":
     "Optional role-based filter list used by providers that attach roles to chat context. Use this to route privileged or operational role traffic to specialized agents.",
   "bindings[].acp":
-    "Optional per-binding ACP overrides for bindings[].type=acp. This layer overrides agents.list[].runtime.acp defaults for the matched conversation.",
+    "Optional per-binding ACP overrides for bindings[].type=acp. This layer overrides agents.entries.*.runtime.acp defaults for the matched conversation.",
   "bindings[].acp.mode": "ACP session mode override for this binding (persistent or oneshot).",
   "bindings[].acp.label":
     "Human-friendly label for ACP status/diagnostics in this bound conversation.",
@@ -347,11 +375,13 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "diagnostics.otel.logsEndpoint":
     "Signal-specific OTLP/HTTP logs endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for log export only.",
   "diagnostics.otel.protocol":
-    'OTel transport protocol for telemetry export: "http/protobuf" or "grpc" depending on collector support. Use the protocol your observability backend expects to avoid dropped telemetry payloads.',
+    'OTel transport protocol for telemetry export. Only "http/protobuf" is accepted; run "openclaw doctor --fix" to repair a persisted legacy "grpc" value or get source-specific manual-edit guidance.',
   "diagnostics.otel.headers":
-    "Additional HTTP/gRPC metadata headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
+    "Additional HTTP request headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
   "diagnostics.otel.serviceName":
     "Service name reported in telemetry resource attributes to identify this gateway instance in observability backends. Use stable names so dashboards and alerts remain consistent over deployments.",
+  "diagnostics.otel.metricNamePrefix":
+    'Replaces the default "openclaw." prefix on OpenClaw-owned metric names. Use an empty string to remove the prefix, or up to 128 ASCII letters, digits, underscores, dots, hyphens, and slashes starting with a letter. Include any separator you need, for example "acme."; standard gen_ai.* metric names are unchanged. Changing this value requires updating dashboards and alerts that query the old names.',
   "diagnostics.otel.traces":
     "Enable trace signal export to the configured OpenTelemetry collector endpoint. Keep enabled when latency/debug tracing is needed, and disable if you only want metrics/logs.",
   "diagnostics.otel.metrics":
@@ -365,29 +395,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "diagnostics.otel.flushIntervalMs":
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
   "diagnostics.otel.captureContent":
-    "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
-  "diagnostics.otel.captureContent.enabled":
-    "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
-  "diagnostics.otel.captureContent.inputMessages":
-    "Capture model input message text on OTEL spans when content capture is enabled.",
-  "diagnostics.otel.captureContent.outputMessages":
-    "Capture model output message text on OTEL spans when content capture is enabled.",
-  "diagnostics.otel.captureContent.toolInputs":
-    "Capture tool input text on OTEL spans when content capture is enabled.",
-  "diagnostics.otel.captureContent.toolOutputs":
-    "Capture tool output text on OTEL spans when content capture is enabled.",
-  "diagnostics.otel.captureContent.systemPrompt":
-    "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
-  "diagnostics.otel.captureContent.toolDefinitions":
-    "Capture model tool definition schemas on OTEL spans when content capture is enabled.",
+    "Opt-in OTEL span content capture. Defaults to off; true captures non-system message and tool content.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
-  "diagnostics.cacheTrace.filePath":
-    "JSONL output path for cache trace logs (default: $OPENCLAW_STATE_DIR/logs/cache-trace.jsonl).",
-  "diagnostics.cacheTrace.includeMessages":
-    "Include full message payloads in trace output (default: true).",
-  "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
-  "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":
@@ -407,6 +417,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
   "tools.exec.commandHighlighting":
     "Show parser-derived command highlights in exec approval prompts (default: false). Enable this to render highlighted command text without changing exec approval policy.",
+  "tools.exec.grantExpiryDays":
+    "Default lifetime, in days (1-3650), for standing grants minted by allow-always on automation approvals. Unset keeps grants valid until revoked or the owning automation changes. Terms freeze at mint, so changing this affects only future grants.",
   "tools.exec.safeBinTrustedDirs":
     "Additional explicit directories trusted for safe-bin path checks (PATH entries are never auto-trusted).",
   "tools.exec.safeBinProfiles":
@@ -417,21 +429,21 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.byProvider":
     "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
-  "agents.list[].tools.profile":
+  "agents.entries.*.tools.profile":
     "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
-  "agents.list[].tools.alsoAllow":
+  "agents.entries.*.tools.alsoAllow":
     "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
-  "agents.list[].tools.codeMode":
-    "Per-agent code mode override. Use this to test or roll out exec/wait tool-surface mode for one agent without enabling it fleet-wide.",
-  "agents.list[].tools.swarm":
+  "agents.entries.*.tools.codeMode":
+    "Per-agent Code Mode options. Explicit enabled overrides the shared model and global activation defaults; an agent-specific model codeMode override wins. Other options merge over tools.codeMode without changing activation.",
+  "agents.entries.*.tools.swarm":
     "Per-agent swarm override. Values merge over the top-level tools.swarm configuration.",
-  "agents.list[].tools.byProvider":
+  "agents.entries.*.tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
-  "agents.list[].tools.message.crossContext.allowWithinProvider":
+  "agents.entries.*.tools.message.crossContext.allowWithinProvider":
     "Per-agent message guard for sending to other conversations on the same provider. Set false for current-conversation-only public agents.",
-  "agents.list[].tools.message.crossContext.allowAcrossProviders":
+  "agents.entries.*.tools.message.crossContext.allowAcrossProviders":
     "Per-agent message guard for sending across providers. Keep false for public or sandboxed agents.",
-  "agents.list[].tools.message.actions.allow":
+  "agents.entries.*.tools.message.actions.allow":
     'Per-agent message action allowlist for the message tool. Set to a minimal list such as ["send"] for public sandbox agents so read, edit, delete, reaction, and other provider-specific message actions stay hidden and blocked.',
   "tools.exec.approvalRunningNoticeMs":
     "Delay in milliseconds before showing an in-progress notice after an exec approval is granted. Increase to reduce flicker for fast commands, or lower for quicker operator feedback.",
@@ -446,52 +458,50 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.links.scope":
     "Controls when link understanding runs relative to conversation context and message type. Keep scope conservative to avoid unnecessary fetches on messages where links are not actionable.",
   "tools.media.models":
-    "Shared fallback model list used by media understanding tools when modality-specific model lists are not set. Keep this aligned with available multimodal providers to avoid runtime fallback churn.",
+    "Canonical media-understanding model list. Use image, audio, or video capability tags on every entry so each pipeline selects only compatible fallbacks.",
   "tools.media.concurrency":
     "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
   "tools.media.image.enabled":
     "Enable image understanding so attached or referenced images can be interpreted into textual context. Disable if you need text-only operation or want to avoid image-processing cost.",
+  "tools.media.image.preferredModel":
+    "Prefer one capability-tagged tools.media.models entry for image understanding before the remaining compatible fallbacks.",
   "tools.media.image.maxBytes":
-    "Maximum accepted image payload size in bytes before the item is skipped or truncated by policy. Keep limits realistic for your provider caps and infrastructure bandwidth.",
+    "Default image input size limit for configured and auto-detected models. Set this to match provider payload limits and deployment bandwidth.",
   "tools.media.image.maxChars":
-    "Maximum characters returned from image understanding output after model response normalization. Use tighter limits to reduce prompt bloat and larger limits for detail-heavy OCR tasks.",
+    "Default maximum image description length. Use a lower value for compact context or a higher value for detailed OCR and scene analysis.",
   "tools.media.image.prompt":
-    "Instruction template used for image understanding requests to shape extraction style and detail level. Keep prompts deterministic so outputs stay consistent across turns and channels.",
+    "Default image-understanding prompt when an entry does not override it. Keep this deterministic when consumers rely on stable descriptions.",
   "tools.media.image.timeoutSeconds":
-    "Timeout in seconds for each image understanding request before it is aborted. Increase for high-resolution analysis and lower it for latency-sensitive operator workflows.",
-  "tools.media.image.attachments":
-    "Attachment handling policy for image inputs, including which message attachments qualify for image analysis. Use restrictive settings in untrusted channels to reduce unexpected processing.",
-  "tools.media.image.models":
-    "Ordered model preferences specifically for image understanding when you want to override shared media models. Put the most reliable multimodal model first to reduce fallback attempts.",
+    "Default timeout for image-understanding requests. Increase it for large images or slower local vision models.",
   "tools.media.image.scope":
-    "Scope selector for when image understanding is attempted (for example only explicit requests versus broader auto-detection). Keep narrow scope in busy channels to control token and API spend.",
+    "Restrict image understanding by channel, chat type, or source key. Keep this narrow in busy or untrusted channels to control processing.",
+  "tools.media.image.attachments":
+    "Choose which matching image attachments are processed. Use first-only handling unless multi-image analysis is intentional.",
   ...MEDIA_AUDIO_FIELD_HELP,
   "tools.media.video.enabled":
     "Enable video understanding so clips can be summarized into text for downstream reasoning and responses. Disable when processing video is out of policy or too expensive for your deployment.",
+  "tools.media.video.preferredModel":
+    "Prefer one capability-tagged tools.media.models entry for video understanding before the remaining compatible fallbacks.",
   "tools.media.video.maxBytes":
-    "Maximum accepted video payload size in bytes before policy rejection or trimming occurs. Tune this to provider and infrastructure limits to avoid repeated timeout/failure loops.",
+    "Default video input size limit for configured and auto-detected models. Set this to match provider payload limits and deployment bandwidth.",
   "tools.media.video.maxChars":
-    "Maximum characters retained from video understanding output to control prompt growth. Raise for dense scene descriptions and lower when concise summaries are preferred.",
+    "Default maximum video description length. Use a lower value for compact context or a higher value for detailed scene summaries.",
   "tools.media.video.prompt":
-    "Instruction template for video understanding describing desired summary granularity and focus areas. Keep this stable so output quality remains predictable across model/provider fallbacks.",
+    "Default video-understanding prompt when an entry does not override it. Keep this deterministic when consumers rely on stable summaries.",
   "tools.media.video.timeoutSeconds":
-    "Timeout in seconds for each video understanding request before cancellation. Use conservative values in interactive channels and longer values for offline or batch-heavy processing.",
-  "tools.media.video.attachments":
-    "Attachment eligibility policy for video analysis, defining which message files can trigger video processing. Keep this explicit in shared channels to prevent accidental large media workloads.",
-  "tools.media.video.models":
-    "Ordered model preferences specifically for video understanding before shared media fallback applies. Prioritize models with strong multimodal video support to minimize degraded summaries.",
+    "Default timeout for video-understanding requests. Increase it for longer clips or slower local analysis models.",
   "tools.media.video.scope":
-    "Scope selector controlling when video understanding is attempted across incoming events. Narrow scope in noisy channels, and broaden only where video interpretation is core to workflow.",
+    "Restrict video understanding by channel, chat type, or source key. Keep this narrow in busy or untrusted channels to control processing.",
+  "tools.media.video.attachments":
+    "Choose which matching video attachments are processed. Use first-only handling unless multi-video analysis is intentional.",
   "skills.load.extraDirs":
     "Additional shared skill roots to scan at lowest precedence. Use this for sibling repos or shared skill packs that should be available without copying them into the OpenClaw workspace.",
   "skills.load.allowSymlinkTargets":
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
   "skills.load.watch":
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
-  "skills.load.watchDebounceMs":
-    "Debounce window in milliseconds for coalescing rapid skill file changes before reload logic runs. Increase to reduce reload churn on frequent writes, or lower for faster edit feedback.",
-  "skills.workshop.allowSymlinkTargetWrites":
-    "Allows Skill Workshop apply to write through symlinked workspace skill paths whose real target is already trusted by skills.load.allowSymlinkTargets. Keep disabled unless operators intentionally want generated proposal applies to mutate those shared skill roots.",
+  "skills.workshop.autonomous.mode":
+    'Controls background learning: "off" keeps only the suggestion nudge, "propose" creates pending proposals, and "auto" applies captured proposals and runs weekly review of Workshop-owned skills using ordinary file edits. Default: "auto".',
   approvals:
     "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":
@@ -537,7 +547,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
-    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
+    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send/session_status. ("all" default = any session on the Gateway, including other agents and users; "agent" = any session in the current agent id; "self" = only current; "tree" = current session + spawned subagent sessions). Cross-agent access is on by default and scoped by tools.agentToAgent; use narrower visibility to restrict access.',
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":
@@ -563,7 +573,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.web.search.openaiCodex.mode":
     'Native Codex web search preference: "cached" (default; unrestricted Codex turns resolve it to live) or "live".',
   "tools.web.search.openaiCodex.allowedDomains":
-    "Optional domain allowlist passed to the native Codex web_search tool.",
+    "Domain allowlist for native Codex web_search. On native-hosted-search turns, it also gates managed web_fetch; managed-provider turns are unchanged.",
   "tools.web.search.openaiCodex.contextSize":
     'Native Codex search context size hint: "low", "medium", or "high".',
   "tools.web.search.openaiCodex.userLocation.country":
@@ -584,12 +594,20 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
+  "tools.web.fetch.headers":
+    "Extra request headers sent with direct web_fetch requests, for example gateway routing or authentication headers. Every configured value is treated as sensitive and redacted from exposed config and debug captures. Values are plain strings, support ${VAR} substitution and the global $${VAR} literal escape, and are sent to model-chosen URLs. Entries are validated when the request is built rather than at config load, so a bad name or unsendable value is dropped and logged instead of disabling the surface; Accept, Accept-Language, User-Agent, and framing headers such as Transfer-Encoding are dropped too. Use tools.web.fetch.userAgent to change the user agent. Cross-origin redirects retain only the guarded-fetch safe header allowlist, and changing the headers actually sent partitions the fetch cache.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
   "tools.web.fetch.useTrustedEnvProxy":
     "Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy is operator-controlled and enforces outbound policy after DNS resolution.",
   "tools.web.fetch.ssrfPolicy":
     "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Allows web_fetch access to private and internal network targets. Keep disabled unless model-selected URLs are trusted in this deployment.",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames":
+    "Exact hostnames or IP literals allowed for web_fetch, including otherwise blocked targets. Keep the list minimal.",
+  "tools.web.fetch.ssrfPolicy.blockedHostnames":
+    'Hostname patterns denied before DNS and allow rules on every web_fetch redirect. Supports exact hosts and "*.example.com" for subdomains only; add "example.com" separately to block the apex. Empty or unset adds no denials.',
   "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange":

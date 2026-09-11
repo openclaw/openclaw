@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability } from "./index.ts";
+import { createTestSessionCapability } from "./session-capability.test-support.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): SessionsListResult {
   return {
@@ -17,13 +17,13 @@ function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): S
 function createGatewayHarness(client: GatewayBrowserClient) {
   const snapshot: {
     client: GatewayBrowserClient | null;
-    connected: boolean;
+    phase: "connected";
     sessionKey: string;
     assistantAgentId: string | null;
     hello: GatewayHelloOk | null;
   } = {
     client,
-    connected: true,
+    phase: "connected" as const,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello: null,
@@ -72,7 +72,7 @@ describe("session swarm activity", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const note = (kind: "phase" | "log", text: string) => ({
       sessionKey: parentKey,
       reason: "swarm-note",
@@ -96,8 +96,13 @@ describe("session swarm activity", () => {
       emitEvent({ type: "event", event: "sessions.changed", payload });
 
     await sessions.refresh({ force: true });
+    const revisionBeforePhase = sessions.canonicalListRevision;
     emitChanged(note("phase", "Plan"));
+    expect(sessions.canonicalListRevision).toBe(revisionBeforePhase);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() =>
+      expect(sessions.canonicalListRevision).toBeGreaterThan(revisionBeforePhase),
+    );
     rows = [
       ...rows,
       {

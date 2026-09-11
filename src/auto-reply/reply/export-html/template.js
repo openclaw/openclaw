@@ -189,40 +189,15 @@
     return current.entry.id;
   }
 
-  /**
-   * Flatten tree into list with indentation and connector info.
-   * Returns array of { node, indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots }.
-   * Matches tree-selector.ts logic exactly.
-   */
-  function flattenTree(roots, activePathIds) {
-    const result = [];
+  /** Lay out ordered children into caller-owned records without replacing their node identity. */
+  function layoutTree(roots, getChildren, getLayoutTarget) {
     const multipleRoots = roots.length > 1;
-
-    // Mark which subtrees contain the active leaf
-    const containsActive = new Map();
-    function markActive(node) {
-      let has = activePathIds.has(node.entry.id);
-      for (const child of node.children) {
-        if (markActive(child)) {
-          has = true;
-        }
-      }
-      containsActive.set(node, has);
-      return has;
-    }
-    roots.forEach(markActive);
-
     // Stack: [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild]
     const stack = [];
-
-    // Add roots (prioritize branch containing active leaf)
-    const orderedRoots = [...roots].toSorted(
-      (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a)),
-    );
-    for (let i = orderedRoots.length - 1; i >= 0; i--) {
-      const isLast = i === orderedRoots.length - 1;
+    for (let i = roots.length - 1; i >= 0; i--) {
+      const isLast = i === roots.length - 1;
       stack.push([
-        orderedRoots[i],
+        roots[i],
         multipleRoots ? 1 : 0,
         multipleRoots,
         multipleRoots,
@@ -236,25 +211,19 @@
       const [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] =
         stack.pop();
 
-      result.push({
-        node,
-        indent,
-        showConnector,
-        isLast,
-        gutters,
-        isVirtualRootChild,
-        multipleRoots,
-      });
+      const target = getLayoutTarget(node);
+      if (!target) {
+        continue;
+      }
+      target.indent = indent;
+      target.showConnector = showConnector;
+      target.isLast = isLast;
+      target.gutters = gutters;
+      target.isVirtualRootChild = isVirtualRootChild;
+      target.multipleRoots = multipleRoots;
 
-      const children = node.children;
+      const children = getChildren(node);
       const multipleChildren = children.length > 1;
-
-      // Order children (active branch first)
-      const orderedChildren = [...children].toSorted(
-        (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a)),
-      );
-
-      // Calculate child indent (matches tree-selector.ts)
       let childIndent;
       if (multipleChildren) {
         // Parent branches: children get +1
@@ -276,10 +245,10 @@
         : gutters;
 
       // Add children in reverse order for stack
-      for (let i = orderedChildren.length - 1; i >= 0; i--) {
-        const childIsLast = i === orderedChildren.length - 1;
+      for (let i = children.length - 1; i >= 0; i--) {
+        const childIsLast = i === children.length - 1;
         stack.push([
-          orderedChildren[i],
+          children[i],
           childIndent,
           multipleChildren,
           multipleChildren,
@@ -289,7 +258,34 @@
         ]);
       }
     }
+  }
 
+  /** Flatten the full tree with the active branch first at each level. */
+  function flattenTree(roots, activePathIds) {
+    const result = [];
+    const containsActive = new Map();
+    function markActive(node) {
+      let has = activePathIds.has(node.entry.id);
+      for (const child of node.children) {
+        if (markActive(child)) {
+          has = true;
+        }
+      }
+      containsActive.set(node, has);
+      return has;
+    }
+    roots.forEach(markActive);
+
+    const activeFirst = (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a));
+    layoutTree(
+      [...roots].toSorted(activeFirst),
+      (node) => [...node.children].toSorted(activeFirst),
+      (node) => {
+        const target = { node };
+        result.push(target);
+        return target;
+      },
+    );
     return result;
   }
 
@@ -332,6 +328,12 @@
 
   let filterMode = "default";
   let searchQuery = "";
+
+  function isHiddenEntry(entry) {
+    return entry.type === "message"
+      ? entry.message.display === false
+      : entry.type === "custom_message" && !entry.display;
+  }
 
   function hasTextContent(content) {
     if (typeof content === "string") {
@@ -422,6 +424,11 @@
       const label = flatNode.node.label;
       const isCurrentLeaf = entry.id === currentLeafId;
 
+      // All is the raw archive index; hidden input never becomes a conversation card.
+      if (isHiddenEntry(entry) && filterMode !== "all") {
+        return false;
+      }
+
       // Always show current leaf
       if (isCurrentLeaf) {
         return true;
@@ -488,7 +495,7 @@
    * Recompute indentation/connectors for the filtered view
    *
    * Filtering can hide intermediate entries; descendants attach to the nearest visible ancestor.
-   * Keep indentation semantics aligned with flattenTree() so single-child chains don't drift right.
+   * Reuse the shared layout without rewriting the original tree or filtered record identities.
    */
   function recalculateVisualStructure(filteredNodes, allFlatNodes) {
     if (filteredNodes.length === 0) {
@@ -510,20 +517,19 @@
         if (visibleIds.has(currentId)) {
           return currentId;
         }
-        currentId = entryMap.get(currentId)?.node.entry.parentId;
+        const parentId = entryMap.get(currentId)?.node.entry.parentId;
+        currentId = parentId === currentId ? null : parentId;
       }
       return null;
     }
 
     // Build visible tree structure
-    const visibleParent = new Map();
     const visibleChildren = new Map();
     visibleChildren.set(null, []); // root-level nodes
 
     for (const flatNode of filteredNodes) {
       const nodeId = flatNode.node.entry.id;
       const ancestorId = findVisibleAncestor(nodeId);
-      visibleParent.set(nodeId, ancestorId);
 
       if (!visibleChildren.has(ancestorId)) {
         visibleChildren.set(ancestorId, []);
@@ -531,9 +537,7 @@
       visibleChildren.get(ancestorId).push(nodeId);
     }
 
-    // Update multipleRoots based on visible roots
     const visibleRootIds = visibleChildren.get(null);
-    const multipleRoots = visibleRootIds.length > 1;
 
     // Build a map for quick lookup: nodeId → FlatNode
     const filteredNodeMap = new Map();
@@ -541,80 +545,12 @@
       filteredNodeMap.set(flatNode.node.entry.id, flatNode);
     }
 
-    // DFS traversal of visible tree, applying same indentation rules as flattenTree()
-    // Stack items: [nodeId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild]
-    const stack = [];
-
-    // Add visible roots in reverse order (to process in forward order via stack)
-    for (let i = visibleRootIds.length - 1; i >= 0; i--) {
-      const isLast = i === visibleRootIds.length - 1;
-      stack.push([
-        visibleRootIds[i],
-        multipleRoots ? 1 : 0,
-        multipleRoots,
-        multipleRoots,
-        isLast,
-        [],
-        multipleRoots,
-      ]);
-    }
-
-    while (stack.length > 0) {
-      const [nodeId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] =
-        stack.pop();
-
-      const flatNode = filteredNodeMap.get(nodeId);
-      if (!flatNode) {
-        continue;
-      }
-
-      // Update this node's visual properties
-      flatNode.indent = indent;
-      flatNode.showConnector = showConnector;
-      flatNode.isLast = isLast;
-      flatNode.gutters = gutters;
-      flatNode.isVirtualRootChild = isVirtualRootChild;
-      flatNode.multipleRoots = multipleRoots;
-
-      // Get visible children of this node
-      const children = visibleChildren.get(nodeId) || [];
-      const multipleChildren = children.length > 1;
-
-      // Calculate child indent using same rules as flattenTree():
-      // - Parent branches (multiple children): children get +1
-      // - Just branched and indent > 0: children get +1 for visual grouping
-      // - Single-child chain: stay flat
-      let childIndent;
-      if (multipleChildren) {
-        childIndent = indent + 1;
-      } else if (justBranched && indent > 0) {
-        childIndent = indent + 1;
-      } else {
-        childIndent = indent;
-      }
-
-      // Build gutters for children (same logic as flattenTree)
-      const connectorDisplayed = showConnector && !isVirtualRootChild;
-      const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
-      const connectorPosition = Math.max(0, currentDisplayIndent - 1);
-      const childGutters = connectorDisplayed
-        ? [...gutters, { position: connectorPosition, show: !isLast }]
-        : gutters;
-
-      // Add children in reverse order (to process in forward order via stack)
-      for (let i = children.length - 1; i >= 0; i--) {
-        const childIsLast = i === children.length - 1;
-        stack.push([
-          children[i],
-          childIndent,
-          multipleChildren,
-          multipleChildren,
-          childIsLast,
-          childGutters,
-          false,
-        ]);
-      }
-    }
+    // Filtering preserves the full traversal's order; update the original last-ID records.
+    layoutTree(
+      visibleRootIds,
+      (nodeId) => visibleChildren.get(nodeId) || [],
+      (nodeId) => filteredNodeMap.get(nodeId),
+    );
   }
 
   // ============================================================
@@ -751,7 +687,9 @@
    */
   function getTreeNodeDisplayHtml(entry, label) {
     const normalize = (s) => s.replace(/[\n\t]/g, " ").trim();
-    const labelHtml = label ? `<span class="tree-label">[${escapeHtml(label)}]</span> ` : "";
+    const labelHtml =
+      (isHiddenEntry(entry) ? '<span class="tree-muted">[hidden]</span> ' : "") +
+      (label ? `<span class="tree-label">[${escapeHtml(label)}]</span> ` : "");
 
     switch (entry.type) {
       case "message": {
@@ -1355,6 +1293,9 @@
   }
 
   function renderEntry(entry) {
+    if (isHiddenEntry(entry)) {
+      return "";
+    }
     const ts = formatTimestamp(entry.timestamp);
     const tsHtml = ts ? `<div class="message-timestamp">${ts}</div>` : "";
     const entryId = `entry-${escapeHtmlAttr(entry.id)}`;
@@ -1465,7 +1406,7 @@
           </div>`;
     }
 
-    if (entry.type === "custom_message" && entry.display) {
+    if (entry.type === "custom_message") {
       return `<div class="hook-message" id="${entryId}">${tsHtml}
             <div class="hook-type">[${escapeHtml(entry.customType)}]</div>
             <div class="markdown-content">${safeMarkedParse(typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content))}</div>
@@ -1869,9 +1810,9 @@
         }
         return `<pre><code class="hljs">${highlighted}</code></pre>`;
       },
-      // Text content: escape HTML tags
+      // Delegate nested inline tokens; leaf text keeps the existing escaping.
       text(token) {
-        return escapeHtmlTags(escapeHtml(token.text));
+        return token.tokens ? false : escapeHtmlTags(escapeHtml(token.text));
       },
       // Inline code: escape HTML
       codespan(token) {

@@ -1,5 +1,6 @@
 {
   "id": "featherless",
+  "categories": ["models"],
   "name": "Featherless AI",
   "description": "OpenClaw Featherless AI provider plugin.",
   "activation": {
@@ -53,8 +54,8 @@
             "contextWindow": 32768,
             "maxTokens": 4096,
             "cost": {
-              "input": 0,
-              "output": 0,
+              "input": 0.102,
+              "output": 0.493,
               "cacheRead": 0,
               "cacheWrite": 0
             },

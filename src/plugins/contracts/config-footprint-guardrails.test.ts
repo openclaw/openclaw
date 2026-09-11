@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../config/bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "../../config/schema-base.js";
@@ -54,21 +55,20 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
   return out;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
+function assertRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
     throw new Error("expected record");
   }
-  expect(Array.isArray(value)).toBe(false);
-  return value as Record<string, unknown>;
+  return value;
 }
 
 describe("config footprint guardrails", () => {
   it("keeps plugin entry config generic in the generated base schema", () => {
-    const root = asRecord(BASE_CONFIG_SCHEMA.schema);
-    const plugins = asRecord(asRecord(root.properties).plugins);
-    const entries = asRecord(asRecord(plugins.properties).entries);
-    const entry = asRecord(entries.additionalProperties);
-    const pluginConfig = asRecord(asRecord(entry.properties).config);
+    const root = assertRecord(BASE_CONFIG_SCHEMA.schema);
+    const plugins = assertRecord(assertRecord(root.properties).plugins);
+    const entries = assertRecord(assertRecord(plugins.properties).entries);
+    const entry = assertRecord(entries.additionalProperties);
+    const pluginConfig = assertRecord(assertRecord(entry.properties).config);
 
     expect(pluginConfig.type).toBe("object");
     expect(pluginConfig.additionalProperties).toStrictEqual({});
@@ -139,21 +139,24 @@ describe("config footprint guardrails", () => {
     }
   });
 
-  it("keeps canonical nested streaming paths in the public core channel schema", () => {
-    const source = readSource("src/config/zod-schema.providers-core.ts");
+  it("keeps retired flat streaming aliases out of channel-owned schemas", () => {
+    const telegramSource = readSource("extensions/telegram/src/config-schema.ts");
+    const discordSource = readSource("extensions/discord/src/config-schema.ts");
+    const msTeamsSource = readSource("extensions/msteams/src/config-schema.ts");
+    const slackSource = readSource("extensions/slack/src/config-schema.ts");
 
-    expect(source).toContain("streaming: ChannelPreviewStreamingConfigSchema.optional(),");
-    expect(source).toContain("streaming: SlackStreamingConfigSchema.optional(),");
-    expect(source).not.toContain('streamMode: z.enum(["replace", "status_final", "append"])');
-    expect(source).not.toContain("draftChunk:");
-    expect(source).not.toContain("nativeStreaming:");
+    for (const schemaSource of [telegramSource, discordSource, msTeamsSource, slackSource]) {
+      expect(schemaSource).not.toContain(
+        'streamMode: z.enum(["replace", "status_final", "append"])',
+      );
+      expect(schemaSource).not.toContain("draftChunk:");
+      expect(schemaSource).not.toContain("nativeStreaming:");
+    }
   });
 
-  it("keeps shared setup input canonical-first", () => {
+  it("keeps retired config aliases out of the shared setup input", () => {
     const source = readSource("src/channels/plugins/types.core.ts");
 
-    expect(source).toContain("dangerouslyAllowPrivateNetwork?: boolean;");
-    expect(source).toContain("allowPrivateNetwork?: boolean;");
     expect(source).not.toContain("streamMode?:");
     expect(source).not.toContain("groupMentionsOnly?:");
     expect(source).not.toContain("perSession?:");
@@ -172,7 +175,7 @@ describe("config footprint guardrails", () => {
     );
   });
 
-  it("keeps bundled channel schemas out of the generic channel config SDK surface", () => {
+  it("keeps current channel schemas plugin-owned behind shipped compatibility exports", () => {
     const source = readSource("src/plugin-sdk/channel-config-schema.ts");
     const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");
     const bundledSection = bundledSource.slice(
@@ -180,18 +183,23 @@ describe("config footprint guardrails", () => {
     );
     const bundledSchemaExportBlocks = Array.from(
       bundledSection.matchAll(
-        /export \{(?<exports>[^}]*)\} from "\.\.\/config\/zod-schema\.providers-(?:core|googlechat|whatsapp)\.js";/g,
+        /export \{(?<exports>[^}]*)\} from "\.\.\/config\/zod-schema\.providers-(?:googlechat|whatsapp)\.js";/g,
       ),
     )
       .map((match) => match.groups?.exports)
       .filter((block): block is string => Boolean(block));
-    expect(bundledSchemaExportBlocks).toHaveLength(3);
-    const exportedSchemaNames = Array.from(
-      bundledSchemaExportBlocks.join("\n").matchAll(/\b([A-Z][A-Za-z0-9]+ConfigSchema)\b/g),
-    )
-      .map((match) => match[1])
-      .filter((name): name is string => Boolean(name))
-      .toSorted((left, right) => left.localeCompare(right));
+    expect(bundledSchemaExportBlocks).toHaveLength(2);
+    const lazySchemaNames = Array.from(
+      bundledSection.matchAll(/\bexport const ([A-Z][A-Za-z0-9]+ConfigSchema)\b/g),
+      (match) => match[1],
+    ).filter((name): name is string => Boolean(name));
+    const exportedSchemaNames = [
+      ...Array.from(
+        bundledSchemaExportBlocks.join("\n").matchAll(/\b([A-Z][A-Za-z0-9]+ConfigSchema)\b/g),
+        (match) => match[1],
+      ).filter((name): name is string => Boolean(name)),
+      ...lazySchemaNames,
+    ].toSorted((left, right) => left.localeCompare(right));
 
     expect(exportedSchemaNames).toEqual([
       "DiscordConfigSchema",
@@ -208,6 +216,12 @@ describe("config footprint guardrails", () => {
     }
     expect(bundledSource).toContain("Bundled-channel config schemas");
     expect(bundledSource).toContain("openclaw/plugin-sdk/channel-config-schema");
+    expect(bundledSource).toMatch(
+      /loadBundledConfigSchema<[^;]+?>\(\s*"imessage",\s*"IMessageConfigSchema",?\s*\)/u,
+    );
+    expect(bundledSource).toMatch(
+      /loadBundledConfigSchema<[^;]+?>\(\s*"telegram",\s*"TelegramConfigSchema",?\s*\)/u,
+    );
     // The primitives facade re-exports the canonical channel-config-schema
     // module; only bundled provider schemas bypass it.
     const primitivesSource = readSource("src/plugin-sdk/channel-config-primitives.ts");
@@ -222,12 +236,17 @@ describe("config footprint guardrails", () => {
     // channel-config-schema is the canonical internal module; the primitives
     // and bundled shells stay export-compatible for plugins only.
     const allowedShellImporters = new Set([
+      // The compatibility test exercises the shipped facade exports.
+      "src/plugin-sdk/shipped-channel-compat.test.ts",
       // This guardrail file embeds facade specifiers in shell-shape assertions.
       "src/plugins/contracts/config-footprint-guardrails.test.ts",
     ]);
     const facadeImportPattern =
       /\bfrom\s*["'][^"']*(?:channel-config-primitives|bundled-channel-config-schema)(?:\.js)?["']/u;
-    const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: "src" }) ?? [];
+    const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: "src" });
+    if (!files) {
+      throw new Error("unable to list tracked source files for the config facade guard");
+    }
 
     const offenders = files.filter((file) => {
       if (!(file.endsWith(".ts") || file.endsWith(".tsx")) || allowedShellImporters.has(file)) {

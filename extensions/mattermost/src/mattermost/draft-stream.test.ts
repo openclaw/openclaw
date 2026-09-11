@@ -1,21 +1,34 @@
 // Mattermost tests cover draft stream plugin behavior.
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import {
   createMattermostDraftPreviewBoundaryController,
   createMattermostDraftStream,
 } from "./draft-stream.js";
+import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
 
 type RequestRecord = {
   path: string;
   init?: RequestInit;
 };
 
-function createMockClient(): {
+type DraftStreamOptions = Omit<
+  Parameters<typeof createMattermostDraftStream>[0],
+  "client" | "channelId"
+> & {
+  request?: MattermostClient["request"];
+};
+
+function createDraftStreamFixture(options: DraftStreamOptions = {}): {
   client: MattermostClient;
   calls: RequestRecord[];
-  requestMock: ReturnType<typeof vi.fn>;
+  requestMock: ReturnType<typeof vi.fn<MattermostClient["request"]>>;
+  stream: ReturnType<typeof createMattermostDraftStream>;
 } {
+  const { request, ...streamOptions } = options;
   const calls: RequestRecord[] = [];
   let nextId = 1;
   const requestImpl: MattermostClient["request"] = async <T>(
@@ -31,7 +44,7 @@ function createMockClient(): {
     }
     return {} as T;
   };
-  const requestMock = vi.fn(requestImpl);
+  const requestMock = vi.fn(request ?? requestImpl);
   const client: MattermostClient = {
     baseUrl: "https://chat.example.com",
     apiBaseUrl: "https://chat.example.com/api/v4",
@@ -39,7 +52,13 @@ function createMockClient(): {
     request: requestMock as MattermostClient["request"],
     fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
   };
-  return { client, calls, requestMock };
+  const stream = createMattermostDraftStream({
+    client,
+    channelId: "channel-1",
+    throttleMs: 0,
+    ...streamOptions,
+  });
+  return { client, calls, requestMock, stream };
 }
 
 function parseRequestJson(init: RequestInit | undefined): Record<string, unknown> {
@@ -53,15 +72,46 @@ function parseRequestJson(init: RequestInit | undefined): Record<string, unknown
   return parsed as Record<string, unknown>;
 }
 
+function createProviderPostFixture(
+  options: {
+    beforeDelete?: (id: string) => Promise<void>;
+    warn?: (message: string) => void;
+  } = {},
+) {
+  const posts = new Map<string, string>();
+  let nextId = 1;
+  const request: MattermostClient["request"] = async <T>(
+    path: string,
+    init?: RequestInit,
+  ): Promise<T> => {
+    if (path === "/posts" && init?.method === "POST") {
+      const id = `post-${nextId++}`;
+      const message = String(parseRequestJson(init).message);
+      posts.set(id, message);
+      return { id, message } as T;
+    }
+    const id = path.slice("/posts/".length);
+    if (init?.method === "DELETE") {
+      await options.beforeDelete?.(id);
+      posts.delete(id);
+      return undefined as T;
+    }
+    if (init?.method === "PUT") {
+      if (!posts.has(id)) {
+        throw new Error("Mattermost API 404 Not Found");
+      }
+      const message = String(parseRequestJson(init).message);
+      posts.set(id, message);
+      return { id, message } as T;
+    }
+    throw new Error(`Unexpected Mattermost request: ${init?.method} ${path}`);
+  };
+  return { ...createDraftStreamFixture({ request, warn: options.warn }), posts };
+}
+
 describe("createMattermostDraftStream", () => {
   it("creates a preview post and updates it on later changes", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Running `read`…");
     await stream.flush();
@@ -80,12 +130,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("does not resend identical updates", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture();
 
     stream.update("Working...");
     await stream.flush();
@@ -96,13 +141,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("clears the preview post when no final reply is delivered", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Working...");
     await stream.flush();
@@ -114,14 +153,206 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBeUndefined();
   });
 
-  it("discardPending keeps the preview post but ignores later updates", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
+  it("retracts a preview without publishing pending text or stopping its replacement", async () => {
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
+
+    stream.update("Inspect");
+    await stream.flush();
+    stream.update("Discard pending");
+    await stream.deleteCurrentMessage();
+    expect(stream.postId()).toBeUndefined();
+    stream.update("Resume");
+    await stream.flush();
+
+    expect(calls.map(({ path, init }) => `${init?.method} ${path}`)).toEqual([
+      "POST /posts",
+      "DELETE /posts/post-1",
+      "POST /posts",
+    ]);
+    expect(parseRequestJson(calls[2]?.init)).toMatchObject({
+      message: "Resume",
+      root_id: "root-1",
     });
+    expect(stream.postId()).toBe("post-2");
+  });
+
+  it.each([
+    ...["immediately after retraction", "while deletion is pending"].flatMap((timing) =>
+      ["different", "identical"].map((replacement) => ({
+        timing,
+        replacement,
+        delayFirstPublication: false,
+      })),
+    ),
+    {
+      timing: "after the retiring publication completes",
+      replacement: "identical",
+      delayFirstPublication: true,
+    },
+  ])(
+    "keeps the $replacement plan replacement $timing",
+    async ({ timing, replacement, delayFirstPublication }) => {
+      const deleteStarted = createDeferred<void>();
+      const releaseDelete = createDeferred<void>();
+      const firstPublicationVisible = createDeferred<void>();
+      const releaseFirstPublication = createDeferred<void>();
+      let firstUpdate = true;
+      const { stream, posts } = createProviderPostFixture({
+        beforeDelete: async () => {
+          deleteStarted.resolve();
+          await releaseDelete.promise;
+        },
+      });
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { label: false } } },
+        mode: "progress",
+        active: true,
+        seed: "plan-retraction",
+        update: async (text, options) => {
+          const delayCompletion = firstUpdate && delayFirstPublication;
+          firstUpdate = false;
+          stream.update(text);
+          if (options?.flush) {
+            await stream.flush();
+          }
+          if (delayCompletion) {
+            firstPublicationVisible.resolve();
+            await releaseFirstPublication.promise;
+          }
+        },
+        deleteCurrent: () => stream.deleteCurrentMessage(),
+      });
+      let firstPublication: Promise<boolean> | undefined;
+      let retraction: Promise<boolean> | undefined;
+      let replacementPublication: Promise<boolean> | undefined;
+      try {
+        firstPublication = progress.pushPlanProgress([{ step: "Inspect", status: "in_progress" }]);
+        if (delayFirstPublication) {
+          await firstPublicationVisible.promise;
+        } else {
+          await firstPublication;
+        }
+        expect([...posts.values()]).toEqual([expect.stringContaining("Inspect")]);
+
+        retraction = progress.pushPlanProgress([]);
+        if (timing !== "immediately after retraction") {
+          await deleteStarted.promise;
+        }
+        if (delayFirstPublication) {
+          releaseFirstPublication.resolve();
+          await firstPublication;
+        }
+        const step = replacement === "identical" ? "Inspect" : "Verify";
+        replacementPublication = progress.pushPlanProgress([{ step, status: "in_progress" }]);
+        await deleteStarted.promise;
+        releaseDelete.resolve();
+        await Promise.all([retraction, replacementPublication]);
+        await stream.flush();
+
+        expect([...posts.values()]).toEqual([expect.stringContaining(step)]);
+        expect(posts.has(stream.postId() ?? "")).toBe(true);
+      } finally {
+        releaseFirstPublication.resolve();
+        releaseDelete.resolve();
+        await Promise.allSettled([firstPublication, retraction, replacementPublication]);
+        progress.cancel();
+        await stream.clear();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retries retired preview cleanup at stop while preserving the final (retry fails: %s)",
+    async (retryFails) => {
+      const warn = vi.fn();
+      const deleteAttempts: string[] = [];
+      const { client, stream, posts } = createProviderPostFixture({
+        warn,
+        beforeDelete: async (id) => {
+          deleteAttempts.push(id);
+          if (deleteAttempts.length === 1 || retryFails) {
+            throw new Error("temporary delete failure");
+          }
+        },
+      });
+      const deliverPayload = vi.fn(async () => {
+        throw new Error("the final should edit its preview in place");
+      });
+      try {
+        stream.update("Retired plan");
+        await stream.flush();
+        const retiredId = stream.postId();
+        await stream.deleteCurrentMessage();
+        stream.update("Replacement plan");
+        await stream.flush();
+        const finalId = stream.postId();
+        const result = await deliverMattermostReplyWithDraftPreview({
+          payload: { text: "Final answer" },
+          info: { kind: "final" },
+          kind: "direct",
+          client,
+          draftStream: stream,
+          resolvePreviewFinalText: (text) => ({ editText: text, alreadyDelivered: false }),
+          previewState: { finalizedViaPreviewPost: false },
+          logVerboseMessage: vi.fn(),
+          deliverPayload,
+        });
+        expect(result.visibleReplySent).toBe(true);
+        expect(result.messageIds).toEqual([finalId]);
+        expect(posts.get(finalId ?? "")).toBe("Final answer");
+        expect(deliverPayload).not.toHaveBeenCalled();
+
+        await stream.stop();
+
+        expect(posts.get(finalId ?? "")).toBe("Final answer");
+        expect(deleteAttempts).not.toContain(finalId);
+        expect(deleteAttempts).toEqual([retiredId, retiredId]);
+        expect(warn).toHaveBeenCalledTimes(retryFails ? 2 : 1);
+        expect(warn).toHaveBeenCalledWith(
+          "mattermost stream preview cleanup failed: temporary delete failure",
+        );
+        expect([...posts.values()]).toEqual(
+          retryFails ? ["Retired plan", "Final answer"] : ["Final answer"],
+        );
+      } finally {
+        await stream.seal();
+      }
+    },
+  );
+
+  it("retains a failed current-post deletion across stop until another clear", async () => {
+    const warn = vi.fn();
+    const deleteAttempts: string[] = [];
+    const { stream, posts } = createProviderPostFixture({
+      warn,
+      beforeDelete: async (id) => {
+        deleteAttempts.push(id);
+        if (deleteAttempts.length === 1) {
+          throw new Error("temporary delete failure");
+        }
+      },
+    });
+    try {
+      stream.update("Current preview");
+      await stream.flush();
+      const currentId = stream.postId();
+      await stream.clear();
+      await stream.stop();
+      expect(stream.postId()).toBe(currentId);
+      expect([...posts.values()]).toEqual(["Current preview"]);
+      expect(deleteAttempts).toEqual([currentId]);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      await stream.clear();
+      expect(posts.size).toBe(0);
+      expect(deleteAttempts).toEqual([currentId, currentId]);
+    } finally {
+      await stream.seal();
+    }
+  });
+
+  it("discardPending keeps the preview post but ignores later updates", async () => {
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Working...");
     await stream.flush();
@@ -135,13 +366,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("seal keeps the preview post and cancels pending final overwrites", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Working...");
     await stream.flush();
@@ -155,13 +380,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("stop flushes the last pending update and ignores later ones", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 1000,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1", throttleMs: 1000 });
 
     stream.update("Working...");
     await stream.flush();
@@ -184,20 +403,7 @@ describe("createMattermostDraftStream", () => {
     const requestImpl: MattermostClient["request"] = async () => {
       throw new Error("boom");
     };
-    const requestMock = vi.fn(requestImpl);
-    const client: MattermostClient = {
-      baseUrl: "https://chat.example.com",
-      apiBaseUrl: "https://chat.example.com/api/v4",
-      token: "token",
-      request: requestMock as MattermostClient["request"],
-      fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
-    };
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-      warn,
-    });
+    const { requestMock, stream } = createDraftStreamFixture({ request: requestImpl, warn });
 
     stream.update("Working...");
     await stream.flush();
@@ -209,17 +415,44 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBeUndefined();
   });
 
+  it("retains an accepted preview failure after its background flush has settled", async () => {
+    const warn = vi.fn();
+    const { requestMock, stream } = createDraftStreamFixture({ warn });
+    requestMock.mockResolvedValueOnce({ message: "already visible" });
+
+    stream.update("Already delivered");
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+
+    let caught: unknown;
+    try {
+      await stream.flush();
+    } catch (error) {
+      caught = error;
+    }
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    expect(requestMock).toHaveBeenCalledOnce();
+    expect(requestMock.mock.calls[0]?.[0]).toBe("/posts");
+    stream.update("Must not create another accepted post");
+    await expect(stream.flush()).rejects.toThrow("did not include a post id");
+    expect(requestMock).toHaveBeenCalledOnce();
+    for (const finish of [
+      () => stream.discardPending(),
+      () => stream.clear(),
+      () => stream.seal(),
+      () => stream.stop(),
+      () => stream.forceNewMessage(),
+      () => stream.settleBoundaries(),
+    ]) {
+      await expect(finish()).rejects.toThrow("did not include a post id");
+    }
+    expect(requestMock).toHaveBeenCalledOnce();
+  });
+
   it("truncates on a code-point boundary so a straddling emoji is dropped whole", async () => {
-    const { client, calls } = createMockClient();
     // maxChars=12 => cut point is maxChars-3=9. The emoji 😀 occupies UTF-16
     // indices 8-9, so a raw slice(0,9) would keep the lone high surrogate at
     // index 8 and drop its low surrogate at index 9, leaking a dangling half.
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-      maxChars: 12,
-    });
+    const { calls, stream } = createDraftStreamFixture({ maxChars: 12 });
 
     const input = `${"a".repeat(8)}\u{1F600}${"b".repeat(5)}`;
     stream.update(input);
@@ -256,20 +489,7 @@ describe("createMattermostDraftStream", () => {
       }
       return {} as T;
     };
-    const requestMock = vi.fn(requestImpl);
-    const client: MattermostClient = {
-      baseUrl: "https://chat.example.com",
-      apiBaseUrl: "https://chat.example.com/api/v4",
-      token: "token",
-      request: requestMock as MattermostClient["request"],
-      fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
-    };
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 1000,
-      warn,
-    });
+    const { stream } = createDraftStreamFixture({ request: requestImpl, throttleMs: 1000, warn });
 
     stream.update("Working...");
     await stream.flush();
@@ -285,14 +505,71 @@ describe("createMattermostDraftStream", () => {
 });
 
 describe("createMattermostDraftStream forceNewMessage", () => {
-  it("creates a new post on the next update after forceNewMessage", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
+  it("propagates a provider-accepted boundary post without an identity", async () => {
+    const { requestMock, stream } = createDraftStreamFixture({
+      maxChars: 10,
+      chunkText: () => ["aaaaaaaaaa", "bbbbbbbbbb"],
     });
+
+    stream.updateAssistantText("aaaaaaaaaabbbbbbbbbb");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "aaaaaaaaaa" })
+      .mockResolvedValueOnce({ message: "already visible" });
+
+    await expect(stream.forceNewMessage()).rejects.toThrow("did not include a post id");
+    await expect(stream.flush()).rejects.toThrow("did not include a post id");
+    expect(requestMock.mock.calls.filter(([path]) => path === "/posts")).toHaveLength(2);
+  });
+
+  it("retains accepted boundary failures before synchronous warning callbacks re-enter", async () => {
+    let reenteredBoundary: Promise<void> | undefined;
+    const warn = vi.fn(() => {
+      stream.update("must not publish twice");
+      reenteredBoundary = stream.forceNewMessage();
+      void reenteredBoundary.catch(() => {});
+    });
+    const { requestMock, stream } = createDraftStreamFixture({
+      maxChars: 10,
+      chunkText: () => ["aaaaaaaaaa", "bbbbbbbbbb"],
+      warn,
+    });
+
+    stream.updateAssistantText("aaaaaaaaaabbbbbbbbbb");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "aaaaaaaaaa" })
+      .mockResolvedValueOnce({ message: "already visible" });
+
+    await expect(stream.forceNewMessage()).rejects.toThrow("did not include a post id");
+    await expect(reenteredBoundary).rejects.toThrow("did not include a post id");
+    expect(warn).toHaveBeenCalledOnce();
+    expect(requestMock.mock.calls.filter(([path]) => path === "/posts")).toHaveLength(2);
+  });
+
+  it("propagates an accepted background failure that settles during boundary rotation", async () => {
+    const { requestMock, stream } = createDraftStreamFixture();
+    let releaseCreate: (() => void) | undefined;
+    const createReady = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    requestMock.mockImplementationOnce(async () => {
+      await createReady;
+      return { message: "already visible" };
+    });
+
+    stream.update("Accepted background preview");
+    await vi.waitFor(() => expect(requestMock).toHaveBeenCalledOnce());
+    const boundary = stream.forceNewMessage();
+    releaseCreate?.();
+
+    await expect(boundary).rejects.toThrow("did not include a post id");
+    await expect(stream.flush()).rejects.toThrow("did not include a post id");
+    expect(requestMock).toHaveBeenCalledOnce();
+  });
+
+  it("creates a new post on the next update after forceNewMessage", async () => {
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Running `read`…");
     await stream.flush();
@@ -320,14 +597,10 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("restores and chunks an already-flushed over-limit block before rotating", async () => {
-    const { client, calls } = createMockClient();
     const firstChunk = "a".repeat(10);
     const secondChunk = "b".repeat(10);
     const chunkText = vi.fn(() => [firstChunk, secondChunk]);
-    const configuredStream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
+    const { calls, stream: configuredStream } = createDraftStreamFixture({
       maxChars: 10,
       chunkText,
     });
@@ -391,19 +664,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       }
       return {} as T;
     };
-    const requestMock = vi.fn(requestImpl);
-    const client: MattermostClient = {
-      baseUrl: "https://chat.example.com",
-      apiBaseUrl: "https://chat.example.com/api/v4",
-      token: "token",
-      request: requestMock as MattermostClient["request"],
-      fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
-    };
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { stream } = createDraftStreamFixture({ request: requestImpl });
 
     stream.update("tool start");
     stream.update("tool complete");
@@ -457,19 +718,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       }
       return {} as T;
     };
-    const requestMock = vi.fn(requestImpl);
-    const client: MattermostClient = {
-      baseUrl: "https://chat.example.com",
-      apiBaseUrl: "https://chat.example.com/api/v4",
-      token: "token",
-      request: requestMock as MattermostClient["request"],
-      fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
-    };
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { stream } = createDraftStreamFixture({ request: requestImpl });
 
     stream.update("Looking into the logs");
     stream.update("Looking into the logs now");
@@ -484,12 +733,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("opens a fresh post for a partial that arrives before a fire-and-forget boundary settles", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture();
 
     stream.update("block A");
     await stream.flush();
@@ -508,12 +752,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("resolves a cumulative terminal reply to the current confirmed generation", async () => {
-    const { client } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { stream } = createDraftStreamFixture();
 
     stream.updateAssistantText("First block");
     await stream.flush();
@@ -524,24 +763,22 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(stream.resolveFinalText("First block\n\nSecond block complete")).toEqual({
       kind: "remaining",
       text: "Second block complete",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
     });
     expect(stream.resolveFinalText("Second block complete")).toEqual({
       kind: "full",
       text: "Second block complete",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
     });
     expect(stream.resolveFinalText("First block extended")).toEqual({
       kind: "full",
       text: "First block extended",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
     });
   });
 
   it("strips confirmed assistant blocks but not transient progress generations", async () => {
-    const { client } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { stream } = createDraftStreamFixture();
 
     stream.updateAssistantText("First block");
     await stream.flush();
@@ -554,21 +791,41 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(stream.resolveFinalText("First block\n\nFinal after tool")).toEqual({
       kind: "remaining",
       text: "Final after tool",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
     });
     expect(stream.resolveFinalText("First block extended")).toEqual({
       kind: "full",
       text: "First block extended",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
     });
-    expect(stream.resolveFinalText("First block")).toEqual({ kind: "already-delivered" });
+    expect(stream.resolveFinalText("First block")).toEqual({
+      kind: "already-delivered",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+    expect(stream.resolveFinalText("")).toEqual({
+      kind: "full",
+      text: "",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+  });
+
+  it("uses provider-finalized content from a boundary edit", async () => {
+    const { requestMock, stream } = createDraftStreamFixture();
+
+    stream.updateAssistantText("Draft block");
+    await stream.flush();
+    requestMock.mockResolvedValueOnce({ id: "post-1", message: "Provider-finalized block" });
+    stream.updateAssistantText("Completed block");
+    await stream.forceNewMessage();
+
+    expect(stream.resolveFinalText("Completed block")).toEqual({
+      kind: "already-delivered",
+      publishedParts: [{ messageId: "post-1", content: "Provider-finalized block" }],
+    });
   });
 
   it("keeps the canonical final when an assistant boundary fails to publish", async () => {
-    const { client, requestMock } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { requestMock, stream } = createDraftStreamFixture();
 
     stream.updateAssistantText("First block");
     await stream.flush();
@@ -577,7 +834,51 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     await stream.forceNewMessage();
 
     const finalText = "First block complete\n\nFinal after failure";
-    expect(stream.resolveFinalText(finalText)).toEqual({ kind: "full", text: finalText });
+    expect(stream.resolveFinalText(finalText)).toEqual({
+      kind: "remaining",
+      text: "complete\n\nFinal after failure",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+  });
+
+  it("retains posts published before a later boundary chunk fails", async () => {
+    const { requestMock, stream } = createDraftStreamFixture({
+      chunkText: () => ["First half", "Second half"],
+    });
+
+    stream.updateAssistantText("First half Second half");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "First half" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    await stream.forceNewMessage();
+
+    const finalText = "First half Second half\n\nFinal after failure";
+    expect(stream.resolveFinalText(finalText)).toEqual({
+      kind: "remaining",
+      text: "Second half\n\nFinal after failure",
+      publishedParts: [{ messageId: "post-1", content: "First half" }],
+    });
+  });
+
+  it("does not strip a requested prefix rewritten by the provider", async () => {
+    const { requestMock, stream } = createDraftStreamFixture({
+      chunkText: () => ["First half", "Second half"],
+    });
+
+    stream.updateAssistantText("First half Second half");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "Provider rewrite" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    await stream.forceNewMessage();
+
+    const finalText = "First half Second half\n\nFinal after failure";
+    expect(stream.resolveFinalText(finalText)).toEqual({
+      kind: "full",
+      text: finalText,
+      publishedParts: [{ messageId: "post-1", content: "Provider rewrite" }],
+    });
   });
 });
 

@@ -10,7 +10,10 @@ import {
 } from "../claws/provenance.js";
 import type { ClawAddPlan } from "../claws/types.js";
 import { markClawPackageIndependentlyOwned } from "./claw-package-adoption.js";
-import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
+import {
+  acquireClawPackageLifecycleLease,
+  withClawPackageLifecycleLease,
+} from "./claw-package-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -83,39 +86,46 @@ describe("Claw package independent adoption", () => {
     for (const agentId of ["first", "second"]) {
       const current = plan(agentId, `/tmp/${agentId}`);
       persistClawInstallRecord(current, { env });
-      persistClawPackageRef(
-        current,
-        {
-          kind: "plugin",
-          source: "clawhub",
-          ref: "@acme/audit",
-          version: "1.0.0",
-          integrity: packageIntegrity,
-        },
-        {
-          env,
-          relationship: "referenced",
-          origin: "claw-introduced",
-          independentOwner: false,
-        },
-      );
+      for (const version of ["1.0.0", "2.0.0"]) {
+        persistClawPackageRef(
+          current,
+          {
+            kind: "plugin",
+            source: "clawhub",
+            ref: "@acme/audit",
+            version,
+            integrity: packageIntegrity,
+          },
+          {
+            env,
+            nowMs: 10,
+            relationship: "referenced",
+            origin: "claw-introduced",
+            independentOwner: false,
+          },
+        );
+      }
     }
 
-    expect(
-      markClawPackageIndependentlyOwned(
-        {
-          kind: "plugin",
-          source: "clawhub",
-          ref: "@acme/audit",
-          version: "1.0.0",
-        },
-        { env, nowMs: 42 },
-      ),
-    ).toBe(2);
-    expect(readClawPackageRefs({ env })).toMatchObject([
-      { origin: "claw-introduced", independentOwner: true, updatedAtMs: 42 },
-      { origin: "claw-introduced", independentOwner: true, updatedAtMs: 42 },
+    const artifact = {
+      kind: "plugin",
+      source: "clawhub",
+      ref: "@acme/audit",
+      version: "1.0.0",
+    } as const;
+    expect(markClawPackageIndependentlyOwned(artifact, { env, nowMs: 42 })).toBe(2);
+    expect(markClawPackageIndependentlyOwned(artifact, { env, nowMs: 99 })).toBe(0);
+    const refs = readClawPackageRefs({ env }).toSorted(
+      (left, right) =>
+        left.agentId.localeCompare(right.agentId) || left.version.localeCompare(right.version),
+    );
+    expect(refs).toMatchObject([
+      { version: "1.0.0", independentOwner: true, updatedAtMs: 42 },
+      { version: "2.0.0", independentOwner: false, updatedAtMs: 10 },
+      { version: "1.0.0", independentOwner: true, updatedAtMs: 42 },
+      { version: "2.0.0", independentOwner: false, updatedAtMs: 10 },
     ]);
+    expect(refs.every((ref) => ref.origin === "claw-introduced")).toBe(true);
   });
 
   it("scopes skill adoption to the owning agent workspace", () => {
@@ -235,6 +245,34 @@ describe("Claw package independent adoption", () => {
       ),
     ).toThrow("being changed by another OpenClaw lifecycle");
     directLease?.release();
+  });
+
+  it("releases a package lease when process exit bypasses async cleanup", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-exit-lease-") };
+    const artifact = { kind: "plugin", source: "clawhub", ref: "@acme/audit" } as const;
+    const existingExitListeners = new Set(process.listeners("exit"));
+
+    await expect(
+      withClawPackageLifecycleLease(
+        artifact,
+        async () => {
+          const exitCleanup = process
+            .listeners("exit")
+            .find((listener) => !existingExitListeners.has(listener));
+          expect(exitCleanup).toBeTypeOf("function");
+          exitCleanup?.(1);
+          throw new Error("simulated process exit");
+        },
+        { env, required: true },
+      ),
+    ).rejects.toThrow("simulated process exit");
+
+    expect(
+      process.listeners("exit").filter((listener) => !existingExitListeners.has(listener)),
+    ).toEqual([]);
+    const nextLease = acquireClawPackageLifecycleLease(artifact, { env, required: true });
+    expect(nextLease).not.toBeNull();
+    nextLease?.release();
   });
 
   it("fails open only for optional direct leases when lifecycle state is unavailable", () => {

@@ -30,7 +30,7 @@ You need:
   macOS app node needs Screen Recording permission. A headless macOS node host
   (`openclaw node host run`) gets the plugin-provided `logbook.snapshot`
   command backed by the system `screencapture` tool.
-- The bundled Codex plugin enabled and authenticated. Codex currently provides
+- The bundled Codex plugin enabled and authenticated. Codex provides
   the structured image-extraction contract Logbook requires. Sign in with
   `openclaw models auth login --provider openai`; see
   [Codex harness](/plugins/codex-harness) for other auth paths.
@@ -174,10 +174,9 @@ Gateway restarts; use `captureEnabled: false` for a persistent stop.
 Logbook resolves the observation model in this order:
 
 1. `plugins.entries.logbook.config.visionModel`
-2. the first image-capable Codex entry under `tools.media.image.models`
-3. the first image-capable Codex entry under `tools.media.models`
+2. the first image-capable Codex entry under `tools.media.models`
 
-Other media providers are skipped because they do not currently expose the
+Other media providers are skipped because they do not expose the
 structured extraction contract Logbook requires. Setting
 `tools.media.image.enabled: false` disables borrowed media defaults, but an
 explicit Logbook `visionModel` still applies.
@@ -227,7 +226,7 @@ the derived-text methods directly.
   model when you need a fully local pipeline.
 - Frames, the timeline database, and temporary captures are written with
   owner-only file permissions.
-- Adding `screen.snapshot` to `gateway.nodes.denyCommands` is the
+- Adding `screen.snapshot` to `gateway.nodes.commands.deny` is the
   screen-capture kill switch: it blocks app-node capture and Logbook's own
   `logbook.snapshot` command alike.
 - Setting `tools.media.image.enabled: false` also stops Logbook from borrowing
@@ -259,7 +258,7 @@ openclaw logs --follow
 - Confirm the node exposes `screen.snapshot` or `logbook.snapshot`.
 - Grant Screen Recording permission on the capture Mac.
 - If `nodeId` is configured, confirm it matches the node id or display name.
-- Check that `gateway.nodes.denyCommands` does not contain
+- Check that `gateway.nodes.commands.deny` does not contain
   `screen.snapshot`.
 
 After three consecutive failures, Logbook backs off for ten capture ticks and

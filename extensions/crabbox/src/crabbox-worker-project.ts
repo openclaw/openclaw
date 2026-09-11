@@ -1,0 +1,70 @@
+import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import { crabboxCommandError } from "./crabbox-worker-command-error.js";
+import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+
+type ProjectPreparation = NonNullable<
+  NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]
+>;
+
+/** Core owns Git contents; this adapter owns only the existing lease's transport. */
+export async function prepareCrabboxProjectFiles(params: {
+  project: ProjectPreparation;
+  binary: string;
+  provider: string;
+  id: string;
+  runArgs: string[];
+  runCommand: CrabboxCommandRunner;
+  timeoutMs: () => number;
+  signal?: AbortSignal;
+  inspectPrepared?: true;
+}) {
+  const run = async (
+    args: string[],
+    signal: AbortSignal,
+    createScript?: (timeoutMs: number) => string,
+  ) => {
+    params.project.assertCurrent();
+    const timeoutMs = params.timeoutMs();
+    const result = await runCrabboxCommand({
+      action: "project preparation",
+      args,
+      binary: params.binary,
+      runCommand: params.runCommand,
+      signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
+      input: createScript?.(timeoutMs),
+      timeoutMs,
+    });
+    params.project.assertCurrent();
+    if (result.termination !== "exit" || result.code !== 0) {
+      throw crabboxCommandError("project preparation", result);
+    }
+    return result.stdout;
+  };
+  if (params.inspectPrepared) {
+    if (!params.project.inspectPreparedWorkspace) {
+      throw new Error("Enrolled project cannot verify its completed workspace");
+    }
+    await params.project.inspectPreparedWorkspace({
+      runScript: (input, signal) => run(params.runArgs, signal, () => input),
+    });
+    return undefined;
+  }
+  return await params.project.prepare({
+    runScript: (input, signal) => run(params.runArgs, signal, () => input),
+    runScriptWithBudget: (createScript, signal) => run(params.runArgs, signal, createScript),
+    upload: async (localPath, remotePath, signal) => {
+      await run(
+        [
+          "cp",
+          "--provider",
+          params.provider,
+          "--id",
+          params.id,
+          localPath,
+          `SANDBOX:${remotePath}`,
+        ],
+        signal,
+      );
+    },
+  });
+}

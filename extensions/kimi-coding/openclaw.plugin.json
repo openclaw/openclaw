@@ -1,10 +1,11 @@
 {
   "id": "kimi",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["kimi", "kimi-coding"],
+  "providers": ["kimi", "kimi-code", "kimi-coding"],
   "providerRequest": {
     "providers": {
       "kimi": {
@@ -15,6 +16,108 @@
         "family": "moonshot",
         "compatibilityFamily": "moonshot"
       }
+    }
+  },
+  "modelCatalog": {
+    "modelsDev": {
+      "kimi": "kimi-for-coding"
+    },
+    "providers": {
+      "kimi": {
+        "baseUrl": "https://api.kimi.com/coding/",
+        "api": "anthropic-messages",
+        "headers": {
+          "User-Agent": "claude-code/0.1.0"
+        },
+        "defaultModel": "kimi-for-coding",
+        "models": [
+          {
+            "id": "k3",
+            "name": "Kimi K3",
+            "reasoning": true,
+            "upstreamModel": "moonshot/kimi-k3",
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": "low",
+              "low": "low",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 3,
+              "output": 15,
+              "cacheRead": 0.3,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "k3-256k",
+            "name": "Kimi K3 (256k)",
+            "reasoning": true,
+            "upstreamModel": "moonshot/kimi-k3",
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": "low",
+              "low": "low",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 3,
+              "output": 15,
+              "cacheRead": 0.3,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "kimi-for-coding",
+            "name": "Kimi Code",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "kimi-for-coding-highspeed",
+            "name": "Kimi K2.7 Code HighSpeed",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "kimi": "static"
     }
   },
   "modelPricing": {

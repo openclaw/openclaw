@@ -1,10 +1,18 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+// Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import {
+  buildNoVisibleReplyFallbackText,
+  QUEUE_CAP_REJECTION_TEXT,
+} from "./dispatch-from-config.payloads.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -12,6 +20,7 @@ import {
   globalMocks,
   hookMocks,
   mocks,
+  placementContextMocks,
   sessionBindingMocks,
   sessionStoreMocks,
   ttsMocks,
@@ -29,8 +38,20 @@ import {
   describe1BeforeEach0,
   describe2BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
-import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+const NO_VISIBLE_REPLY_FALLBACK_TEXT = buildNoVisibleReplyFallbackText();
+
+function sendPolicySessionEntry(sendPolicy: "allow" | "deny") {
+  return { sessionId: "s1", updatedAt: 0, sendPolicy };
+}
+
+function groupSilenceConfig(group: "allow" | "disallow"): OpenClawConfig {
+  return { agents: { defaults: { silentReply: { group } } } };
+}
 
 beforeAll(globalBeforeAll0);
 
@@ -46,6 +67,30 @@ describe("before_dispatch hook", () => {
       dispatcher,
     });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Blocked" });
+    expect(result.queuedFinal).toBe(true);
+  });
+
+  it("skips claiming hooks when admitted session settings are restrictive", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "unsafe" });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "embedded reply" }));
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        admittedSessionSettings: {
+          permissionMode: "guarded",
+          toolOverrides: { webSearch: false },
+        },
+      },
+    });
+
+    expect(hookMocks.runner.runBeforeDispatch).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "embedded reply" });
     expect(result.queuedFinal).toBe(true);
   });
 
@@ -141,10 +186,51 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(true);
   });
 
+  it("passes canonical requester lineage to the before_dispatch runner", async () => {
+    sessionStoreMocks.currentEntry = {
+      sessionId: "canonical-session-id",
+      sessionKey: "agent:main:telegram:direct:canonical",
+      updatedAt: 0,
+    };
+    hookMocks.runner.runBeforeDispatch.mockImplementation(async (event, context) => {
+      (event as { sessionKey?: string }).sessionKey = "agent:plugin:forged";
+      (context as { sessionKey?: string }).sessionKey = "agent:plugin:forged";
+      return { handled: true };
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx({
+        SessionKey: "agent:main:telegram:direct:fallback",
+        OriginatingChannel: " Telegram ",
+        OriginatingTo: " telegram:999 ",
+        AccountId: " Work ",
+        MessageThreadId: 42,
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+    });
+
+    const requester = firstMockCall(
+      hookMocks.runner.runBeforeDispatch,
+      "before dispatch hook",
+    )[2] as PluginSubagentRequesterContext | undefined;
+    expect(requester).toEqual({
+      sessionKey: "agent:main:telegram:direct:fallback",
+      origin: {
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "work",
+        threadId: 42,
+      },
+    });
+  });
+
   it("passes inbound reply metadata to before_dispatch event and context", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
     const dispatcher = createDispatcher();
     const ctx = createHookCtx({
+      MessageSid: "discord-message-456",
+      MessageSidFull: "  ",
       ReplyToId: "discord-reply-123",
       ReplyToIdFull: "discord:channel-1:discord-reply-123",
       ReplyToBody: "the quoted parent message",
@@ -160,6 +246,7 @@ describe("before_dispatch hook", () => {
     ) as
       | [
           {
+            messageId?: unknown;
             replyToId?: unknown;
             replyToIdFull?: unknown;
             replyToBody?: unknown;
@@ -167,6 +254,7 @@ describe("before_dispatch hook", () => {
             replyToIsQuote?: unknown;
           },
           {
+            messageId?: unknown;
             replyToId?: unknown;
             replyToIdFull?: unknown;
             replyToBody?: unknown;
@@ -176,6 +264,7 @@ describe("before_dispatch hook", () => {
         ]
       | undefined;
     expect(beforeDispatchCall?.[0]).toMatchObject({
+      messageId: "discord-message-456",
       replyToId: "discord-reply-123",
       replyToIdFull: "discord:channel-1:discord-reply-123",
       replyToBody: "the quoted parent message",
@@ -183,6 +272,7 @@ describe("before_dispatch hook", () => {
       replyToIsQuote: true,
     });
     expect(beforeDispatchCall?.[1]).toMatchObject({
+      messageId: "discord-message-456",
       replyToId: "discord-reply-123",
       replyToIdFull: "discord:channel-1:discord-reply-123",
       replyToBody: "the quoted parent message",
@@ -193,11 +283,7 @@ describe("before_dispatch hook", () => {
 
   it("suppresses before_dispatch handled reply when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "Blocked" });
     const dispatcher = createDispatcher();
     const result = await dispatchReplyFromConfig({
@@ -232,11 +318,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("still calls the replyResolver when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.suppressTyping).toBe(true);
@@ -259,11 +341,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     setNoAbort();
     diagnosticMocks.logMessageDispatchStarted.mockClear();
     diagnosticMocks.logMessageDispatchCompleted.mockClear();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     hookMocks.runner.runReplyDispatch.mockImplementation(async (event: unknown) => {
       const candidate = event as { isTailDispatch?: boolean };
       if (candidate.isTailDispatch) {
@@ -318,11 +396,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("suppresses final reply delivery when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({ SessionKey: "test:session" });
@@ -343,11 +417,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
   it("keeps the suppressed reply log preview UTF-16 safe", async () => {
     setNoAbort();
     globalMocks.logVerbose.mockClear();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const text = `${"y".repeat(159)}🚀`;
 
@@ -387,7 +457,392 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
   });
 
-  it("marks disallowed group silence eligible for no-visible fallback", async () => {
+  it.each([
+    {
+      name: "direct turns",
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        Surface: "feishu",
+        Provider: "feishu",
+        SessionKey: "agent:main:feishu:direct:ou_user",
+      }),
+      cfg: emptyConfig,
+    },
+    {
+      name: "mentioned group turns",
+      ctx: buildTestCtx({
+        ChatType: "group",
+        Surface: "feishu",
+        Provider: "feishu",
+        SessionKey: "agent:main:feishu:group:oc_group",
+        WasMentioned: true,
+      }),
+      cfg: groupSilenceConfig("disallow"),
+    },
+  ])("records explicit NO_REPLY without a generic fallback in $name", async ({ ctx, cfg }) => {
+    setNoAbort();
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      (opts as InternalGetReplyOptions | undefined)?.onDeliberateSilentTerminalReply?.();
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      deliberateSilentTerminalReply: true,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("does not infer terminal silence from a sibling NO_REPLY payload", async () => {
+    setNoAbort();
+    const deliveredTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: vi.fn(async (payload) => {
+        deliveredTexts.push(payload.text ?? "");
+      }),
+      beforeDeliver: async (payload) =>
+        payload.text === NO_VISIBLE_REPLY_FALLBACK_TEXT ? payload : null,
+    });
+    const replyResolver = vi.fn(
+      async () => [{ text: "visible reply" }, { text: "NO_REPLY" }] satisfies ReplyPayload[],
+    );
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliveredTexts).not.toContain("visible reply");
+    expect(deliveredTexts).toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("reports queue-cap rejection instead of a temporary model failure", async () => {
+    setNoAbort();
+    diagnosticMocks.logMessageDispatchCompleted.mockClear();
+    const deliveredTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: vi.fn(async (payload) => {
+        deliveredTexts.push(payload.text ?? "");
+      }),
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const runState = resolveReplyOperationRunState(opts);
+      if (!runState) {
+        throw new Error("expected reply operation state");
+      }
+      runState.admission = { status: "skipped", reason: "queue-cap" };
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct", SessionKey: "test:queue-cap" }),
+      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliveredTexts).toEqual([QUEUE_CAP_REJECTION_TEXT]);
+    expect(deliveredTexts).not.toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "skipped",
+        reason: "queue-cap",
+        sessionKey: "test:queue-cap",
+      }),
+    );
+  });
+
+  it("does not report a pending continuation as an empty terminal reply", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: InternalGetReplyOptions) => {
+      opts?.onPendingContinuation?.();
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        Surface: "telegram",
+        Provider: "telegram",
+        SessionKey: "agent:main:telegram:direct:test",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+  });
+
+  it("delivers core no-visible-reply fallback for disallowed empty mentioned group turns", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "feishu",
+      Provider: "feishu",
+      SessionKey: "agent:main:feishu:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+      noVisibleReplyFallbackDelivered: true,
+    });
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it.each([
+    ["caller-run", undefined, false, "caller-run"],
+    [undefined, "generated-run", false, "generated-run"],
+    ["caller-run", "observed-run", true, "observed-run"],
+    [undefined, undefined, true, undefined],
+    ["<@everyone>", undefined, true, undefined],
+  ] as const)(
+    "keeps fallback correlation non-error (supplied=%s, observed=%s, routed=%s)",
+    async (runId, generatedRunId, routed, reference) => {
+      setNoAbort();
+      const dispatcher = createDispatcher();
+      const onAgentRunStart = vi.fn();
+      const replyOptions = { runId, onAgentRunStart };
+      const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+        if (generatedRunId) {
+          options?.onAgentRunStart?.(generatedRunId);
+          options?.onAgentRunTerminalOutcome?.("completed");
+        }
+        return undefined;
+      });
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: routed ? "discord" : "telegram",
+          OriginatingTo: "user:1",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions,
+      });
+      const payload = {
+        text: reference
+          ? `${NO_VISIBLE_REPLY_FALLBACK_TEXT} Reference: ${reference}.`
+          : NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      };
+      if (routed) {
+        expect(firstRouteReplyCall().payload).toEqual(payload);
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      } else {
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(payload);
+      }
+      expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+      expect(readAgentRunTerminalOutcome(result)).toBe(generatedRunId ? "completed" : undefined);
+      expect(replyOptions).toEqual({ runId, onAgentRunStart });
+      expect(onAgentRunStart.mock.calls).toEqual(generatedRunId ? [[generatedRunId]] : []);
+    },
+  );
+
+  it("keeps ambient group turns silent even when silence policy is disallow", async () => {
+    setNoAbort();
+    // The fallback exists for a user who asked and got nothing. An undirected
+    // group turn never draws a visible failure notice, regardless of silence
+    // policy (#114799: ambient HamVerBot group chatter drew fallback spam).
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("reports an active-run accepted turn as deferred instead of empty", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const runState = resolveReplyOperationRunState(opts);
+      if (!runState) {
+        throw new Error("expected reply operation run state");
+      }
+      runState.admission = { status: "accepted", mode: "followup" };
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Surface: "telegram",
+        Provider: "telegram",
+        SessionKey: "agent:main:telegram:direct:test",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      deferredToActiveRun: "followup",
+    });
+  });
+
+  it("keeps room_event turns silent even when silence policy is disallow", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      InboundEventKind: "room_event",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("keeps room_event turns silent even when they carry a mention", async () => {
+    setNoAbort();
+    // A room_event is ambient by construction; a stray WasMentioned/direct
+    // classification must not promote it to a directed turn (only a command
+    // turn does, matching the room_event source-reply suppression bypass).
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      InboundEventKind: "room_event",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("delivers fallback for mentioned group turns even when group silence is allowed", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    // No silentReply config: group default is "allow", but an explicit mention
+    // is a directed turn and must never end silently.
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("keeps ambient group turns silent under the default group policy", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("does not deliver no-visible fallback when silentReply allows empty finals", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
@@ -400,33 +855,499 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("allow"),
       dispatcher,
       replyResolver,
     });
 
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
-      noVisibleReplyFallbackEligible: true,
     });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("does not deliver no-visible fallback when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+    expect(result.sendPolicyDenied).toBe(true);
+  });
+
+  it("does not deliver no-visible fallback under message_tool_only source delivery", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "direct",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:direct:user1",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    // Direct silent policy is disallow; eligibility remains for transport fallbacks.
+    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
+  it("does not deliver no-visible fallback after observed reply delivery", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const observedReplyDelivery = vi.fn();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onObservedReplyDelivery?.();
+      return undefined;
+    });
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onObservedReplyDelivery: observedReplyDelivery,
+      },
+    });
+
+    expect(observedReplyDelivery).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+    expect(result.observedReplyDelivery).toBe(true);
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("delivers routed fallback when routing drops an empty final without sending", async () => {
+    setNoAbort();
+    mocks.routeReply.mockResolvedValueOnce({ ok: true, delivered: false }).mockResolvedValueOnce({
+      ok: true,
+      delivered: true,
+      messageId: "fallback-1",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "" }));
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "slack",
+      Provider: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    // The empty final routes as { ok: true } without sending; the fallback must
+    // still fire instead of trusting route success as visibility.
+    const fallbackCall = mocks.routeReply.mock.calls.find(
+      (call) =>
+        (call[0] as { payload?: { text?: string } }).payload?.text ===
+        NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    );
+    expect(fallbackCall).toBeDefined();
+    expect(result.queuedFinal).toBe(true);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("keeps eligibility when an empty routed final precedes a suppressed fallback", async () => {
+    setNoAbort();
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: false, suppressed: true });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "" }));
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "slack",
+      Provider: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    // Neither the phantom empty route nor the suppressed fallback was visible;
+    // eligibility must survive for channel-level recovery.
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
+  it("does not report a hook-suppressed routed fallback as delivered", async () => {
+    setNoAbort();
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: false, suppressed: true });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "slack",
+      Provider: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
+  it("does not deliver no-visible fallback after a routed media-only block", async () => {
+    setNoAbort();
+    mocks.routeReply.mockResolvedValue({
+      ok: true,
+      delivered: true,
+      messageId: "media-block-1",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ mediaUrl: "https://example.com/seatmap.png" });
+      return undefined;
+    });
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "slack",
+      Provider: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    // A routed media-only block increments neither blockCount (text-only counter)
+    // nor dispatcher counts; the delivered-routed-block fact must suppress the
+    // fallback so users never see failure text after valid media.
+    const fallbackCall = mocks.routeReply.mock.calls.find(
+      (call) =>
+        (call[0] as { payload?: { text?: string } }).payload?.text ===
+        NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    );
+    expect(fallbackCall).toBeUndefined();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+  });
+
+  it("does not deliver no-visible fallback after streamed blocks invisible to dispatcher counts", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ text: "Streamed answer content." });
+      return undefined;
+    });
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    // The stub dispatcher exposes no settlement, so the ledger keeps the block's
+    // admission as its visibility fact and no misleading fallback is sent.
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+  });
+
+  it("does not duplicate a final accepted by a legacy dispatcher", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    delete dispatcher.supportsSettledReceipt;
+    dispatcher.waitForIdle = vi.fn(async () => {});
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver: vi.fn(async () => ({ text: "Legacy final answer." })),
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
+      text: "Legacy final answer.",
+    });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+  });
+
+  it("does not infer receipt visibility from a custom dispatcher's queued block", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    dispatcher.getQueuedCounts = vi.fn(() => ({ tool: 0, block: 1, final: 0 }));
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(result.queuedFinal).toBe(true);
+    expect(result.counts.block).toBe(1);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("keeps no-visible fallback eligible when core fallback delivery fails", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    dispatcher.sendFinalReply = vi.fn(() => false);
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.queuedFinal).toBe(false);
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
+  it("delivers routed fallback when a suppressed contentful final settles invisible", async () => {
+    setNoAbort();
+    // A contentful routed final that reports ok+suppressed was never visible;
+    // admission-based gating used to end this turn silently (#114768 corner 1).
+    mocks.routeReply.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload?: { text?: string } };
+      return params.payload?.text === NO_VISIBLE_REPLY_FALLBACK_TEXT
+        ? { ok: true, delivered: true, messageId: "fallback-1" }
+        : { ok: true, delivered: false, suppressed: true };
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "real answer" }));
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "slack",
+      Provider: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+
+    const fallbackCall = mocks.routeReply.mock.calls.find(
+      (call) =>
+        (call[0] as { payload?: { text?: string } }).payload?.text ===
+        NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    );
+    expect(fallbackCall).toBeDefined();
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("delivers fallback when a queued streamed block is cancelled before delivery", async () => {
+    setNoAbort();
+    // A generated block only proves visibility once its delivery settles; a
+    // pre-transport cancellation used to suppress the fallback silently
+    // (#114768 corner 2). Started-then-failed sends stay conservative: they may
+    // have shown partial content, so they do not trigger the fallback.
+    const deliver = vi.fn(async (_payload: ReplyPayload) => {});
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: async (payload, info) => (info.kind === "block" ? null : payload),
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ text: "Streamed answer content." });
+      return undefined;
+    });
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    const deliveredTexts = deliver.mock.calls.map((call) => call[0].text);
+    expect(deliveredTexts).toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("keeps eligibility when a beforeDeliver hook cancels the queued fallback", async () => {
+    setNoAbort();
+    // The fallback's own admission can still be cancelled by a beforeDeliver
+    // hook; the delivered flag must follow settlement so channel recovery stays
+    // eligible (#114768 corner 3).
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: async () => null,
+    });
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
+  it("delivers fallback when a beforeDeliver hook cancels the model final", async () => {
+    setNoAbort();
+    const deliver = vi.fn(async (_payload: ReplyPayload) => {});
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: async (payload) =>
+        payload.text === NO_VISIBLE_REPLY_FALLBACK_TEXT ? payload : null,
+    });
+    const replyResolver = vi.fn(async () => ({ text: "cancelled answer" }));
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: groupSilenceConfig("disallow"),
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    const deliveredTexts = deliver.mock.calls.map((call) => call[0].text);
+    expect(deliveredTexts).toEqual([NO_VISIBLE_REPLY_FALLBACK_TEXT]);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
   it("suppresses tool result delivery when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     let capturedOnToolResult: ((payload: ReplyPayload) => Promise<void>) | undefined;
     const replyResolver = vi.fn(
@@ -453,11 +1374,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("suppresses block reply delivery when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     let capturedOnBlockReply:
       | ((payload: ReplyPayload, context?: unknown) => Promise<void>)
@@ -486,11 +1403,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("delivers replies normally when sendPolicy is allow", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({ SessionKey: "test:session" });
@@ -508,11 +1421,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("delivers provider conversation-state runner payloads as outbound channel replies", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const exactProviderError = "Custom tool call output is missing for call id: call_live_123.";
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
@@ -574,11 +1483,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       handled: true,
       aborted: true,
     });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -604,11 +1509,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       handled: true,
       aborted: true,
     });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -656,30 +1557,538 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
+    const archivedAt = Date.now() - 1_000;
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
-      archivedAt: Date.now(),
+      archivedAt,
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:archived-test",
+      ChatType: "channel",
+      From: "discord:user:12345",
       To: "discord:channel:archived-test",
       AccountId: "default",
       SessionKey: "agent:main:discord:channel:archived-test",
       Body: "start work",
+      CommandBody: "start work",
+      RawBody: "start work",
+      CommandSource: undefined,
+      InboundAccessAuthorized: true,
+      InboundEventKind: "user_request",
+      InputProvenance: { kind: "external_user", sourceChannel: "discord" },
     });
 
     await expect(
       dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
     ).rejects.toThrow(/is archived/i);
 
+    expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
     expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "no placement", blocked: false, suppliedOwner: false },
+    { name: "active placement", blocked: true, suppliedOwner: false },
+    {
+      name: "owning Gateway proves failed environment is gone",
+      blocked: false,
+      suppliedOwner: true,
+    },
+  ])(
+    "restores admitted archived channel work before reply-operation admission: $name",
+    async ({ blocked, suppliedOwner }) => {
+      setNoAbort();
+      const sessionId = "archived-channel-session";
+      const sessionKey = "agent:main:discord:channel:restored-test";
+      const archivedAt = Date.now() - 1_000;
+      sessionStoreMocks.currentEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        archivedAt,
+        archivedBy: { type: "human", id: "profile-operator" },
+        archiveReason: "manual",
+      };
+      if (blocked || suppliedOwner) {
+        placementContextMocks.getMany.mockReturnValue(
+          new Map([[sessionId, { state: "active" } as WorkerSessionPlacementRecord]]),
+        );
+      }
+      const ownerGetMany = vi.fn(
+        () =>
+          new Map([
+            [
+              sessionId,
+              {
+                state: "failed",
+                environmentId: "environment-a",
+              } as WorkerSessionPlacementRecord,
+            ],
+          ]),
+      );
+      const sessionWorkerPlacementContext = suppliedOwner
+        ? {
+            workerEnvironmentService: { get: vi.fn(() => undefined) },
+            workerSessionPlacementService: { getMany: ownerGetMany },
+          }
+        : undefined;
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "restored reply" }) satisfies ReplyPayload);
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:restored-test",
+        ChatType: "channel",
+        From: "discord:user:12345",
+        To: "discord:channel:restored-test",
+        AccountId: "default",
+        SessionKey: sessionKey,
+        Body: "start work",
+        CommandBody: "start work",
+        RawBody: "start work",
+        CommandSource: undefined,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "discord" },
+      });
+
+      const dispatch = dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
+      });
+
+      if (blocked) {
+        await expect(dispatch).rejects.toThrow(/is archived/i);
+        expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+        expect(sessionStoreMocks.currentEntry?.archivedBy).toEqual({
+          type: "human",
+          id: "profile-operator",
+        });
+        expect(sessionStoreMocks.currentEntry?.archiveReason).toBe("manual");
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        return;
+      }
+
+      const result = await dispatch;
+      expect(result.queuedFinal).toBe(true);
+      expect(sessionStoreMocks.currentEntry?.sessionId).toBe(sessionId);
+      expect(sessionStoreMocks.currentEntry?.archivedAt).toBeUndefined();
+      expect(sessionStoreMocks.currentEntry?.archivedBy).toBeUndefined();
+      expect(sessionStoreMocks.currentEntry?.archiveReason).toBeUndefined();
+      if (suppliedOwner) {
+        expect(ownerGetMany).toHaveBeenCalledWith([sessionId]);
+        expect(placementContextMocks.resolveSessionWorkerPlacementContext).not.toHaveBeenCalled();
+      }
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "restored reply" });
+    },
+  );
+
+  it("does not auto-restore an archived restart-recovery tombstone", async () => {
+    setNoAbort();
+    const sessionId = "restart-tombstone-session";
+    const sessionKey = "agent:main:matrix:channel:room-a";
+    const archivedAt = Date.now() - 1_000;
+    sessionStoreMocks.currentEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      archivedAt,
+      status: "failed",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "matrix",
+      Surface: "matrix",
+      OriginatingChannel: "matrix",
+      OriginatingTo: "!room-a:example.test",
+      ChatType: "channel",
+      From: "@owner:example.test",
+      To: "!room-a:example.test",
+      AccountId: "default",
+      SessionKey: sessionKey,
+      Body: "continue",
+      CommandBody: "continue",
+      RawBody: "continue",
+      CommandSource: undefined,
+      InboundAccessAuthorized: true,
+      InboundEventKind: "user_request",
+      InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
+    });
+
+    await expect(
+      dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
+    ).rejects.toThrow();
+
+    expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+    expect(sessionStoreMocks.currentEntry).toMatchObject({
+      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+    });
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not add a lifecycle parent lookup for an ordinary healthy threaded turn", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "healthy-thread-session",
+      updatedAt: Date.now(),
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "thread handled" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: "agent:main:slack:channel:c1:thread:healthy",
+        ParentSessionKey: "agent:main:slack:channel:c1",
+        Body: "thread reply",
+        CommandBody: "thread reply",
+        RawBody: "thread reply",
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    const parentLookups = sessionStoreMocks.loadSessionStoreEntry.mock.calls.filter(
+      ([params]) =>
+        (params as { sessionKey?: string }).sessionKey === "agent:main:slack:channel:c1",
+    );
+    expect(parentLookups).toHaveLength(1);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits a human parent-fork replacement without reopening its restart tombstone", async () => {
+    setNoAbort();
+    const archivedAt = Date.now() - 1_000;
+    sessionStoreMocks.currentEntry = {
+      sessionId: "preseed-thread-session",
+      updatedAt: Date.now(),
+      archivedAt,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => {
+      expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+      return { text: "fork handled" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: "agent:main:slack:channel:c1:thread:123",
+        ParentSessionKey: "agent:main:slack:channel:c1",
+        Body: "thread reply",
+        CommandBody: "thread reply",
+        RawBody: "thread reply",
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "fork handled" });
+  });
+
+  it.each([
+    {
+      label: "room event",
+      context: { InboundEventKind: "room_event" as const },
+    },
+    {
+      label: "system event",
+      context: {
+        InputProvenance: { kind: "internal_system" as const, sourceTool: "heartbeat" },
+      },
+    },
+  ])("keeps a restart tombstone terminal for a $label parent-fork turn", async ({ context }) => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "preseed-thread-session",
+      updatedAt: Date.now(),
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          SessionKey: "agent:main:slack:channel:c1:thread:123",
+          ParentSessionKey: "agent:main:slack:channel:c1",
+          Body: "thread event",
+          CommandBody: "thread event",
+          RawBody: "thread event",
+          InboundAccessAuthorized: true,
+          InboundEventKind: "user_request",
+          InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+          ...context,
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+      }),
+    ).rejects.toThrow(/ended during restart recovery/i);
+
+    expect(sessionStoreMocks.currentEntry).toMatchObject({
+      sessionId: "preseed-thread-session",
+      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+    });
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it.each<{
+    name: string;
+    commands?: OpenClawConfig["commands"];
+    admitted: boolean;
+    command?: "/new" | "/reset";
+    tombstoneDuringDispatch?: boolean;
+  }>([
+    { name: "ordinary channel-authorized reset", admitted: true },
+    {
+      name: "channel-admitted non-owner reset",
+      commands: { ownerAllowFrom: ["owner"] },
+      admitted: true,
+    },
+    {
+      name: "explicit command denial remains authoritative",
+      commands: { ownerAllowFrom: ["owner"], allowFrom: { matrix: [] } },
+      admitted: false,
+    },
+    ...(["/new", "/reset"] as const).flatMap((command) => [
+      {
+        name: `authorized ${command} after recovery commits`,
+        command,
+        tombstoneDuringDispatch: true,
+        admitted: true,
+      },
+      {
+        name: `denied ${command} after recovery commits`,
+        command,
+        tombstoneDuringDispatch: true,
+        commands: { allowFrom: { matrix: [] } },
+        admitted: false,
+      },
+    ]),
+  ])(
+    "gates hard reset admission without pre-unarchiving the tombstone: $name",
+    async ({ commands, admitted, command = "/new", tombstoneDuringDispatch }) => {
+      setNoAbort();
+      const sessionId = "restart-tombstone-session";
+      const sessionKey = "agent:main:matrix:channel:room-a";
+      const archivedAt = Date.now() - 1_000;
+      sessionStoreMocks.currentEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        archivedAt,
+        status: "failed",
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: {
+            reason: "automatic recovery exhausted",
+            recoveredSessionId: "dashboard-successor",
+            recoveredSessionKey: "agent:main:dashboard:successor",
+          },
+        },
+      };
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => {
+        expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+        expect(sessionStoreMocks.currentEntry).toMatchObject({
+          mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+        });
+        return { text: "reset handled" } satisfies ReplyPayload;
+      });
+      const ctx = buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        OriginatingChannel: "matrix",
+        OriginatingTo: "!room-a:example.test",
+        ChatType: "channel",
+        SenderId: "guest",
+        From: "@guest:example.test",
+        To: "!room-a:example.test",
+        AccountId: "default",
+        SessionKey: sessionKey,
+        Body: command,
+        CommandBody: command,
+        RawBody: command,
+        CommandSource: "text",
+        CommandAuthorized: true,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
+      });
+
+      const tombstoneBefore = structuredClone(sessionStoreMocks.currentEntry);
+      if (tombstoneDuringDispatch) {
+        sessionStoreMocks.currentEntry = {
+          sessionId,
+          updatedAt: Date.now(),
+          mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 3 },
+        };
+      }
+      const dispatch = dispatchReplyFromConfig({
+        ctx,
+        cfg: { ...emptyConfig, commands },
+        dispatcher,
+        replyResolver,
+        ...(tombstoneDuringDispatch
+          ? {
+              fastAbortResolver: async () => {
+                sessionStoreMocks.currentEntry = structuredClone(tombstoneBefore);
+                return { handled: false, aborted: false };
+              },
+              formatAbortReplyTextResolver: () => "aborted",
+            }
+          : {}),
+      });
+      if (!admitted) {
+        await expect(dispatch).rejects.toMatchObject({
+          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+        });
+        expect(sessionStoreMocks.currentEntry).toEqual(tombstoneBefore);
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        return;
+      }
+      const result = await dispatch;
+
+      expect(result.queuedFinal).toBe(true);
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "reset handled" });
+    },
+  );
+
+  it("admits an authorized native reset only when it owns the tombstoned source", async () => {
+    setNoAbort();
+    const sessionId = "restart-tombstone-session";
+    const sessionKey = "agent:main:matrix:channel:room-a";
+    const archivedAt = Date.now() - 1_000;
+    sessionStoreMocks.currentEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      archivedAt,
+      status: "failed",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => {
+      expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+      return { text: "native reset handled" } satisfies ReplyPayload;
+    });
+    const ctx = buildTestCtx({
+      Provider: "matrix",
+      Surface: "matrix",
+      OriginatingChannel: "matrix",
+      OriginatingTo: "!room-a:example.test",
+      ChatType: "channel",
+      From: "@owner:example.test",
+      To: "!room-a:example.test",
+      AccountId: "default",
+      SessionKey: sessionKey,
+      Body: "/new",
+      CommandBody: "/new",
+      RawBody: "/new",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTargetSessionKey: sessionKey,
+      CommandTurn: {
+        kind: "native",
+        source: "native",
+        authorized: true,
+        commandName: "new",
+        body: "/new",
+      },
+      InboundAccessAuthorized: true,
+      InboundEventKind: "user_request",
+      InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "native reset handled" });
+
+    sessionStoreMocks.currentEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      archivedAt,
+      status: "failed",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const differentSourceResolver = vi.fn(async () => ({ text: "must not run" }));
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: { ...ctx, SessionKey: "agent:main:matrix:channel:room-b" },
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver: differentSourceResolver,
+      }),
+    ).rejects.toThrow(/ended during restart recovery/i);
+    expect(differentSourceResolver).not.toHaveBeenCalled();
   });
 
   it("skips plugin-bound claim hook under deny and falls through to suppressed agent dispatch", async () => {
@@ -713,11 +2122,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -734,7 +2139,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     // Binding is still tracked (touch runs before the gate)...
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-deny");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-deny",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     // ...but the plugin claim hook MUST NOT be invoked under deny — the
     // plugin can't be trusted to honor suppressDelivery on its outbound path.
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
@@ -863,11 +2272,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           pluginRoot: "/tmp/plugin",
         },
       } satisfies SessionBindingRecord);
-      sessionStoreMocks.currentEntry = {
-        sessionId: "s1",
-        updatedAt: 0,
-        sendPolicy: "allow",
-      };
+      sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
 
@@ -883,8 +2288,13 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         queuedFinal: false,
         counts: { tool: 0, block: 0, final: 0 },
         sourceReplyDeliveryMode: "message_tool_only",
+        ...(params.expectPluginReplyDelivered ? { observedReplyDelivery: true } : {}),
       });
-      expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
+      expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+        params.bindingId,
+        undefined,
+        expect.objectContaining(params.conversation),
+      );
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
         "openclaw-codex-app-server",
         expect.objectContaining({
@@ -933,11 +2343,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -1028,11 +2434,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -1111,11 +2513,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const cfg = { messages: { visibleReplies: "message_tool" } } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "reset ack" }) satisfies ReplyPayload);
@@ -1180,11 +2578,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -1256,11 +2650,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -1311,11 +2701,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("keeps message-tool-only source delivery private while still processing the turn", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const callbacks = {
       partial: vi.fn(),
@@ -1399,11 +2785,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("treats message-tool-only observed delivery as visible for fallback eligibility", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const observedReplyDelivery = vi.fn();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -1437,11 +2819,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const blockedReply = setReplyPayloadMetadata(
       { text: "Your message could not be sent: blocked by policy-plugin", isError: true },
@@ -1470,13 +2848,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
-  it("delivers fast auto progress in message-tool-only mode without verbose progress", async () => {
+  it("suppresses fast auto progress in message-tool-only mode without verbose progress", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({
@@ -1494,50 +2868,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
-        suppressDefaultToolProgressMessages: true,
-      },
-    });
-
-    expect(result.queuedFinal).toBe(false);
-    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "💨Fast: auto-off(75s>=60s)",
-        channelData: { openclawProgressKind: "fast-mode-auto" },
-      }),
-    );
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("suppresses fast auto progress for room-event message-tool-only turns", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({
-        text: "💨Fast: auto-off(75s>=60s)",
-        channelData: { openclawProgressKind: "fast-mode-auto" },
-      });
-      return { text: "NO_REPLY" } satisfies ReplyPayload;
-    });
-    const ctx = buildTestCtx({
-      SessionKey: "test:session",
-      ChatType: "channel",
-      InboundEventKind: "room_event",
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-        suppressDefaultToolProgressMessages: true,
       },
     });
 
@@ -1547,19 +2877,21 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses fast auto progress when sendPolicy is deny", async () => {
+  it("delivers fast auto progress in message-tool-only mode when verbose progress is on", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
       updatedAt: 0,
-      sendPolicy: "deny",
+      sendPolicy: "allow",
+      verboseLevel: "on",
     };
     const dispatcher = createDispatcher();
+    const payload = {
+      text: "💨Fast: auto-off(75s>=60s)",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({
-        text: "💨Fast: auto-off(75s>=60s)",
-        channelData: { openclawProgressKind: "fast-mode-auto" },
-      });
+      await opts?.onToolResult?.(payload);
       return { text: "NO_REPLY" } satisfies ReplyPayload;
     });
 
@@ -1575,17 +2907,100 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+  });
+
+  it.each([
+    { forceToolResultProgress: false, label: "hidden", verboseLevel: "off" },
+    { forceToolResultProgress: false, label: "verbose", verboseLevel: "on" },
+    { forceToolResultProgress: true, label: "forced", verboseLevel: "off" },
+  ] as const)(
+    "suppresses $label fast auto progress for room-event message-tool-only turns",
+    async ({ forceToolResultProgress, verboseLevel }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "s1",
+        updatedAt: 0,
+        sendPolicy: "allow",
+        verboseLevel,
+      };
+      const dispatcher = createDispatcher();
+      const onToolResult = vi.fn(() => true);
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onToolResult?.({
+          text: "💨Fast: auto-off(75s>=60s)",
+          channelData: { openclawProgressKind: "fast-mode-auto" },
+        });
+        return { text: "NO_REPLY" } satisfies ReplyPayload;
+      });
+      const ctx = buildTestCtx({
+        SessionKey: "test:session",
+        ChatType: "channel",
+        InboundEventKind: "room_event",
+      });
+
+      const result = await dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          suppressDefaultToolProgressMessages: true,
+          forceToolResultProgress,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+          allowToolLifecycleWhenProgressHidden: true,
+          onToolResult,
+        },
+      });
+
+      expect(result.queuedFinal).toBe(false);
+      expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(onToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("suppresses fast auto progress when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
+        suppressDefaultToolProgressMessages: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        onToolResult,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sendPolicyDenied).toBe(true);
+    expect(onToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("forwards fast auto progress callbacks without separate message delivery", async () => {
+  it("suppresses fast auto progress callbacks when verbose progress is off", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const onToolResult = vi.fn();
     const payload = {
@@ -1613,22 +3028,218 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(result.queuedFinal).toBe(false);
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("forwards hidden fast auto progress only to lifecycle callbacks", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn(() => false);
+    const payload = {
+      text: "💨Fast: auto-on",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.(payload);
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressDefaultToolProgressMessages: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        allowToolLifecycleWhenProgressHidden: true,
+        onToolResult,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(onToolResult).toHaveBeenCalledOnce();
     expect(onToolResult).toHaveBeenCalledWith(payload);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("forwards suppressed tool progress callbacks in message-tool-only mode", async () => {
+  it.each(["off", "on"] as const)(
+    "falls back once when a forced fast auto callback declines visibility at verbose %s",
+    async (verboseLevel) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "s1",
+        updatedAt: 0,
+        sendPolicy: "allow",
+        verboseLevel,
+      };
+      const dispatcher = createDispatcher();
+      const onToolResult = vi.fn(() => false);
+      const payload = {
+        text: "💨Fast: auto-on",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      } satisfies ReplyPayload;
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onToolResult?.(payload);
+        return { text: "NO_REPLY" } satisfies ReplyPayload;
+      });
+
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          forceToolResultProgress: true,
+          suppressDefaultToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+          onToolResult,
+        },
+      });
+
+      expect(result.queuedFinal).toBe(false);
+      expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(onToolResult).toHaveBeenCalledOnce();
+      expect(onToolResult).toHaveBeenCalledWith(payload);
+      expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+      expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delivers forced fast auto progress once without a channel callback", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
       updatedAt: 0,
       sendPolicy: "allow",
+      verboseLevel: "off",
     };
     const dispatcher = createDispatcher();
-    const onToolResult = vi.fn();
+    const payload = {
+      text: "💨Fast: auto-on",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({ text: "🛠️ Exec: ruby sleep proof" });
+      await opts?.onToolResult?.(payload);
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        forceToolResultProgress: true,
+        suppressDefaultToolProgressMessages: true,
+      },
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+  });
+
+  it("does not invoke a source-suppressed fast auto callback without opt-in", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn(() => true);
+    const payload = {
+      text: "💨Fast: auto-on",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.(payload);
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
+        suppressDefaultToolProgressMessages: true,
+        onToolResult,
+      },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { callbackResult: true, verboseLevel: "off" },
+    { callbackResult: undefined, verboseLevel: "off" },
+    { callbackResult: true, verboseLevel: "on" },
+    { callbackResult: undefined, verboseLevel: "on" },
+  ] as const)(
+    "does not duplicate forced fast auto progress accepted with $callbackResult at verbose $verboseLevel",
+    async ({ callbackResult, verboseLevel }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "s1",
+        updatedAt: 0,
+        sendPolicy: "allow",
+        verboseLevel,
+      };
+      const dispatcher = createDispatcher();
+      const onToolResult = vi.fn(() => callbackResult);
+      const payload = {
+        text: "💨Fast: auto-on",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      } satisfies ReplyPayload;
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onToolResult?.(payload);
+        return { text: "NO_REPLY" } satisfies ReplyPayload;
+      });
+
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          forceToolResultProgress: true,
+          suppressDefaultToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+          onToolResult,
+        },
+      });
+
+      expect(onToolResult).toHaveBeenCalledOnce();
+      expect(onToolResult).toHaveBeenCalledWith(payload);
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("lets the channel own forced tool progress at verbosity off", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn(() => false);
+    const payload = { text: "🧠 Memory Search: release notes" } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.(payload);
       return { text: "NO_REPLY" } satisfies ReplyPayload;
     });
     const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
@@ -1640,6 +3251,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
         suppressDefaultToolProgressMessages: true,
         allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onToolResult,
@@ -1648,18 +3260,89 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(result.queuedFinal).toBe(false);
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(onToolResult).toHaveBeenCalledWith({ text: "🛠️ Exec: ruby sleep proof" });
+    expect(onToolResult).toHaveBeenCalledOnce();
+    expect(onToolResult).toHaveBeenCalledWith(payload);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "media",
+      payload: { mediaUrl: "https://example.com/tool-result.png" },
+    },
+    {
+      label: "captioned media",
+      payload: {
+        text: "Generated image",
+        mediaUrl: "https://example.com/tool-result.png",
+      },
+    },
+    {
+      label: "exec approvals",
+      payload: {
+        text: "Approval required.",
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      },
+    },
+    {
+      label: "unavailable exec approvals",
+      payload: {
+        text: "Exec approval is unavailable.",
+        channelData: {
+          execApprovalUnavailable: { reason: "no-approval-route" },
+        },
+      },
+    },
+    {
+      label: "ask-user prompts",
+      payload: {
+        text: "Question for you: Where should this deploy?",
+        channelData: { askUser: { questionId: "question-owned-by-agent-runtime" } },
+      },
+    },
+  ] satisfies Array<{ label: string; payload: ReplyPayload }>)(
+    "keeps forced $label durable when channel progress is available",
+    async ({ payload }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
+      const dispatcher = createDispatcher();
+      const onToolResult = vi.fn(() => false);
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onToolResult?.(payload);
+        return { text: "NO_REPLY" } satisfies ReplyPayload;
+      });
+
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          forceToolResultProgress: true,
+          suppressDefaultToolProgressMessages: true,
+          suppressToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+          onToolResult,
+        },
+      });
+
+      expect(onToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
   it("delivers forced tool progress in message-tool-only mode without verbose progress", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({ text: "🛠️ Exec: ruby sleep proof" });
@@ -1695,6 +3378,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       verboseLevel: "on",
     };
     const dispatcher = createDispatcher();
+    const onToolResult = vi.fn(() => false);
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({ text: "🛠️ Exec: echo post-restart" });
       return { text: "NO_REPLY" } satisfies ReplyPayload;
@@ -1708,6 +3392,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        onToolResult,
       },
     });
 
@@ -1716,16 +3403,13 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
       expect.objectContaining({ text: "🛠️ Exec: echo post-restart" }),
     );
+    expect(onToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("delivers marked runtime failure notices in message-tool-only mode", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const failureNotice = setReplyPayloadMetadata(
       { text: "⚠️ You've reached your Codex subscription usage limit." },

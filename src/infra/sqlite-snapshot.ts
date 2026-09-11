@@ -1,82 +1,36 @@
-// Creates compact SQLite snapshots only after verifying both source and output.
+// Creates verified SQLite snapshots, compacting by default.
 import { createHash, randomUUID } from "node:crypto";
-import fsSync, { type BigIntStats, type Stats } from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
-import { runExec } from "../process/exec.js";
+import {
+  getPublishFileExclusiveFailureDetails,
+  isHardlinkFallbackError,
+  pinDirectory,
+  publishFileExclusive,
+  requireDirectorySync,
+  syncDirectory,
+} from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
+import {
+  copyFileHandle,
+  hashFileDescriptorSync,
+  sameFileMutationFingerprint,
+  type FileMutationFingerprint,
+} from "./file-descriptor.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
-import { resolveSystemBin } from "./resolve-system-bin.js";
+import {
+  openNodeSqliteDatabase,
+  requireNodeSqlite,
+  resolveSqliteFilesystemPath,
+} from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import { withSqliteSnapshotSource } from "./sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-
-const SQLITE_DIRECTORY_MODE = 0o700;
-const WINDOWS_DIRECTORY_EXISTS_MARKER = "OPENCLAW_SQLITE_DIRECTORY_EXISTS";
-// Managed directory creation accepts existing paths. CreateDirectoryW applies the
-// protected DACL atomically while preserving fail-if-exists semantics.
-const WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE = `
-using System;
-using System.Runtime.InteropServices;
-
-public static class OpenClawPrivateDirectory
-{
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SecurityAttributes
-    {
-        public int Length;
-        public IntPtr SecurityDescriptor;
-        public int InheritHandle;
-    }
-
-    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        string securityDescriptor,
-        uint revision,
-        out IntPtr convertedSecurityDescriptor,
-        out uint convertedSecurityDescriptorSize);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool CreateDirectoryW(
-        string path,
-        ref SecurityAttributes securityAttributes);
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr LocalFree(IntPtr memory);
-
-    public static int Create(string path, string securityDescriptor)
-    {
-        IntPtr descriptor;
-        uint descriptorSize;
-        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                securityDescriptor,
-                1,
-                out descriptor,
-                out descriptorSize))
-        {
-            return Marshal.GetLastWin32Error();
-        }
-
-        try
-        {
-            var attributes = new SecurityAttributes
-            {
-                Length = Marshal.SizeOf(typeof(SecurityAttributes)),
-                SecurityDescriptor = descriptor,
-                InheritHandle = 0,
-            };
-            return CreateDirectoryW(path, ref attributes) ? 0 : Marshal.GetLastWin32Error();
-        }
-        finally
-        {
-            LocalFree(descriptor);
-        }
-    }
-}
-`;
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
 
@@ -86,6 +40,9 @@ type CreateVerifiedSqliteSnapshotOptions = {
   /** Final caller checks around publication; failures remove only this helper's target. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;
+  requireNonEmptySource?: boolean;
+  /** Skip compaction/ID rewriting; transforms may still change IDs and free-page data remains. */
+  preserveRowIds?: boolean;
   transform?: (database: DatabaseSync) => void | Promise<void>;
   validate?: SqliteSnapshotValidator;
 };
@@ -117,75 +74,16 @@ type VerifiedSqliteSnapshot = {
   userVersion: number;
 };
 
-export async function createPrivateSqliteDirectory(directoryPath: string): Promise<void> {
-  if (process.platform !== "win32") {
-    await fs.mkdir(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
-    return;
-  }
-  const encodedPath = Buffer.from(directoryPath, "utf8").toString("base64");
-  const encodedNativeSource = Buffer.from(WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE, "utf8").toString(
-    "base64",
-  );
-  const command = [
-    "$ErrorActionPreference = 'Stop'",
-    `$path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))`,
-    `$nativeSource = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedNativeSource}'))`,
-    "Add-Type -TypeDefinition $nativeSource -Language CSharp",
-    "$current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User",
-    "$security = New-Object System.Security.AccessControl.DirectorySecurity",
-    "$security.SetAccessRuleProtection($true, $false)",
-    "$security.SetOwner($current)",
-    "$inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit",
-    "$propagation = [System.Security.AccessControl.PropagationFlags]::None",
-    "foreach ($sidValue in @($current.Value, 'S-1-5-18', 'S-1-5-32-544')) { $sid = New-Object System.Security.Principal.SecurityIdentifier($sidValue); $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, $inheritance, $propagation, [System.Security.AccessControl.AccessControlType]::Allow); [void]$security.AddAccessRule($rule) }",
-    "$sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Access",
-    "$sddl = $security.GetSecurityDescriptorSddlForm($sections)",
-    "$errorCode = [OpenClawPrivateDirectory]::Create($path, $sddl)",
-    `if ($errorCode -eq 80 -or $errorCode -eq 183) { throw '${WINDOWS_DIRECTORY_EXISTS_MARKER}' }`,
-    "if ($errorCode -ne 0) { $exception = New-Object System.ComponentModel.Win32Exception($errorCode); throw $exception }",
-  ].join("; ");
-  const powershell = resolveSystemBin("powershell");
-  if (!powershell) {
-    throw new Error("Unable to resolve PowerShell for private Windows SQLite staging.");
-  }
-  const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
-  try {
-    await runExec(
-      powershell,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
-      {
-        timeoutMs: 10_000,
-        maxBuffer: 64 * 1024,
-      },
-    );
-  } catch (error) {
-    if (String(error).includes(WINDOWS_DIRECTORY_EXISTS_MARKER)) {
-      const existsError = new Error(`Private SQLite directory already exists: ${directoryPath}`);
-      (existsError as NodeJS.ErrnoException).code = "EEXIST";
-      throw existsError;
-    }
-    throw new Error(`Unable to create private Windows SQLite directory: ${directoryPath}`, {
-      cause: error,
-    });
-  }
-}
-
-export async function createPrivateSqliteTempDirectory(
-  rootPath: string,
-  prefix: string,
-): Promise<string> {
-  if (process.platform !== "win32") {
-    return await fs.mkdtemp(path.join(rootPath, prefix));
-  }
-  const directoryPath = path.join(rootPath, `${prefix}${randomUUID()}`);
-  await createPrivateSqliteDirectory(directoryPath);
-  return directoryPath;
-}
-
-async function assertRegularSourceFile(sourcePath: string): Promise<void> {
+async function assertRegularSourceFile(
+  sourcePath: string,
+  requireNonEmptySource: boolean,
+): Promise<void> {
   const stat = await fs.lstat(sourcePath);
   if (!stat.isFile()) {
     throw new Error(`SQLite snapshot source must be a regular file: ${sourcePath}`);
+  }
+  if (requireNonEmptySource && stat.size === 0) {
+    throw new Error(`SQLite snapshot source must not be empty: ${sourcePath}`);
   }
 }
 
@@ -211,30 +109,13 @@ async function copyFileExclusive(
   try {
     target = await fs.open(targetPath, "wx+", 0o600);
     targetIdentity = await target.stat();
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
     const hash = createHash("sha256");
-    let offset = 0;
-    while (true) {
-      const { bytesRead } = await source.read(buffer, 0, buffer.length, offset);
-      if (bytesRead === 0) {
-        break;
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      let bytesWritten = 0;
-      while (bytesWritten < bytesRead) {
-        const result = await target.write(
-          buffer,
-          bytesWritten,
-          bytesRead - bytesWritten,
-          offset + bytesWritten,
-        );
-        if (result.bytesWritten === 0) {
-          throw new Error(`SQLite snapshot copy made no progress: ${targetPath}`);
-        }
-        bytesWritten += result.bytesWritten;
-      }
-      offset += bytesRead;
-    }
+    const offset = await copyFileHandle(source, target, {
+      noProgressMessage: `SQLite snapshot copy made no progress: ${targetPath}`,
+      onChunk: (chunk) => {
+        hash.update(chunk);
+      },
+    });
     await assertMutationFingerprintUnchanged(source, sourceFingerprint, targetPath);
     await target.sync();
     const currentIdentity = await fs.lstat(targetPath);
@@ -257,11 +138,6 @@ async function copyFileExclusive(
   }
 }
 
-type FileMutationFingerprint = Pick<
-  BigIntStats,
-  "birthtimeNs" | "ctimeNs" | "dev" | "ino" | "mtimeNs" | "size"
->;
-
 async function readMutationFingerprint(handle: FileHandle): Promise<FileMutationFingerprint> {
   const stat = await handle.stat({ bigint: true });
   return {
@@ -280,30 +156,9 @@ async function assertMutationFingerprintUnchanged(
   filePath: string,
 ): Promise<void> {
   const current = await readMutationFingerprint(handle);
-  if (
-    current.birthtimeNs !== expected.birthtimeNs ||
-    current.ctimeNs !== expected.ctimeNs ||
-    current.dev !== expected.dev ||
-    current.ino !== expected.ino ||
-    current.mtimeNs !== expected.mtimeNs ||
-    current.size !== expected.size
-  ) {
+  if (!sameFileMutationFingerprint(current, expected)) {
     throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
   }
-}
-
-function sameMutationFingerprint(
-  left: FileMutationFingerprint,
-  right: FileMutationFingerprint,
-): boolean {
-  return (
-    left.birthtimeNs === right.birthtimeNs &&
-    left.ctimeNs === right.ctimeNs &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeNs === right.mtimeNs &&
-    left.size === right.size
-  );
 }
 
 async function syncFile(filePath: string): Promise<void> {
@@ -411,17 +266,7 @@ function hashPublishedFileSync(filePath: string, expectedIdentity: Stats): Sqlit
       mtimeNs: initialStat.mtimeNs,
       size: initialStat.size,
     };
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    let offset = 0;
-    while (true) {
-      const bytesRead = fsSync.readSync(fileDescriptor, buffer, 0, buffer.length, offset);
-      if (bytesRead === 0) {
-        break;
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
+    const content = hashFileDescriptorSync(fileDescriptor);
     const finalStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
     const finalFingerprint: FileMutationFingerprint = {
       birthtimeNs: finalStat.birthtimeNs,
@@ -431,11 +276,11 @@ function hashPublishedFileSync(filePath: string, expectedIdentity: Stats): Sqlit
       mtimeNs: finalStat.mtimeNs,
       size: finalStat.size,
     };
-    if (!sameMutationFingerprint(initialFingerprint, finalFingerprint)) {
+    if (!sameFileMutationFingerprint(initialFingerprint, finalFingerprint)) {
       throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
     }
     assertOpenFileIdentitySync(fileDescriptor, filePath, expectedIdentity);
-    return { sha256: hash.digest("hex"), sizeBytes: offset };
+    return content;
   } finally {
     fsSync.closeSync(fileDescriptor);
   }
@@ -475,7 +320,18 @@ function removePublishedTargetIfOwned(
       expectedIdentity.mtimeMs === currentIdentity.mtimeMs &&
       expectedIdentity.ctimeMs === currentIdentity.ctimeMs &&
       expectedIdentity.birthtimeMs === currentIdentity.birthtimeMs);
-  if (!sameFileIdentity(expectedIdentity, currentIdentity) || !fingerprintMatches) {
+  // Unknown Windows identity can admit a read, but cannot authorize deletion.
+  const unknownIdentity =
+    process.platform === "win32" &&
+    [expectedIdentity.dev, expectedIdentity.ino, currentIdentity.dev, currentIdentity.ino].some(
+      (value) => value === 0,
+    );
+  if (
+    !currentIdentity.isFile() ||
+    unknownIdentity ||
+    !sameFileIdentity(expectedIdentity, currentIdentity) ||
+    !fingerprintMatches
+  ) {
     return false;
   }
   // Node has no cross-platform unlink-by-inode primitive. Keep the ownership
@@ -486,6 +342,17 @@ function removePublishedTargetIfOwned(
   } catch {
     return false;
   }
+}
+
+function sameFileStatFingerprint(left: Stats, right: Stats): boolean {
+  // Creating the publication hard link changes source ctime, so compare the
+  // mutation fields that remain stable for the same bytes and pathname owner.
+  return (
+    sameFileIdentity(left, right) &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.birthtimeMs === right.birthtimeMs
+  );
 }
 
 function assertSynchronousCallbackResult(result: unknown, label: string): void {
@@ -499,48 +366,6 @@ function assertSynchronousCallbackResult(result: unknown, label: string): void {
   }
 }
 
-function isUnsupportedDirectorySyncError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EINVAL" ||
-    code === "ENOTSUP" ||
-    code === "ENOSYS" ||
-    (process.platform === "win32" && (code === "EISDIR" || code === "EPERM" || code === "EACCES"))
-  );
-}
-
-export async function syncDirectoryBestEffort(directoryPath: string): Promise<void> {
-  const handle = await fs.open(directoryPath, "r").catch((error: unknown) => {
-    if (isUnsupportedDirectorySyncError(error)) {
-      return undefined;
-    }
-    throw error;
-  });
-  if (!handle) {
-    return;
-  }
-  try {
-    await handle.sync();
-  } catch (error) {
-    if (!isUnsupportedDirectorySyncError(error)) {
-      throw error;
-    }
-  } finally {
-    await handle.close();
-  }
-}
-
-function isLinkFallbackError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EPERM" ||
-    code === "EXDEV" ||
-    code === "ENOTSUP" ||
-    code === "EOPNOTSUPP" ||
-    code === "ENOSYS"
-  );
-}
-
 /**
  * Publish the exact bytes of one already-verified SQLite file without reopening
  * its pathname during the copy. The target is always created exclusively.
@@ -549,28 +374,33 @@ export async function publishVerifiedSqliteFile(
   options: PublishVerifiedSqliteFileOptions,
 ): Promise<void> {
   await assertTargetAbsent(options.targetPath);
-  const targetDirectory = path.dirname(options.targetPath);
-  const stagingDir = await createPrivateSqliteTempDirectory(
-    targetDirectory,
-    `.sqlite-publish-${randomUUID()}-`,
-  );
+  const targetDirectory = path.resolve(path.dirname(options.targetPath));
+  const targetDirectoryPin = await pinDirectory(targetDirectory, {
+    label: "SQLite publication directory",
+  });
+  const targetDirectoryReceipt = targetDirectoryPin.receipt;
+  let stagingDir: string;
+  try {
+    stagingDir = await createPrivateSqliteTempDirectory(
+      targetDirectory,
+      `.sqlite-publish-${randomUUID()}-`,
+    );
+  } catch (error) {
+    await targetDirectoryPin.close().catch(() => undefined);
+    throw error;
+  }
   const stagedPath = path.join(stagingDir, "database.sqlite");
   let stagingIdentity: Stats | undefined;
   let source: FileHandle | undefined;
   let target: FileHandle | undefined;
   let targetPinFileDescriptor: number | undefined;
-  let verifiedStagedIdentity: Stats | undefined;
-  let linkedCandidateIdentity: Stats | undefined;
   let publishedIdentity: Stats | undefined;
-  let ownershipPinned = false;
-  let hardLinkCreated = false;
   try {
     stagingIdentity = await fs.lstat(stagingDir);
     await fs.chmod(stagingDir, 0o700);
     source = await fs.open(options.sourcePath, "r");
     await assertOpenFileIdentity(source, options.sourcePath, options.sourceIdentity);
     const staged = await copyFileExclusive(source, stagedPath);
-    verifiedStagedIdentity = staged.identity;
     const expectedContent = options.expectedContent;
     assertExpectedContent(staged.content, expectedContent, options.targetPath);
     await source.close();
@@ -581,76 +411,75 @@ export async function publishVerifiedSqliteFile(
     assertExpectedContent(validatedContent, expectedContent, options.targetPath);
     await options.beforePublish?.();
     await assertTargetAbsent(options.targetPath);
-    let usedHardLink = false;
+    const currentStagedIdentity = await fs.lstat(stagedPath);
+    if (!sameFileStatFingerprint(staged.identity, currentStagedIdentity)) {
+      throw new Error(`SQLite snapshot staging file changed during publication: ${stagedPath}`);
+    }
     try {
-      await fs.link(stagedPath, options.targetPath);
-      usedHardLink = true;
-      hardLinkCreated = true;
+      const publication = await publishFileExclusive({
+        sourcePath: stagedPath,
+        targetPath: options.targetPath,
+        expectedSourceIdentity: currentStagedIdentity,
+        strategy: options.requireAtomicPublication ? "link-required" : "link-or-copy",
+      });
+      publishedIdentity = publication.identity;
+      // Keep the successful receipt before our durability policy can reject it;
+      // dependency failures retain their own cleanup instead of a lossy receipt.
+      requireDirectorySync(publication.directorySync, "File publication directory");
     } catch (error) {
-      if (!isLinkFallbackError(error)) {
-        throw error;
-      }
-      if (options.requireAtomicPublication) {
+      const details = getPublishFileExclusiveFailureDetails(error);
+      const stagedAfterFailure = details?.targetCreated
+        ? await fs.lstat(stagedPath).catch(() => undefined)
+        : undefined;
+      const stagedPathChanged =
+        !stagedAfterFailure || !sameFileStatFingerprint(staged.identity, stagedAfterFailure);
+      // Failed-publication cleanup belongs to the publisher's opened identity.
+      // A later staging/target lookup cannot grant ownership of a replacement.
+      if (options.requireAtomicPublication && isHardlinkFallbackError(error)) {
         throw new Error(
           `Atomic SQLite publication requires hard-link support in ${targetDirectory}.`,
           { cause: error },
         );
       }
-      const stagedSource = await fs.open(stagedPath, "r");
-      try {
-        const copied = await copyFileExclusive(stagedSource, options.targetPath);
-        publishedIdentity = copied.identity;
-        assertExpectedContent(copied.content, expectedContent, options.targetPath);
-      } finally {
-        await stagedSource.close();
-      }
-    }
-    if (usedHardLink) {
-      target = await fs.open(options.targetPath, "r");
-      const linkedIdentity = await target.stat();
-      linkedCandidateIdentity = linkedIdentity;
-      const currentTargetIdentity = await fs.lstat(options.targetPath);
-      const currentStagedIdentity = await fs.lstat(stagedPath);
-      if (!sameFileIdentity(linkedIdentity, currentTargetIdentity)) {
-        throw new Error(`SQLite snapshot target changed during publication: ${options.targetPath}`);
-      }
-      const matchesVerifiedStaging = sameFileIdentity(staged.identity, linkedIdentity);
-      const matchesCurrentStaging = sameFileIdentity(currentStagedIdentity, linkedIdentity);
-      if (matchesVerifiedStaging || matchesCurrentStaging) {
-        // The target handle pins exactly what link() published for ownership-safe cleanup.
-        publishedIdentity = linkedIdentity;
-        ownershipPinned = true;
-      }
-      if (!matchesCurrentStaging) {
-        throw new Error(`SQLite snapshot staging path changed after publication: ${stagedPath}`);
-      }
-      if (!matchesVerifiedStaging) {
+      if (details?.targetCreated) {
+        if (stagedPathChanged) {
+          throw new Error(
+            `SQLite snapshot staging file changed during publication: ${options.targetPath}`,
+            { cause: error },
+          );
+        }
         throw new Error(
-          `SQLite snapshot staging file changed during publication: ${options.targetPath}`,
+          `SQLite snapshot target changed during publication: ${options.targetPath}`,
+          { cause: error },
         );
       }
+      throw error;
     }
     if (!publishedIdentity) {
       throw new Error(`SQLite snapshot target was not published: ${options.targetPath}`);
     }
     const initialPublishedIdentity = publishedIdentity;
-    target ??= await fs.open(options.targetPath, "r");
+    target = await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);
-    ownershipPinned = true;
-    await syncDirectoryBestEffort(targetDirectory);
+    // Retire the writable staging hard link before the final byte verification.
     await fs.unlink(stagedPath);
     const expectedIdentity = await target.stat();
     publishedIdentity = expectedIdentity;
+    const publishedContent = await hashOpenPublishedFile(
+      target,
+      options.targetPath,
+      expectedIdentity,
+    );
+    assertExpectedContent(publishedContent, expectedContent, options.targetPath);
     await fs.rmdir(stagingDir);
-    await syncDirectoryBestEffort(targetDirectory);
-    const linkedContent = await hashOpenPublishedFile(target, options.targetPath, expectedIdentity);
-    assertExpectedContent(linkedContent, expectedContent, options.targetPath);
+    requireDirectorySync(
+      await syncDirectory(targetDirectoryReceipt),
+      "SQLite publication directory",
+    );
     await target.close();
     target = undefined;
-    ownershipPinned = false;
     targetPinFileDescriptor = fsSync.openSync(options.targetPath, "r");
     assertOpenFileIdentitySync(targetPinFileDescriptor, options.targetPath, expectedIdentity);
-    ownershipPinned = true;
 
     const guard: PublishedSqliteFileGuard = {
       assertTargetMatchesExpectedContent: (finalCheck) => {
@@ -675,51 +504,19 @@ export async function publishVerifiedSqliteFile(
     }
     fsSync.closeSync(targetPinFileDescriptor);
     targetPinFileDescriptor = undefined;
-    ownershipPinned = false;
   } catch (error) {
-    if (!publishedIdentity && hardLinkCreated && verifiedStagedIdentity) {
-      const currentTargetIdentity = await fs.lstat(options.targetPath).catch(() => undefined);
-      const currentStagedIdentity = await fs.lstat(stagedPath).catch(() => undefined);
-      const targetMatchesStaging =
-        currentTargetIdentity &&
-        currentStagedIdentity &&
-        sameFileIdentity(currentTargetIdentity, currentStagedIdentity);
-      const targetMatchesVerified =
-        currentTargetIdentity && sameFileIdentity(currentTargetIdentity, verifiedStagedIdentity);
-      if (targetMatchesStaging || targetMatchesVerified) {
-        publishedIdentity = currentTargetIdentity;
-        ownershipPinned = Boolean(targetMatchesStaging);
-      }
-    }
-    if (!publishedIdentity && target && linkedCandidateIdentity && verifiedStagedIdentity) {
-      const currentTargetIdentity = await fs.lstat(options.targetPath).catch(() => undefined);
-      const currentStagedIdentity = await fs.lstat(stagedPath).catch(() => undefined);
-      const targetStillMatches =
-        currentTargetIdentity && sameFileIdentity(currentTargetIdentity, linkedCandidateIdentity);
-      const targetCameFromStaging =
-        (currentStagedIdentity &&
-          sameFileIdentity(currentStagedIdentity, linkedCandidateIdentity)) ||
-        sameFileIdentity(verifiedStagedIdentity, linkedCandidateIdentity);
-      if (targetStillMatches && targetCameFromStaging) {
-        publishedIdentity = linkedCandidateIdentity;
-        ownershipPinned = true;
-      }
-    }
     if (target && publishedIdentity) {
       const openedIdentity = await target.stat().catch(() => undefined);
       if (openedIdentity && sameFileIdentity(openedIdentity, publishedIdentity)) {
         publishedIdentity = openedIdentity;
-        ownershipPinned = true;
       }
     }
     if (publishedIdentity) {
-      const removed = removePublishedTargetIfOwned(
-        options.targetPath,
-        publishedIdentity,
-        !ownershipPinned,
-      );
+      // Windows can reuse a deleted file's identity while our old handle is still pinned.
+      // Require the full fingerprint so cleanup never unlinks a caller replacement.
+      const removed = removePublishedTargetIfOwned(options.targetPath, publishedIdentity, true);
       if (removed) {
-        await syncDirectoryBestEffort(targetDirectory).catch(() => undefined);
+        await syncDirectory(targetDirectoryReceipt).catch(() => undefined);
       }
     }
     if (stagingIdentity) {
@@ -738,6 +535,7 @@ export async function publishVerifiedSqliteFile(
     if (source) {
       await source.close().catch(() => undefined);
     }
+    await targetDirectoryPin.close().catch(() => undefined);
   }
 }
 
@@ -775,7 +573,7 @@ async function removePublicationStagingDirectory(
 export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
-  await assertRegularSourceFile(options.sourcePath);
+  await assertRegularSourceFile(options.sourcePath, options.requireNonEmptySource === true);
   await assertTargetAbsent(options.targetPath);
 
   const stagingDir = await createPrivateSqliteTempDirectory(
@@ -787,29 +585,48 @@ export async function createVerifiedSqliteSnapshot(
   const sqlite = requireNodeSqlite();
   let stagedIdentity: Stats | undefined;
   try {
-    const source = new sqlite.DatabaseSync(options.sourcePath, {
-      allowExtension: true,
-      readOnly: true,
+    await withSqliteSnapshotSource(options.sourcePath, async (snapshotSourcePath) => {
+      await fs.rm(stagedPath, { force: true });
+      const source = openNodeSqliteDatabase(snapshotSourcePath, {
+        allowExtension: true,
+        readOnly: true,
+      });
+      try {
+        source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
+        try {
+          // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
+          source.prepare("PRAGMA schema_version;").get();
+          await loadSqliteVecExtension({ db: source });
+          assertSqliteIntegrity(source, options.sourcePath);
+          options.validate?.(source, options.sourcePath);
+          await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
+        } finally {
+          source.exec("ROLLBACK;");
+        }
+      } finally {
+        if (source.isOpen) {
+          source.close();
+        }
+      }
     });
-    try {
-      source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
-      await loadSqliteVecExtension({ db: source });
-      assertSqliteIntegrity(source, options.sourcePath);
-      options.validate?.(source, options.sourcePath);
-      source.prepare("VACUUM INTO ?").run(stagedPath);
-    } finally {
-      source.close();
-    }
 
     await fs.chmod(stagedPath, 0o600);
-    const snapshot = new sqlite.DatabaseSync(stagedPath, { allowExtension: true });
+    const snapshot = openNodeSqliteDatabase(stagedPath, {
+      allowExtension: true,
+    });
     try {
       snapshot.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
       await loadSqliteVecExtension({ db: snapshot });
+      // Online backup preserves WAL mode. Switch the private copy to rollback
+      // journaling so verification and restore need only the published file.
+      snapshot.exec("PRAGMA journal_mode = DELETE;");
       if (options.transform) {
         await options.transform(snapshot);
-        // A transform may delete sensitive rows. Compact again so the
-        // published artifact cannot retain their bytes in free pages.
+      }
+      // Ordinary backups erase deleted/transformed data from free pages. Update
+      // checkpoints opt out because VACUUM can rewrite implicit row IDs. DELETE
+      // journaling above still makes the published artifact single-file.
+      if (!options.preserveRowIds) {
         snapshot.exec("VACUUM;");
       }
       assertSqliteIntegrity(snapshot, options.targetPath);
@@ -827,7 +644,7 @@ export async function createVerifiedSqliteSnapshot(
         beforePublish: options.beforePublish,
         afterPublish: options.afterPublish,
         validatePublished: async (publishedPath) => {
-          const published = new sqlite.DatabaseSync(publishedPath, {
+          const published = openNodeSqliteDatabase(publishedPath, {
             allowExtension: true,
             readOnly: true,
           });
@@ -862,4 +679,3 @@ export async function createVerifiedSqliteSnapshot(
     await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

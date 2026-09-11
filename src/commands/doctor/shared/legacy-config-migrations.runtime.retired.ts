@@ -6,6 +6,24 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
+import {
+  hasConfigTrancheLegacyKeys,
+  migrateConfigTranche,
+} from "./legacy-config-migrations.runtime.config-tranche.js";
+import {
+  consolidateMediaCapabilityConfig,
+  hasDiscordRealtimeVoice,
+  hasLegacyMediaCapabilityConfig,
+  hasMediaDeepgram,
+  migrateDiscordVoice,
+  migrateMediaDeepgram,
+  moveVoice,
+  stripRetiredTuningKnobs,
+} from "./legacy-config-migrations.runtime.retired-media.js";
+import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
+import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
+import { visitAgentConfigScopes, visitChannelEntries } from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],
@@ -17,290 +35,570 @@ const rule = (
   ...(match ? { match } : {}),
 });
 
-function moveVoice(owner: Record<string, unknown>, path: string, changes: string[]): void {
-  if (!Object.hasOwn(owner, "voice")) {
-    return;
-  }
-  if (owner.speakerVoice === undefined) {
-    owner.speakerVoice = owner.voice;
-    changes.push(`Moved ${path}.voice → ${path}.speakerVoice.`);
-  } else {
-    changes.push(`Removed ${path}.voice (${path}.speakerVoice already set).`);
-  }
-  delete owner.voice;
-}
-
-function migrateDiscordVoice(channels: Record<string, unknown>, changes: string[]): void {
-  const discord = getRecord(channels.discord);
-  if (!discord) {
-    return;
-  }
-  const migrateEntry = (entry: Record<string, unknown>, path: string) => {
-    const realtime = getRecord(getRecord(entry.voice)?.realtime);
-    if (realtime) {
-      moveVoice(realtime, `${path}.voice.realtime`, changes);
-    }
-  };
-  migrateEntry(discord, "channels.discord");
-  const accounts = getRecord(discord.accounts);
-  if (accounts) {
-    for (const [accountId, value] of Object.entries(accounts)) {
-      const account = getRecord(value);
-      if (account) {
-        migrateEntry(account, `channels.discord.accounts.${accountId}`);
-      }
-    }
-  }
-}
-
-function hasDiscordRealtimeVoice(value: unknown): boolean {
-  const discord = getRecord(value);
-  if (!discord) {
-    return false;
-  }
-  const hasAlias = (entry: unknown) => {
-    const realtime = getRecord(getRecord(getRecord(entry)?.voice)?.realtime);
-    return realtime ? Object.hasOwn(realtime, "voice") : false;
-  };
-  if (hasAlias(discord)) {
-    return true;
-  }
-  const accounts = getRecord(discord.accounts);
-  return accounts ? Object.values(accounts).some(hasAlias) : false;
-}
-
-function mapDeepgram(value: Record<string, unknown>): Record<string, unknown> {
-  const mapped: Record<string, unknown> = {};
-  if (typeof value.detectLanguage === "boolean") {
-    mapped.detect_language = value.detectLanguage;
-  }
-  if (typeof value.punctuate === "boolean") {
-    mapped.punctuate = value.punctuate;
-  }
-  if (typeof value.smartFormat === "boolean") {
-    mapped.smart_format = value.smartFormat;
-  }
-  return mapped;
-}
-
-function migrateDeepgramOwner(
-  owner: Record<string, unknown>,
+function moveKey(
+  owner: Record<string, unknown> | null | undefined,
+  legacyKey: string,
+  canonicalKey: string,
   path: string,
   changes: string[],
 ): void {
-  const legacy = getRecord(owner.deepgram);
-  if (!legacy) {
+  if (!owner || !Object.hasOwn(owner, legacyKey)) {
     return;
   }
-  const providerOptions = getRecord(owner.providerOptions) ?? {};
-  const canonical = getRecord(providerOptions.deepgram) ?? {};
-  providerOptions.deepgram = { ...mapDeepgram(legacy), ...canonical };
-  owner.providerOptions = providerOptions;
-  delete owner.deepgram;
-  changes.push(`Moved ${path}.deepgram → ${path}.providerOptions.deepgram.`);
+  if (owner[canonicalKey] === undefined) {
+    owner[canonicalKey] = owner[legacyKey];
+    changes.push(`Moved ${path}.${legacyKey} → ${path}.${canonicalKey}.`);
+  } else {
+    changes.push(`Removed ${path}.${legacyKey} (${path}.${canonicalKey} already set).`);
+  }
+  delete owner[legacyKey];
 }
 
-function migrateMediaDeepgram(raw: Record<string, unknown>, changes: string[]): void {
-  const media = getRecord(getRecord(raw.tools)?.media);
-  if (!media) {
-    return;
-  }
-  const migrateModels = (models: unknown, path: string) => {
-    if (!Array.isArray(models)) {
+function migrateMessageCrossContext(raw: Record<string, unknown>, changes: string[]): void {
+  const globalMessage = getRecord(getRecord(raw.tools)?.message);
+  const globalBypass = globalMessage?.allowCrossContextSend;
+  const globalCrossContext = getRecord(globalMessage?.crossContext);
+  const migrate = (message: Record<string, unknown> | null, path: string, agent: boolean) => {
+    if (!message) {
       return;
     }
-    models.forEach((value, index) => {
-      const model = getRecord(value);
-      if (model) {
-        migrateDeepgramOwner(model, `${path}[${index}]`, changes);
-      }
-    });
-  };
-  migrateModels(media.models, "tools.media.models");
-  for (const capability of ["audio", "image", "video"]) {
-    const entry = getRecord(media[capability]);
-    if (!entry) {
-      continue;
+    const legacy = message.allowCrossContextSend;
+    const inheritedBypass = agent && globalBypass === true;
+    if (legacy === undefined && !inheritedBypass) {
+      return;
     }
-    migrateDeepgramOwner(entry, `tools.media.${capability}`, changes);
-    migrateModels(entry.models, `tools.media.${capability}.models`);
-  }
+    const crossContext = getRecord(message.crossContext) ?? {};
+    // The shipped legacy flag bypassed both checks. An agent's false masked the
+    // root bypass, so preserve that effective policy before changing the root.
+    if ((legacy ?? (agent ? globalBypass : undefined)) === true) {
+      message.crossContext = {
+        ...crossContext,
+        allowWithinProvider: true,
+        allowAcrossProviders: true,
+      };
+    } else if (inheritedBypass) {
+      message.crossContext = {
+        ...crossContext,
+        allowWithinProvider:
+          (crossContext.allowWithinProvider ?? globalCrossContext?.allowWithinProvider) !== false,
+        allowAcrossProviders:
+          (crossContext.allowAcrossProviders ?? globalCrossContext?.allowAcrossProviders) === true,
+      };
+    }
+    delete message.allowCrossContextSend;
+    changes.push(`Moved ${path}.allowCrossContextSend → ${path}.crossContext.`);
+  };
+  visitAgentConfigScopes(raw, (scope, path) => {
+    if (path !== "agents.defaults") {
+      migrate(getRecord(getRecord(scope.tools)?.message), `${path}.tools.message`, true);
+    }
+  });
+  migrate(globalMessage, "tools.message", false);
 }
 
-function hasMediaDeepgram(value: unknown): boolean {
-  const media = getRecord(value);
-  if (!media) {
-    return false;
+function migrateTruncateAfterCompaction(raw: Record<string, unknown>, changes: string[]): void {
+  const compaction = getRecord(getRecord(getRecord(raw.agents)?.defaults)?.compaction);
+  if (!compaction || !Object.hasOwn(compaction, "truncateAfterCompaction")) {
+    return;
   }
-  const hasAlias = (entry: unknown) => {
-    const owner = getRecord(entry);
-    return owner ? Object.hasOwn(owner, "deepgram") : false;
-  };
-  const modelsHaveAlias = (models: unknown) => Array.isArray(models) && models.some(hasAlias);
-  if (modelsHaveAlias(media.models)) {
-    return true;
+  if (
+    compaction.truncateAfterCompaction === false &&
+    Object.hasOwn(compaction, "maxActiveTranscriptBytes")
+  ) {
+    delete compaction.maxActiveTranscriptBytes;
+    changes.push("Removed maxActiveTranscriptBytes to preserve truncateAfterCompaction: false.");
   }
-  return ["audio", "image", "video"].some((capability) => {
-    const entry = getRecord(media[capability]);
-    return entry ? hasAlias(entry) || modelsHaveAlias(entry.models) : false;
+  delete compaction.truncateAfterCompaction;
+  changes.push("Removed retired agents.defaults.compaction.truncateAfterCompaction.");
+}
+
+function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string[]): void {
+  const agents = getRecord(raw.agents);
+  const defaults = getRecord(agents?.defaults);
+  moveKey(defaults, "pdfMaxBytesMb", "pdfMaxMb", "agents.defaults", changes);
+  if (defaults) {
+    const mediaModels = getRecord(defaults.mediaModels) ?? {};
+    for (const [legacyKey, canonicalKey] of [
+      ["imageGenerationModel", "image"],
+      ["videoGenerationModel", "video"],
+      ["musicGenerationModel", "music"],
+    ] as const) {
+      if (!Object.hasOwn(defaults, legacyKey)) {
+        continue;
+      }
+      if (mediaModels[canonicalKey] === undefined) {
+        mediaModels[canonicalKey] = defaults[legacyKey];
+        changes.push(
+          `Moved agents.defaults.${legacyKey} → agents.defaults.mediaModels.${canonicalKey}.`,
+        );
+      } else {
+        changes.push(
+          `Removed agents.defaults.${legacyKey} (agents.defaults.mediaModels.${canonicalKey} already set).`,
+        );
+      }
+      delete defaults[legacyKey];
+    }
+    if (Object.keys(mediaModels).length > 0) {
+      defaults.mediaModels = mediaModels;
+    }
+  }
+
+  visitAgentConfigScopes(raw, (scope, path) => {
+    moveKey(
+      getRecord(getRecord(scope.tools)?.exec),
+      "timeoutSec",
+      "timeoutSeconds",
+      `${path}.tools.exec`,
+      changes,
+    );
+    moveKey(
+      getRecord(getRecord(scope.sandbox)?.browser),
+      "enableNoVnc",
+      "noVncEnabled",
+      `${path}.sandbox.browser`,
+      changes,
+    );
+  });
+  moveKey(
+    getRecord(getRecord(raw.tools)?.exec),
+    "timeoutSec",
+    "timeoutSeconds",
+    "tools.exec",
+    changes,
+  );
+
+  const env = getRecord(raw.env);
+  if (env) {
+    const vars = getRecord(env.vars) ?? {};
+    let moved = false;
+    for (const [key, value] of Object.entries(env)) {
+      if (key === "vars" || key === "shellEnv" || typeof value !== "string") {
+        continue;
+      }
+      if (vars[key] === undefined) {
+        vars[key] = value;
+        changes.push(`Moved env.${key} → env.vars.${key}.`);
+      } else {
+        changes.push(`Removed env.${key} (env.vars.${key} already set).`);
+      }
+      delete env[key];
+      moved = true;
+    }
+    if (moved) {
+      env.vars = vars;
+    }
+  }
+
+  const browser = getRecord(raw.browser);
+  const ssrfPolicy = getRecord(browser?.ssrfPolicy);
+  if (ssrfPolicy && Array.isArray(ssrfPolicy.hostnameAllowlist)) {
+    const canonical = Array.isArray(ssrfPolicy.allowedHostnames) ? ssrfPolicy.allowedHostnames : [];
+    ssrfPolicy.allowedHostnames = [
+      ...new Set(
+        [...canonical, ...ssrfPolicy.hostnameAllowlist].filter(
+          (value) => typeof value === "string",
+        ),
+      ),
+    ];
+    delete ssrfPolicy.hostnameAllowlist;
+    changes.push("Merged browser.ssrfPolicy.hostnameAllowlist → allowedHostnames.");
+  }
+
+  const legacyMedia = getRecord(raw.media);
+  if (legacyMedia) {
+    const attachments = ensureRecord(raw, "attachments");
+    mergeMissing(attachments, legacyMedia);
+    delete raw.media;
+    changes.push("Moved media → attachments.");
+  }
+
+  const audit = getRecord(raw.audit);
+  if (audit) {
+    const logging = ensureRecord(raw, "logging");
+    const canonicalAudit = getRecord(logging.audit) ?? {};
+    mergeMissing(canonicalAudit, audit);
+    logging.audit = canonicalAudit;
+    delete raw.audit;
+    changes.push("Moved audit → logging.audit.");
+  }
+
+  const nodes = getRecord(getRecord(raw.gateway)?.nodes);
+  if (nodes) {
+    const skills = getRecord(nodes.skills);
+    if (skills && Object.hasOwn(skills, "enabled")) {
+      if (nodes.allowSkills === undefined) {
+        nodes.allowSkills = skills.enabled;
+      }
+      delete nodes.skills;
+      changes.push("Moved gateway.nodes.skills.enabled → gateway.nodes.allowSkills.");
+    }
+    const commands = getRecord(nodes.commands) ?? {};
+    if (Object.hasOwn(nodes, "allowCommands")) {
+      if (commands.allow === undefined) {
+        commands.allow = nodes.allowCommands;
+      }
+      delete nodes.allowCommands;
+      changes.push("Moved gateway.nodes.allowCommands → gateway.nodes.commands.allow.");
+    }
+    if (Object.hasOwn(nodes, "denyCommands")) {
+      if (commands.deny === undefined) {
+        commands.deny = nodes.denyCommands;
+      }
+      delete nodes.denyCommands;
+      changes.push("Moved gateway.nodes.denyCommands → gateway.nodes.commands.deny.");
+    }
+    if (Object.keys(commands).length > 0) {
+      nodes.commands = commands;
+    }
+  }
+
+  visitChannelEntries(raw, "slack", (entry, path) => {
+    moveKey(entry, "identity", "postAs", path, changes);
   });
 }
 
-const RETIRED_TUNING_PATHS = [
-  ["auth", "cooldowns"],
-  ["secrets", "resolution"],
-  ["browser", "remoteCdpTimeoutMs"],
-  ["browser", "remoteCdpHandshakeTimeoutMs"],
-  ["browser", "localLaunchTimeoutMs"],
-  ["browser", "localCdpReadyTimeoutMs"],
-  ["browser", "actionTimeoutMs"],
-  ["browser", "cdpPortRangeStart"],
-  ["browser", "tabCleanup", "idleMinutes"],
-  ["browser", "tabCleanup", "maxTabsPerSession"],
-  ["browser", "tabCleanup", "sweepMinutes"],
-  ["tools", "loopDetection", "genericRepeat"],
-  ["tools", "loopDetection", "knownPollNoProgress"],
-  ["tools", "loopDetection", "pingPong"],
-  ["tools", "loopDetection", "windowSize"],
-  ["tools", "loopDetection", "historySize"],
-  ["tools", "loopDetection", "warningThreshold"],
-  ["tools", "loopDetection", "unknownToolThreshold"],
-  ["tools", "loopDetection", "criticalThreshold"],
-  ["tools", "loopDetection", "globalCircuitBreakerThreshold"],
-  ["tools", "loopDetection", "detectors"],
-  ["tools", "loopDetection", "postCompactionGuard"],
-  ["gateway", "handshakeTimeoutMs"],
-  ["gateway", "channelHealthCheckMinutes"],
-  ["gateway", "channelStaleEventThresholdMinutes"],
-  ["gateway", "channelMaxRestartsPerHour"],
-  ["gateway", "reload", "debounceMs"],
-  ["gateway", "reload", "deferralTimeoutMs"],
-  ["gateway", "http", "endpoints", "chatCompletions", "maxBodyBytes"],
-  ["gateway", "http", "endpoints", "chatCompletions", "maxImageParts"],
-  ["gateway", "http", "endpoints", "chatCompletions", "maxTotalImageBytes"],
-  ["gateway", "http", "endpoints", "responses", "maxBodyBytes"],
-  ["session", "typingIntervalSeconds"],
-  ["session", "writeLock"],
-  ["session", "agentToAgent", "maxPingPongTurns"],
-  ["cron", "maxConcurrentRuns"],
-  ["cron", "triggers", "minIntervalMs"],
-  ["cron", "retry"],
-  ["diagnostics", "stuckSessionWarnMs"],
-  ["diagnostics", "stuckSessionAbortMs"],
-  ["diagnostics", "memoryPressureSnapshot"],
-  ["diagnostics", "memoryPressureBundle"],
-  ["web", "heartbeatSeconds"],
-  ["web", "reconnect"],
-  ["web", "whatsapp"],
-  ["messages", "queue", "debounceMs"],
-  ["messages", "statusReactions", "timing"],
-  ["acp", "stream", "coalesceIdleMs"],
-  ["acp", "stream", "maxChunkChars"],
-  ["acp", "stream", "maxOutputChars"],
-  ["acp", "stream", "maxSessionUpdateChars"],
-  ["acp", "stream", "hiddenBoundarySeparator"],
-  ["acp", "maxConcurrentSessions"],
-  ["acp", "runtime", "ttlMinutes"],
-  ["mcp", "sessionIdleTtlMs"],
-  ["worktrees"],
-  ["transcripts", "maxUtterances"],
-  ["hooks", "maxBodyBytes"],
-  ["update", "auto", "stableDelayHours"],
-  ["update", "auto", "stableJitterHours"],
-  ["update", "auto", "betaCheckIntervalHours"],
-] as const;
-
-const RETIRED_AGENT_TUNING_PATHS = [
-  ["compaction", "reserveTokens"],
-  ["compaction", "reserveTokensFloor"],
-  ["compaction", "maxHistoryShare"],
-  ["contextPruning", "keepLastAssistants"],
-  ["contextPruning", "softTrimRatio"],
-  ["contextPruning", "hardClearRatio"],
-  ["contextPruning", "minPrunableToolChars"],
-  ["contextPruning", "softTrim"],
-  ["memorySearch", "chunking"],
-  ["memorySearch", "sync", "watchDebounceMs"],
-  ["memorySearch", "sync", "intervalMinutes"],
-  ["memorySearch", "query", "hybrid", "vectorWeight"],
-  ["memorySearch", "query", "hybrid", "textWeight"],
-  ["memorySearch", "query", "hybrid", "candidateMultiplier"],
-  ["memorySearch", "query", "hybrid", "mmr", "lambda"],
-  ["memorySearch", "query", "hybrid", "temporalDecay", "halfLifeDays"],
-  ["memorySearch", "cache", "maxEntries"],
-  ["cliBackends", "*", "reliability", "outputLimits"],
-  ["cliBackends", "*", "reliability", "watchdog", "fresh", "noOutputTimeoutMs"],
-  ["cliBackends", "*", "reliability", "watchdog", "resume", "noOutputTimeoutMs"],
-  ["runRetries"],
-  ["tools", "loopDetection", "genericRepeat"],
-  ["tools", "loopDetection", "knownPollNoProgress"],
-  ["tools", "loopDetection", "pingPong"],
-  ["tools", "loopDetection", "windowSize"],
-  ["tools", "loopDetection", "historySize"],
-  ["tools", "loopDetection", "warningThreshold"],
-  ["tools", "loopDetection", "unknownToolThreshold"],
-  ["tools", "loopDetection", "criticalThreshold"],
-  ["tools", "loopDetection", "globalCircuitBreakerThreshold"],
-  ["tools", "loopDetection", "detectors"],
-  ["tools", "loopDetection", "postCompactionGuard"],
-] as const;
-
-function deleteRetiredPath(owner: unknown, path: readonly string[], index = 0): boolean {
-  const record = getRecord(owner);
-  if (!record) {
-    return false;
-  }
-  const key = path[index];
-  if (!key) {
-    return false;
-  }
-  if (key === "*") {
-    let changed = false;
-    for (const value of Object.values(record)) {
-      changed = deleteRetiredPath(value, path, index + 1) || changed;
+function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]): void {
+  const defaults = getRecord(getRecord(raw.agents)?.defaults);
+  if (defaults && Object.hasOwn(defaults, "promptOverlays")) {
+    const personality = getRecord(getRecord(defaults.promptOverlays)?.gpt5)?.personality;
+    if (personality !== undefined) {
+      const openaiConfig = ensureRecord(
+        ensureRecord(ensureRecord(ensureRecord(raw, "plugins"), "entries"), "openai"),
+        "config",
+      );
+      if (openaiConfig.personality === undefined) {
+        openaiConfig.personality = personality;
+        changes.push(
+          "Moved agents.defaults.promptOverlays.gpt5.personality → plugins.entries.openai.config.personality.",
+        );
+      } else {
+        changes.push(
+          "Removed agents.defaults.promptOverlays.gpt5.personality (plugins.entries.openai.config.personality already set).",
+        );
+      }
+    } else {
+      changes.push("Removed agents.defaults.promptOverlays; built-in behavior now applies.");
     }
-    return changed;
+    delete defaults.promptOverlays;
   }
-  if (index === path.length - 1) {
-    if (!Object.hasOwn(record, key)) {
-      return false;
-    }
-    delete record[key];
-    return true;
-  }
-  const child = getRecord(record[key]);
-  if (!child || !deleteRetiredPath(child, path, index + 1)) {
-    return false;
-  }
-  if (Object.keys(child).length === 0) {
-    delete record[key];
-  }
-  return true;
-}
-
-function stripRetiredTuningKnobs(raw: Record<string, unknown>): boolean {
-  let changed = false;
-  for (const path of RETIRED_TUNING_PATHS) {
-    changed = deleteRetiredPath(raw, path) || changed;
-  }
-  const agents = getRecord(raw.agents);
-  const defaults = getRecord(agents?.defaults);
-  if (defaults) {
-    for (const path of RETIRED_AGENT_TUNING_PATHS) {
-      changed = deleteRetiredPath(defaults, path) || changed;
+  for (const key of [
+    "envelopeTimestamp",
+    "envelopeElapsed",
+    "envelopeTimezone",
+    "timeFormat",
+    "bootstrapPromptTruncationWarning",
+    "mediaGenerationAutoProviderFallback",
+  ]) {
+    if (defaults && Object.hasOwn(defaults, key)) {
+      delete defaults[key];
+      changes.push(`Removed agents.defaults.${key}; built-in behavior now applies.`);
     }
   }
-  if (Array.isArray(agents?.list)) {
-    for (const agent of agents.list) {
-      for (const path of RETIRED_AGENT_TUNING_PATHS) {
-        changed = deleteRetiredPath(agent, path) || changed;
+
+  const diagnostics = getRecord(raw.diagnostics);
+  const otel = getRecord(diagnostics?.otel);
+  const captureContent = getRecord(otel?.captureContent);
+  if (otel && captureContent) {
+    otel.captureContent =
+      typeof captureContent.enabled === "boolean"
+        ? captureContent.enabled
+        : Object.entries(captureContent).some(
+            ([key, value]) => key !== "enabled" && value === true,
+          );
+    changes.push("Collapsed diagnostics.otel.captureContent to a boolean.");
+  }
+  const cacheTrace = getRecord(diagnostics?.cacheTrace);
+  if (
+    cacheTrace &&
+    (Object.keys(cacheTrace).some((key) => key !== "enabled") ||
+      (cacheTrace.enabled !== undefined && typeof cacheTrace.enabled !== "boolean"))
+  ) {
+    diagnostics!.cacheTrace = { enabled: cacheTrace.enabled === true };
+    changes.push("Removed diagnostics.cacheTrace detail fields; only enabled remains.");
+  }
+
+  const attachments = getRecord(raw.attachments);
+  if (attachments && Object.hasOwn(attachments, "preserveFilenames")) {
+    delete attachments.preserveFilenames;
+    changes.push("Removed attachments.preserveFilenames; temp-safe names now always apply.");
+  }
+  const browser = getRecord(raw.browser);
+  if (browser && Object.hasOwn(browser, "color")) {
+    delete browser.color;
+    changes.push("Removed browser.color; the built-in color now applies.");
+  }
+  const profiles = getRecord(browser?.profiles);
+  if (profiles) {
+    for (const [profileId, value] of Object.entries(profiles)) {
+      const profile = getRecord(value);
+      if (profile && Object.hasOwn(profile, "color")) {
+        delete profile.color;
+        changes.push(`Removed browser.profiles.${profileId}.color.`);
       }
     }
   }
-  return changed;
+
+  visitChannelEntries(raw, "discord", (entry, path) => {
+    const autoPresence = getRecord(entry.autoPresence);
+    for (const key of ["healthyText", "degradedText", "exhaustedText"]) {
+      if (autoPresence && Object.hasOwn(autoPresence, key)) {
+        delete autoPresence[key];
+        changes.push(`Removed ${path}.autoPresence.${key}.`);
+      }
+    }
+    const components = getRecord(getRecord(entry.ui)?.components);
+    if (components && Object.hasOwn(components, "accentColor")) {
+      delete components.accentColor;
+      changes.push(`Removed ${path}.ui.components.accentColor.`);
+      const ui = getRecord(entry.ui);
+      if (Object.keys(components).length === 0 && ui) {
+        delete ui.components;
+      }
+      if (ui && Object.keys(ui).length === 0) {
+        delete entry.ui;
+      }
+    }
+  });
+
+  const messages = getRecord(raw.messages);
+  const statusReactions = getRecord(messages?.statusReactions);
+  if (statusReactions && Object.hasOwn(statusReactions, "emojis")) {
+    delete statusReactions.emojis;
+    changes.push("Removed messages.statusReactions.emojis; curated defaults now apply.");
+  }
+  if (messages && Object.hasOwn(messages, "removeAckAfterReply")) {
+    delete messages.removeAckAfterReply;
+    changes.push("Removed messages.removeAckAfterReply; acknowledgements are retained.");
+  }
+
+  visitChannelEntries(raw, "whatsapp", (entry, path) => {
+    moveKey(entry, "messagePrefix", "responsePrefix", path, changes);
+  });
+
+  visitChannelEntries(raw, "slack", (entry, path) => {
+    const socketMode = getRecord(entry.socketMode);
+    for (const key of ["clientPingTimeout", "serverPingTimeout", "pingPongLoggingEnabled"]) {
+      if (socketMode && Object.hasOwn(socketMode, key)) {
+        delete socketMode[key];
+        changes.push(`Removed ${path}.socketMode.${key}.`);
+      }
+    }
+    if (socketMode && Object.keys(socketMode).length === 0) {
+      delete entry.socketMode;
+    }
+  });
+  visitChannelEntries(raw, "imessage", (entry, path) => {
+    if (Object.hasOwn(entry, "coalesceSameSenderDms")) {
+      delete entry.coalesceSameSenderDms;
+      changes.push(`Removed ${path}.coalesceSameSenderDms.`);
+    }
+  });
+
+  const commands = getRecord(raw.commands);
+  for (const key of ["ownerDisplay", "ownerDisplaySecret"]) {
+    if (commands && Object.hasOwn(commands, key)) {
+      delete commands[key];
+      changes.push(`Removed commands.${key}; owner ids now render raw.`);
+    }
+  }
+
+  const cron = getRecord(raw.cron);
+  const failureDestination = getRecord(cron?.failureDestination);
+  if (cron && failureDestination) {
+    const failureAlert = getRecord(cron.failureAlert) ?? {};
+    mergeMissing(failureAlert, failureDestination);
+    cron.failureAlert = failureAlert;
+    delete cron.failureDestination;
+    changes.push("Merged cron.failureDestination → cron.failureAlert.");
+  }
+  const gateway = getRecord(raw.gateway);
+  const reload = getRecord(gateway?.reload);
+  if (reload?.mode === "restart" || reload?.mode === "hot") {
+    reload.mode = "hybrid";
+    changes.push("Mapped gateway.reload.mode to hybrid.");
+  }
+  const logging = getRecord(raw.logging);
+  if (logging?.consoleStyle === "compact") {
+    logging.consoleStyle = "pretty";
+    changes.push("Mapped logging.consoleStyle compact → pretty.");
+  }
+  const controlUi = getRecord(gateway?.controlUi);
+  if (controlUi && Object.hasOwn(controlUi, "chatMessageMaxWidth")) {
+    delete controlUi.chatMessageMaxWidth;
+    changes.push("Removed gateway.controlUi.chatMessageMaxWidth; chat width is now browser-local.");
+  }
+}
+
+function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string[]): void {
+  const ui = getRecord(raw.ui);
+  if (!ui || !Object.hasOwn(ui, "assistant")) {
+    return;
+  }
+
+  // The retired override was presentation-only. Translating it into agent identity
+  // would unexpectedly change outbound channel identity.
+  delete ui.assistant;
+  if (Object.keys(ui).length === 0) {
+    delete raw.ui;
+  }
+  changes.push("Removed retired ui.assistant; configure agents.list[].identity instead.");
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
+  LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
+  defineLegacyConfigMigration({
+    id: "runtime.automatic-local-model-lean",
+    describe: "Remove onboarding-owned local model lean settings",
+    legacyRules: [
+      rule(
+        ["wizard", "localModelLeanAutoModel"],
+        "wizard.localModelLeanAutoModel is retired; local models now use Tool Search without reducing their capabilities.",
+      ),
+    ],
+    apply: (raw, changes) => {
+      const wizard = getRecord(raw.wizard);
+      if (!wizard || !Object.hasOwn(wizard, "localModelLeanAutoModel")) {
+        return;
+      }
+      const autoModel = wizard.localModelLeanAutoModel;
+      const defaults = getRecord(getRecord(raw.agents)?.defaults);
+      const model = defaults?.model;
+      const primary = typeof model === "string" ? model : getRecord(model)?.primary;
+      const experimental = getRecord(defaults?.experimental);
+      // The shipped marker owned only a matching default model's true flag.
+      // A changed model or explicit false relinquished that ownership.
+      if (experimental?.localModelLean === true) {
+        if (typeof autoModel === "string" && autoModel === primary) {
+          delete experimental.localModelLean;
+          changes.push("Removed onboarding-owned agents.defaults.experimental.localModelLean.");
+        } else {
+          changes.push(
+            "Retained explicit or unowned agents.defaults.experimental.localModelLean=true; remove it or set it to false to restore the full tool capabilities through Tool Search.",
+          );
+        }
+      }
+      delete wizard.localModelLeanAutoModel;
+      changes.push("Removed retired wizard.localModelLeanAutoModel.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.messages-suppress-tool-errors",
+    describe: "Remove retired tool failure warning suppression",
+    legacyRules: [
+      rule(
+        ["messages", "suppressToolErrors"],
+        "messages.suppressToolErrors is retired; tool failure warnings now appear only when a run ends without a reply.",
+      ),
+    ],
+    apply: (raw, changes) => {
+      const messages = getRecord(raw.messages);
+      if (!messages || !Object.hasOwn(messages, "suppressToolErrors")) {
+        return;
+      }
+      delete messages.suppressToolErrors;
+      changes.push(
+        "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.retired-internal-hook-handlers",
+    describe: "Remove retired internal hook handler registrations",
+    legacyRules: [
+      {
+        path: ["hooks", "internal", "handlers"],
+        message:
+          'hooks.internal.handlers is retired. Move each module to a managed/workspace hook directory with HOOK.md + handler file before running "openclaw doctor --fix"; the fix removes retired registrations and does not materialize executable files.',
+      },
+    ],
+    apply: (raw, changes) => {
+      const internal = getRecord(getRecord(raw.hooks)?.internal);
+      if (!internal || !Object.hasOwn(internal, "handlers")) {
+        return;
+      }
+
+      delete internal.handlers;
+      changes.push(
+        "Removed retired hooks.internal.handlers registrations; hook files must be migrated separately.",
+      );
+
+      const entries = getRecord(internal.entries);
+      const extraDirs = getRecord(internal.load)?.extraDirs;
+      const hasNamedEntries = Boolean(entries && Object.keys(entries).length > 0);
+      const hasExtraDirs =
+        Array.isArray(extraDirs) &&
+        extraDirs.some((dir) => typeof dir === "string" && dir.trim().length > 0);
+      if (internal.enabled === true && !hasNamedEntries && !hasExtraDirs) {
+        delete internal.enabled;
+        changes.push(
+          "Removed legacy-only hooks.internal.enabled to avoid enabling broad hook discovery.",
+        );
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.doctor-tier-eval-tranche",
+    describe: "Consolidate approved tier-eval configuration surfaces",
+    legacyRules: [
+      rule([], "Approved tier-eval configuration surfaces were consolidated.", (_value, root) => {
+        const changes: string[] = [];
+        migrateTierEvalTranche(structuredClone(root), changes);
+        return changes.length > 0;
+      }),
+    ],
+    apply: migrateTierEvalTranche,
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.final-layout-polish",
+    describe: "Normalize final configuration layout names",
+    legacyRules: [
+      rule([], "Final layout aliases were retired.", (_value, root) => {
+        const changes: string[] = [];
+        migrateFinalLayoutRenames(structuredClone(root), changes);
+        return changes.length > 0;
+      }),
+    ],
+    apply: migrateFinalLayoutRenames,
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.final-layout-kills",
+    describe: "Remove final layout tuning knobs",
+    legacyRules: [
+      rule([], "Final layout tuning knobs were retired.", (_value, root) => {
+        const changes: string[] = [];
+        migrateFinalLayoutKills(structuredClone(root), changes);
+        return changes.length > 0;
+      }),
+    ],
+    apply: migrateFinalLayoutKills,
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.media-models-consolidation",
+    describe: "Consolidate per-capability media model configuration",
+    legacyRules: [
+      rule(
+        ["tools", "media"],
+        "Per-capability media model settings moved to capability-tagged tools.media.models entries.",
+        hasLegacyMediaCapabilityConfig,
+      ),
+    ],
+    apply: (raw, changes) => {
+      migrateMediaDeepgram(raw, changes);
+      consolidateMediaCapabilityConfig(raw, changes);
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.config-tranche",
+    describe: "Migrate retired config-tranche options",
+    legacyRules: [
+      rule(
+        [],
+        "Presentation-only preferences and duplicate tuning options moved to canonical defaults.",
+        (_value, root) => hasConfigTrancheLegacyKeys(root),
+      ),
+    ],
+    apply: migrateConfigTranche,
+  }),
   defineLegacyConfigMigration({
     id: "runtime.tuning-knobs-purge",
     describe: "Remove retired runtime tuning knobs",
@@ -318,6 +616,14 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
     },
   }),
   defineLegacyConfigMigration({
+    id: "runtime.ui-assistant-identity",
+    describe: "Remove the retired UI assistant identity override",
+    legacyRules: [
+      rule(["ui", "assistant"], "ui.assistant was retired; use agents.list[].identity instead."),
+    ],
+    apply: removeUiAssistantIdentity,
+  }),
+  defineLegacyConfigMigration({
     id: "runtime.retired-config-keys",
     describe: "Migrate retired root and tool config keys",
     legacyRules: [
@@ -325,7 +631,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       rule(["commands", "modelsWrite"], "commands.modelsWrite was retired and is ignored."),
       rule(
         ["messages", "messagePrefix"],
-        "messages.messagePrefix moved to channels.whatsapp.messagePrefix.",
+        "messages.messagePrefix moved to channels.whatsapp.responsePrefix.",
       ),
       rule(
         ["tools", "media", "asyncCompletion"],
@@ -335,6 +641,23 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         ["tools", "message", "allowCrossContextSend"],
         "tools.message.allowCrossContextSend moved to tools.message.crossContext.",
       ),
+      rule(
+        ["agents"],
+        "Per-agent tools.message.allowCrossContextSend moved to tools.message.crossContext on the same agent.",
+        (value) => {
+          let found = false;
+          visitAgentConfigScopes({ agents: value }, (scope, path) => {
+            found ||=
+              path !== "agents.defaults" &&
+              Object.hasOwn(
+                getRecord(getRecord(scope.tools)?.message) ?? {},
+                "allowCrossContextSend",
+              );
+          });
+          return found;
+        },
+      ),
+      rule(["tools", "experimental"], "tools.experimental.planTool moved to tools.updatePlan."),
       rule(
         ["talk", "realtime", "voice"],
         "talk.realtime.voice moved to talk.realtime.speakerVoice.",
@@ -349,8 +672,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         "Legacy Deepgram options moved to providerOptions.deepgram.",
         hasMediaDeepgram,
       ),
+      rule(
+        ["agents", "defaults", "compaction", "truncateAfterCompaction"],
+        "agents.defaults.compaction.truncateAfterCompaction is retired; byte-triggered compaction now opts in via maxActiveTranscriptBytes alone.",
+      ),
     ],
     apply: (raw, changes) => {
+      migrateTruncateAfterCompaction(raw, changes);
       if (Object.hasOwn(raw, "tui")) {
         delete raw.tui;
         changes.push("Removed retired tui config; the footer uses the default compact display.");
@@ -363,12 +691,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       const messages = getRecord(raw.messages);
       if (messages && Object.hasOwn(messages, "messagePrefix")) {
         const whatsapp = ensureRecord(ensureRecord(raw, "channels"), "whatsapp");
-        if (whatsapp.messagePrefix === undefined) {
-          whatsapp.messagePrefix = messages.messagePrefix;
-          changes.push("Moved messages.messagePrefix → channels.whatsapp.messagePrefix.");
+        if (whatsapp.responsePrefix === undefined) {
+          whatsapp.responsePrefix = messages.messagePrefix;
+          changes.push("Moved messages.messagePrefix → channels.whatsapp.responsePrefix.");
         } else {
           changes.push(
-            "Removed messages.messagePrefix (channels.whatsapp.messagePrefix already set).",
+            "Removed messages.messagePrefix (channels.whatsapp.responsePrefix already set).",
           );
         }
         delete messages.messagePrefix;
@@ -378,23 +706,19 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         delete media.asyncCompletion;
         changes.push("Removed retired tools.media.asyncCompletion.directSend.");
       }
-      const messageTool = getRecord(getRecord(raw.tools)?.message);
-      if (messageTool && Object.hasOwn(messageTool, "allowCrossContextSend")) {
-        const enabled = messageTool.allowCrossContextSend === true;
-        if (enabled) {
-          const crossContext = getRecord(messageTool.crossContext) ?? {};
-          if (crossContext.allowWithinProvider === undefined) {
-            crossContext.allowWithinProvider = true;
-          }
-          if (crossContext.allowAcrossProviders === undefined) {
-            crossContext.allowAcrossProviders = true;
-          }
-          messageTool.crossContext = crossContext;
-          changes.push("Moved tools.message.allowCrossContextSend → tools.message.crossContext.");
+      migrateMessageCrossContext(raw, changes);
+      // planTool was the only tools.experimental member, so the strict schema now
+      // rejects the whole container; lift the value, then drop the empty parent.
+      const tools = getRecord(raw.tools);
+      const experimentalTools = getRecord(tools?.experimental);
+      if (tools && experimentalTools) {
+        if (Object.hasOwn(experimentalTools, "planTool") && tools.updatePlan === undefined) {
+          tools.updatePlan = experimentalTools.planTool;
+          changes.push("Moved tools.experimental.planTool → tools.updatePlan.");
         } else {
-          changes.push("Removed tools.message.allowCrossContextSend.");
+          changes.push("Removed tools.experimental; tools.updatePlan now owns the switch.");
         }
-        delete messageTool.allowCrossContextSend;
+        delete tools.experimental;
       }
       const talkRealtime = getRecord(getRecord(raw.talk)?.realtime);
       if (talkRealtime) {

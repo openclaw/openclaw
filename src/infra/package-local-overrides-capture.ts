@@ -5,14 +5,13 @@ import { resolveStateDir } from "../config/paths.js";
 import { root as openFsRoot } from "./fs-safe.js";
 import {
   collectPackageDistInventory,
-  isLegacyContentInventoryCompatVersion,
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   readPackageDistContentInventoryIfPresent,
 } from "./package-dist-inventory.js";
-import { readPackageVersion } from "./package-json.js";
 import {
   assertRecoveryRootOutsidePackageRoot,
   countChanges,
+  emptyResult,
   fileModesHaveSameExecutableSemantics,
   isMissingPathError,
   normalizeDistPath,
@@ -189,29 +188,23 @@ async function collectReferencedAddedOverridePaths(params: {
 export async function captureLocalPackageOverrides(params: {
   packageRoot: string;
   recordedPackageRoot?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<LocalPackageOverridesPlan | null> {
   if (!(await packageRootExists(params.packageRoot))) {
     return null;
   }
   const baseline = await readPackageDistContentInventoryIfPresent(params.packageRoot);
-  if (baseline === null) {
-    const packageVersion = await readPackageVersion(params.packageRoot);
-    if (isLegacyContentInventoryCompatVersion(packageVersion)) {
-      return null;
-    }
-    throw new Error(
-      `missing package dist content inventory ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}`,
-    );
-  }
   const packageFs = await openFsRoot(params.packageRoot, {
     hardlinks: "reject",
     nonBlockingRead: true,
     symlinks: "reject",
   });
 
-  const actualFiles = await collectPackageDistInventory(params.packageRoot, {
-    includePackageExcludedFiles: true,
-  });
+  const actualFiles = (
+    await collectPackageDistInventory(params.packageRoot, {
+      includePackageExcludedFiles: true,
+    })
+  ).filter((file) => file !== PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH);
   const actualSet = new Set(actualFiles);
   const actualCaseFoldedSet = new Set(
     actualFiles.map((relativePath) => relativePath.toLocaleLowerCase("en-US")),
@@ -220,7 +213,7 @@ export async function captureLocalPackageOverrides(params: {
   let recoveryDir: string | null = null;
   const ensureRecoveryDir = async () => {
     if (!recoveryDir) {
-      const recoveryRoot = path.join(resolveStateDir(), "update-recovery");
+      const recoveryRoot = path.join(resolveStateDir(params.env), "update-recovery");
       await assertRecoveryRootOutsidePackageRoot(params.packageRoot, recoveryRoot);
       if (params.recordedPackageRoot && params.recordedPackageRoot !== params.packageRoot) {
         await assertRecoveryRootOutsidePackageRoot(params.recordedPackageRoot, recoveryRoot);
@@ -232,6 +225,31 @@ export async function captureLocalPackageOverrides(params: {
   };
 
   try {
+    if (baseline === null) {
+      // Shipped filename-only packages cannot distinguish vendor bytes from local edits.
+      // Preserve its dist artifact (excluding dependency trees), without claiming a classified/replayable delta.
+      const snapshotDir = await ensureRecoveryDir();
+      for (const relativePath of actualFiles) {
+        await copyOverridePayload({ packageFs, recoveryDir: snapshotDir, relativePath });
+      }
+      const packageRoot = params.recordedPackageRoot ?? params.packageRoot;
+      await fs.writeFile(
+        path.join(snapshotDir, "manifest.json"),
+        JSON.stringify({ packageRoot, changes }, null, 2) + "\n",
+      );
+      return {
+        packageRoot,
+        recoveryDir: snapshotDir,
+        changes,
+        result: {
+          ...emptyResult("preserved"),
+          recoveryDir: snapshotDir,
+          warnings: [
+            "The previous package has no content inventory. Its dist files were preserved in the recovery bundle; local changes cannot be classified or automatically replayed. Inspect and restore trusted files manually.",
+          ],
+        },
+      };
+    }
     const baselineSet = new Set(baseline.map((entry) => entry.path));
     for (const entry of baseline) {
       resolveSafePackagePath(params.packageRoot, entry.path);

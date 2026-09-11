@@ -1,6 +1,7 @@
 {
   "id": "openrouter",
-  "icon": "https://cdn.simpleicons.org/openrouter",
+  "categories": ["models"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -69,7 +70,9 @@
       "provider": "openrouter",
       "method": "oauth",
       "choiceId": "openrouter-oauth",
+      "credentialOnly": true,
       "appGuidedAuth": "oauth",
+      "channelLogin": {},
       "choiceLabel": "OpenRouter OAuth",
       "choiceHint": "Browser sign-in",
       "groupId": "openrouter",

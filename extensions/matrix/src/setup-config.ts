@@ -4,6 +4,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeSecretInputString,
+  patchTopLevelChannelConfigSection,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/setup";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -43,6 +44,19 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
 const MATRIX_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set<string>(matrixSingleAccountKeysToMove);
 const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set<string>(matrixNamedAccountPromotionKeys);
 
+export type MatrixSetupInput = ChannelSetupInput & {
+  homeserver?: string;
+  dangerouslyAllowPrivateNetwork?: boolean;
+  allowPrivateNetwork?: boolean;
+  proxy?: string;
+  userId?: string;
+  accessToken?: string;
+  password?: string;
+  deviceName?: string;
+  avatarUrl?: string;
+  initialSyncLimit?: number;
+};
+
 function cloneIfObject<T>(value: T): T {
   if (value && typeof value === "object") {
     return structuredClone(value);
@@ -50,7 +64,7 @@ function cloneIfObject<T>(value: T): T {
   return value;
 }
 
-function resolveSetupAvatarUrl(input: ChannelSetupInput): string | undefined {
+function resolveSetupAvatarUrl(input: MatrixSetupInput): string | undefined {
   const avatarUrl = input.avatarUrl;
   if (typeof avatarUrl !== "string") {
     return undefined;
@@ -115,44 +129,38 @@ export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): Co
   for (const key of keysToMove) {
     nextAccount[key] = cloneIfObject(base[key]);
   }
-  const nextChannel = { ...base };
-  for (const key of keysToMove) {
-    delete nextChannel[key];
-  }
-
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      [channel]: {
-        ...nextChannel,
-        accounts: {
-          ...accounts,
-          [resolvedTargetAccountId]: nextAccount,
-        },
+  return patchTopLevelChannelConfigSection({
+    cfg,
+    channel,
+    clearFields: keysToMove,
+    patch: {
+      accounts: {
+        ...accounts,
+        [resolvedTargetAccountId]: nextAccount,
       },
     },
-  };
+  });
 }
 
 export function validateMatrixSetupInput(params: {
   accountId: string;
   input: ChannelSetupInput;
 }): string | null {
-  const avatarUrl = resolveSetupAvatarUrl(params.input);
+  const input = params.input as MatrixSetupInput;
+  const avatarUrl = resolveSetupAvatarUrl(input);
   if (avatarUrl && !isSupportedMatrixAvatarSource(avatarUrl)) {
     return "Matrix avatar URL must be an mxc:// URI or an http(s) URL.";
   }
-  if (params.input.useEnv) {
+  if (input.useEnv) {
     const envReadiness = resolveMatrixEnvAuthReadiness(params.accountId, process.env);
     return envReadiness.ready ? null : envReadiness.missingMessage;
   }
-  if (!params.input.homeserver?.trim()) {
+  if (!input.homeserver?.trim()) {
     return "Matrix requires --homeserver";
   }
-  const accessToken = params.input.accessToken?.trim();
-  const password = normalizeSecretInputString(params.input.password);
-  const userId = params.input.userId?.trim();
+  const accessToken = input.accessToken?.trim();
+  const password = normalizeSecretInputString(input.password);
+  const userId = input.userId?.trim();
   if (!accessToken && !password) {
     return "Matrix requires --access-token or --password";
   }
@@ -172,6 +180,7 @@ export function applyMatrixSetupAccountConfig(params: {
   accountId: string;
   input: ChannelSetupInput;
 }): CoreConfig {
+  const input = params.input as MatrixSetupInput;
   const normalizedAccountId = normalizeAccountId(params.accountId);
   const migratedCfg =
     normalizedAccountId !== DEFAULT_ACCOUNT_ID
@@ -181,11 +190,11 @@ export function applyMatrixSetupAccountConfig(params: {
     cfg: migratedCfg,
     channelKey: channel,
     accountId: normalizedAccountId,
-    name: params.input.name,
+    name: input.name,
   }) as CoreConfig;
-  const avatarUrl = resolveSetupAvatarUrl(params.input);
+  const avatarUrl = resolveSetupAvatarUrl(input);
 
-  if (params.input.useEnv) {
+  if (input.useEnv) {
     return updateMatrixAccountConfig(next, normalizedAccountId, {
       enabled: true,
       homeserver: null,
@@ -200,24 +209,24 @@ export function applyMatrixSetupAccountConfig(params: {
     });
   }
 
-  const accessToken = params.input.accessToken?.trim();
-  const password = normalizeSecretInputString(params.input.password);
-  const userId = params.input.userId?.trim();
+  const accessToken = input.accessToken?.trim();
+  const password = normalizeSecretInputString(input.password);
+  const userId = input.userId?.trim();
   return updateMatrixAccountConfig(next, normalizedAccountId, {
     enabled: true,
-    homeserver: params.input.homeserver?.trim(),
+    homeserver: input.homeserver?.trim(),
     allowPrivateNetwork:
-      typeof params.input.dangerouslyAllowPrivateNetwork === "boolean"
-        ? params.input.dangerouslyAllowPrivateNetwork
-        : typeof params.input.allowPrivateNetwork === "boolean"
-          ? params.input.allowPrivateNetwork
+      typeof input.dangerouslyAllowPrivateNetwork === "boolean"
+        ? input.dangerouslyAllowPrivateNetwork
+        : typeof input.allowPrivateNetwork === "boolean"
+          ? input.allowPrivateNetwork
           : undefined,
-    proxy: normalizeOptionalString(params.input.proxy),
+    proxy: normalizeOptionalString(input.proxy),
     userId: password && !userId ? null : userId,
     accessToken: accessToken || (password ? null : undefined),
     password: password || (accessToken ? null : undefined),
-    deviceName: params.input.deviceName?.trim(),
+    deviceName: input.deviceName?.trim(),
     avatarUrl,
-    initialSyncLimit: params.input.initialSyncLimit,
+    initialSyncLimit: input.initialSyncLimit,
   });
 }

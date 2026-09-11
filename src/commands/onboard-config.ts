@@ -1,8 +1,10 @@
 /** Shared config mutations used by interactive and non-interactive onboarding. */
 import fs from "node:fs";
 import path from "node:path";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolProfileId } from "../config/types.tools.js";
@@ -53,7 +55,7 @@ export function resolveOnboardingWorkspaceConflict(
     return undefined;
   }
 
-  const hasRoster = Array.isArray(baseConfig.agents?.list) && baseConfig.agents.list.length > 0;
+  const hasRoster = listAgentEntries(baseConfig).length > 0;
   if (!hasRoster && !(configuredWorkspace && hasExistingAgentState(env))) {
     return undefined;
   }
@@ -81,11 +83,12 @@ export function applyLocalSetupWorkspaceConfig(
     workspaceDir,
     options.env,
   );
-  const hasRoster = Array.isArray(baseConfig.agents?.list) && baseConfig.agents.list.length > 0;
+  const hasRoster = listAgentEntries(baseConfig).length > 0;
   const shouldUpdateWorkspace =
     !options.preserveWorkspace &&
     (options.allowWorkspaceChange || (!hasRoster && !workspaceConflict));
-  return {
+  // Workspace/gateway copies still belong to the owner selected by the config reader.
+  return inheritLegacyDefaultAgentId(baseConfig, {
     ...baseConfig,
     ...(shouldUpdateWorkspace
       ? {
@@ -106,7 +109,7 @@ export function applyLocalSetupWorkspaceConfig(
       ...baseConfig.tools,
       profile: baseConfig.tools?.profile ?? ONBOARDING_DEFAULT_TOOLS_PROFILE,
     },
-  };
+  });
 }
 
 /** Marks default agents to skip bootstrap file creation. */
@@ -117,5 +120,5 @@ export function applySkipBootstrapConfig(cfg: OpenClawConfig): OpenClawConfig {
     ["agents", "defaults", "skipBootstrap"],
     true,
   );
-  return next;
+  return inheritLegacyDefaultAgentId(cfg, next);
 }

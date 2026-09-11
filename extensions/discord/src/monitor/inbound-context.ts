@@ -12,7 +12,7 @@ type DiscordSupplementalContextSender = {
   id?: string;
   name?: string;
   tag?: string;
-  memberRoleIds?: string[];
+  memberRoleIds?: readonly string[];
 };
 
 export function createDiscordSupplementalContextAccessChecker(params: {
@@ -33,7 +33,7 @@ export function createDiscordSupplementalContextAccessChecker(params: {
         resolveDiscordMemberAllowed({
           userAllowList,
           roleAllowList,
-          memberRoleIds: sender.memberRoleIds ?? [],
+          memberRoleIds: [...(sender.memberRoleIds ?? [])],
           userId: sender.id ?? "",
           userName: sender.name,
           userTag: sender.tag,
@@ -46,20 +46,17 @@ export function createDiscordSupplementalContextAccessChecker(params: {
 export function buildDiscordGroupSystemPrompt(
   channelConfig?: DiscordChannelConfigResolved | null,
 ): string | undefined {
-  const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
-    (entry): entry is string => Boolean(entry),
-  );
-  return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  return channelConfig?.systemPrompt?.trim() || undefined;
 }
 
-function buildDiscordUntrustedContext(params: {
+function buildDiscordChannelStructuredContext(params: {
   isGuild: boolean;
   channelTopic?: string;
-}): MsgContext["UntrustedStructuredContext"] | undefined {
+}): MsgContext["ChannelStructuredContext"] | undefined {
   if (!params.isGuild) {
     return undefined;
   }
-  const entries: NonNullable<MsgContext["UntrustedStructuredContext"]> = [];
+  const entries: NonNullable<MsgContext["ChannelStructuredContext"]> = [];
   if (typeof params.channelTopic === "string" && params.channelTopic.trim().length > 0) {
     entries.push({
       label: "Discord channel metadata",
@@ -89,7 +86,7 @@ export function buildDiscordInboundAccessContext(params: {
     groupSystemPrompt: params.isGuild
       ? buildDiscordGroupSystemPrompt(params.channelConfig)
       : undefined,
-    untrustedContext: buildDiscordUntrustedContext({
+    channelStructuredContext: buildDiscordChannelStructuredContext({
       isGuild: params.isGuild,
       channelTopic: params.channelTopic,
     }),

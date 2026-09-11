@@ -1,16 +1,16 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeEach } from "vitest";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
   embeddedAgentLog,
-  withTempDir,
   expect,
   it,
   vi,
   tinyPngBase64,
   fs,
-  os,
   path,
-  trackTempDir,
   createParams,
   createProjector,
   buildEmptyToolTelemetry,
@@ -18,13 +18,25 @@ import {
   turnCompleted,
   type EmbeddedRunAttemptParams,
 } from "./event-projector.test-harness.js";
+import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
 registerCodexEventProjectorTestLifecycle();
 
+let openClawState: OpenClawTestState;
+beforeEach(async () => {
+  openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-codex-media-state-",
+  });
+});
+afterEach(async () => {
+  await openClawState.cleanup();
+});
+
 describe("CodexAppServerEventProjector media projection", () => {
-  it("attaches native Codex image-generation saved paths as reply media", async () => {
+  it("saves native Codex image-generation snapshots into gateway-managed media", async () => {
     const projector = await createProjector();
-    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+    const savedPath = "/home/dev-user/.codex/generated_images/session-1/ig_123.png";
 
     await projector.handleNotification(
       turnCompleted([
@@ -33,17 +45,232 @@ describe("CodexAppServerEventProjector media projection", () => {
           id: "ig_123",
           status: "completed",
           revisedPrompt: "A tiny blue square",
-          result: "Zm9v",
+          result: tinyPngBase64,
           savedPath,
         },
       ]),
     );
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
+    const mediaUrl = result.toolMediaUrls?.[0];
 
     expect(result.assistantTexts).toStrictEqual([]);
-    expect(result.toolMediaUrls).toEqual([savedPath]);
-    expect(result.hostOwnedToolMediaUrls).toEqual([savedPath]);
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+    expect(mediaUrl).not.toBe(savedPath);
+    expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
+    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
+  it("saves typed Codex image-generation completions without a raw response or saved path", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "imageGeneration",
+          id: "ig_typed_only",
+          status: "completed",
+          revisedPrompt: "A tiny blue square",
+          result: tinyPngBase64,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const mediaUrl = result.toolMediaUrls?.[0];
+
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+    expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
+    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
+  });
+
+  it("does not expose a remote saved path when typed image bytes are invalid", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "imageGeneration",
+          id: "ig_typed_invalid",
+          status: "completed",
+          result: "not valid base64!",
+          savedPath: "/home/dev-user/.codex/generated_images/session-1/ig_typed_invalid.png",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMediaUrls).toBeUndefined();
+    expect(result.hostOwnedToolMediaUrls).toBeUndefined();
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
+  it("fetches saved-path-only remote images over the bounded Codex command protocol", async () => {
+    const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(async () => ({
+      dataBase64: tinyPngBase64,
+    }));
+    const runAbort = new AbortController();
+    const projector = await createProjector(undefined, {
+      remoteWorkspaceRoot: "/remote/codex-workspace",
+      readRemoteWorkspaceFile,
+      remoteWorkspaceRequestTimeoutMs: 90_000,
+      runAbortSignal: runAbort.signal,
+    });
+    const savedPath = "/remote/codex-home/generated_images/session-1/ig_saved_only.png";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "imageGeneration",
+          id: "ig_saved_only",
+          status: "completed",
+          revisedPrompt: "A tiny blue square",
+          savedPath,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(readRemoteWorkspaceFile).toHaveBeenCalledWith({
+      path: savedPath,
+      maxBytes: expect.any(Number),
+      signal: expect.any(AbortSignal),
+      timeoutMs: 90_000,
+    });
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
+    await expect(fs.readFile(result.toolMediaUrls?.[0] ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
+    const signal = readRemoteWorkspaceFile.mock.calls[0]?.[0].signal;
+    expect(signal?.aborted).toBe(false);
+    runAbort.abort();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it.each([false, true])(
+    "fences direct tool-result callbacks after blocked media when projection closed=%s",
+    async (closed) => {
+      const media = createDeferred<{ dataBase64: string }>();
+      const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(() => media.promise);
+      const onToolResult = vi.fn();
+      const projector = await createProjector(
+        { ...(await createParams()), verboseLevel: "full", onToolResult },
+        { remoteWorkspaceRoot: "/remote/workspace", readRemoteWorkspaceFile },
+      );
+      const pending = projector.handleNotification(
+        turnCompleted([
+          {
+            type: "imageGeneration",
+            id: "blocked-image",
+            status: "completed",
+            result: "",
+            revisedPrompt: null,
+            savedPath: "/remote/workspace/image.png",
+          },
+          {
+            type: "commandExecution",
+            id: "command-after-image",
+            command: "echo late-output",
+            cwd: "/remote/workspace",
+            commandActions: [],
+            processId: null,
+            source: "agent",
+            status: "completed",
+            aggregatedOutput: "late-output",
+            exitCode: 0,
+            durationMs: 1,
+          },
+        ]),
+      );
+      try {
+        await vi.waitFor(() => expect(readRemoteWorkspaceFile).toHaveBeenCalledOnce());
+        const signal = readRemoteWorkspaceFile.mock.calls[0]?.[0].signal;
+        expect(signal?.aborted === true).toBe(false);
+        expect(onToolResult).not.toHaveBeenCalled();
+        if (closed) {
+          await projector.closeProjection();
+        }
+        expect(signal?.aborted === true).toBe(closed);
+        media.resolve({ dataBase64: tinyPngBase64 });
+        await pending;
+        if (closed) {
+          expect(onToolResult).not.toHaveBeenCalled();
+        } else {
+          expect(onToolResult).toHaveBeenCalledWith(
+            expect.objectContaining({ text: expect.stringContaining("late-output") }),
+          );
+        }
+      } finally {
+        media.resolve({ dataBase64: tinyPngBase64 });
+        await pending;
+      }
+    },
+  );
+
+  it("never exposes a remote image path when remote file transfer is unavailable", async () => {
+    const projector = await createProjector(undefined, {
+      remoteWorkspaceRoot: "/remote/codex-workspace",
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "imageGeneration",
+          id: "ig_remote_unavailable",
+          status: "completed",
+          savedPath: "/remote/codex-home/generated_images/session-1/ig_remote_unavailable.png",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.toolMediaUrls).toBeUndefined();
+    expect(result.hostOwnedToolMediaUrls).toBeUndefined();
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
+  it("preserves image side-effect state when remote file transfer fails", async () => {
+    const readRemoteWorkspaceFile = vi.fn(async () => {
+      throw new Error("remote generated image is unavailable");
+    });
+    const projector = await createProjector(undefined, {
+      remoteWorkspaceRoot: "/remote/codex-workspace",
+      readRemoteWorkspaceFile,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "imageGeneration",
+          id: "ig_remote_transfer_failed",
+          status: "completed",
+          savedPath: "/remote/codex-home/generated_images/session-1/ig_transfer_failed.png",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(readRemoteWorkspaceFile).toHaveBeenCalledOnce();
+    expect(result.toolMediaUrls).toBeUndefined();
+    expect(result.hostOwnedToolMediaUrls).toBeUndefined();
     expect(result.replayMetadata).toStrictEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,
@@ -51,9 +278,6 @@ describe("CodexAppServerEventProjector media projection", () => {
   });
 
   it("saves raw Codex image-generation results as reply media", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
-    trackTempDir(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const projector = await createProjector();
 
     await projector.handleNotification(
@@ -83,42 +307,6 @@ describe("CodexAppServerEventProjector media projection", () => {
       hadPotentialSideEffects: true,
       replaySafe: false,
     });
-  });
-
-  it("supersedes terminal assistant text before raw image persistence settles", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "agentMessage", id: "answer-before-image", text: "stale answer" },
-      }),
-    );
-    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(true);
-
-    let resolveMedia: (() => void) | undefined;
-    const mediaPersistence = new Promise<void>((resolve) => {
-      resolveMedia = resolve;
-    });
-    const mediaProjection = (
-      projector as unknown as {
-        generatedMediaProjection: { recordRaw(item: unknown): Promise<void> };
-      }
-    ).generatedMediaProjection;
-    vi.spyOn(mediaProjection, "recordRaw").mockReturnValue(mediaPersistence);
-
-    const pending = projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "image_generation_call",
-          id: "image-after-answer",
-          status: "completed",
-          result: tinyPngBase64,
-        },
-      }),
-    );
-
-    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(false);
-    resolveMedia?.();
-    await pending;
   });
 
   it("does not let delayed raw completion consume a newer assistant echo", async () => {
@@ -193,10 +381,39 @@ describe("CodexAppServerEventProjector media projection", () => {
     );
   });
 
+  it("rejects oversized typed Codex images instead of using a remote saved path", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector({
+      ...(await createParams()),
+      config: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+    } as EmbeddedRunAttemptParams);
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "imageGeneration",
+          id: "ig_typed_capped",
+          status: "completed",
+          result: tinyPngBase64,
+          savedPath: "/home/dev-user/.codex/generated_images/session-1/ig_typed_capped.png",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMediaUrls).toBeUndefined();
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server native image generation result exceeds media limit",
+      expect.objectContaining({ itemId: "ig_typed_capped" }),
+    );
+  });
+
   it("dedupes raw and typed Codex image-generation media for the same item", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
-    trackTempDir(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const projector = await createProjector();
     const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
 
@@ -229,51 +446,118 @@ describe("CodexAppServerEventProjector media projection", () => {
     expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
   });
 
-  it("prefers gateway-managed image media when the typed event arrives first", async () => {
-    await withTempDir("openclaw-codex-media-state-", async (stateDir) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const projector = await createProjector();
-      const savedPath = "/home/dev-user/.codex/generated_images/session-1/ig_123.png";
+  it("materializes overlapping typed and raw image events only once", async () => {
+    const projector = await createProjector();
 
-      await projector.handleNotification(
+    await Promise.all([
+      projector.handleNotification(
         forCurrentTurn("item/completed", {
           item: {
             type: "imageGeneration",
-            id: "ig_123",
+            id: "ig_concurrent",
             status: "completed",
             revisedPrompt: "A tiny blue square",
             result: tinyPngBase64,
-            savedPath,
+            savedPath: "/home/dev-user/.codex/generated_images/session-1/ig_concurrent.png",
           },
         }),
-      );
-      await projector.handleNotification(
+      ),
+      projector.handleNotification(
         forCurrentTurn("rawResponseItem/completed", {
           item: {
             type: "image_generation_call",
-            id: "ig_123",
-            status: "generating",
+            id: "ig_concurrent",
+            status: "completed",
             result: tinyPngBase64,
           },
         }),
-      );
+      ),
+    ]);
 
-      const result = projector.buildResult(buildEmptyToolTelemetry());
-      const mediaUrl = result.toolMediaUrls?.[0];
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const mediaUrl = result.toolMediaUrls?.[0];
 
-      expect(result.toolMediaUrls).toHaveLength(1);
-      expect(mediaUrl).not.toBe(savedPath);
-      expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
-      await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
-        Buffer.from(tinyPngBase64, "base64"),
-      );
-    });
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
+    await expect(fs.readdir(path.dirname(mediaUrl ?? ""))).resolves.toHaveLength(1);
+  });
+
+  it("retries valid typed image bytes after an overlapping invalid raw event", async () => {
+    const projector = await createProjector();
+
+    await Promise.all([
+      projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "image_generation_call",
+            id: "ig_retry_valid",
+            status: "completed",
+            result: "not valid base64!",
+          },
+        }),
+      ),
+      projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "imageGeneration",
+            id: "ig_retry_valid",
+            status: "completed",
+            result: tinyPngBase64,
+            savedPath: "/home/dev-user/.codex/generated_images/session-1/ig_retry_valid.png",
+          },
+        }),
+      ),
+    ]);
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.toolMediaUrls).toHaveLength(1);
+    await expect(fs.readFile(result.toolMediaUrls?.[0] ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
+  });
+
+  it("prefers gateway-managed image media when the typed event arrives first", async () => {
+    const projector = await createProjector();
+    const savedPath = "/home/dev-user/.codex/generated_images/session-1/ig_123.png";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "imageGeneration",
+          id: "ig_123",
+          status: "completed",
+          revisedPrompt: "A tiny blue square",
+          result: tinyPngBase64,
+          savedPath,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "ig_123",
+          status: "generating",
+          result: tinyPngBase64,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const mediaUrl = result.toolMediaUrls?.[0];
+
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(mediaUrl).not.toBe(savedPath);
+    expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
+    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
   });
 
   it("preserves distinct raw image-generation items with identical image bytes", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
-    trackTempDir(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const projector = await createProjector();
 
     for (const id of ["ig_raw_1", "ig_raw_2"]) {
@@ -323,16 +607,18 @@ describe("CodexAppServerEventProjector media projection", () => {
     expect(result.hostOwnedToolMediaUrls).toBeUndefined();
   });
 
-  it("propagates message-tool-only source reply delivery telemetry", async () => {
+  it("propagates source reply delivery without destination telemetry", async () => {
     const projector = await createProjector();
 
     const result = projector.buildResult({
       ...buildEmptyToolTelemetry(),
       didSendViaMessagingTool: true,
       didDeliverSourceReplyViaMessageTool: true,
+      sourceReplyDelivered: true,
     });
 
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.sourceReplyDelivered).toBe(true);
   });
 });

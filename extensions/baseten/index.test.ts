@@ -2,15 +2,22 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  createRuntimeEnv,
+  createTestWizardPrompter,
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+  type ModelDefinitionConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
+import { applyBasetenConfig } from "./api.js";
 import basetenPlugin from "./index.js";
-import { applyBasetenConfig } from "./onboard.js";
 import { createBasetenThinkingWrapper } from "./stream.js";
 
 type OpenAICompletionsModel = Model<"openai-completions">;
@@ -108,6 +115,127 @@ function captureDeepSeekReplayPayload(thinkingLevel: "off" | "high" | undefined)
 }
 
 describe("Baseten provider registration", () => {
+  it.each([undefined, "merge", "replace"] as const)(
+    "keeps registered %s setup separate from the public catalog preset",
+    async (mode) => {
+      const provider = await registerSingleProviderPlugin(basetenPlugin);
+      const method = resolveProviderPluginChoice({
+        providers: [provider],
+        choice: "baseten-api-key",
+      })?.method;
+      if (!method?.runNonInteractive) {
+        throw new Error("expected Baseten noninteractive auth method");
+      }
+      const config: OpenClawConfig = { models: { mode } };
+      const interactive = await method.run({
+        config,
+        env: {},
+        opts: { basetenApiKey: TEST_VALUE },
+        runtime: createRuntimeEnv(),
+        prompter: createTestWizardPrompter(),
+        secretInputMode: "plaintext",
+        isRemote: false,
+        openUrl: vi.fn(),
+        oauth: { createVpsAwareHandlers: vi.fn() },
+      });
+      const noninteractive = await method.runNonInteractive({
+        authChoice: "baseten-api-key",
+        opts: {},
+        config,
+        baseConfig: config,
+        runtime: createRuntimeEnv(),
+        resolveApiKey: async () => ({ key: TEST_VALUE, source: "profile" }),
+        toApiKeyCredential: () => null,
+      });
+
+      for (const output of [interactive.configPatch, noninteractive]) {
+        expect(output?.models?.providers?.baseten).toMatchObject({
+          baseUrl: "https://inference.baseten.co/v1",
+          api: "openai-completions",
+        });
+        expect(output?.models?.providers?.baseten?.models).toHaveLength(mode === "replace" ? 9 : 0);
+        expect(output?.agents?.defaults?.models).toEqual({
+          "baseten/thinkingmachines/inkling": { alias: "Inkling" },
+        });
+      }
+      expect(applyBasetenConfig(config).models?.providers?.baseten?.models).toHaveLength(9);
+    },
+  );
+
+  it.each(["merge", "replace"] as const)(
+    "preserves authored rows and aliases when repeating registered %s setup",
+    async (mode) => {
+      const provider = await registerSingleProviderPlugin(basetenPlugin);
+      const run = resolveProviderPluginChoice({
+        providers: [provider],
+        choice: "baseten-api-key",
+      })?.method.runNonInteractive;
+      if (!run) {
+        throw new Error("expected Baseten noninteractive auth method");
+      }
+      const authoredDefault: ModelDefinitionConfig = {
+        id: "thinkingmachines/inkling",
+        name: "Authored default",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 8192,
+        maxTokens: 1024,
+        cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
+      };
+      const authoredModels = [
+        authoredDefault,
+        { ...authoredDefault, id: "operator-only", name: "Authored selection" },
+      ];
+      const input: OpenClawConfig = {
+        models: {
+          mode,
+          providers: {
+            baseten: { baseUrl: "https://operator.invalid/v1", models: authoredModels },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "fixture/primary", fallbacks: ["fixture/fallback"] },
+            models: { "baseten/thinkingmachines/inkling": { alias: "Saved alias" } },
+          },
+        },
+      };
+      const original = structuredClone(input);
+      const authenticate = (config: OpenClawConfig) =>
+        run({
+          authChoice: "baseten-api-key",
+          opts: {},
+          config,
+          baseConfig: config,
+          runtime: createRuntimeEnv(),
+          resolveApiKey: async () => ({ key: TEST_VALUE, source: "profile" }),
+          toApiKeyCredential: () => null,
+        });
+      const first = await authenticate(input);
+      if (!first) {
+        throw new Error("expected configured Baseten provider");
+      }
+      const second = await authenticate(first);
+
+      for (const output of [first, second]) {
+        expect(output?.models?.providers?.baseten?.models).toEqual(
+          expect.arrayContaining(authoredModels),
+        );
+        expect(output?.models?.providers?.baseten?.models).toHaveLength(
+          mode === "replace" ? 10 : 2,
+        );
+        expect(output?.agents?.defaults?.models).toEqual(original.agents?.defaults?.models);
+        expect(resolveAgentModelPrimaryValue(output?.agents?.defaults?.model)).toBe(
+          "baseten/thinkingmachines/inkling",
+        );
+        expect(resolveAgentModelFallbackValues(output?.agents?.defaults?.model)).toEqual([
+          "fixture/fallback",
+        ]);
+      }
+      expect(input).toEqual(original);
+    },
+  );
+
   it("registers authenticated live and network-free static catalogs", async () => {
     const provider = await registerSingleProviderPlugin(basetenPlugin);
     const choice = resolveProviderPluginChoice({
@@ -142,7 +270,7 @@ describe("Baseten provider registration", () => {
       baseUrl: "https://inference.baseten.co/v1",
       api: "openai-completions",
     });
-    expect(catalog.models).toHaveLength(12);
+    expect(catalog.models).toHaveLength(9);
     expect(provider.staticCatalog).toBeDefined();
     expect(
       provider.buildReplayPolicy?.({
@@ -153,13 +281,15 @@ describe("Baseten provider registration", () => {
   });
 
   it("sets and clears chat-template thinking while preserving caller arguments", () => {
-    expect(captureThinkingPayload("zai-org/GLM-5", "high")).toMatchObject({
+    expect(captureThinkingPayload("zai-org/GLM-5.2-Fast", "high")).toMatchObject({
       chat_template_args: { preserve_me: true, enable_thinking: true },
     });
     expect(captureThinkingPayload("moonshotai/Kimi-K2.6", "off")).toMatchObject({
       chat_template_args: { preserve_me: true, enable_thinking: false },
     });
-    expect(captureThinkingPayload("NVIDIA/Nemotron-120B-A12B", undefined)).toMatchObject({
+    expect(
+      captureThinkingPayload("nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B", undefined),
+    ).toMatchObject({
       chat_template_args: { preserve_me: true, enable_thinking: false },
     });
   });
@@ -181,6 +311,16 @@ describe("Baseten provider registration", () => {
       provider.resolveThinkingProfile?.({
         provider: "baseten",
         modelId: "zai-org/GLM-5.2",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "baseten",
+        modelId: "zai-org/GLM-5.2-Fast",
         reasoning: true,
       } as never),
     ).toEqual({

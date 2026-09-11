@@ -1,3 +1,5 @@
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
 import type { scanInstalledApps } from "../infra/installed-apps.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
@@ -25,6 +27,11 @@ export type NodeHostInvokeRuntime = {
   installedAppsSharingEnabled?: boolean;
   installedAppsPlatform?: NodeJS.Platform;
   scanInstalledApps?: typeof scanInstalledApps;
+  gatewayUrl?: string;
+  gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
+  desktopHostConfig?: DesktopHostConfig;
+  emitProgress?: (text: string) => Promise<void>;
 };
 
 type ClaudeCliNodeInvokeDeps = Pick<
@@ -58,6 +65,50 @@ type ClaudeCliNodeInvokeDeps = Pick<
     },
   ) => Promise<void>;
 };
+
+const CLAUDE_NODE_AUTH_INPUTS = [
+  {
+    requestEnv: "CLAUDE_CODE_OAUTH_TOKEN",
+    descriptorEnv: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  },
+  {
+    requestEnv: "ANTHROPIC_API_KEY",
+    descriptorEnv: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  },
+] as const;
+
+function prepareClaudeNodeSecretInput(params: {
+  requestEnv: Record<string, string> | undefined;
+  childEnv: Record<string, string>;
+}): { secretInput?: { fd: 3; createData: () => Buffer }; cleanup: () => void } {
+  const selected = CLAUDE_NODE_AUTH_INPUTS.find(({ requestEnv }) =>
+    Object.hasOwn(params.requestEnv ?? {}, requestEnv),
+  );
+  if (!selected) {
+    return { cleanup: () => {} };
+  }
+  for (const key of [
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
+  ]) {
+    delete params.childEnv[key];
+  }
+  const value = params.requestEnv?.[selected.requestEnv]?.trim();
+  // An empty descriptor suppresses Claude's healthy native login.
+  if (!value) {
+    return { cleanup: () => {} };
+  }
+  const source = Buffer.from(value, "utf8");
+  params.childEnv[selected.descriptorEnv] = "3";
+  return {
+    secretInput: {
+      fd: 3,
+      createData: () => Buffer.from(source),
+    },
+    cleanup: () => source.fill(0),
+  };
+}
 
 export async function handleClaudeCliNodeInvoke(params: {
   frame: NodeInvokeRequestPayload;
@@ -118,7 +169,8 @@ export async function handleClaudeCliNodeInvoke(params: {
   await (params.runtime.handleSystemRun ?? handleSystemRunInvoke)({
     client: params.client,
     // The command-specific validator is the execution boundary. Approval sees
-    // every executable argument; prompt/stdin content remains request input.
+    // every caller-supplied executable argument. The node adds its own prompt,
+    // verified resources, and invocation-only MCP proxy after approval.
     params: {
       command: approvalCommand,
       ...(request.cwd ? { cwd: request.cwd } : {}),
@@ -137,16 +189,32 @@ export async function handleClaudeCliNodeInvoke(params: {
     isCmdExeInvocation: params.deps.isCmdExeInvocation,
     sanitizeEnv: params.deps.sanitizeEnv,
     runCommand: async (approvalArgv, cwd, env, timeoutMs) => {
-      runResult = await runClaudeCliNodeCommand({
-        client: params.client,
-        frame: params.frame,
-        request,
-        argv: approvalArgv,
-        cwd,
-        env,
-        timeoutMs,
-        signal: params.runtime.signal,
+      const childEnv = { ...env };
+      for (const key of request.clearEnv ?? []) {
+        if (!Object.hasOwn(request.env ?? {}, key)) {
+          delete childEnv[key];
+        }
+      }
+      const preparedSecret = prepareClaudeNodeSecretInput({
+        requestEnv: request.env,
+        childEnv,
       });
+      try {
+        runResult = await runClaudeCliNodeCommand({
+          client: params.client,
+          frame: params.frame,
+          request,
+          argv: approvalArgv,
+          cwd,
+          env: childEnv,
+          secretInput: preparedSecret.secretInput,
+          timeoutMs,
+          signal: params.runtime.signal,
+          skillIo: params.runtime.pluginCommandIo,
+        });
+      } finally {
+        preparedSecret.cleanup();
+      }
       return runResult;
     },
     runViaMacAppExecHost: params.deps.runViaMacAppExecHost,

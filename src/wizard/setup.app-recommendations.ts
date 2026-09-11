@@ -6,7 +6,7 @@ import {
   type OnboardingPluginInstallEntry,
 } from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { fetchClawHubSkillVerification } from "../infra/clawhub.js";
+import { fetchClawHubSkillVerification } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { scanInstalledApps } from "../infra/installed-apps.js";
 import {
@@ -29,6 +29,7 @@ import {
   getSetupAppRecommendations,
   type SetupAppRecommendationMatch,
   type SetupAppRecommendationsResult,
+  type SetupAppScanPhase,
 } from "../system-agent/setup-app-recommendations.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -36,7 +37,9 @@ import type { WizardPrompter } from "./prompts.js";
 const SKIP_VALUE = "__skip__";
 
 type SetupAppRecommendationDeps = {
-  recommend?: () => Promise<SetupAppRecommendationsResult>;
+  recommend?: (
+    onPhase?: (phase: SetupAppScanPhase) => void,
+  ) => Promise<SetupAppRecommendationsResult>;
   ensurePlugin?: typeof ensureOnboardingPluginInstalled;
   installSkill?: typeof installSkillFromClawHub;
   isSkillInstalled?: (params: { workspaceDir: string; skillRef: string }) => Promise<boolean>;
@@ -198,13 +201,26 @@ export async function setupAppRecommendations(params: {
       params.runtime.log(scanDisclosure);
     }
     const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
+    const scanPhaseMessage = (phase: SetupAppScanPhase): string => {
+      if (phase.kind === "candidates") {
+        return t(
+          phase.appCount === 1
+            ? "wizard.appRecommendations.scanningCandidate"
+            : "wizard.appRecommendations.scanningCandidates",
+          { count: phase.appCount, sample: phase.sampleLabels.join(", ") },
+        );
+      }
+      return t("wizard.appRecommendations.scanningMatch");
+    };
+    const onPhase = (phase: SetupAppScanPhase) => progress.update(scanPhaseMessage(phase));
     let result: SetupAppRecommendationsResult;
     try {
       result = params.deps?.recommend
-        ? await params.deps.recommend()
+        ? await params.deps.recommend(onPhase)
         : await getSetupAppRecommendations({
             inventorySource: async () => await scanInstalledApps({ platform }),
             runtime: params.runtime,
+            onPhase,
           });
     } catch (error) {
       progress.stop();
@@ -307,13 +323,6 @@ export async function setupAppRecommendations(params: {
             workspaceDir: params.workspaceDir,
             slug: match.candidate.id,
             config: next,
-            onClawHubRisk: async () =>
-              await params.prompter.confirm({
-                message: t("wizard.appRecommendations.skillTrust", {
-                  name: match.candidate.displayName,
-                }),
-                initialValue: false,
-              }),
             logger: { warn: (message) => params.runtime.error(message) },
           });
           if (!result.ok) {

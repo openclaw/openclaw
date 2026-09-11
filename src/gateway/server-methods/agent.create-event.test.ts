@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -39,6 +40,20 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../commands/agent.js", () => ({
   agentCommandFromGatewayIngress: agentIngressMocks.agentCommandFromIngress,
   agentCommandFromIngress: agentIngressMocks.agentCommandFromIngress,
+}));
+
+vi.mock("../../agents/prepared-model-runtime.js", () => ({
+  acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
+    release: vi.fn(),
+    snapshot: {},
+  })),
+  loadPublishedGatewayReplyDispatchRuntime: vi.fn(async ({ agentId }: { agentId: string }) => ({
+    agentId,
+    agentDir: configMocks.workspaceDir,
+    config: configMocks.getRuntimeConfig(),
+    pluginGeneration: { pluginMetadataSnapshot: {} },
+    workspaceDir: configMocks.workspaceDir,
+  })),
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -92,6 +107,7 @@ describe("agent handler session create events", () => {
         },
         respond,
         context: {
+          trackExecution: trackAsyncWork,
           dedupe: new Map(),
           deps: {} as never,
           logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
@@ -123,14 +139,18 @@ describe("agent handler session create events", () => {
               string,
               { sessionKey?: string; reason?: string },
               Set<string>,
-              { dropIfSlow?: boolean },
+              { dropIfSlow?: boolean; sessionKeys?: string[] },
             ]
           | undefined;
         expect(call?.[0]).toBe("sessions.changed");
         expect(call?.[1]?.sessionKey).toBe("agent:main:subagent:create-test");
         expect(call?.[1]?.reason).toBe("create");
         expect(call?.[2]).toEqual(new Set(["conn-1"]));
-        expect(call?.[3]).toEqual({ dropIfSlow: true });
+        expect(call?.[3]).toEqual({
+          agentId: "main",
+          dropIfSlow: true,
+          sessionKeys: ["agent:main:subagent:create-test"],
+        });
       },
       { timeout: 2_000, interval: 5 },
     );

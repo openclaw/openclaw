@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
+import { normalizeDiscordHandleKey, resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
 
@@ -48,31 +48,17 @@ export function formatMention(params: {
   return `<#${target.id}>`;
 }
 
-function normalizeHandleKey(raw: string): string | null {
-  let handle = normalizeOptionalString(raw) ?? "";
-  if (!handle) {
-    return null;
-  }
-  if (handle.startsWith("@")) {
-    handle = normalizeOptionalString(handle.slice(1)) ?? "";
-  }
-  if (!handle || /\s/.test(handle)) {
-    return null;
-  }
-  return normalizeLowercaseStringOrEmpty(handle);
-}
-
 function resolveConfiguredMentionAlias(
   handle: string,
   mentionAliases?: DiscordMentionAliasesConfig | null,
 ): string | undefined {
-  const key = normalizeHandleKey(handle);
+  const key = normalizeDiscordHandleKey(handle);
   if (!key || !mentionAliases) {
     return undefined;
   }
   const withoutDiscriminator = key.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
   for (const [rawAlias, rawUserId] of Object.entries(mentionAliases)) {
-    const alias = normalizeHandleKey(rawAlias);
+    const alias = normalizeDiscordHandleKey(rawAlias);
     if (!alias) {
       continue;
     }
@@ -133,16 +119,13 @@ function countBacktickRun(text: string, index: number): number {
   return cursor - index;
 }
 
-function findSameLineBacktickRun(
-  text: string,
-  startIndex: number,
-  runLength: number,
-): number | null {
-  const delimiter = "`".repeat(runLength);
-  const newlineIndex = text.indexOf("\n", startIndex);
+function findInlineBacktickRun(text: string, startIndex: number, runLength: number): number | null {
+  // Inline spans can cross soft line breaks; fence-sized runs use the block scanner below.
+  const newlineIndex = runLength >= 3 ? text.indexOf("\n", startIndex) : -1;
   const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
-  const closeIndex = text.indexOf(delimiter, startIndex);
-  return closeIndex !== -1 && closeIndex < lineEnd ? closeIndex + runLength : null;
+  // A longer backtick run is literal code, not a matching inline delimiter.
+  const close = new RegExp("(?<!`)`{" + runLength + "}(?!`)").exec(text.slice(startIndex, lineEnd));
+  return close ? startIndex + close.index + runLength : null;
 }
 
 function findFenceEnd(text: string, startIndex: number, runLength: number): number {
@@ -169,26 +152,18 @@ function findNextMarkdownCodeSegment(
   text: string,
   startIndex: number,
 ): { startIndex: number; endIndex: number } | null {
-  let searchIndex = startIndex;
-  while (searchIndex < text.length) {
-    const segmentStart = text.indexOf("`", searchIndex);
-    if (segmentStart === -1) {
-      return null;
-    }
-    const runLength = countBacktickRun(text, segmentStart);
-    const inlineEndIndex = findSameLineBacktickRun(text, segmentStart + runLength, runLength);
-    if (inlineEndIndex !== null) {
-      return { startIndex: segmentStart, endIndex: inlineEndIndex };
-    }
-    if (runLength >= 3) {
-      return {
-        startIndex: segmentStart,
-        endIndex: findFenceEnd(text, segmentStart, runLength),
-      };
-    }
-    searchIndex = segmentStart + runLength;
+  const segmentOffset = text.slice(startIndex).search(/(?<=(?:^|[^\\])(?:\\\\)*)`/);
+  if (segmentOffset === -1) {
+    return null;
   }
-  return null;
+  const segmentStart = startIndex + segmentOffset;
+  const runLength = countBacktickRun(text, segmentStart);
+  return {
+    startIndex: segmentStart,
+    endIndex:
+      findInlineBacktickRun(text, segmentStart + runLength, runLength) ??
+      (runLength >= 3 ? findFenceEnd(text, segmentStart, runLength) : text.length),
+  };
 }
 
 export function rewriteDiscordKnownMentions(

@@ -1,11 +1,14 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import {
+  INTERNAL_WORKBOARD_PATH_PARAM,
   pathForRoute,
   pathForWorkboardBoard,
+  restoreBridgedRouteLocation,
   workboardBoardIdFromPath,
 } from "../../app-route-paths.ts";
-import { WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+// Existing Workboard URLs persist this value for the all-boards route.
+const WORKBOARD_ALL_BOARDS_FILTER = "__all__";
 
 export type WorkboardRouteData = {
   boardFilter: string;
@@ -13,10 +16,17 @@ export type WorkboardRouteData = {
   search: string;
 };
 
+export function workboardRouteLocation(location: RouteLocation): RouteLocation {
+  // The router's private bridge must not masquerade as the public legacy
+  // `board` query, or its canonical redirect survives after the real path wins.
+  return restoreBridgedRouteLocation(location, INTERNAL_WORKBOARD_PATH_PARAM);
+}
+
 export function resolveWorkboardRouteLocation(
-  location: RouteLocation,
+  sourceLocation: RouteLocation,
   basePath = "",
 ): WorkboardRouteData {
+  const location = workboardRouteLocation(sourceLocation);
   const pathBoardId = workboardBoardIdFromPath(location.pathname, basePath);
   if (pathBoardId) {
     const params = new URLSearchParams(location.search);

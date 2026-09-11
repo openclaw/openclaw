@@ -1,3 +1,4 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
   type AssistantMessage,
@@ -10,16 +11,14 @@ import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { buildKimiCodingProvider } from "./provider-catalog.js";
+import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
 
 const describeLive =
   isLiveTestEnabled() && process.env.KIMI_API_KEY?.trim() ? describe : describe.skip;
 
-async function collectDoneMessage(
-  stream: AsyncIterable<{ type: string; message?: AssistantMessage; error?: AssistantMessage }>,
-): Promise<AssistantMessage> {
+async function collectDoneMessage(stream: ReturnType<StreamFn>): Promise<AssistantMessage> {
   let doneMessage: AssistantMessage | undefined;
-  for await (const event of stream) {
+  for await (const event of await stream) {
     if (event.type === "error") {
       throw new Error(event.error?.errorMessage || "Kimi live request failed");
     }
@@ -33,9 +32,10 @@ async function collectDoneMessage(
   return doneMessage;
 }
 
-function resolveModel(modelId: "k3" | "k3[1m]"): Model<"anthropic-messages"> {
+function resolveModel(modelId: "k3" | "k3-256k"): Model<"anthropic-messages"> {
   const provider = buildKimiCodingProvider();
-  const definition = provider.models.find((model) => model.id === modelId);
+  const normalizedModelId = normalizeKimiCodingModelId(modelId);
+  const definition = provider.models.find((model) => model.id === normalizedModelId);
   if (!definition) {
     throw new Error(`Missing model ${modelId}`);
   }
@@ -61,8 +61,8 @@ function countContentChars(message: AssistantMessage, type: "text" | "thinking")
 }
 
 async function runReasoningScenario(params: {
-  modelId: "k3" | "k3[1m]";
-  thinkingLevel: "off" | "max";
+  modelId: "k3" | "k3-256k";
+  thinkingLevel: "off" | "low" | "adaptive" | "max";
 }): Promise<AssistantMessage> {
   const registered = await registerSingleProviderPlugin(plugin);
   const wrapped = registered.wrapStreamFn?.({
@@ -89,16 +89,12 @@ async function runReasoningScenario(params: {
     wrapped(resolveModel(params.modelId), context, {
       apiKey: process.env.KIMI_API_KEY?.trim() ?? "",
       maxTokens: 4096,
-    }) as AsyncIterable<{
-      type: string;
-      message?: AssistantMessage;
-      error?: AssistantMessage;
-    }>,
+    }),
   );
 }
 
 describeLive("Kimi Code K3 reasoning live", () => {
-  it.each(["k3", "k3[1m]"] as const)(
+  it.each(["k3", "k3-256k"] as const)(
     "%s honors off and max reasoning",
     async (modelId) => {
       const off = await runReasoningScenario({ modelId, thinkingLevel: "off" });
@@ -108,6 +104,16 @@ describeLive("Kimi Code K3 reasoning live", () => {
       const max = await runReasoningScenario({ modelId, thinkingLevel: "max" });
       expect(countContentChars(max, "thinking")).toBeGreaterThan(0);
       expect(countContentChars(max, "text")).toBeGreaterThan(0);
+    },
+    180_000,
+  );
+
+  it.each(["low", "adaptive"] as const)(
+    "k3 accepts %s reasoning",
+    async (thinkingLevel) => {
+      const message = await runReasoningScenario({ modelId: "k3", thinkingLevel });
+      expect(countContentChars(message, "thinking")).toBeGreaterThan(0);
+      expect(countContentChars(message, "text")).toBeGreaterThan(0);
     },
     180_000,
   );
@@ -139,11 +145,7 @@ describeLive("Kimi Code K3 reasoning live", () => {
         resolveModel("k3"),
         { messages: [firstUser], tools: [tool] },
         { apiKey: process.env.KIMI_API_KEY?.trim() ?? "", maxTokens: 4096 },
-      ) as AsyncIterable<{
-        type: string;
-        message?: AssistantMessage;
-        error?: AssistantMessage;
-      }>,
+      ),
     );
     expect(countContentChars(first, "thinking")).toBeGreaterThan(0);
     const toolCall = first.content.find((block) => block.type === "toolCall");
@@ -176,11 +178,7 @@ describeLive("Kimi Code K3 reasoning live", () => {
           tools: [tool],
         },
         { apiKey: process.env.KIMI_API_KEY?.trim() ?? "", maxTokens: 4096 },
-      ) as AsyncIterable<{
-        type: string;
-        message?: AssistantMessage;
-        error?: AssistantMessage;
-      }>,
+      ),
     );
     expect(countContentChars(second, "text")).toBeGreaterThan(0);
   }, 180_000);

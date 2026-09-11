@@ -6,17 +6,15 @@ import {
   archiveLegacyStateSource,
   legacyStateFileExists,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS } from "./src/compiled-cache.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveMemoryWikiAgentConfig,
   resolveMemoryWikiConfig,
   resolveMemoryWikiConfiguredAgentIds,
   type MemoryWikiPluginConfig,
 } from "./src/config.js";
-export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   countMemoryWikiImportRunStateRows,
   createMemoryWikiImportRunStateStore,
@@ -25,6 +23,7 @@ import {
   MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE,
   readLegacyMemoryWikiImportRunRecords,
   resolveMemoryWikiImportRunsDir,
+  type ChatGptImportRunRecord,
   writeMemoryWikiImportRunRecord,
 } from "./src/import-runs-state.js";
 import {
@@ -35,6 +34,12 @@ import {
   resolveMemoryWikiSourceSyncStatePath,
   writeMemoryWikiSourceSyncState,
 } from "./src/source-sync-state.js";
+export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
+
+const LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS = [
+  ".openclaw-wiki/cache/agent-digest.json",
+  ".openclaw-wiki/cache/claims.jsonl",
+] as const;
 
 function resolveHomeDir(env: NodeJS.ProcessEnv): string | undefined {
   return env.HOME?.trim() || env.USERPROFILE?.trim() || undefined;
@@ -89,6 +94,7 @@ function resolveConfiguredVaultRoots(params: {
   const homeDir = resolveHomeDir(params.env);
   const resolved = resolveMemoryWikiConfig(readConfiguredPluginConfig(params.config), {
     homedir: homeDir,
+    env: params.env,
   });
   if (resolved.vault.scope === "global") {
     return [resolved.vault.path];
@@ -131,7 +137,7 @@ async function archiveLegacyImportRunRecords(params: {
 }
 
 function countImportRunStateRows(
-  records: Array<{ createdPaths: string[]; updatedPaths: unknown[] }>,
+  records: Array<Pick<ChatGptImportRunRecord, "createdPaths" | "updatedPaths">>,
 ): number {
   return records.reduce(
     (total, record) => total + 1 + record.createdPaths.length + record.updatedPaths.length,
@@ -189,13 +195,17 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           } catch (error) {
             if (!isMissingPathError(error)) {
               warnings.push(
-                `Failed removing rebuildable Memory Wiki compiled cache ${filePath}: ${String(error)}`,
+                `Skipped rebuildable Memory Wiki compiled cache cleanup. Run openclaw doctor --fix to retry. ${filePath}: ${String(error)}`,
               );
             }
           }
         }
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+      };
     },
   },
   {

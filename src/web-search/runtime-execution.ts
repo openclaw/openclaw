@@ -26,7 +26,8 @@ function isStructuredAvailabilityError(result: unknown): result is { error: stri
 export async function executeWebSearchCandidates(
   params: ExecuteWebSearchCandidatesParams,
 ): Promise<RunWebSearchResult> {
-  let lastError: unknown;
+  // Keep the selected provider's failure, including null or undefined rejections.
+  let firstFailure: { error: unknown } | undefined;
   let sawUnavailableProvider = false;
 
   for (const candidate of params.candidates) {
@@ -52,7 +53,9 @@ export async function executeWebSearchCandidates(
       if (params.allowFallback && isStructuredAvailabilityError(executed)) {
         // Some providers report missing credentials as structured tool output.
         // Treat that like unavailable only during auto-detected fallback.
-        lastError = new Error(`web_search provider "${candidate.id}" returned ${executed.error}`);
+        firstFailure ??= {
+          error: new Error(`web_search provider "${candidate.id}" returned ${executed.error}`),
+        };
         continue;
       }
       return {
@@ -61,15 +64,16 @@ export async function executeWebSearchCandidates(
       };
     } catch (error) {
       params.signal?.throwIfAborted();
-      lastError = error;
+      firstFailure ??= { error };
       if (!params.allowFallback) {
         throw error;
       }
     }
   }
 
-  if (sawUnavailableProvider && lastError === undefined) {
+  if (sawUnavailableProvider && firstFailure === undefined) {
     throw new Error("web_search is enabled but no provider is currently available.");
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  const error = firstFailure?.error;
+  throw error instanceof Error ? error : new Error(String(error));
 }

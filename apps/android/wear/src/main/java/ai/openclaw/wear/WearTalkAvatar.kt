@@ -1,16 +1,27 @@
 package ai.openclaw.wear
 
-import android.provider.Settings
+import android.animation.ValueAnimator
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
+import android.os.PowerManager
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -22,6 +33,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.flow.collect
+import kotlin.coroutines.coroutineContext
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
@@ -58,7 +74,7 @@ private val RightAntennaPivot = Offset(82.5f, 11f)
 private val LeftEyeCenter = Offset(45f, 35f)
 private val RightEyeCenter = Offset(75f, 35f)
 
-private data class WearAvatarPose(
+internal data class WearAvatarPose(
   val floatOffset: Float,
   val bodyTilt: Float,
   val bodyStretch: Float,
@@ -80,19 +96,20 @@ internal fun WearTalkAvatar(
   accent: Color,
   danger: Color,
   modifier: Modifier = Modifier,
+  animatorScaleSource: WearAnimatorScaleSource? = null,
+  motionDurationScale: MotionDurationScale? = null,
+  frameClock: WearAvatarFrameClock = ComposeWearAvatarFrameClock,
+  onAnimationStateChanged: ((WearAvatarAnimationState) -> Unit)? = null,
 ) {
-  val context = LocalContext.current
-  val animationsEnabled =
-    remember(context) {
-      Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
-    }
+  val animationScale = rememberAnimatorDurationScale(animatorScaleSource, motionDurationScale)
+  val animationsEnabled = animationScale > 0f
   val latestState by rememberUpdatedState(state)
   val latestMouthLevel by rememberUpdatedState(mouthLevel)
   val latestSyntheticSpeech by rememberUpdatedState(syntheticSpeech)
   var animationSeconds by remember { mutableFloatStateOf(0f) }
   var smoothedMouth by remember { mutableFloatStateOf(0f) }
 
-  LaunchedEffect(animationsEnabled) {
+  LaunchedEffect(animationScale, frameClock) {
     if (!animationsEnabled) {
       animationSeconds = 0f
       smoothedMouth = 0f
@@ -100,9 +117,13 @@ internal fun WearTalkAvatar(
     }
     var lastFrameNanos = 0L
     while (true) {
-      withFrameNanos { frameNanos ->
+      frameClock.awaitFrame { frameNanos ->
         if (lastFrameNanos != 0L) {
-          val deltaSeconds = ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
+          val deltaSeconds =
+            scaledAvatarDeltaSeconds(
+              deltaSeconds = (frameNanos - lastFrameNanos) / 1_000_000_000f,
+              durationScale = animationScale,
+            )
           animationSeconds = (animationSeconds + deltaSeconds) % AVATAR_ANIMATION_CYCLE_SECONDS
           val targetMouth =
             if (latestState == RealtimeVoiceButtonState.SPEAKING) {
@@ -120,14 +141,19 @@ internal fun WearTalkAvatar(
     }
   }
 
-  val staticMouth =
-    if (!animationsEnabled && state == RealtimeVoiceButtonState.SPEAKING) {
-      mouthLevel.coerceIn(0f, 1f)
-    } else {
-      smoothedMouth
-    }
-  val pose = avatarPoseAt(state, animationSeconds, staticMouth)
+  val motionInputs = avatarMotionInputs(animationsEnabled, animationSeconds, smoothedMouth)
+  val pose = avatarPoseAt(state, motionInputs.animationSeconds, motionInputs.mouthLevel)
   val stateColor = if (state == RealtimeVoiceButtonState.ERROR) danger else accent
+
+  SideEffect {
+    onAnimationStateChanged?.invoke(
+      WearAvatarAnimationState(
+        durationScale = animationScale,
+        animationSeconds = motionInputs.animationSeconds,
+        mouthLevel = motionInputs.mouthLevel,
+      ),
+    )
+  }
 
   Canvas(modifier = modifier) {
     val unit = size.minDimension
@@ -144,11 +170,174 @@ internal fun WearTalkAvatar(
     val artTop = center.y - ((CANONICAL_ART_SIZE * artScale) / 2f) + (unit * 0.025f)
     withTransform({ translate(left = artLeft, top = artTop) }) {
       withTransform({ scale(artScale, artScale, pivot = Offset.Zero) }) {
-        drawCanonicalAvatar(pose, state, animationSeconds)
+        drawCanonicalAvatar(pose, state, motionInputs.animationSeconds)
       }
     }
   }
 }
+
+@Composable
+internal fun rememberAnimatorDurationScale(
+  animatorScaleSource: WearAnimatorScaleSource? = null,
+  motionDurationScale: MotionDurationScale? = null,
+): Float {
+  val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val effectiveScaleSource =
+    animatorScaleSource
+      ?: remember(context, lifecycleOwner) {
+        AndroidWearAnimatorScaleSource(context.applicationContext, lifecycleOwner)
+      }
+  val effectiveScale = rememberEffectiveAnimatorScale(effectiveScaleSource)
+  var canonicalScale by remember(motionDurationScale) {
+    mutableFloatStateOf(motionDurationScale?.scaleFactor?.coerceAtLeast(0f) ?: 1f)
+  }
+
+  LaunchedEffect(motionDurationScale) {
+    val composeScale = motionDurationScale ?: coroutineContext[MotionDurationScale]
+    if (composeScale == null) {
+      canonicalScale = 1f
+      return@LaunchedEffect
+    }
+    // Compose lazily starts its Android scale observer from this getter, which
+    // may write snapshot state and therefore must run before snapshotFlow.
+    canonicalScale = composeScale.scaleFactor.coerceAtLeast(0f)
+    snapshotFlow { composeScale.scaleFactor.coerceAtLeast(0f) }
+      .collect { scale -> canonicalScale = scale }
+  }
+
+  return resolvedAvatarAnimationScale(canonicalScale, effectiveScale)
+}
+
+@Composable
+private fun rememberEffectiveAnimatorScale(source: WearAnimatorScaleSource): Float {
+  var effectiveScale by remember(source) { mutableFloatStateOf(source.currentScale()) }
+
+  DisposableEffect(source) {
+    effectiveScale = source.currentScale()
+    val subscription = source.subscribe { scale -> effectiveScale = scale.coerceAtLeast(0f) }
+    onDispose { subscription.dispose() }
+  }
+
+  return effectiveScale
+}
+
+internal fun resolvedAvatarAnimationScale(
+  canonicalScale: Float,
+  effectiveScale: Float,
+): Float = if (canonicalScale > 0f && effectiveScale > 0f) canonicalScale else 0f
+
+internal fun interface WearAnimatorScaleSubscription {
+  fun dispose()
+}
+
+internal interface WearAnimatorScaleSource {
+  fun currentScale(): Float
+
+  fun subscribe(onScaleChanged: (Float) -> Unit): WearAnimatorScaleSubscription
+}
+
+internal class AndroidWearAnimatorScaleSource(
+  private val context: Context,
+  private val lifecycleOwner: LifecycleOwner,
+) : WearAnimatorScaleSource {
+  private val powerManager = context.getSystemService(PowerManager::class.java)
+
+  override fun currentScale(): Float =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      ValueAnimator.getDurationScale().coerceAtLeast(0f)
+    } else {
+      // Compose owns the user duration scale. Legacy Android exposes no listener
+      // for Battery Saver's separate override, so keep only that signal here.
+      if (powerManager.isPowerSaveMode) 0f else 1f
+    }
+
+  override fun subscribe(onScaleChanged: (Float) -> Unit): WearAnimatorScaleSubscription =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      subscribeToDurationScale(onScaleChanged)
+    } else {
+      subscribeToLegacyEffectiveScale(onScaleChanged)
+    }
+
+  @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+  private fun subscribeToDurationScale(
+    onScaleChanged: (Float) -> Unit,
+  ): WearAnimatorScaleSubscription {
+    val listener =
+      ValueAnimator.DurationScaleChangeListener { scale ->
+        onScaleChanged(scale.coerceAtLeast(0f))
+      }
+    ValueAnimator.registerDurationScaleChangeListener(listener)
+    onScaleChanged(currentScale())
+    return WearAnimatorScaleSubscription {
+      ValueAnimator.unregisterDurationScaleChangeListener(listener)
+    }
+  }
+
+  @Suppress("UnspecifiedRegisterReceiverFlag")
+  private fun subscribeToLegacyEffectiveScale(onScaleChanged: (Float) -> Unit): WearAnimatorScaleSubscription {
+    val refresh = { onScaleChanged(currentScale()) }
+    val receiver =
+      object : BroadcastReceiver() {
+        override fun onReceive(
+          context: Context?,
+          intent: Intent?,
+        ) {
+          refresh()
+        }
+      }
+    val lifecycleObserver =
+      object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+          refresh()
+        }
+
+        override fun onResume(owner: LifecycleOwner) {
+          refresh()
+        }
+      }
+
+    context.registerReceiver(receiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
+    lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+    refresh()
+
+    return WearAnimatorScaleSubscription {
+      context.unregisterReceiver(receiver)
+      lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
+    }
+  }
+}
+
+internal fun interface WearAvatarFrameClock {
+  suspend fun awaitFrame(onFrame: (Long) -> Unit)
+}
+
+private val ComposeWearAvatarFrameClock = WearAvatarFrameClock { onFrame -> withFrameNanos(onFrame) }
+
+internal data class WearAvatarAnimationState(
+  val durationScale: Float,
+  val animationSeconds: Float,
+  val mouthLevel: Float,
+)
+
+internal data class WearAvatarMotionInputs(
+  val animationSeconds: Float,
+  val mouthLevel: Float,
+)
+
+internal fun avatarMotionInputs(
+  animationsEnabled: Boolean,
+  animationSeconds: Float,
+  mouthLevel: Float,
+): WearAvatarMotionInputs =
+  if (animationsEnabled) {
+    WearAvatarMotionInputs(
+      animationSeconds = animationSeconds,
+      mouthLevel = mouthLevel.coerceIn(0f, 1f),
+    )
+  } else {
+    WearAvatarMotionInputs(animationSeconds = 0f, mouthLevel = 0f)
+  }
 
 private fun DrawScope.drawCanonicalAvatar(
   pose: WearAvatarPose,
@@ -274,7 +463,7 @@ private fun DrawScope.drawCanonicalMouth(
   }
 }
 
-private fun avatarPoseAt(
+internal fun avatarPoseAt(
   state: RealtimeVoiceButtonState,
   animationSeconds: Float,
   mouthLevel: Float,
@@ -293,7 +482,8 @@ private fun avatarPoseAt(
   var haloPulse = 0.5f + (0.5f * sin(animationSeconds * tau / 2.4f))
 
   when (state) {
-    RealtimeVoiceButtonState.IDLE -> Unit
+    RealtimeVoiceButtonState.IDLE -> {}
+
     RealtimeVoiceButtonState.CONNECTING -> {
       val orbit = animationSeconds * tau / 1.65f
       gaze = Offset(cos(orbit) * 1.05f, sin(orbit) * 0.82f)
@@ -303,6 +493,7 @@ private fun avatarPoseAt(
       rightClawDegrees = -leftClawDegrees
       haloPulse = 0.5f + (0.5f * sin(animationSeconds * tau / 0.9f))
     }
+
     RealtimeVoiceButtonState.LISTENING -> {
       val attentivePulse = 0.5f + (0.5f * sin(animationSeconds * tau / 1.25f))
       gaze = Offset(0.2f * sin(animationSeconds * tau / 3.2f), 0.34f)
@@ -312,6 +503,7 @@ private fun avatarPoseAt(
       antennaDegrees = -4f * sin(animationSeconds * tau / 1.45f)
       haloPulse = attentivePulse
     }
+
     RealtimeVoiceButtonState.THINKING -> {
       val orbit = animationSeconds * tau / 2.15f
       gaze = Offset(cos(orbit) * 1.15f, sin(orbit) * 0.92f)
@@ -321,6 +513,7 @@ private fun avatarPoseAt(
       rightClawDegrees = -10f - (3f * sin(animationSeconds * tau / 2.2f))
       haloPulse = 0.5f + (0.5f * sin(animationSeconds * tau / 1.4f))
     }
+
     RealtimeVoiceButtonState.SPEAKING -> {
       val speechBeat = sin(animationSeconds * tau / 0.72f)
       floatOffset -= mouthLevel * 2.2f
@@ -332,6 +525,7 @@ private fun avatarPoseAt(
       gaze = Offset(0.18f * sin(animationSeconds * tau / 2.6f), 0.12f)
       haloPulse = (0.25f + (mouthLevel * 0.75f)).coerceIn(0f, 1f)
     }
+
     RealtimeVoiceButtonState.ERROR -> {
       bodyTilt = 2.2f * sin(animationSeconds * tau / 0.42f)
       antennaDroop = 0.72f
@@ -373,6 +567,14 @@ internal fun smoothAvatarMouth(
   return (safeCurrent + ((safeTarget - safeCurrent) * blend)).coerceIn(0f, 1f)
 }
 
+internal fun scaledAvatarDeltaSeconds(
+  deltaSeconds: Float,
+  durationScale: Float,
+): Float {
+  if (durationScale <= 0f) return 0f
+  return (deltaSeconds / durationScale).coerceIn(0f, 0.05f)
+}
+
 private fun syntheticSpeechMouth(animationSeconds: Float): Float {
   val tau = 2f * PI.toFloat()
   val syllable = 0.5f + (0.5f * sin(animationSeconds * tau / 0.19f))
@@ -383,11 +585,17 @@ private fun syntheticSpeechMouth(animationSeconds: Float): Float {
 private fun avatarBlinkClosure(animationSeconds: Float): Float {
   val phase = animationSeconds % BLINK_CYCLE_SECONDS
   return when {
-    phase in FIRST_BLINK_START..FIRST_BLINK_END ->
+    phase in FIRST_BLINK_START..FIRST_BLINK_END -> {
       smoothBell((phase - FIRST_BLINK_START) / (FIRST_BLINK_END - FIRST_BLINK_START))
-    phase in SECOND_BLINK_START..SECOND_BLINK_END ->
+    }
+
+    phase in SECOND_BLINK_START..SECOND_BLINK_END -> {
       smoothBell((phase - SECOND_BLINK_START) / (SECOND_BLINK_END - SECOND_BLINK_START))
-    else -> 0f
+    }
+
+    else -> {
+      0f
+    }
   }
 }
 

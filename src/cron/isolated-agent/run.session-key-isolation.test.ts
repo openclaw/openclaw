@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  cleanupBrowserSessionsForLifecycleEndMock,
   isCliProviderMock,
   loadSessionEntryMock,
   loadRunCronIsolatedAgentTurn,
@@ -64,18 +65,38 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     const runRequest = requireFirstMockArg(runEmbeddedAgentMock, "runEmbeddedAgentMock") as {
       sessionId?: string;
       sessionKey?: string;
+      sessionFile?: string;
+      sessionTarget?: {
+        agentId?: string;
+        sessionId?: string;
+        sessionKey?: string;
+        storePath?: string;
+      };
       promptCacheKey?: string;
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
     };
     expect(runRequest.sessionId).toBe("isolated-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:daily-monitor:run:isolated-run-1");
+    expect(runRequest.sessionFile).toBeUndefined();
+    expect(runRequest.sessionTarget).toEqual({
+      agentId: "default",
+      sessionId: "isolated-run-1",
+      sessionKey: "agent:default:cron:daily-monitor:run:isolated-run-1",
+      storePath: expect.any(String),
+    });
     expect(runRequest.sessionKey).not.toBe("agent:default:cron:daily-monitor");
     expect(runRequest.promptCacheKey).toMatch(/^openclaw-cron-[a-f0-9]{32}$/u);
     expect(runRequest.promptCacheKey).not.toContain("isolated-run-1");
     expect(runRequest.promptCacheKey).not.toContain("daily-monitor");
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledOnce();
+    expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      sessionKeys: ["agent:default:cron:daily-monitor:run:isolated-run-1"],
+      onWarn: expect.any(Function),
+    });
     const embeddedRunOrder = runEmbeddedAgentMock.mock.invocationCallOrder[0];
     if (embeddedRunOrder === undefined) {
       throw new Error("Expected embedded cron execution order");
@@ -180,6 +201,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBeUndefined();
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expect(cleanupBrowserSessionsForLifecycleEndMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -288,14 +310,13 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
 
   it("uses a run-scoped key for CLI isolated cron execution", async () => {
     isCliProviderMock.mockReturnValue(true);
-    resolveCronSessionMock.mockReturnValue(
-      makeCronSession({
-        sessionEntry: {
-          ...makeCronSession().sessionEntry,
-          sessionId: "isolated-cli-run-1",
-        },
-      }),
-    );
+    const cronSession = makeCronSession({
+      sessionEntry: {
+        ...makeCronSession().sessionEntry,
+        sessionId: "isolated-cli-run-1",
+      },
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
     mockRunCronFallbackPassthrough();
     runCliAgentMock.mockResolvedValue({
       payloads: [{ text: "done" }],
@@ -321,6 +342,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     const runRequest = requireFirstMockArg(runCliAgentMock, "runCliAgentMock") as {
       sessionId?: string;
       sessionKey?: string;
+      sessionTarget?: unknown;
       promptCacheKey?: string;
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
@@ -328,6 +350,12 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     };
     expect(runRequest.sessionId).toBe("isolated-cli-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
+    expect(runRequest.sessionTarget).toEqual({
+      agentId: "default",
+      sessionId: "isolated-cli-run-1",
+      sessionKey: "agent:default:cron:cli-monitor:run:isolated-cli-run-1",
+      storePath: cronSession.storePath,
+    });
     expect(runRequest.sessionKey).not.toBe("agent:default:cron:cli-monitor");
     expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBe("lightweight");

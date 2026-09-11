@@ -1,8 +1,10 @@
 import { ErrorCodes } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { TranscriptSourceProvider } from "openclaw/plugin-sdk/transcripts";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { ZOOM_MEETINGS_CLI_METADATA } from "./src/cli-output-mode.js";
 
 const MEETING_URL = "https://zoom.us/j/12345678901?pwd=owned";
 
@@ -113,9 +115,10 @@ describe("Zoom meetings plugin surface", () => {
   it("registers the bounded gateway, tool, CLI, and node surfaces", () => {
     const methods = new Map<string, unknown>();
     const tools: Array<Record<string, unknown>> = [];
-    const cli: unknown[] = [];
+    const cli: Array<Parameters<OpenClawPluginApi["registerCli"]>[1]> = [];
     const nodeCommands: unknown[] = [];
     const policies: unknown[] = [];
+    const transcriptProviders: TranscriptSourceProvider[] = [];
     const api = createTestPluginApi({
       id: "zoom-meetings",
       name: "Zoom meetings",
@@ -136,9 +139,10 @@ describe("Zoom meetings plugin surface", () => {
             : tool) as Record<string, unknown>,
         );
       },
-      registerCli: (_registrar: unknown, options: unknown) => cli.push(options),
+      registerCli: (_registrar, options) => cli.push(options),
       registerNodeHostCommand: (command: unknown) => nodeCommands.push(command),
       registerNodeInvokePolicy: (policy: unknown) => policies.push(policy),
+      registerTranscriptSourceProvider: (provider) => transcriptProviders.push(provider),
     });
 
     plugin.register(api);
@@ -157,10 +161,18 @@ describe("Zoom meetings plugin surface", () => {
     );
     expect(tools.map((tool) => tool.name)).toEqual(["zoom_meetings"]);
     expect(cli).toEqual([expect.objectContaining({ commands: ["zoommeetings"] })]);
+    expect(cli[0]?.descriptors?.[0]).toBe(ZOOM_MEETINGS_CLI_METADATA.descriptor);
     expect(nodeCommands).toEqual([
       expect.objectContaining({ command: "zoommeetings.chrome", cap: "zoom-meetings" }),
     ]);
     expect(policies).toHaveLength(1);
+    expect(transcriptProviders).toEqual([
+      expect.objectContaining({
+        id: "zoom",
+        aliases: ["zoom-meetings"],
+        sourceKinds: ["live-caption"],
+      }),
+    ]);
   });
 
   it("does not expose the dangerous node surface when disabled", () => {

@@ -1,25 +1,32 @@
-// Control UI tests cover Quick Config persistence through the mocked Gateway.
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+// Control UI tests cover shared model-behavior persistence through the mocked Gateway.
+import { expect, it } from "vitest";
+import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-  type MockGatewayRequest,
-} from "../test-helpers/control-ui-e2e.ts";
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI Models settings behavior persistence mocked Gateway E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-
-function configResponse(thinkingDefault: "low" | "high", hash: string) {
-  const config = { agents: { defaults: { model: "openai/gpt-5.5", thinkingDefault } } };
+function configResponse(
+  thinkingDefault: "low" | "high",
+  hash: string,
+  fastModeDefault?: boolean | "auto",
+) {
+  const config = {
+    agents: {
+      defaults: {
+        model: "openai/gpt-5.5",
+        thinkingDefault,
+        ...(fastModeDefault === undefined ? {} : { fastModeDefault }),
+      },
+    },
+  };
   return {
     config,
     hash,
@@ -32,73 +39,136 @@ function configResponse(thinkingDefault: "low" | "high", hash: string) {
 function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   const params = request.params;
   if (!params || typeof params !== "object" || Array.isArray(params)) {
-    throw new Error("Expected config.set params");
+    throw new Error("Expected config mutation params");
   }
   return JSON.parse(String((params as Record<string, unknown>).raw)) as Record<string, unknown>;
 }
 
-describeControlUiE2e("Control UI General settings thinking persistence mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+suite.define(() => {
+  it("redirects the legacy General model deep link to Models", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page);
+
+      const response = await page.goto(
+        `${suite.server.baseUrl}settings/general#settings-general-model`,
       );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
-  it("reads and writes only agents.defaults.thinkingDefault", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const initialConfig = configResponse("low", "hash-1");
-    const savedConfig = configResponse("high", "hash-2");
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "config.get": initialConfig,
-        "config.set": savedConfig,
-      },
-    });
-
-    try {
-      const response = await page.goto(`${server.baseUrl}config`);
       expect(response?.status()).toBe(200);
 
-      const modelCard = page.locator("#settings-general-model");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+    });
+  });
+
+  it("persists agents.defaults.thinkingDefault through autosave", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ context, page }) => {
+      const initialConfig = configResponse("low", "hash-1");
+      const savedConfig = configResponse("high", "hash-2");
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "config.get": { sequence: [initialConfig, savedConfig] },
+          "config.patch": savedConfig,
+        },
+      });
+
+      const response = await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+      expect(response?.status()).toBe(200);
+
+      const modelCard = page.locator("#settings-model-behavior");
       const lowButton = modelCard.getByRole("radio", { name: "Low", exact: true });
       await lowButton.waitFor();
       expect(await lowButton.getAttribute("aria-checked")).toBe("true");
 
       await modelCard.getByRole("radio", { name: "High", exact: true }).click();
 
-      const raw = requestRaw(await gateway.waitForRequest("config.set"));
+      const raw = requestRaw(await gateway.waitForRequest("config.patch"));
       expect(raw).toEqual({
-        agents: { defaults: { model: "openai/gpt-5.5", thinkingDefault: "high" } },
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            utilityModel: null,
+            thinkingDefault: "high",
+            fastModeDefault: null,
+          },
+        },
       });
       expect(JSON.stringify(raw)).not.toContain("thinkingLevel");
-      expect(JSON.stringify(raw)).not.toContain("fastMode");
+      expect(raw.agents).not.toHaveProperty("defaults.fastMode");
 
       const freshPage = await context.newPage();
       await installMockGateway(freshPage, {
         methodResponses: { "config.get": savedConfig },
       });
-      await freshPage.goto(`${server.baseUrl}config`);
+      await freshPage.goto(`${suite.server.baseUrl}settings/model-providers`);
       const highButton = freshPage
-        .locator("#settings-general-model")
+        .locator("#settings-model-behavior")
         .getByRole("radio", { name: "High", exact: true });
       await highButton.waitFor();
       expect(await highButton.getAttribute("aria-checked")).toBe("true");
-    } finally {
-      await context.close();
-    }
+    });
   });
+
+  it.each([
+    { initial: false, initialLabel: "Off", next: true, nextLabel: "On" },
+    { initial: true, initialLabel: "On", next: "auto" as const, nextLabel: "Auto" },
+    { initial: "auto" as const, initialLabel: "Auto", next: false, nextLabel: "Off" },
+  ])(
+    "persists agents.defaults.fastModeDefault from $initialLabel to $nextLabel",
+    async ({ initial, initialLabel, next, nextLabel }) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ context, page }) => {
+        const initialConfig = configResponse("low", "hash-1", initial);
+        const savedConfig = configResponse("low", "hash-2", next);
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": { sequence: [initialConfig, savedConfig] },
+            "config.patch": savedConfig,
+          },
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        expect(response?.status()).toBe(200);
+
+        const modelCard = page.locator("#settings-model-behavior");
+        const fastModeGroup = modelCard.locator("wa-radio-group").nth(1);
+        const initialButton = fastModeGroup.getByRole("radio", {
+          name: initialLabel,
+          exact: true,
+        });
+        await initialButton.waitFor();
+        expect(await initialButton.getAttribute("aria-checked")).toBe("true");
+
+        await fastModeGroup.getByRole("radio", { name: nextLabel, exact: true }).click();
+
+        const raw = requestRaw(await gateway.waitForRequest("config.patch"));
+        expect(raw).toEqual({
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+              utilityModel: null,
+              thinkingDefault: "low",
+              fastModeDefault: next,
+            },
+          },
+        });
+        expect(raw.agents).not.toHaveProperty("defaults.fastMode");
+
+        const freshPage = await context.newPage();
+        await installMockGateway(freshPage, {
+          methodResponses: { "config.get": savedConfig },
+        });
+        const reloadResponse = await freshPage.goto(
+          `${suite.server.baseUrl}settings/model-providers`,
+        );
+        expect(reloadResponse?.status()).toBe(200);
+        const persistedButton = freshPage
+          .locator("#settings-model-behavior wa-radio-group")
+          .nth(1)
+          .getByRole("radio", {
+            name: nextLabel,
+            exact: true,
+          });
+        await persistedButton.waitFor();
+        expect(await persistedButton.getAttribute("aria-checked")).toBe("true");
+      });
+    },
+  );
 });

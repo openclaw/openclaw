@@ -1,9 +1,6 @@
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 // OpenClaw overview gathers config, agent, tool, docs, source, and gateway status.
-import {
-  listAgentEntries,
-  resolveAgentEffectiveModelPrimary,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentEntries, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import {
   OPENCLAW_DOCS_URL,
   OPENCLAW_SOURCE_URL,
@@ -17,6 +14,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
@@ -90,8 +88,7 @@ function issueMessages(snapshot: ConfigFileSnapshot): string[] {
   });
 }
 
-function buildAgentSummaries(cfg: OpenClawConfig): SystemAgentSummary[] {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): SystemAgentSummary[] {
   const entries = listAgentEntries(cfg);
   if (entries.length === 0) {
     return [
@@ -131,7 +128,7 @@ function buildAgentSummaries(cfg: OpenClawConfig): SystemAgentSummary[] {
 }
 
 function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePaths | undefined {
-  if (env.OPENCLAW_TEST_FAST !== "1") {
+  if (!isFastTestRuntimeEnv(env)) {
     return undefined;
   }
   const sourcePath = process.cwd();
@@ -142,14 +139,14 @@ function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePat
 }
 
 export async function loadSystemAgentOverview(
-  opts: { env?: NodeJS.ProcessEnv; deps?: SystemAgentOverviewDependencies } = {},
+  opts: { agentId?: string; env?: NodeJS.ProcessEnv; deps?: SystemAgentOverviewDependencies } = {},
 ): Promise<SystemAgentOverview> {
   const env = opts.env ?? process.env;
   const deps = opts.deps ?? {};
   const readSnapshot = deps.readConfigFileSnapshot ?? readConfigFileSnapshot;
   const snapshot = await readSnapshot();
   const cfg = snapshot.runtimeConfig ?? snapshot.sourceConfig ?? {};
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveAmbientOwnerAgentId(cfg, opts.agentId);
   const defaultModel =
     resolveAgentEffectiveModelPrimary(cfg, defaultAgentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
@@ -191,7 +188,7 @@ export async function loadSystemAgentOverview(
       issues: issueMessages(snapshot),
       hash: snapshot.hash ?? null,
     },
-    agents: buildAgentSummaries(cfg),
+    agents: buildAgentSummaries(cfg, defaultAgentId),
     defaultAgentId,
     defaultModel,
     tools: {

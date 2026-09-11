@@ -3,10 +3,14 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/con
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
+import { resolveAgentToolSurfacePlan } from "./tool-surface-plan.js";
 
-function createRuntimeConfigPair() {
+function createRuntimeConfigPair(localModelLean = true) {
   const sourceConfig = {
-    agents: { defaults: { experimental: { localModelLean: true } } },
+    agents: {
+      defaults: { experimental: { localModelLean } },
+      entries: { main: { default: true } },
+    },
     plugins: {
       entries: {
         "example-plugin": {
@@ -39,40 +43,53 @@ describe("resolveAgentToolSearchRuntimeConfig", () => {
     resetConfigRuntimeState();
   });
 
-  it("applies Tool Search defaults after selecting the resolved runtime snapshot", () => {
-    const { runtimeConfig, sourceConfig } = createRuntimeConfigPair();
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+  it.each([true, false])(
+    "applies Tool Search after selecting the resolved snapshot for forced replies (lean: %s)",
+    (localModelLean) => {
+      const { runtimeConfig, sourceConfig } = createRuntimeConfigPair(localModelLean);
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
-    const resolved = resolveAgentToolSearchRuntimeConfig({ config: sourceConfig });
+      const resolved = resolveAgentToolSurfacePlan({
+        config: sourceConfig,
+        model: localModelLean ? undefined : { toolSearchMode: "tools" },
+        forceDirectMessageTool: true,
+        toolsEnabled: true,
+        isRawModelRun: false,
+      }).toolSearchRuntimeConfig;
 
-    expect(resolved?.tools?.toolSearch).toEqual({
-      enabled: true,
-      mode: "tools",
-      searchDefaultLimit: 5,
-      maxSearchLimit: 10,
-    });
-    expect(resolved?.plugins?.entries?.["example-plugin"]?.config).toMatchObject({
-      marker: "resolved",
-    });
-    expect(runtimeConfig.tools).toBeUndefined();
-    expect(sourceConfig.plugins?.entries?.["example-plugin"]?.config).toMatchObject({
-      marker: {
-        source: "exec",
-        provider: "example",
-        id: "example/value",
-      },
-    });
-  });
+      expect(resolved?.tools?.toolSearch).toEqual({
+        enabled: true,
+        mode: "tools",
+        searchDefaultLimit: 5,
+        maxSearchLimit: 10,
+      });
+      expect(resolved?.plugins?.entries?.["example-plugin"]?.config).toMatchObject({
+        marker: "resolved",
+      });
+      expect(runtimeConfig.tools).toBeUndefined();
+      expect(sourceConfig.plugins?.entries?.["example-plugin"]?.config).toMatchObject({
+        marker: {
+          source: "exec",
+          provider: "example",
+          id: "example/value",
+        },
+      });
+    },
+  );
 
   it("returns the resolved snapshot unchanged for direct-message-only tool surfaces", () => {
     const { runtimeConfig, sourceConfig } = createRuntimeConfigPair();
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
     expect(
-      resolveAgentToolSearchRuntimeConfig({
+      resolveAgentToolSurfacePlan({
         config: sourceConfig,
+        model: { toolSearchMode: "tools" },
         forceDirectMessageTool: true,
-      }),
+        toolsAllow: ["message"],
+        toolsEnabled: true,
+        isRawModelRun: false,
+      }).toolSearchRuntimeConfig,
     ).toBe(runtimeConfig);
   });
 
@@ -80,6 +97,7 @@ describe("resolveAgentToolSearchRuntimeConfig", () => {
     const { runtimeConfig, sourceConfig } = createRuntimeConfigPair();
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     const explicitConfig = {
+      agents: { entries: { main: { default: true } } },
       plugins: {
         entries: {
           "example-plugin": { config: { marker: "explicit" } },
@@ -92,7 +110,10 @@ describe("resolveAgentToolSearchRuntimeConfig", () => {
   });
 
   it("uses the input config when no runtime snapshot exists", () => {
-    const config = { tools: { toolSearch: false } } as OpenClawConfig;
+    const config = {
+      agents: { entries: { main: { default: true } } },
+      tools: { toolSearch: false },
+    } as OpenClawConfig;
 
     expect(resolveAgentRuntimeToolConfig(config)).toBe(config);
     expect(resolveAgentToolSearchRuntimeConfig({ config })).toBe(config);

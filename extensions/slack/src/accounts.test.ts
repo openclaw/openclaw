@@ -67,7 +67,7 @@ describe("resolveSlackOperationToken", () => {
         cfg: {
           channels: {
             slack: {
-              identity: "user",
+              postAs: "user",
               userToken: "test-user-token",
               userTokenReadOnly: true,
             },
@@ -84,7 +84,7 @@ describe("resolveSlackOperationToken", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             botToken: "test-bot-token",
           },
         },
@@ -279,6 +279,36 @@ describe("resolveSlackAccount allowFrom precedence", () => {
       maxEventsPerWindow: 3,
       windowSeconds: 120,
       cooldownSeconds: 240,
+    });
+  });
+
+  it("inherits the top-level presence prompt when an account overrides only the mode", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            presenceEvents: {
+              mode: "auto",
+              prompt: "Use the account owner's workspace guidance.",
+            },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                presenceEvents: {
+                  mode: "on",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.presenceEvents).toEqual({
+      mode: "on",
+      prompt: "Use the account owner's workspace guidance.",
     });
   });
 

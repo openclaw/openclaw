@@ -20,6 +20,25 @@ extension OpenClawChatViewModel {
         markTimelineChanged()
     }
 
+    nonisolated static func durableSessionCacheProjection(
+        _ session: OpenClawChatSessionEntry) -> OpenClawChatSessionEntry
+    {
+        var projected = session
+        let wasActive =
+            projected.hasActiveRun == true ||
+            projected.activeRunIds?.isEmpty == false ||
+            projected.hasActiveSubagentRun == true ||
+            projected.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "running"
+        projected.hasActiveRun = nil
+        projected.activeRunIds = nil
+        projected.hasActiveSubagentRun = nil
+        if wasActive {
+            projected.startedAt = nil
+            projected.status = nil
+        }
+        return projected
+    }
+
     func persistTranscriptToCache(
         session: SessionSnapshot,
         messages: [OpenClawChatMessage],
@@ -64,12 +83,13 @@ extension OpenClawChatViewModel {
         }
     }
 
-    func persistSessionsToCache(_ sessions: [OpenClawChatSessionEntry]) {
+    func persistSessionsToCache(_ sessions: [OpenClawChatSessionEntry], agentID: String?) {
         guard let transcriptCache else { return }
+        let durableSessions = sessions.map(Self.durableSessionCacheProjection)
         let previous = pendingCacheWriteTask
         pendingCacheWriteTask = Task.detached {
             await previous?.value
-            await transcriptCache.storeSessions(sessions)
+            await transcriptCache.storeSessions(durableSessions, agentID: agentID)
         }
     }
 
@@ -81,13 +101,32 @@ extension OpenClawChatViewModel {
         guard let transcriptCache else { return }
         if sessions.isEmpty, !hasAppliedLiveSessions {
             Task { [weak self] in
-                let cached = await transcriptCache.loadSessions()
+                let cached = await transcriptCache.loadSessions(agentID: session.deliveryAgentID)
                 guard let self, !cached.isEmpty else { return }
                 // A live sessions response (even an empty one) is authoritative;
                 // a slow cache read must never repaint over it.
-                guard self.sessions.isEmpty, !self.hasAppliedLiveSessions else { return }
+                // Session lists are always agent-scoped, even when the chat key
+                // itself has immutable routing and ignores active-agent changes.
+                guard self.isCurrentSession(session),
+                      self.activeAgentId == session.agentID,
+                      self.sessions.isEmpty,
+                      !self.hasAppliedLiveSessions
+                else {
+                    return
+                }
+                let durableSessions = cached.map(Self.durableSessionCacheProjection)
+                let organized = OpenClawChatSessionListOrganizer.organize(durableSessions)
+                let agentScoped = organized.filter {
+                    ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                        key: $0.key,
+                        agentID: $0.agentId,
+                        activeAgentID: self.activeAgentId)
+                }
+                let scoped = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(
+                    in: agentScoped,
+                    activeAgentId: self.activeAgentId)
                 self.sessions = self.applyingLocalUnreadOverrides(
-                    to: OpenClawChatSessionListOrganizer.organize(cached))
+                    to: scoped)
             }
         }
         guard messages.isEmpty, !hasAppliedLiveHistory else { return }

@@ -1,5 +1,11 @@
 // Msteams tests cover reaction handler plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "openclaw/plugin-sdk/system-event-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { setMSTeamsRuntime } from "../runtime.js";
@@ -26,6 +32,18 @@ function buildMockRuntime(overrides?: Partial<PluginRuntime>): PluginRuntime {
     },
     ...overrides,
   } as unknown as PluginRuntime;
+}
+
+function buildProductionBoundaryRuntime(): PluginRuntime {
+  const runtime = buildMockRuntime();
+  return {
+    ...runtime,
+    channel: {
+      ...runtime.channel,
+      routing: { ...runtime.channel.routing, resolveAgentRoute },
+    },
+    system: { ...runtime.system, enqueueSystemEvent },
+  };
 }
 
 function buildDeps(cfg: OpenClawConfig, _runtime?: PluginRuntime): MSTeamsMessageHandlerDeps {
@@ -57,7 +75,7 @@ function createReactionTestHarness() {
   setMSTeamsRuntime(mockRuntime);
 
   const cfg: OpenClawConfig = {
-    channels: { msteams: { allowFrom: ["allowed-aad"] } },
+    channels: { msteams: { allowFrom: ["allowed-aad"], groupPolicy: "open" } },
   } as OpenClawConfig;
 
   const deps = buildDeps(cfg, mockRuntime);
@@ -83,14 +101,6 @@ function firstEnqueueLabel(enqueue: ReturnType<typeof vi.fn>): string {
   return label;
 }
 
-function firstEnqueueMeta(enqueue: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const [, meta] = firstEnqueueCall(enqueue);
-  if (!meta || typeof meta !== "object") {
-    throw new Error("Expected enqueueSystemEvent metadata");
-  }
-  return meta as Record<string, unknown>;
-}
-
 async function invokeReactionEvent(
   handler: ReturnType<typeof createMSTeamsReactionHandler>,
   activity: Record<string, unknown>,
@@ -110,6 +120,10 @@ async function invokeReactionEvent(
 }
 
 describe("createMSTeamsReactionHandler", () => {
+  afterEach(() => {
+    resetSystemEventsForTest();
+  });
+
   describe("emoji mapping", () => {
     it("maps Teams reaction types to unicode emoji in event label", async () => {
       const mockRuntime = buildMockRuntime();
@@ -190,25 +204,34 @@ describe("createMSTeamsReactionHandler", () => {
   });
 
   describe("inbound reaction events", () => {
-    it("enqueues system event for reactionsAdded", async () => {
-      const { handler, enqueue } = createReactionTestHarness();
-      await invokeReactionEvent(
-        handler,
-        {
-          reactionsAdded: [{ type: "like" }],
-          from: { id: "u1", aadObjectId: "allowed-aad", name: "User" },
-          replyToId: "msg-1",
-        },
-        "added",
-      );
+    it.each([
+      { conversationType: "personal", conversationId: "a:dm" },
+      { conversationType: "groupChat", conversationId: "19:g@thread.v2" },
+      { conversationType: "channel", conversationId: "19:c@thread.tacv2" },
+    ] as const)(
+      "enqueues the exact inbound reaction event label for $conversationType conversations",
+      async ({ conversationType, conversationId }) => {
+        const { handler, enqueue } = createReactionTestHarness();
+        await invokeReactionEvent(
+          handler,
+          {
+            reactionsAdded: [{ type: "like" }],
+            from: { id: "u1", aadObjectId: "allowed-aad", name: "User" },
+            conversation: { id: conversationId, conversationType },
+            replyToId: "msg-1",
+          },
+          "added",
+        );
 
-      expect(enqueue).toHaveBeenCalledOnce();
-      const label = firstEnqueueLabel(enqueue);
-      const meta = firstEnqueueMeta(enqueue);
-      expect(label).toContain("added");
-      expect(meta.sessionKey).toBe("test-session");
-      expect(meta.contextKey).toContain("added");
-    });
+        expect(enqueue).toHaveBeenCalledExactlyOnceWith(
+          "Teams reaction 👍 added by User on message msg-1",
+          {
+            sessionKey: "test-session",
+            contextKey: `msteams:reaction:${conversationId}:msg-1:allowed-aad:like:added`,
+          },
+        );
+      },
+    );
 
     it("enqueues system event for reactionsRemoved", async () => {
       const { handler, enqueue } = createReactionTestHarness();
@@ -256,6 +279,162 @@ describe("createMSTeamsReactionHandler", () => {
       );
 
       expect(enqueue).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("team/channel route authorization", () => {
+    const routeCfg = {
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["allowed-aad"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["allowed-aad"],
+          teams: { trustedTeam: { channels: { "19:trusted-channel@thread.tacv2": {} } } },
+        },
+      },
+    } as OpenClawConfig;
+
+    function createRouteHarness() {
+      const mockRuntime = buildMockRuntime();
+      setMSTeamsRuntime(mockRuntime);
+      const handler = createMSTeamsReactionHandler(buildDeps(routeCfg, mockRuntime));
+      return {
+        handler,
+        enqueue: mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>,
+        resolveAgentRoute: mockRuntime.channel.routing.resolveAgentRoute as ReturnType<
+          typeof vi.fn
+        >,
+      };
+    }
+
+    function reactionFrom(conversation: Record<string, unknown>, teamId: string) {
+      return {
+        reactionsAdded: [{ type: "like" }],
+        from: { id: "teams-user", aadObjectId: "allowed-aad", name: "Allowed Sender" },
+        conversation,
+        channelData: { team: { id: teamId } },
+        replyToId: "target-message",
+      };
+    }
+
+    it.each(["added", "removed"] as const)(
+      "drops a %s reaction from a team/channel outside the configured allowlist",
+      async (direction) => {
+        const { handler, enqueue } = createRouteHarness();
+        const reaction = reactionFrom(
+          { id: "19:excluded-channel@thread.tacv2", conversationType: "channel" },
+          "excludedTeam",
+        );
+        await invokeReactionEvent(
+          handler,
+          direction === "added"
+            ? reaction
+            : { ...reaction, reactionsAdded: undefined, reactionsRemoved: [{ type: "like" }] },
+          direction,
+        );
+
+        expect(enqueue).not.toHaveBeenCalled();
+      },
+    );
+
+    it("enqueues a reaction from an allowlisted team/channel", async () => {
+      const { handler, enqueue } = createRouteHarness();
+      await invokeReactionEvent(
+        handler,
+        reactionFrom(
+          { id: "19:trusted-channel@thread.tacv2", conversationType: "channel" },
+          "trustedTeam",
+        ),
+        "added",
+      );
+
+      expect(enqueue).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      {
+        scopeMarker: "isGroup",
+        conversation: {
+          id: "19:excluded-channel@thread.tacv2",
+          conversationType: "personal",
+          isGroup: true,
+        },
+        channelData: undefined,
+      },
+      {
+        scopeMarker: "team metadata",
+        conversation: { id: "19:excluded-channel@thread.tacv2", conversationType: "personal" },
+        channelData: { team: { id: "excludedTeam" } },
+      },
+      {
+        scopeMarker: "channel metadata",
+        conversation: { id: "19:excluded-channel@thread.tacv2", conversationType: "personal" },
+        channelData: { channel: { id: "19:excluded-channel@thread.tacv2" } },
+      },
+    ])("drops a personal reaction with contradictory $scopeMarker", async (activityScope) => {
+      const { handler, enqueue, resolveAgentRoute: resolveRouteMock } = createRouteHarness();
+      await invokeReactionEvent(
+        handler,
+        {
+          reactionsAdded: [{ type: "like" }],
+          from: { id: "teams-user", aadObjectId: "allowed-aad", name: "Allowed Sender" },
+          conversation: activityScope.conversation,
+          channelData: activityScope.channelData,
+          replyToId: "target-message",
+        },
+        "added",
+      );
+
+      expect(resolveRouteMock).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it("enforces reaction admission at the production route and session-event queue", async () => {
+      const runtime = buildProductionBoundaryRuntime();
+      setMSTeamsRuntime(runtime);
+      const handler = createMSTeamsReactionHandler(buildDeps(routeCfg, runtime));
+      const allowedConversation = {
+        id: "19:trusted-channel@thread.tacv2",
+        conversationType: "channel",
+      };
+      const allowedRoute = resolveAgentRoute({
+        cfg: routeCfg,
+        channel: "msteams",
+        peer: { kind: "channel", id: allowedConversation.id },
+        teamId: "trustedTeam",
+      });
+
+      await invokeReactionEvent(handler, reactionFrom(allowedConversation, "trustedTeam"), "added");
+
+      expect(peekSystemEventEntries(allowedRoute.sessionKey)).toEqual([
+        expect.objectContaining({
+          text: "Teams reaction 👍 added by Allowed Sender on message target-message",
+          contextKey:
+            "msteams:reaction:19:trusted-channel@thread.tacv2:target-message:allowed-aad:like:added",
+        }),
+      ]);
+
+      resetSystemEventsForTest();
+      const forbiddenDirectRoute = resolveAgentRoute({
+        cfg: routeCfg,
+        channel: "msteams",
+        peer: { kind: "direct", id: "allowed-aad" },
+      });
+      await invokeReactionEvent(
+        handler,
+        reactionFrom(
+          {
+            id: "19:excluded-channel@thread.tacv2",
+            conversationType: "personal",
+            isGroup: true,
+          },
+          "excludedTeam",
+        ),
+        "added",
+      );
+
+      expect(peekSystemEventEntries(forbiddenDirectRoute.sessionKey)).toEqual([]);
     });
   });
 

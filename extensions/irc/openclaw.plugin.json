@@ -1,5 +1,11 @@
 {
   "id": "irc",
+  "categories": ["channels"],
+  "name": "IRC",
+  "description": "OpenClaw IRC channel plugin.",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },

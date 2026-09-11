@@ -39,10 +39,9 @@ type ModelPolicyWildcardRef = {
 /** Parse and canonicalize a segment-boundary model-policy prefix wildcard. */
 export function parseModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef | null {
   const trimmed = raw.trim();
-  if (!trimmed.endsWith("/*")) {
-    return null;
-  }
-  const segments = trimmed.split("/");
+  // Wildcard keys match on segment boundaries, so normalize boundary padding
+  // before building the canonical key used by policy matching.
+  const segments = trimmed.split("/").map((segment) => segment.trim());
   if (
     segments.at(-1) !== "*" ||
     !hasValidSegments(segments.slice(0, -1), {
@@ -62,13 +61,34 @@ export function parseModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef
 }
 
 /** True for a syntactically valid exact provider/model policy reference. */
-export function isValidExactModelPolicyRef(raw: string): boolean {
-  const trimmed = raw.trim();
-  const parsed = parseModelCatalogRef(trimmed);
-  return Boolean(parsed && hasValidSegments(trimmed.split("/"), { min: 2 }));
+function isValidExactModelPolicyRef(raw: string): boolean {
+  const parsed = parseModelCatalogRef(raw);
+  return Boolean(
+    parsed &&
+    hasValidSegments([parsed.provider, ...parsed.modelId.split("/")], {
+      min: 2,
+    }),
+  );
 }
 
-/** True for a supported bare selector whose target is resolved from config. */
-export function isModelPolicyCompatSelector(raw: string): boolean {
-  return MODEL_POLICY_COMPAT_SELECTORS.has(normalizeLowercaseStringOrEmpty(raw));
+/** Share policy grammar and owner-scoped aliases between validation and migration. */
+export function createModelPolicyRefValidator(
+  ...modelMaps: Array<Record<string, { alias?: string }> | undefined>
+): (raw: string) => boolean {
+  const aliases = new Set(
+    modelMaps
+      .flatMap((models) =>
+        Object.values(models ?? {}).map((entry) => normalizeLowercaseStringOrEmpty(entry?.alias)),
+      )
+      .filter(Boolean),
+  );
+  return (raw) => {
+    const trimmed = raw.trim();
+    return Boolean(
+      aliases.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
+      MODEL_POLICY_COMPAT_SELECTORS.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
+      isValidExactModelPolicyRef(trimmed) ||
+      parseModelPolicyWildcardRef(trimmed),
+    );
+  };
 }

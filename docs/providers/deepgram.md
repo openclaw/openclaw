@@ -11,15 +11,15 @@ Deepgram is a speech-to-text API. OpenClaw uses it for inbound audio/voice-note
 transcription through `tools.media.audio` and for Voice Call streaming STT
 through `plugins.entries.voice-call.config.streaming`.
 
-Batch transcription uploads the complete audio file to Deepgram and injects
-the transcript into the reply pipeline (`{{Transcript}}` + `[Audio]` block).
+Batch transcription uploads the complete audio file to Deepgram. Flux models
+use Deepgram's one-shot WebSocket instead. Both paths inject the transcript
+into the reply pipeline (`{{Transcript}}` + `[Audio]` block).
 Voice Call streaming forwards live G.711 u-law frames over Deepgram's
 WebSocket `listen` endpoint and emits partial/final transcripts as Deepgram
 returns them.
 
 | Detail        | Value                                                      |
 | ------------- | ---------------------------------------------------------- |
-| Website       | [deepgram.com](https://deepgram.com)                       |
 | Docs          | [developers.deepgram.com](https://developers.deepgram.com) |
 | Auth          | `DEEPGRAM_API_KEY`                                         |
 | Default model | `nova-3`                                                   |
@@ -29,7 +29,7 @@ returns them.
 <Steps>
   <Step title="Set your API key">
     ```bash
-    DEEPGRAM_API_KEY=dg_...
+    export DEEPGRAM_API_KEY=dg_...
     ```
   </Step>
   <Step title="Enable the audio provider">
@@ -37,9 +37,9 @@ returns them.
     {
       tools: {
         media: {
+          models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
           audio: {
             enabled: true,
-            models: [{ provider: "deepgram", model: "nova-3" }],
           },
         },
       },
@@ -54,10 +54,10 @@ returns them.
 
 ## Configuration options
 
-| Option     | Path                                  | Description                           |
-| ---------- | ------------------------------------- | ------------------------------------- |
-| `model`    | `tools.media.audio.models[].model`    | Deepgram model id (default: `nova-3`) |
-| `language` | `tools.media.audio.models[].language` | Language hint (optional)              |
+| Option     | Path                            | Description                           |
+| ---------- | ------------------------------- | ------------------------------------- |
+| `model`    | `tools.media.models[].model`    | Deepgram model id (default: `nova-3`) |
+| `language` | `tools.media.models[].language` | Language hint (optional)              |
 
 `providerOptions.deepgram` merges extra query params directly into the
 Deepgram `/listen` request, so any Deepgram-supported param name works
@@ -69,9 +69,11 @@ Deepgram `/listen` request, so any Deepgram-supported param name works
     {
       tools: {
         media: {
+          models: [
+            { provider: "deepgram", model: "nova-3", language: "en", capabilities: ["audio"] },
+          ],
           audio: {
             enabled: true,
-            models: [{ provider: "deepgram", model: "nova-3", language: "en" }],
           },
         },
       },
@@ -83,6 +85,7 @@ Deepgram `/listen` request, so any Deepgram-supported param name works
     {
       tools: {
         media: {
+          models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             providerOptions: {
@@ -92,7 +95,6 @@ Deepgram `/listen` request, so any Deepgram-supported param name works
                 smart_format: true,
               },
             },
-            models: [{ provider: "deepgram", model: "nova-3" }],
           },
         },
       },
@@ -100,6 +102,22 @@ Deepgram `/listen` request, so any Deepgram-supported param name works
     ```
   </Tab>
 </Tabs>
+
+### Flux models
+
+Use `flux-general-en` or `flux-general-multi` for Deepgram Flux. OpenClaw
+converts the voice note to 16 kHz mono linear16 audio with `ffmpeg`, then sends
+it to Deepgram's `/v2/listen` WebSocket endpoint.
+Set `tools.media.models[].model` to either Flux model in the getting-started
+configuration above.
+
+Flux supports `eager_eot_threshold`, `eot_threshold`, `eot_timeout_ms`,
+`keyterm`, `language_hint`, `mip_opt_out`, `numerals`, `profanity_filter`,
+`redact`, and `tag` in `providerOptions.deepgram`. OpenClaw ignores batch-only
+options such as `detect_language`, `punctuate`, and `smart_format` on Flux.
+Language hints apply only to `flux-general-multi`: OpenClaw maps the model entry's
+`language` setting to `language_hint`, with an explicit provider option taking
+precedence. Both settings are ignored for the English-only `flux-general-en` model.
 
 ## Voice Call streaming STT
 
@@ -162,12 +180,15 @@ Twilio media frames can be forwarded directly.
     the simplest path.
   </Accordion>
   <Accordion title="Proxy and custom endpoints">
-    Override endpoints or headers with `tools.media.audio.baseUrl` and
-    `tools.media.audio.headers` when using a proxy.
+    Override endpoints or headers on the Deepgram `tools.media.models[]` entry when using a proxy.
   </Accordion>
   <Accordion title="Output behavior">
     Output follows the same audio rules as other providers (size caps, timeouts,
     transcript injection).
+  </Accordion>
+  <Accordion title="Flux requires ffmpeg">
+    Install `ffmpeg` with the gateway host's package manager before selecting a
+    Flux model.
   </Accordion>
 </AccordionGroup>
 

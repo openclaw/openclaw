@@ -1,9 +1,9 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -22,6 +22,7 @@ import {
   listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
   recordSessionCompacted,
+  recordSessionCreated,
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
@@ -103,7 +104,7 @@ async function createWatcherSession(
   database: ReturnType<typeof createDatabaseOptions>,
   watcherSessionKey = watcher,
 ) {
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { sessionKey: watcherSessionKey, env: database.env },
     { sessionId: `session-${watcherSessionKey}`, updatedAt: Date.now() },
   );
@@ -194,34 +195,50 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
-  it("wakes main watchers but only queues notices for nested watchers", async () => {
-    vi.useFakeTimers();
-    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
-    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-    // Drain notices queued by earlier tests before checking this watcher's routing.
-    await vi.advanceTimersByTimeAsync(300);
-    wakes.mockClear();
-    const database = createDatabaseOptions();
-    seedChild(database, nestedWatcher);
+  it.each([false, true])(
+    "wakes main watchers but only queues notices for nested watchers (prior clock=%s)",
+    async (priorClock) => {
+      if (priorClock) {
+        vi.useFakeTimers();
+        vi.advanceTimersByTime(30_000);
+        requestHeartbeat({
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          coalesceMs: 0,
+        });
+        vi.useRealTimers();
+      }
+      vi.useFakeTimers();
+      const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+      disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+      // Pending deadlines may belong to a previous fake-clock origin.
+      await vi.runAllTimersAsync();
+      wakes.mockClear();
+      const database = createDatabaseOptions();
+      seedChild(database, nestedWatcher);
 
-    recordSessionStateEvent(eventInput({ watcherSessionKeys: [nestedWatcher] }), database);
-    await vi.advanceTimersByTimeAsync(300);
-    expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
-    expect(wakes).not.toHaveBeenCalled();
+      recordSessionStateEvent(eventInput({ watcherSessionKeys: [nestedWatcher] }), database);
+      await vi.advanceTimersByTimeAsync(21_000);
+      expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
+      expect(wakes).not.toHaveBeenCalled();
 
-    seedChild(database, watcher);
-    recordSessionStateEvent(eventInput(), database);
-    await vi.advanceTimersByTimeAsync(300);
-    expect(wakes).toHaveBeenCalledWith(
-      // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
-      // dueness and would sit on the notice until the next scheduled tick.
-      expect.objectContaining({
-        source: "session-state",
-        sessionKey: watcher,
-        intent: "immediate",
-      }),
-    );
-  });
+      seedChild(database, watcher);
+      recordSessionStateEvent(eventInput(), database);
+      await vi.advanceTimersByTimeAsync(21_000);
+      expect(wakes).toHaveBeenCalledWith(
+        // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
+        // dueness and would sit on the notice until the next scheduled tick. The
+        // wake itself coalesces for SESSION_STATE_WAKE_COALESCE_MS (20s), hence
+        // the 21s timer advances in these tests.
+        expect.objectContaining({
+          source: "session-state",
+          sessionKey: watcher,
+          intent: "immediate",
+        }),
+      );
+    },
+  );
 
   it("suppresses watcher-originated material events", () => {
     const database = createDatabaseOptions();
@@ -442,6 +459,7 @@ describe("session state events", () => {
 
     await drainFormattedSystemEvents({
       cfg,
+      agentId: "main",
       sessionKey: watcher,
       isMainSession: false,
       isNewSession: false,
@@ -453,6 +471,7 @@ describe("session state events", () => {
     enqueueSystemEvent("Exec completed", { sessionKey: watcher, contextKey: "exec:job-1" });
     await drainFormattedSystemEvents({
       cfg,
+      agentId: "main",
       sessionKey: watcher,
       isMainSession: false,
       isNewSession: false,
@@ -531,31 +550,20 @@ describe("session state events", () => {
     });
   });
 
-  it("registers the main watcher once only under dmScope main", () => {
+  it("registers one ambient main watcher for a distinct group session", () => {
     const database = createDatabaseOptions();
     expect(
       registerMainSessionGroupWatch(
-        { sessionKey: group, agentId: "main", dmScope: "main" },
+        { sessionKey: group, agentId: "main" },
         { ...database, now: 100 },
       ),
     ).toBe(true);
     expect(
       registerMainSessionGroupWatch(
-        { sessionKey: group, agentId: "main", dmScope: "main" },
+        { sessionKey: group, agentId: "main" },
         { ...database, now: 200 },
       ),
     ).toBe(true);
-    expect(
-      registerMainSessionGroupWatch(
-        {
-          sessionKey: "agent:main:slack:channel:room-2",
-          agentId: "main",
-          dmScope: "per-channel-peer",
-        },
-        database,
-      ),
-    ).toBe(false);
-
     const rows = openOpenClawStateDatabase(database)
       .db.prepare(
         `SELECT watcher_session_key, target_session_key, provenance, updated_at
@@ -581,42 +589,32 @@ describe("session state events", () => {
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
   });
 
-  it("revokes ambient watches outside main scope but preserves explicit watches", () => {
+  it("does not register a group routed into the configured main session", () => {
     const database = createDatabaseOptions();
-    registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main", dmScope: "main" },
-      database,
-    );
-    expect(
-      registerMainSessionGroupWatch(
-        { sessionKey: group, agentId: "main", dmScope: "per-channel-peer" },
-        database,
-      ),
-    ).toBe(false);
-    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
-    expect(readCursor(database, watcher, group)).toBeUndefined();
+    const mainSessionKey = "agent:main:work";
 
-    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
     expect(
       registerMainSessionGroupWatch(
-        { sessionKey: group, agentId: "main", dmScope: "per-channel-peer" },
+        {
+          sessionKey: mainSessionKey,
+          agentId: "main",
+          mainKey: "work",
+          entry: { sessionId: "session-main", updatedAt: 100, chatType: "group" },
+        },
         database,
       ),
     ).toBe(false);
-    expect(readCursor(database, watcher, group)).toBeDefined();
+    expect(listAmbientGroupWatchTargets(mainSessionKey, database)).toEqual(new Set());
   });
 
   it("records and coalesces group activity without an immediate wake", async () => {
     vi.useFakeTimers();
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
     disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.runAllTimersAsync();
     wakes.mockClear();
     const database = createDatabaseOptions();
-    registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main", dmScope: "main" },
-      database,
-    );
+    registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
     for (const actorId of ["human-1", "human-2"]) {
       recordSessionHumanDirectMessage(
@@ -630,7 +628,7 @@ describe("session state events", () => {
         database,
       );
     }
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
 
     expect(listSessionStateEventsSince(group, "main", 0, 200, database).events).toHaveLength(2);
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
@@ -645,11 +643,11 @@ describe("session state events", () => {
     const dormantGroup = "agent:main:slack:channel:dormant";
     const registeredAt = 100;
     registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main", dmScope: "main" },
+      { sessionKey: group, agentId: "main" },
       { ...database, now: registeredAt },
     );
     registerMainSessionGroupWatch(
-      { sessionKey: dormantGroup, agentId: "main", dmScope: "main" },
+      { sessionKey: dormantGroup, agentId: "main" },
       { ...database, now: registeredAt },
     );
 
@@ -677,7 +675,7 @@ describe("session state events", () => {
     vi.useFakeTimers();
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
     disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.runAllTimersAsync();
     wakes.mockClear();
     const database = createDatabaseOptions();
     const coordinator = "agent:main:coordinator";
@@ -696,7 +694,7 @@ describe("session state events", () => {
       },
       database,
     );
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
 
     expect(peekSystemEventEntries(coordinator)).toHaveLength(1);
     expect(wakes).toHaveBeenCalledTimes(1);
@@ -706,13 +704,10 @@ describe("session state events", () => {
     vi.useFakeTimers();
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
     disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.runAllTimersAsync();
     wakes.mockClear();
     const database = createDatabaseOptions();
-    registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main", dmScope: "main" },
-      database,
-    );
+    registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
 
     registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
@@ -726,10 +721,7 @@ describe("session state events", () => {
         .get(watcher, group),
     ).toEqual({ provenance: "explicit" });
     // Later inbound group registration must not downgrade the explicit watch.
-    registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main", dmScope: "main" },
-      database,
-    );
+    registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
     recordSessionHumanDirectMessage(
       {
@@ -741,7 +733,7 @@ describe("session state events", () => {
       },
       database,
     );
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
 
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
     expect(wakes).toHaveBeenCalledTimes(1);
@@ -776,6 +768,17 @@ describe("session state events", () => {
 
   it("projects spawn, terminal, goal, and compaction producer helpers", () => {
     const database = createDatabaseOptions();
+    recordSessionCreated({
+      sessionKey: child,
+      agentId: "main",
+      entry: {
+        sessionId: "session-child",
+        updatedAt: Date.now(),
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: watcher },
+        createdAt: Date.now(),
+      },
+    });
     recordSubagentSpawned({
       childSessionKey: child,
       childRunId: "run-child",
@@ -823,13 +826,19 @@ describe("session state events", () => {
 
     const events = listSessionStateEventsSince(child, "main", 0, 200, database).events;
     expect(events.map((event) => event.kind)).toEqual([
+      "created",
       "child_spawned",
       "run_completed",
       "run_failed",
       "goal_changed",
       "compacted",
     ]);
-    expect(events[2]).toMatchObject({
+    expect(events[0]).toMatchObject({
+      actorType: "agent",
+      actorId: watcher,
+      summary: "session created",
+    });
+    expect(events[3]).toMatchObject({
       runId: "run-child-cancelled",
       summary: "child run cancelled",
       payload: { outcome: "cancelled" },

@@ -1,16 +1,31 @@
 // Creates Claw-owned bootstrap and supporting files inside the new agent workspace.
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
+import { resolve, sep } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import type { Selectable } from "kysely";
+import { root as fsSafeRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
+import {
+  compileSqliteQueryBindings,
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { clawContainedRelativePath } from "./path-containment.js";
+import { parseClawMarkdown } from "./reader.js";
 import type { ClawAddPlan, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
 
-const CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION = "openclaw.clawWorkspaceFileRecord.v1" as const;
+export const CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION =
+  "openclaw.clawWorkspaceFileRecord.v1" as const;
 
 const MAX_CLAW_WORKSPACE_FILE_BYTES = 1024 * 1024;
 
@@ -36,29 +51,56 @@ export class ClawWorkspaceWriteError extends Error {
   }
 }
 
-type WorkspaceFileRow = {
-  schema_version: string;
-  agent_id: string;
-  workspace: string;
-  target_path: string;
-  source_path: string;
-  content_digest: string;
-  status: PersistedClawWorkspaceFile["status"];
-  created_at_ms: number | bigint;
-  updated_at_ms: number | bigint;
-};
+class ClawWorkspaceSourceAliasError extends Error {}
 
-function rowToWorkspaceFile(row: WorkspaceFileRow): PersistedClawWorkspaceFile {
+type WorkspaceDatabase = Pick<DB, "claw_workspace_files">;
+type WorkspaceFileRow = Selectable<DB["claw_workspace_files"]>;
+
+function selectWorkspaceFiles(db: DatabaseSync) {
+  return getNodeSqliteKysely<WorkspaceDatabase>(db)
+    .selectFrom("claw_workspace_files")
+    .select([
+      "schema_version",
+      "agent_id",
+      "workspace",
+      "target_path",
+      "source_path",
+      "content_digest",
+      "status",
+      "created_at_ms",
+      "updated_at_ms",
+    ]);
+}
+
+function rowToWorkspaceFile(
+  row: WorkspaceFileRow,
+  schemaVersion: PersistedClawWorkspaceFile["schemaVersion"] = CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
+): PersistedClawWorkspaceFile {
   return {
-    schemaVersion: CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
+    schemaVersion,
     agentId: row.agent_id,
     workspace: row.workspace,
     path: row.target_path,
     sourcePath: row.source_path,
     contentDigest: row.content_digest,
-    status: row.status,
-    createdAtMs: Number(row.created_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    // SAFETY: Inventory keeps its unchecked status contract; the retry reader validates it first.
+    status: row.status as PersistedClawWorkspaceFile["status"],
+    createdAtMs: sqliteNumber(row.created_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
+  };
+}
+
+function workspaceFileToRow(record: PersistedClawWorkspaceFile): WorkspaceFileRow {
+  return {
+    agent_id: record.agentId,
+    target_path: record.path,
+    schema_version: record.schemaVersion,
+    workspace: record.workspace,
+    source_path: record.sourcePath,
+    content_digest: record.contentDigest,
+    status: record.status,
+    created_at_ms: record.createdAtMs,
+    updated_at_ms: record.updatedAtMs,
   };
 }
 
@@ -76,12 +118,37 @@ function contentDigest(content: Uint8Array): string {
   return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
-function containedRelativePath(root: string, path: string): string | undefined {
-  const child = relative(root, path);
-  if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) {
-    return undefined;
+export async function readClawWorkspaceActionSource(params: {
+  action: ClawAddPlanAction;
+  packageRoot: string;
+  sourceRoot: Root;
+}): Promise<{ content: Buffer; sourcePath: string; sourceRelative: string }> {
+  if (!params.action.source) {
+    throw new Error("Workspace file action lacks a source.");
   }
-  return child;
+  const sourcePath = resolve(params.action.source);
+  const sourceRelative = clawContainedRelativePath(params.packageRoot, sourcePath);
+  if (!sourceRelative) {
+    throw new Error("Workspace file source must remain inside the Claw package.");
+  }
+  const read = await params.sourceRoot.read(sourceRelative, {
+    hardlinks: "reject",
+    maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
+    symlinks: "reject",
+  });
+  if (resolve(read.realPath) !== sourcePath) {
+    throw new ClawWorkspaceSourceAliasError(
+      "Workspace source no longer resolves to the consented file.",
+    );
+  }
+  if (params.action.sourceKind !== "clawMarkdownBody") {
+    return { content: read.buffer, sourcePath, sourceRelative };
+  }
+  const parsed = parseClawMarkdown(read.buffer, sourcePath);
+  if (!parsed.ok) {
+    throw new Error(parsed.diagnostics.map((item) => item.message).join("; "));
+  }
+  return { content: parsed.body, sourcePath, sourceRelative };
 }
 
 function persistWorkspaceFile(
@@ -89,40 +156,14 @@ function persistWorkspaceFile(
   options: OpenClawStateDatabaseOptions,
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
-    // sqlite-allow-raw: this Claw prototype state-table write is scoped to one owned row.
-    db.prepare(
-      `INSERT INTO claw_workspace_files (
-         agent_id, target_path, schema_version, workspace, source_path,
-         content_digest, status, created_at_ms, updated_at_ms
-       ) VALUES (
-         @agent_id, @target_path, @schema_version, @workspace, @source_path,
-         @content_digest, @status, @created_at_ms, @updated_at_ms
-       )`,
-    ).run({
-      agent_id: record.agentId,
-      target_path: record.path,
-      schema_version: record.schemaVersion,
-      workspace: record.workspace,
-      source_path: record.sourcePath,
-      content_digest: record.contentDigest,
-      status: record.status,
-      created_at_ms: record.createdAtMs,
-      updated_at_ms: record.updatedAtMs,
-    });
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<WorkspaceDatabase>(db)
+        .insertInto("claw_workspace_files")
+        .values(workspaceFileToRow(record)),
+    );
   }, options);
 }
-
-type PersistedClawWorkspaceFileRow = {
-  schema_version: string;
-  agent_id: string;
-  workspace: string;
-  target_path: string;
-  source_path: string;
-  content_digest: string;
-  status: string;
-  created_at_ms: number | bigint;
-  updated_at_ms: number | bigint;
-};
 
 function readWorkspaceFile(
   agentId: string,
@@ -130,14 +171,13 @@ function readWorkspaceFile(
   options: OpenClawStateDatabaseOptions,
 ): PersistedClawWorkspaceFile | undefined {
   return runOpenClawStateWriteTransaction(({ db }) => {
-    const statement = db /* sqlite-allow-raw: one owned Claw state-table row */
-      .prepare(
-        `SELECT schema_version, agent_id, workspace, target_path, source_path,
-              content_digest, status, created_at_ms, updated_at_ms
-         FROM claw_workspace_files
-        WHERE agent_id = ? AND target_path = ?`,
-      );
-    const row = statement.get(agentId, targetPath) as PersistedClawWorkspaceFileRow | undefined;
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      selectWorkspaceFiles(db)
+        .where("agent_id", "=", agentId)
+        .where("target_path", "=", targetPath)
+        .limit(1),
+    );
     if (!row) {
       return undefined;
     }
@@ -149,17 +189,7 @@ function readWorkspaceFile(
         `Claw workspace file ${JSON.stringify(targetPath)} has unsupported provenance state.`,
       );
     }
-    return {
-      schemaVersion: CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
-      agentId: row.agent_id,
-      workspace: row.workspace,
-      path: row.target_path,
-      sourcePath: row.source_path,
-      contentDigest: row.content_digest,
-      status: row.status,
-      createdAtMs: Number(row.created_at_ms),
-      updatedAtMs: Number(row.updated_at_ms),
-    };
+    return rowToWorkspaceFile(row);
   }, options);
 }
 
@@ -183,26 +213,62 @@ function updateWorkspaceFileStatus(
   options: OpenClawStateDatabaseOptions,
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
-    const expectedPlaceholders = expectedStatuses.map(() => "?").join(", ");
-    const statement = db /* sqlite-allow-raw: one owned Claw state-table row */
-      .prepare(
-        `UPDATE claw_workspace_files
-          SET status = ?, updated_at_ms = ?
-        WHERE agent_id = ? AND target_path = ?
-          AND status IN (${expectedPlaceholders})`,
-      );
-    const result = statement.run(
-      record.status,
-      record.updatedAtMs,
-      record.agentId,
-      record.path,
-      ...expectedStatuses,
+    const result = executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<WorkspaceDatabase>(db)
+        .updateTable("claw_workspace_files")
+        .set({ status: record.status, updated_at_ms: record.updatedAtMs })
+        .where("agent_id", "=", record.agentId)
+        .where("target_path", "=", record.path)
+        .where("status", "in", expectedStatuses),
     );
-    if (Number(result.changes) !== 1) {
+    if (result.numAffectedRows !== 1n) {
       throw new Error(
         `Claw workspace file ${JSON.stringify(record.path)} changed ownership state concurrently.`,
       );
     }
+  }, options);
+}
+
+export function upsertClawWorkspaceFile(
+  record: PersistedClawWorkspaceFile,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<WorkspaceDatabase>(db)
+        .insertInto("claw_workspace_files")
+        .values(workspaceFileToRow(record))
+        .onConflict((conflict) =>
+          conflict.columns(["agent_id", "target_path"]).doUpdateSet((eb) => ({
+            schema_version: eb.ref("excluded.schema_version"),
+            workspace: eb.ref("excluded.workspace"),
+            source_path: eb.ref("excluded.source_path"),
+            content_digest: eb.ref("excluded.content_digest"),
+            status: eb.ref("excluded.status"),
+            // Update rollback restores the complete prior record, including its creation time.
+            created_at_ms: eb.ref("excluded.created_at_ms"),
+            updated_at_ms: eb.ref("excluded.updated_at_ms"),
+          })),
+        ),
+    );
+  }, options);
+}
+
+export function deleteClawWorkspaceFileRecord(
+  agentId: string,
+  path: string,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<WorkspaceDatabase>(db)
+        .deleteFrom("claw_workspace_files")
+        .where("agent_id", "=", agentId)
+        .where("target_path", "=", path),
+    );
   }, options);
 }
 
@@ -214,19 +280,43 @@ export function readClawWorkspaceFiles(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawWorkspaceFile[] {
-  const database = openOpenClawStateDatabase(options);
-  // sqlite-allow-raw: read-only Claw workspace-file lookup with a closed agent-id filter.
-  const rows =
-    database.db /* sqlite-allow-raw: read-only Claw workspace-file lookup with a closed agent-id filter. */
-      .prepare(
-        `SELECT schema_version, agent_id, workspace, target_path, source_path,
-              content_digest, status, created_at_ms, updated_at_ms
-         FROM claw_workspace_files
-        WHERE agent_id = ?
-        ORDER BY target_path`,
+  const { db } = openOpenClawStateDatabase(options);
+  if (options.readOnly && !tableExists(db, "claw_workspace_files")) {
+    return [];
+  }
+  const { compiled, bind } = compileSqliteQueryBindings<string, WorkspaceFileRow>((parameter) =>
+    selectWorkspaceFiles(db)
+      .where(
+        "agent_id",
+        "=",
+        parameter((value) => value),
       )
-      .all(agentId) as WorkspaceFileRow[];
-  return rows.map(rowToWorkspaceFile);
+      .orderBy("target_path"),
+  );
+  const rows =
+    db /* sqlite-allow-raw: preserve native list errors outside the write-transaction owner. */
+      .prepare(compiled.sql)
+      .all(...bind(agentId)) as WorkspaceFileRow[];
+  return rows.map((row) => rowToWorkspaceFile(row));
+}
+
+export function readAllClawWorkspaceFiles(
+  options: OpenClawStateDatabaseOptions,
+): PersistedClawWorkspaceFile[] {
+  const { db } = openOpenClawStateDatabase(options);
+  if (!tableExists(db, "claw_workspace_files")) {
+    return [];
+  }
+  const compiled = selectWorkspaceFiles(db).orderBy("agent_id").orderBy("target_path").compile();
+  const rows =
+    db /* sqlite-allow-raw: preserve native orphan inventory errors without a write transaction. */
+      .prepare(compiled.sql)
+      // SAFETY: The canonical table and shared explicit projection provide this generated row shape.
+      .all() as WorkspaceFileRow[];
+  // Orphan inventory reports the stored version; per-agent inventory uses the current constant.
+  return rows.map((row) =>
+    rowToWorkspaceFile(row, row.schema_version as PersistedClawWorkspaceFile["schemaVersion"]),
+  );
 }
 
 export async function createClawWorkspaceFiles(
@@ -267,11 +357,9 @@ export async function createClawWorkspaceFiles(
           createdFiles,
         );
       }
-      const sourcePath = resolve(action.source);
       const targetPath = resolve(action.target);
-      const sourceRelative = containedRelativePath(packageRoot, sourcePath);
-      const targetRelative = containedRelativePath(workspaceRoot, targetPath);
-      if (!sourceRelative || !targetRelative) {
+      const targetRelative = clawContainedRelativePath(workspaceRoot, targetPath);
+      if (!targetRelative) {
         throw new ClawWorkspaceWriteError(
           [
             diagnostic(
@@ -283,24 +371,12 @@ export async function createClawWorkspaceFiles(
           createdFiles,
         );
       }
-      const read = await source.read(sourceRelative, {
-        hardlinks: "reject",
-        maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
-        symlinks: "reject",
+      const resolvedSource = await readClawWorkspaceActionSource({
+        action,
+        packageRoot,
+        sourceRoot: source,
       });
-      if (resolve(read.realPath) !== sourcePath) {
-        throw new ClawWorkspaceWriteError(
-          [
-            diagnostic(
-              action,
-              "workspace_file_path_alias",
-              `Workspace source ${JSON.stringify(action.id)} no longer resolves to the consented file.`,
-            ),
-          ],
-          createdFiles,
-        );
-      }
-      const digest = contentDigest(read.buffer);
+      const digest = contentDigest(resolvedSource.content);
       if (digest !== action.digest) {
         throw new ClawWorkspaceWriteError(
           [
@@ -318,7 +394,7 @@ export async function createClawWorkspaceFiles(
         agentId: plan.agent.finalId,
         workspace: workspace.rootReal,
         path: targetRelative.replaceAll(sep, "/"),
-        sourcePath: sourceRelative.replaceAll(sep, "/"),
+        sourcePath: resolvedSource.sourceRelative.replaceAll(sep, "/"),
         contentDigest: digest,
         status: "pending",
         createdAtMs: nowMs,
@@ -388,7 +464,10 @@ export async function createClawWorkspaceFiles(
         persistWorkspaceFile(record, options);
       }
       try {
-        await workspace.write(targetRelative, read.buffer, { mkdir: true, overwrite: false });
+        await workspace.write(targetRelative, resolvedSource.content, {
+          mkdir: true,
+          overwrite: false,
+        });
         record.status = "complete";
         updateWorkspaceFileStatus(record, ["pending"], options);
         createdFiles.push(record);
@@ -408,9 +487,13 @@ export async function createClawWorkspaceFiles(
         throw error;
       }
       const code =
-        error instanceof FsSafeError ? `workspace_file_${error.code}` : "workspace_file_io_error";
+        error instanceof ClawWorkspaceSourceAliasError
+          ? "workspace_file_path_alias"
+          : error instanceof FsSafeError
+            ? `workspace_file_${error.code}`
+            : "workspace_file_io_error";
       throw new ClawWorkspaceWriteError(
-        [diagnostic(action, code, error instanceof Error ? error.message : String(error))],
+        [diagnostic(action, code, coerceErrorMessage(error))],
         createdFiles,
       );
     }

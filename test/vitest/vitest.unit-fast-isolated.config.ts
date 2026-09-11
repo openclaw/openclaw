@@ -1,16 +1,24 @@
 // Vitest unit fast isolated config wires audited stateful tests out of shared module caches.
 import { defineConfig } from "vitest/config";
-import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
+import {
+  intersectIncludePatterns,
+  loadPatternListFromEnv,
+  narrowIncludePatternsForCli,
+} from "./vitest.pattern-file.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { getUnitFastIsolatedTestFiles } from "./vitest.unit-fast-paths.mjs";
+import { unitTestIncludePatterns } from "./vitest.unit-paths.mjs";
 
 export function createUnitFastIsolatedVitestConfig(
   env: Record<string, string | undefined> = process.env,
   options: { argv?: string[] } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
-  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-  const isolatedTestFiles = getUnitFastIsolatedTestFiles();
+  const selectedPatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const discoveryPatterns =
+    selectedPatterns ?? narrowIncludePatternsForCli(unitTestIncludePatterns, options.argv);
+  const isolatedTestFiles = getUnitFastIsolatedTestFiles(discoveryPatterns);
+  const includeFromEnv = intersectIncludePatterns(isolatedTestFiles, selectedPatterns);
   const cliInclude = narrowIncludePatternsForCli(isolatedTestFiles, options.argv);
 
   return defineConfig({

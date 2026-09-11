@@ -103,7 +103,7 @@ The plugin checks the host OpenClaw version at startup.
 
 | Plugin line | OpenClaw version                                                | npm tag  |
 | ----------- | --------------------------------------------------------------- | -------- |
-| `2.x`       | `>=2026.5.12` (current 2.4.6; early 2.x accepted `>=2026.3.22`) | `latest` |
+| `2.x`       | `>=2026.5.12` (current 2.4.8; early 2.x accepted `>=2026.3.22`) | `latest` |
 | `1.x`       | `>=2026.1.0 <2026.3.22`                                         | `legacy` |
 
 If the plugin reports that your OpenClaw version is too old, either update
@@ -113,10 +113,19 @@ OpenClaw or install the legacy plugin line:
 openclaw plugins install @tencent-weixin/openclaw-weixin@legacy
 ```
 
+Plugin 2.4.6 imports the retired `openclaw/plugin-sdk/channel-runtime` path and
+cannot load on OpenClaw 2026.8.1. If startup reports that this subpath is not
+exported, update to plugin 2.4.8, which uses the available SDK path:
+
+```bash
+openclaw plugins update @tencent-weixin/openclaw-weixin@2.4.8
+openclaw gateway restart
+```
+
 ## Sidecar process
 
 The WeChat plugin can run helper work beside the Gateway while it monitors the
-Tencent iLink API. In issue #68451, that helper path exposed a bug in OpenClaw's
+Tencent iLink API. In [issue #68451](https://github.com/openclaw/openclaw/issues/68451), that helper path exposed a bug in OpenClaw's
 generic stale-Gateway cleanup: a child process could try to clean up the parent
 Gateway process, causing restart loops under process managers such as systemd.
 
@@ -167,7 +176,7 @@ openclaw gateway restart
 
 - Channel overview: [Chat Channels](/channels)
 - Pairing: [Pairing](/channels/pairing)
-- Channel routing: [Channel Routing](/channels/channel-routing)
+- Channel routing: [Channel routing](/channels/channel-routing)
 - Plugin architecture: [Plugin Architecture](/plugins/architecture)
 - Channel plugin SDK: [Channel Plugin SDK](/plugins/sdk-channel-plugins)
 - External package: [@tencent-weixin/openclaw-weixin](https://www.npmjs.com/package/@tencent-weixin/openclaw-weixin)

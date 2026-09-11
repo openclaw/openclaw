@@ -1,4 +1,3 @@
-import path from "node:path";
 import { FsSafeError, root as openFsRoot } from "./fs-safe.js";
 import {
   readPackageDistContentInventoryIfPresent,
@@ -114,17 +113,13 @@ export async function preflightLocalOverrides(params: {
     }
     return conflicts;
   }
-  const topologyPaths = new Map<string, string>();
   let topologyResolutionFailed = false;
   for (const change of params.plan.changes) {
     try {
-      topologyPaths.set(
+      await resolveLocalOverrideTopologyPath(
+        params.packageRoot,
+        params.realPackageRoot,
         change.path,
-        await resolveLocalOverrideTopologyPath(
-          params.packageRoot,
-          params.realPackageRoot,
-          change.path,
-        ),
       );
     } catch {
       topologyResolutionFailed = true;
@@ -138,69 +133,6 @@ export async function preflightLocalOverrides(params: {
       conflicts.push({ path: change.path, reason: "target-inspection-failed" });
     }
     return conflicts;
-  }
-  const conflictPaths = new Set(conflicts.map((conflict) => conflict.path));
-  const pathsShareTopology = (left: string, right: string) => {
-    const normalizedLeft = topologyPaths.get(left);
-    const normalizedRight = topologyPaths.get(right);
-    if (!normalizedLeft || !normalizedRight) {
-      return false;
-    }
-    return (
-      normalizedLeft === normalizedRight ||
-      normalizedLeft.startsWith(`${normalizedRight}${path.sep}`) ||
-      normalizedRight.startsWith(`${normalizedLeft}${path.sep}`)
-    );
-  };
-  let propagatedConflict = true;
-  while (propagatedConflict) {
-    propagatedConflict = false;
-    for (const change of params.plan.changes) {
-      if (conflictPaths.has(change.path)) {
-        continue;
-      }
-      if (
-        [...conflictPaths].some((conflictPath) => pathsShareTopology(change.path, conflictPath))
-      ) {
-        conflicts.push({ path: change.path, reason: "target-changed" });
-        conflictPaths.add(change.path);
-        propagatedConflict = true;
-      }
-    }
-    for (const change of params.plan.changes) {
-      if (change.kind === "deleted" || conflictPaths.has(change.path)) {
-        continue;
-      }
-      if ((change.dependencies ?? []).some((dependency) => conflictPaths.has(dependency))) {
-        conflicts.push({ path: change.path, reason: "target-changed" });
-        conflictPaths.add(change.path);
-        propagatedConflict = true;
-      }
-    }
-    for (const change of params.plan.changes) {
-      if (change.kind !== "added" || conflictPaths.has(change.path)) {
-        continue;
-      }
-      const importers = params.plan.changes.filter(
-        (candidate) =>
-          candidate.kind !== "deleted" && (candidate.dependencies ?? []).includes(change.path),
-      );
-      if (importers.length > 0 && importers.every((importer) => conflictPaths.has(importer.path))) {
-        conflicts.push({ path: change.path, reason: "target-changed" });
-        conflictPaths.add(change.path);
-        propagatedConflict = true;
-      }
-    }
-    for (const change of params.plan.changes) {
-      if (change.kind !== "deleted" || conflictPaths.has(change.path)) {
-        continue;
-      }
-      if (conflictPaths.size > 0) {
-        conflicts.push({ path: change.path, reason: "target-changed" });
-        conflictPaths.add(change.path);
-        propagatedConflict = true;
-      }
-    }
   }
   return conflicts;
 }

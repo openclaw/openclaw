@@ -1,11 +1,9 @@
 // Openrouter provider module implements model/runtime integration.
 import path from "node:path";
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-  type AudioTranscriptionRequest,
-  type AudioTranscriptionResult,
-  type MediaUnderstandingProvider,
+import type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+  MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
 import {
   assertOkOrThrowHttpError,
@@ -141,6 +139,7 @@ async function transcribeOpenRouterAudio(
       ...(temperature !== undefined ? { temperature } : {}),
     },
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,
@@ -175,7 +174,7 @@ export const openrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
   autoPriority: {
     audio: 35,
   },
-  describeImage: describeImageWithModel,
-  describeImages: describeImagesWithModel,
+  describeImage: undefined,
+  describeImages: undefined,
   transcribeAudio: transcribeOpenRouterAudio,
 };

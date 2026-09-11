@@ -1,9 +1,14 @@
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 // Bash tool helper tests cover conversion from model-facing timeout seconds to
 // timer-safe millisecond values.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { buildShellCommandInvocation } from "../../shell-utils.js";
+import {
+  expectNativeBashSpill,
+  nativeBashSpillScenarios,
+} from "../bash-output-spill.test-support.js";
 import type { BashOperations } from "./bash-operations.js";
 import { createBashTool, createLocalBashOperations } from "./bash.js";
 import { resolveBashTimeoutMs } from "./bash.test-support.js";
@@ -56,6 +61,47 @@ describe("bash tool timeout helpers", () => {
 });
 
 describe("bash tool output lifecycle", () => {
+  it("reports a long final line's tail and size after its newline", async () => {
+    const text = `${"x".repeat(250_000)}END-MARKER\n`;
+    const operations: BashOperations = {
+      exec: async (_command, _cwd, { onData }) => {
+        onData(Buffer.from(text), "stdout");
+        return { exitCode: 0 };
+      },
+    };
+    const result = await createBashTool(process.cwd(), { operations }).execute("long-line", {
+      command: "ignored",
+    });
+    const details = result.details;
+    if (
+      !details ||
+      typeof details !== "object" ||
+      !("fullOutputPath" in details) ||
+      typeof details.fullOutputPath !== "string"
+    ) {
+      throw new Error("Expected a full output path for truncated Bash output");
+    }
+    const fullOutputPath = details.fullOutputPath;
+    try {
+      expect(result.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(
+          "END-MARKER\n\n[Showing last 50.0KB of line 1 (line is 244.2KB).",
+        ),
+      });
+      expect(await readFile(fullOutputPath, "utf8")).toBe(text);
+    } finally {
+      await rm(fullOutputPath, { force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32").each(nativeBashSpillScenarios)(
+    "settles real Bash output for %s",
+    async (scenario) => {
+      await expectNativeBashSpill("tool", scenario);
+    },
+  );
+
   it.runIf(process.platform !== "win32")("surfaces a configured shell launch error", async () => {
     const operations = createLocalBashOperations({
       shellPath: path.join(process.cwd(), "package.json"),
@@ -82,5 +128,49 @@ describe("bash tool output lifecycle", () => {
     });
 
     expect(result.content[0]).toEqual({ type: "text", text: "before\n" });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "tags stdout and stderr from the local shell backend",
+    async () => {
+      const operations = createLocalBashOperations();
+      const chunks: Array<{ data: Buffer; stream?: "stdout" | "stderr" }> = [];
+
+      const result = await operations.exec("printf stdout; printf stderr >&2", process.cwd(), {
+        onData: (data, stream) => chunks.push({ data, stream }),
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(
+        Buffer.concat(
+          chunks.filter((chunk) => chunk.stream === "stdout").map((chunk) => chunk.data),
+        ).toString("utf8"),
+      ).toBe("stdout");
+      expect(
+        Buffer.concat(
+          chunks.filter((chunk) => chunk.stream === "stderr").map((chunk) => chunk.data),
+        ).toString("utf8"),
+      ).toBe("stderr");
+      expect(chunks.every((chunk) => chunk.stream !== undefined)).toBe(true);
+    },
+  );
+
+  it("decodes a split multi-byte character when the other stream interleaves", async () => {
+    // stdout and stderr are independent pipes: each needs its own decoder, or a
+    // character straddling a stdout read boundary is corrupted by an stderr write
+    // landing between its bytes.
+    const operations: BashOperations = {
+      exec: async (_command, _cwd, { onData }) => {
+        onData(Buffer.from([0xe6, 0x97]), "stdout"); // leading bytes of 日
+        onData(Buffer.from("E"), "stderr"); // interleaves mid-character
+        onData(Buffer.from([0xa5, 0x0a]), "stdout");
+        return { exitCode: 0 };
+      },
+    };
+    const tool = createBashTool(process.cwd(), { operations });
+
+    const result = await tool.execute("call-split-utf8", { command: "ignored" });
+
+    expect(result.content[0]).toEqual({ type: "text", text: "E日\n" });
   });
 });

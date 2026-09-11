@@ -8,9 +8,16 @@ type QaRuntimeGatewayClient = {
   tempRoot: string;
   workspaceDir: string;
   runtimeEnv: NodeJS.ProcessEnv;
+  cliCommand?: {
+    executablePath: string;
+    argsPrefix: readonly string[];
+    cwd: string;
+  };
   getProcessCpuMs?: () => number | null;
   getProcessRssBytes?: () => number | null;
   logs?: () => string;
+  markLogs?: () => number;
+  readLogsSince?: (mark: number) => string;
   restart?: () => Promise<void>;
   stop?: (options?: { preserveToDir?: string }) => Promise<void>;
   restartAfterStateMutation?: (

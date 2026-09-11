@@ -1,19 +1,12 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as normalizedString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 
 // Lifecycle notes are transient UI state, so bound them for long-lived board tabs.
-const MAX_TRACKED_SWARM_GROUPS = 128;
-const MAX_TRACKED_SWARM_CHILDREN = 2_048;
-
-type SwarmDisplayCarrier = {
-  swarmPhaseRank?: number;
-  swarmLog?: string;
-  swarmPhase?: string;
-};
-
-function normalizedString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
+const MAX_TRACKED_SWARM_GROUPS = 10_000;
+// Completed members stay visible while any group child is active, so retain the
+// supported lifetime membership ceiling rather than only the live-child cap.
+const MAX_TRACKED_SWARM_CHILDREN = 100_000;
 
 function setBounded<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void {
   map.delete(key);
@@ -45,17 +38,16 @@ export class SwarmActivityTracker {
     this.phaseByChild.clear();
   }
 
-  observe(payload: unknown): void {
+  observe(payload: unknown): boolean {
     const event = asNullableRecord(payload);
     if (!event) {
-      return;
+      return false;
     }
     const source = asNullableRecord(event.session) ?? event;
     const groupId = normalizedString(event.swarmGroupId) ?? normalizedString(source.swarmGroupId);
     if (!groupId) {
-      return;
+      return false;
     }
-
     const kind = normalizedString(event.kind);
     const text = normalizedString(event.text);
     if ((kind === "phase" || kind === "log") && text) {
@@ -77,17 +69,17 @@ export class SwarmActivityTracker {
         text,
         MAX_TRACKED_SWARM_GROUPS,
       );
-      return;
+      return true;
     }
 
     const childKey = normalizedString(source.key) ?? normalizedString(event.sessionKey);
     if (!childKey) {
-      return;
+      return true;
     }
     const explicitPhase = normalizedString(source.swarmPhase) ?? normalizedString(event.swarmPhase);
     if (explicitPhase) {
       setBounded(this.phaseByChild, childKey, explicitPhase, MAX_TRACKED_SWARM_CHILDREN);
-      return;
+      return true;
     }
     // Implicit phase assignment is a creation-time fact: only a child ADMITTED
     // after phase('X') belongs to X. Status/completion updates for a child that
@@ -98,6 +90,7 @@ export class SwarmActivityTracker {
         setBounded(this.phaseByChild, childKey, currentPhase, MAX_TRACKED_SWARM_CHILDREN);
       }
     }
+    return true;
   }
 
   decorate(result: SessionsListResult | null): SessionsListResult | null {
@@ -106,19 +99,14 @@ export class SwarmActivityTracker {
     }
     let changed = false;
     const sessions = result.sessions.map((row): GatewaySessionRow => {
-      const carrier = row as GatewaySessionRow & SwarmDisplayCarrier;
-      const phase = this.phaseByChild.get(row.key) ?? carrier.swarmPhase;
+      const phase = this.phaseByChild.get(row.key) ?? row.swarmPhase;
       const groupId = row.swarmGroupId?.trim();
-      const log = (groupId ? this.latestLogByGroup.get(groupId) : undefined) ?? carrier.swarmLog;
+      const log = (groupId ? this.latestLogByGroup.get(groupId) : undefined) ?? row.swarmLog;
       const phaseRank =
         (phase && groupId
           ? this.phaseRankByGroupPhase.get(`${groupId}\u0000${phase}`)
-          : undefined) ?? carrier.swarmPhaseRank;
-      if (
-        phase === carrier.swarmPhase &&
-        log === carrier.swarmLog &&
-        phaseRank === carrier.swarmPhaseRank
-      ) {
+          : undefined) ?? row.swarmPhaseRank;
+      if (phase === row.swarmPhase && log === row.swarmLog && phaseRank === row.swarmPhaseRank) {
         return row;
       }
       changed = true;

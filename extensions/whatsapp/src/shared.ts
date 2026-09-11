@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -9,11 +8,13 @@ import {
 import {
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createAllowlistProviderGroupPolicyWarningCollector,
+  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   createDelegatedSetupWizardProxy,
+  setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
 import {
@@ -87,16 +88,7 @@ function createWhatsAppSetupWizardProxy(
     resolveShouldPromptAccountIds: (params) => params.shouldPromptAccountIds,
     credentials: [],
     delegateFinalize: true,
-    disable: (cfg) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        whatsapp: {
-          ...cfg.channels?.whatsapp,
-          enabled: false,
-        },
-      },
-    }),
+    disable: (cfg) => setSetupChannelEnabled(cfg, WHATSAPP_CHANNEL, false),
     onAccountRecorded: (accountId, options) => {
       options?.onAccountId?.(WHATSAPP_CHANNEL, accountId);
     },
@@ -106,8 +98,9 @@ function createWhatsAppSetupWizardProxy(
 export function createWhatsAppPluginBase(params: {
   groups: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["groups"]>;
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
-  setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupContract"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
+  isLinked: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isLinked"];
 }) {
   const collectWhatsAppSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
     account: ResolvedWhatsAppAccount;
@@ -144,6 +137,12 @@ export function createWhatsAppPluginBase(params: {
         },
       }),
   });
+  const collectWhatsAppOpenGroupFindings = createConditionalWarningCollector.findings({
+    collectWarnings: collectWhatsAppSecurityWarnings,
+    checkId: "channels.whatsapp.groups.open",
+    severity: "critical",
+    title: "WhatsApp security warning",
+  });
   const base = createChannelPluginBase({
     id: WHATSAPP_CHANNEL,
     meta: {
@@ -172,29 +171,34 @@ export function createWhatsAppPluginBase(params: {
         },
       },
     },
-    // `channels.whatsapp.accounts.*` (account add/remove, and `enabled` flips)
-    // must restart the channel so a disabled account's provider is torn down;
+    // Root/account `enabled` flips must restart the channel so a disabled
+    // provider is torn down;
     // the broad `channels.whatsapp` noop prefix below otherwise swallows it as a
     // hot no-op and leaves the account connected until a full restart.
     reload: {
-      configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
-      noopPrefixes: ["channels.whatsapp"],
+      configPrefixes: [
+        "channels.whatsapp.enabled",
+        "channels.whatsapp.accounts",
+        "channels.whatsapp.selfChatMode",
+      ],
+      noopPrefixes: ["channels.whatsapp", "messages.inbound", "messages.ackReactionScope"],
     },
     gatewayMethodDescriptors: [{ name: "web.login.start" }, { name: "web.login.wait" }],
     configSchema: WhatsAppChannelConfigSchema,
     config: {
       ...whatsappConfigAdapter,
-      isEnabled: (account, cfg) => account.enabled && cfg.web?.enabled !== false,
+      isEnabled: (account) => account.enabled,
       disabledReason: () => "disabled",
       isConfigured: params.isConfigured,
+      isLinked: params.isLinked,
       hasPersistedAuthState: ({ cfg }) => hasAnyWhatsAppAuth(cfg),
-      unconfiguredReason: () => "not linked",
+      unconfiguredReason: () => "not configured",
+      unlinkedReason: () => "not linked",
       describeAccount: (account) =>
         describeAccountSnapshot({
           account,
           configured: Boolean(account.authDir),
           extra: {
-            linked: Boolean(account.authDir),
             dmPolicy: account.dmPolicy,
             allowFrom: account.allowFrom,
           },
@@ -203,10 +207,10 @@ export function createWhatsAppPluginBase(params: {
     security: {
       applyConfigFixes: applyWhatsAppSecurityConfigFixes,
       resolveDmPolicy: whatsappResolveDmPolicy,
-      collectWarnings: collectWhatsAppSecurityWarnings,
+      collectWarnings: collectWhatsAppOpenGroupFindings,
     },
     doctor: whatsappDoctor,
-    setup: params.setup,
+    setupContract: params.setupContract,
     groups: params.groups,
   });
   return {
@@ -245,7 +249,7 @@ export function createWhatsAppPluginBase(params: {
     | "secrets"
     | "security"
     | "doctor"
-    | "setup"
+    | "setupContract"
     | "groups"
   >;
 }

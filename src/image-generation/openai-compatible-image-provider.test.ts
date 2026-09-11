@@ -67,13 +67,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   };
 });
 
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
 function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
   const [call] = mock.mock.calls;
   if (!call) {
@@ -151,8 +144,8 @@ function mockGeneratedResponse() {
       },
     ],
   };
-  postJsonRequestMock.mockResolvedValue({ response: jsonResponse(payload), release });
-  postMultipartRequestMock.mockResolvedValue({ response: jsonResponse(payload), release });
+  postJsonRequestMock.mockResolvedValue({ response: Response.json(payload), release });
+  postMultipartRequestMock.mockResolvedValue({ response: Response.json(payload), release });
   return release;
 }
 
@@ -183,6 +176,32 @@ describe("OpenAI-compatible image provider helper", () => {
     });
   });
 
+  it("checks config-backed auth under the credential owner, not its HTTP config alias", () => {
+    const provider = createProvider({ providerConfigKey: "different-http-provider" });
+    const cfg = {
+      models: {
+        providers: {
+          sample: {
+            apiKey: "sample-config-key",
+            baseUrl: "https://sample.example/v1/",
+            models: [],
+          },
+          "different-http-provider": {
+            apiKey: "wrong-owner-key",
+            baseUrl: "https://different-http-provider.example/v1/",
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(provider.isConfigured?.({ cfg })).toBe(true);
+    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
+      provider: "sample",
+      cfg,
+    });
+  });
+
   it("posts JSON generation requests and parses OpenAI-compatible image data", async () => {
     const release = mockGeneratedResponse();
     const provider = createProvider();
@@ -199,12 +218,13 @@ describe("OpenAI-compatible image provider helper", () => {
           providers: {
             sample: {
               baseUrl: "https://sample.example/v1/",
+              models: [],
               request: { allowPrivateNetwork: true },
             },
           },
         },
       },
-    } as never);
+    });
 
     const apiKeyParams = requireFirstCallArg(resolveApiKeyForProviderMock) as { provider?: string };
     expect(apiKeyParams.provider).toBe("sample");
@@ -242,7 +262,7 @@ describe("OpenAI-compatible image provider helper", () => {
   it("accepts valid multi-image JSON above the generic provider JSON cap", async () => {
     const imageBytes = Buffer.alloc(3 * 1024 * 1024 + 64 * 1024, 1);
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: Response.json({
         data: Array.from({ length: 4 }, () => ({
           b64_json: imageBytes.toString("base64"),
         })),
@@ -256,10 +276,9 @@ describe("OpenAI-compatible image provider helper", () => {
       model: "sample-image",
       prompt: "large",
       count: 4,
-      cfg: {} as never,
+      cfg: {},
     });
 
-    expect(result.images).toHaveLength(4);
     expect(result.images.map((image) => image.buffer.byteLength)).toEqual([
       imageBytes.byteLength,
       imageBytes.byteLength,
@@ -271,7 +290,7 @@ describe("OpenAI-compatible image provider helper", () => {
   it("honors configured generated media caps above the default image limit", async () => {
     const imageBytes = Buffer.alloc(7 * 1024 * 1024, 1);
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: Response.json({
         data: [{ b64_json: imageBytes.toString("base64") }],
       }),
       release: vi.fn(async () => {}),
@@ -282,7 +301,7 @@ describe("OpenAI-compatible image provider helper", () => {
       provider: "sample",
       model: "sample-image",
       prompt: "large",
-      cfg: { agents: { defaults: { mediaMaxMb: 8 } } } as never,
+      cfg: { agents: { defaults: { mediaMaxMb: 8 } } },
     });
 
     expect(result.images).toHaveLength(1);
@@ -291,7 +310,7 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("rejects oversized OpenAI-compatible image JSON", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: Response.json({
         data: [{ b64_json: "x".repeat(35 * 1024 * 1024) }],
       }),
       release: vi.fn(async () => {}),
@@ -303,7 +322,7 @@ describe("OpenAI-compatible image provider helper", () => {
         provider: "sample",
         model: "sample-image",
         prompt: "too large",
-        cfg: {} as never,
+        cfg: {},
       }),
     ).rejects.toThrow("sample.image-generation: JSON response exceeds");
   });
@@ -317,7 +336,7 @@ describe("OpenAI-compatible image provider helper", () => {
       model: "sample-image",
       prompt: "edit it",
       inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/png" }],
-      cfg: {} as never,
+      cfg: {},
     });
 
     const multipartRequest = requireFirstCallArg(postMultipartRequestMock) as {
@@ -332,7 +351,7 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("honors default operation timeouts and empty-response errors", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({ data: [] }),
+      response: Response.json({ data: [] }),
       release: vi.fn(async () => {}),
     });
     const provider = createProvider({
@@ -346,7 +365,7 @@ describe("OpenAI-compatible image provider helper", () => {
         model: "sample-image",
         prompt: "empty",
         timeoutMs: 123,
-        cfg: {} as never,
+        cfg: {},
       }),
     ).rejects.toThrow("Sample response missing image data");
 
@@ -364,7 +383,7 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("wraps malformed successful image responses with provider-owned errors", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({ data: { b64_json: "not-an-array" } }),
+      response: Response.json({ data: { b64_json: "not-an-array" } }),
       release: vi.fn(async () => {}),
     });
     const provider = createProvider();
@@ -374,7 +393,7 @@ describe("OpenAI-compatible image provider helper", () => {
         provider: "sample",
         model: "sample-image",
         prompt: "bad shape",
-        cfg: {} as never,
+        cfg: {},
       }),
     ).rejects.toThrow("Sample image generation response malformed");
   });

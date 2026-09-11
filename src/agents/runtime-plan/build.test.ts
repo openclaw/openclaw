@@ -2,21 +2,19 @@
 // auth, transport, tools, prompt, delivery, transcript, and observability.
 import { createParameterFreeTool } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { resetConfigRuntimeState } from "../../config/config.js";
 import {
-  resolveProviderRuntimePluginHandle,
-  prepareProviderExtraParams,
   resolveProviderFollowupFallbackRoute,
+  resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../plugins/provider-hook-runtime.js";
 import { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlan } from "./build.js";
 
-const manifestMocks = vi.hoisted(() => ({
-  loadManifestMetadataSnapshot: vi.fn(() => ({}) as never),
-}));
+const resolveProviderIdForAuth = vi.hoisted(() => vi.fn((provider: string) => provider));
 
-vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
-  loadManifestMetadataSnapshot: manifestMocks.loadManifestMetadataSnapshot,
+vi.mock("../provider-auth-aliases.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../provider-auth-aliases.js")>()),
+  resolveProviderIdForAuth,
 }));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
@@ -27,14 +25,12 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   ensureProviderRuntimePluginHandle: vi.fn(
     (params) => params.runtimeHandle ?? { provider: "openai" },
   ),
-  prepareProviderExtraParams: vi.fn(() => undefined),
+  getModelProviderRuntimePluginHandle: () => undefined,
   resolveProviderAuthProfileId: vi.fn(() => undefined),
-  resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
   resolveProviderFollowupFallbackRoute: vi.fn(() => undefined),
   resolveProviderPluginsForHooks: vi.fn(() => []),
   resolveProviderRuntimePlugin: vi.fn(() => undefined),
   resolveProviderRuntimePluginHandle: vi.fn(() => ({ provider: "openai" })),
-  wrapProviderStreamFn: vi.fn(() => undefined),
 }));
 
 const gpt54Model = {
@@ -90,16 +86,24 @@ function latestFollowupRouteCall(): {
 describe("AgentRuntimePlan", () => {
   afterEach(() => {
     resetConfigRuntimeState();
-    manifestMocks.loadManifestMetadataSnapshot.mockClear();
-    vi.mocked(resolveProviderRuntimePluginHandle).mockClear();
   });
 
   it("defers default transport extra params until they are read", () => {
     // Extra params are lazy so plan construction stays cheap and provider hooks
     // only run if a transport path actually needs them.
-    const prepareProviderExtraParamsMock = vi.mocked(prepareProviderExtraParams);
-    prepareProviderExtraParamsMock.mockClear();
-
+    const prepareProviderExtraParamsMock = vi.fn(() => undefined);
+    const providerRuntimeHandle = {
+      provider: "openai",
+      modelId: gpt54Model.id,
+      workspaceDir: "/tmp/openclaw-runtime-plan",
+      prepared: true,
+      plugin: {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        prepareExtraParams: prepareProviderExtraParamsMock,
+      },
+    } satisfies ProviderRuntimePluginHandle & { modelId: string; prepared: true };
     const plan = buildAgentRuntimePlan({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -107,6 +111,7 @@ describe("AgentRuntimePlan", () => {
       config: {},
       workspaceDir: "/tmp/openclaw-runtime-plan",
       model: gpt54Model,
+      providerRuntimeHandle,
     });
 
     expect(prepareProviderExtraParamsMock).not.toHaveBeenCalled();
@@ -117,6 +122,37 @@ describe("AgentRuntimePlan", () => {
     expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
     void plan.transport.extraParams;
     expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps prepared extra params within their provider generation and attempt", () => {
+    const config = { agents: { defaults: { params: { temperature: 0.1 } } } };
+    const buildPlan = (owner: string) => {
+      const providerRuntimeHandle = {
+        provider: "fixture-provider",
+        modelId: "fixture-model",
+        prepared: true,
+        plugin: {
+          id: "fixture-provider",
+          label: "Fixture",
+          auth: [],
+          prepareExtraParams: ({ extraParams }) => ({ ...extraParams, owner }),
+        },
+      } satisfies ProviderRuntimePluginHandle & { modelId: string; prepared: true };
+      return buildAgentRuntimePlan({
+        config,
+        provider: "fixture-provider",
+        modelId: "fixture-model",
+        providerRuntimeHandle,
+      });
+    };
+    const first = buildPlan("first");
+    expect(first.transport.extraParams).toEqual({ temperature: 0.1, owner: "first" });
+    const replacement = buildPlan("replacement");
+    expect(replacement.transport.extraParams).toEqual({ temperature: 0.1, owner: "replacement" });
+    config.agents.defaults.params.temperature = 0.7;
+    const updated = buildPlan("updated");
+    expect(updated.transport.extraParams).toEqual({ temperature: 0.7, owner: "updated" });
+    expect(first.transport.extraParams).toEqual({ temperature: 0.1, owner: "first" });
   });
 
   it("records resolved model, auth, transport, tool, delivery, and observability policy", () => {
@@ -292,8 +328,13 @@ describe("AgentRuntimePlan", () => {
       route: "dispatcher" as const,
       reason: "prepared-route",
     });
-    const providerRuntimeHandle: ProviderRuntimePluginHandle = {
+    const providerRuntimeHandle: ProviderRuntimePluginHandle & {
+      modelId: string;
+      prepared: true;
+    } = {
       provider: "openai",
+      modelId: "gpt-5.4",
+      prepared: true,
     };
 
     const plan = buildAgentRuntimePlan({
@@ -323,26 +364,21 @@ describe("AgentRuntimePlan", () => {
     expect(followupCall.context?.dispatcherAvailable).toBe(true);
   });
 
-  it("resolves incomplete supplied provider handles before invoking runtime hooks", () => {
-    const resolveProviderRuntimePluginHandleMock = vi.mocked(resolveProviderRuntimePluginHandle);
+  it("reuses the provider handle prepared before plan construction", () => {
     const resolveProviderFollowupFallbackRouteMock = vi.mocked(
       resolveProviderFollowupFallbackRoute,
     );
-    resolveProviderRuntimePluginHandleMock.mockClear();
     resolveProviderFollowupFallbackRouteMock.mockClear();
 
-    const suppliedHandle = {
+    const suppliedHandle: ProviderRuntimePluginHandle & { modelId: string; prepared: true } = {
       provider: "openai",
+      modelId: "gpt-5.4",
+      prepared: true,
       config: { plugins: { allow: ["openai"] } },
-    };
-    const resolvedHandle: ProviderRuntimePluginHandle = {
-      ...suppliedHandle,
       workspaceDir: "/tmp/openclaw-runtime-plan",
       env: process.env,
       plugin: {} as never,
     };
-
-    resolveProviderRuntimePluginHandleMock.mockReturnValueOnce(resolvedHandle);
 
     const plan = buildAgentRuntimePlan({
       provider: "openai",
@@ -352,7 +388,7 @@ describe("AgentRuntimePlan", () => {
       providerRuntimeHandle: suppliedHandle,
     });
 
-    expect(plan.providerRuntimeHandle).toBe(resolvedHandle);
+    expect(plan.providerRuntimeHandle).toBe(suppliedHandle);
 
     plan.delivery.resolveFollowupRoute({
       payload: { text: "hello" },
@@ -360,38 +396,24 @@ describe("AgentRuntimePlan", () => {
       dispatcherAvailable: true,
     });
 
-    expect(resolveProviderRuntimePluginHandleMock).toHaveBeenCalledWith({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      config: suppliedHandle.config,
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-      env: process.env,
-      applyAutoEnable: undefined,
-      bundledProviderVitestCompat: undefined,
-    });
     const followupCall = latestFollowupRouteCall();
-    expect(followupCall.runtimeHandle).toBe(resolvedHandle);
+    expect(followupCall.runtimeHandle).toBe(suppliedHandle);
   });
 
-  it("resolves incomplete supplied delivery handles before follow-up routing", () => {
-    const resolveProviderRuntimePluginHandleMock = vi.mocked(resolveProviderRuntimePluginHandle);
+  it("reuses a delivery-only provider handle", () => {
     const resolveProviderFollowupFallbackRouteMock = vi.mocked(
       resolveProviderFollowupFallbackRoute,
     );
-    resolveProviderRuntimePluginHandleMock.mockClear();
     resolveProviderFollowupFallbackRouteMock.mockClear();
 
-    const suppliedHandle = {
+    const suppliedHandle: ProviderRuntimePluginHandle & { modelId: string; prepared: true } = {
       provider: "openai",
-    };
-    const resolvedHandle: ProviderRuntimePluginHandle = {
-      provider: "openai",
+      modelId: "gpt-5.4",
+      prepared: true,
       workspaceDir: "/tmp/openclaw-runtime-plan",
       env: process.env,
       plugin: {} as never,
     };
-
-    resolveProviderRuntimePluginHandleMock.mockReturnValueOnce(resolvedHandle);
 
     const delivery = buildAgentRuntimeDeliveryPlan({
       provider: "openai",
@@ -407,42 +429,27 @@ describe("AgentRuntimePlan", () => {
       dispatcherAvailable: true,
     });
 
-    expect(resolveProviderRuntimePluginHandleMock).toHaveBeenCalledWith({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-      env: process.env,
-      applyAutoEnable: undefined,
-      bundledProviderVitestCompat: undefined,
-    });
     const followupCall = latestFollowupRouteCall();
-    expect(followupCall.runtimeHandle).toBe(resolvedHandle);
+    expect(followupCall.runtimeHandle).toBe(suppliedHandle);
   });
 
-  it("plans tool metadata against the runtime source snapshot lazily", () => {
-    const sourceConfig = { channels: { telegram: { botToken: "token" } } };
-    const runtimeConfig = {
-      ...sourceConfig,
-      plugins: { allow: ["telegram"] },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-
+  it("threads prepared tool metadata without discovery", () => {
+    const metadataSnapshot = { plugins: [] };
+    vi.mocked(resolveProviderRuntimePluginHandle).mockClear();
+    resolveProviderIdForAuth.mockClear();
     const plan = buildAgentRuntimePlan({
       provider: "openai",
       modelId: "gpt-5.4",
-      config: runtimeConfig,
-      workspaceDir: "/tmp/openclaw-runtime-plan",
+      metadataSnapshot,
     });
 
-    expect(manifestMocks.loadManifestMetadataSnapshot).not.toHaveBeenCalled();
-
-    plan.tools.preparedPlanning?.loadMetadataSnapshot?.();
-
-    expect(manifestMocks.loadManifestMetadataSnapshot).toHaveBeenCalledWith({
-      config: sourceConfig,
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-      env: process.env,
-    });
+    expect(plan.tools.preparedPlanning?.metadataSnapshot).toBe(metadataSnapshot);
+    expect(resolveProviderRuntimePluginHandle).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
+    );
+    expect(resolveProviderIdForAuth).toHaveBeenCalledWith(
+      "openai",
+      expect.objectContaining({ metadataSnapshot }),
+    );
   });
 });
