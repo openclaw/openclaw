@@ -5,6 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -35,7 +36,7 @@ function managedWorkspaceFile(plan: ClawAddPlan, content: string): PersistedClaw
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-async function fixture(): Promise<{
+async function fixture(params: { withBootstrap?: boolean } = {}): Promise<{
   root: string;
   plan: ClawAddPlan;
   config: OpenClawConfig;
@@ -61,9 +62,23 @@ async function fixture(): Promise<{
     byteLength: 1,
   };
   const existing = { id: "worker", name: "Worker", workspace, default: true };
+  const bootstrapContent = "# First run\n";
+  if (params.withBootstrap) {
+    await writeFile(join(root, "BOOTSTRAP.md"), bootstrapContent, "utf8");
+  }
   const plan = await buildClawAddPlan({
     manifest: parsed.manifest,
     source,
+    ...(params.withBootstrap
+      ? {
+          packageBootstrap: {
+            sourcePath: "BOOTSTRAP.md",
+            realPath: join(root, "BOOTSTRAP.md"),
+            byteLength: Buffer.byteLength(bootstrapContent),
+            digest: `sha256:${createHash("sha256").update(bootstrapContent).digest("hex")}`,
+          },
+        }
+      : {}),
     context: { workspace, adoptExistingAgent: true, existingAgents: [existing] },
   });
   return {
@@ -190,6 +205,66 @@ describe("applyClawAddPlan agent adoption", () => {
     expect(result).toMatchObject({ status: "partial", error: { code: "agent_config_conflict" } });
     expect(result.installRecord).toBeUndefined();
     expect(readClawInstallRecord("worker", { env })).toBeUndefined();
+  });
+
+  it("reseeds the bootstrap after a resumed adoption rolls back its config commit", async () => {
+    const { root, plan, config } = await fixture({ withBootstrap: true });
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const bootstrap = join(plan.agent.workspace, "BOOTSTRAP.md");
+
+    // Attempt 1 seeds BOOTSTRAP.md, then fails while writing workspace files.
+    const first = await applyClawAddPlan(plan, {
+      env,
+      consentPlanIntegrity: plan.planIntegrity,
+      readConfig: () => config,
+      createWorkspaceFiles: async () => {
+        throw new Error("disk full");
+      },
+    });
+    expect(first).toMatchObject({
+      status: "partial",
+      installRecord: { status: "workspace_ready" },
+      error: { code: "workspace_files_failed" },
+    });
+    expect(existsSync(bootstrap)).toBe(true);
+    if (!first.installRecord) {
+      throw new Error("expected a partial install record");
+    }
+
+    // Attempt 2 resumes (its seed reads already-seeded), then loses the config compare-and-swap.
+    // Rollback must retire the file and the native seed marker together: the recorded receipt,
+    // not this attempt's seed result, says the bootstrap is this install's.
+    const second = await applyClawAddPlan(plan, {
+      env,
+      consentPlanIntegrity: plan.planIntegrity,
+      resumeRecord: first.installRecord,
+      resumePlan: plan,
+      readConfig: () => config,
+      commitConfig: async (transform) => {
+        transform({
+          ...config,
+          agents: { entries: { worker: { ...config.agents?.entries?.worker, name: "Raced" } } },
+        });
+      },
+    });
+    expect(second).toMatchObject({ status: "partial", error: { code: "agent_config_conflict" } });
+    expect(second.installRecord).toBeUndefined();
+    expect(existsSync(bootstrap)).toBe(false);
+    expect(
+      readWorkspaceStateSnapshot(plan.agent.workspace, { env }).setup.bootstrapSeededAt,
+    ).toBeUndefined();
+
+    // A fresh adoption seeds the package instructions again instead of reading them as consumed.
+    const third = await applyClawAddPlan(plan, {
+      env,
+      consentPlanIntegrity: plan.planIntegrity,
+      readConfig: () => config,
+      commitConfig: async (transform) => {
+        transform(config);
+      },
+    });
+    expect(third).toMatchObject({ status: "complete" });
+    expect(existsSync(bootstrap)).toBe(true);
   });
 
   it("rolls back the files this attempt wrote before releasing the claim", async () => {

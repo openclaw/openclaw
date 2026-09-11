@@ -419,8 +419,6 @@ export async function applyClawAddPlan(
     });
   }
 
-  const bootstrapSeeded = bootstrapSeedResult === "seeded";
-
   // A seed this install actually performed waives the bootstrap conflict on a later resume; an
   // operator-created BOOTSTRAP.md that merely matches by content must never be read as our own
   // seed. Record it before file ownership so a crash here leaves the marker unseeded (fail
@@ -571,7 +569,8 @@ export async function applyClawAddPlan(
         install: installRecord,
         workspaceFiles,
         packages,
-        bootstrapSeeded,
+        // Re-read: this attempt's own seed flipped the receipt after the read above.
+        workspaceOrigin: readClawWorkspaceAdoption(plan.agent.finalId, workspace, options),
         options,
       });
       if (release.released) {

@@ -94,13 +94,35 @@ describe("releaseUnclaimedClawAdoption", () => {
       install: installRecord(workspace),
       workspaceFiles: [ownedFile(workspace, "SKILL.md", "operator content")],
       packages: [],
-      bootstrapSeeded: false,
+      workspaceOrigin: { adopted: true, adoptedFiles: ["SKILL.md"], bootstrapSeeded: false },
       options: { env },
     });
 
     expect(result).toEqual({ released: true, retained: [] });
     // The attempt claimed this file, it never wrote it; releasing the claim must not delete it.
     expect(existsSync(adopted)).toBe(true);
+  });
+
+  it("leaves a bootstrap this install never seeded exactly as found", async () => {
+    const root = tempDirs.make("openclaw-claw-release-unowned-bootstrap-");
+    const workspace = join(root, "workspace");
+    await mkdir(workspace);
+    const bootstrap = join(workspace, "BOOTSTRAP.md");
+    await writeFile(bootstrap, "seeded bootstrap");
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+
+    // Identical bytes, no receipt: an operator wrote this file, so rollback has nothing to undo.
+    const result = await releaseUnclaimedClawAdoption({
+      plan: planWith(workspace, [] as ClawAddPlan["actions"]),
+      install: installRecord(workspace, "seeded bootstrap"),
+      workspaceFiles: [],
+      packages: [],
+      workspaceOrigin: { adopted: true, adoptedFiles: [], bootstrapSeeded: false },
+      options: { env, nowMs: 2 },
+    });
+
+    expect(result).toEqual({ released: true, retained: [] });
+    expect(existsSync(bootstrap)).toBe(true);
   });
 
   it("clears the seed marker with the bootstrap it rolls back", async () => {
@@ -119,7 +141,7 @@ describe("releaseUnclaimedClawAdoption", () => {
       install: installRecord(workspace, "seeded bootstrap"),
       workspaceFiles: [],
       packages: [],
-      bootstrapSeeded: true,
+      workspaceOrigin: { adopted: true, adoptedFiles: [], bootstrapSeeded: true },
       options: { env, nowMs: 2 },
     });
 

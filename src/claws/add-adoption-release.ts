@@ -14,6 +14,7 @@ import {
 import { applyClawPackageRemovals, planClawPackageRemovals } from "./package-remove.js";
 import type { PersistedClawInstall, PersistedClawPackageRef } from "./provenance.js";
 import type { ClawAddPlan } from "./types.js";
+import { clawBootstrapSeedOwned, type ClawWorkspaceAdoption } from "./workspace-origin.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 // Adoption release unwinds a config commit that never landed, so no deletion journal was opened
@@ -31,7 +32,7 @@ export async function releaseUnclaimedClawAdoption(params: {
   install: PersistedClawInstall;
   workspaceFiles: PersistedClawWorkspaceFile[];
   packages: PersistedClawPackageRef[];
-  bootstrapSeeded: boolean;
+  workspaceOrigin: ClawWorkspaceAdoption;
   options: ClawAddApplyOptions;
 }): Promise<{ released: boolean; retained: string[] }> {
   // A declared file that already existed with identical content was adopted, not written, so the
@@ -50,7 +51,10 @@ export async function releaseUnclaimedClawAdoption(params: {
     );
   }
   let bootstrapRemoval: RemovedWorkspaceFile | undefined;
-  if (params.install.bootstrap) {
+  // Only a bootstrap this install seeded is its to roll back. The recorded receipt decides, not
+  // this attempt's seed result: a resumed attempt reads its own earlier seed as already-seeded.
+  // A file the install never seeded is left exactly as found.
+  if (params.install.bootstrap && clawBootstrapSeedOwned(params.workspaceOrigin)) {
     bootstrapRemoval = await removeClawWorkspaceFile(
       {
         workspace: params.install.workspace,
@@ -65,7 +69,7 @@ export async function releaseUnclaimedClawAdoption(params: {
   }
   // The seed marker and the file are one fact. Deleting the file while the marker stands makes the
   // next seed read "already seeded, file gone" as consumed and write nothing at all.
-  if (params.bootstrapSeeded && bootstrapRemoval?.action === "deleted") {
+  if (bootstrapRemoval?.action === "deleted") {
     clearWorkspaceBootstrapSeedMarker(
       params.install.workspace,
       params.options.nowMs ?? Date.now(),
