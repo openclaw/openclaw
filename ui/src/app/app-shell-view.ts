@@ -20,6 +20,7 @@ import {
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId, resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import { showToast } from "../lib/toast.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { renderControlUiPluginRecovery } from "../plugins/control-ui-contributions.ts";
@@ -36,6 +37,8 @@ import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
+import { loadGatewayRegistryForGateway } from "./gateway-registry.ts";
+import { selectAndConnectGateway } from "./gateway-shell-selection.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
@@ -282,12 +285,28 @@ export function renderApplicationShell(host: ShellViewHost) {
       lobsterPetVisits: uiSettings.lobsterPetVisits !== false,
       lobsterPetSounds: uiSettings.lobsterPetSounds === true,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
+      gatewayRegistry:
+        nativeEmbed || nativeWebChrome
+          ? undefined
+          : loadGatewayRegistryForGateway(context.gateway.connection.gatewayUrl),
       devGitBranch: config.devGitBranch,
       watchUpdateProgress,
       onOpenApprovals: () => host.openApprovals(),
       onOpenPalette: () => host.openPalette(),
       onRetryConnect: () => context.gateway.connect(),
       onToggleSidebar: () => host.toggleNavigationSurface(),
+      onSelectGateway: (id: string) => {
+        try {
+          selectAndConnectGateway(context.gateway, id);
+        } catch (error) {
+          if (error instanceof Error && error.name === "GatewayRegistryPersistenceError") {
+            showToast({ message: t("connection.registry.persistence") });
+            return;
+          }
+          throw error;
+        }
+      },
+      onManageGateways: () => host.navigate("connection"),
       onOpenNewSession: openNewSession,
       onUpdateSidebarEntries: (entries: string[]) =>
         context.navigation.update({ sidebarEntries: entries }),

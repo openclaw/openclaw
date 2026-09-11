@@ -4014,6 +4014,12 @@ export const en: TranslationMap & {
     },
     // Settings → Gateway copy lives in the lazy en-settings catalog; the anchor keeps its merge target.
     access: {},
+    // The Account menu renders before the lazy Connection settings module loads.
+    registry: {
+      switchTitle: "Switch gateway",
+      manage: "Manage gateways",
+      persistence: "Gateway profile could not be saved. Check browser storage and try again.",
+    },
     switchGateway: {
       title: "Switch to a different Gateway?",
       summary: "This link asks the browser to connect somewhere else.",

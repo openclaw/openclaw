@@ -19,6 +19,7 @@ import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import { registerGatewayProfileForSettings } from "./gateway-settings-registration.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
@@ -36,7 +37,7 @@ const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
 
 export function settingsKeyForGateway(gatewayUrl: string): string {
-  return `${SETTINGS_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
+  return `${SETTINGS_KEY_PREFIX}${gatewayCredentialScope(gatewayUrl)}`;
 }
 
 function currentGatewaySelectionKeyForPage(pageUrl: string): string {
@@ -305,27 +306,39 @@ function settingsMatchGatewayTarget(parsed: PersistedUiSettings, targetUrl: stri
   if (!storedUrl) {
     return false;
   }
-  return gatewayOriginScope(storedUrl) === gatewayOriginScope(targetUrl);
+  return gatewayCredentialScope(storedUrl) === gatewayCredentialScope(targetUrl);
 }
 
 function readSettingsForGateway(
   storage: Storage | null,
   targetUrl: string,
 ): PersistedSettingsSource | null {
-  const scoped = parsePersistedSettings(storage?.getItem(settingsKeyForGateway(targetUrl)) ?? null);
-  if (
-    scoped &&
-    (!normalizeOptionalString(scoped.gatewayUrl) || settingsMatchGatewayTarget(scoped, targetUrl))
-  ) {
-    return {
-      gatewayUrl: normalizeOptionalString(scoped.gatewayUrl) ?? targetUrl,
-      parsed: scoped,
-    };
+  const candidates = [
+    storage?.getItem(settingsKeyForGateway(targetUrl)) ?? null,
+    // Before query-aware credential scopes, query-bearing gateways shared the
+    // origin key. Only accept that data when its stored URL proves ownership.
+    storage?.getItem(`${SETTINGS_KEY_PREFIX}${gatewayOriginScope(targetUrl)}`) ?? null,
+  ];
+  for (const raw of candidates) {
+    const parsed = parsePersistedSettings(raw);
+    if (
+      parsed &&
+      (!normalizeOptionalString(parsed.gatewayUrl) || settingsMatchGatewayTarget(parsed, targetUrl))
+    ) {
+      return {
+        gatewayUrl: normalizeOptionalString(parsed.gatewayUrl) ?? targetUrl,
+        parsed,
+      };
+    }
   }
   return null;
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
+  return `${TOKEN_SESSION_KEY_PREFIX}${gatewayCredentialScope(gatewayUrl)}`;
+}
+
+function legacyTokenSessionKeyForGateway(gatewayUrl: string): string {
   return `${TOKEN_SESSION_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
 }
 
@@ -334,8 +347,11 @@ function resolveScopedSessionSelection(
   parsed: PersistedUiSettings,
   fallback: ScopedSessionSelection,
 ): ScopedSessionSelection {
-  const scope = gatewayOriginScope(gatewayUrl);
-  const scoped = parsed.sessionsByGateway?.[scope];
+  const scope = gatewayCredentialScope(gatewayUrl);
+  // Releases before query-aware scopes keyed this map by origin. Prefer the
+  // exact endpoint entry, then recover the ownership-compatible legacy entry.
+  const scoped =
+    parsed.sessionsByGateway?.[scope] ?? parsed.sessionsByGateway?.[gatewayOriginScope(gatewayUrl)];
   const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
   const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
   const scopedSelectedAgentId = normalizeOptionalString(scoped?.selectedAgentId);
@@ -380,7 +396,21 @@ function loadSessionToken(gatewayUrl: string): string {
     }
     storage.removeItem(LEGACY_TOKEN_SESSION_KEY);
     const token = storage.getItem(tokenSessionKeyForGateway(gatewayUrl));
-    return normalizeOptionalString(token) ?? "";
+    if (token) {
+      return normalizeOptionalString(token) ?? "";
+    }
+    // Recover an old token only when the legacy settings record belongs to
+    // this exact endpoint.
+    const legacySettings = parsePersistedSettings(
+      getSafeLocalStorage()?.getItem(`${SETTINGS_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`) ??
+        null,
+    );
+    if (!legacySettings || !settingsMatchGatewayTarget(legacySettings, gatewayUrl)) {
+      return "";
+    }
+    return (
+      normalizeOptionalString(storage.getItem(legacyTokenSessionKeyForGateway(gatewayUrl))) ?? ""
+    );
   } catch {
     return "";
   }
@@ -392,7 +422,7 @@ export function resolveGatewayCredentialsForUrlEdit(
   credentials: { token: string; password: string },
 ): { token: string; password: string } {
   const sameTokenScope =
-    gatewayOriginScope(currentGatewayUrl) === gatewayOriginScope(nextGatewayUrl);
+    gatewayCredentialScope(currentGatewayUrl) === gatewayCredentialScope(nextGatewayUrl);
   const sameCredentialScope =
     gatewayCredentialScope(currentGatewayUrl) === gatewayCredentialScope(nextGatewayUrl);
   return {
@@ -453,7 +483,7 @@ export function loadUiPreferences(
   if (
     cached &&
     (!targetGatewayUrl ||
-      gatewayOriginScope(cached.gatewayUrl) === gatewayOriginScope(targetGatewayUrl))
+      gatewayCredentialScope(cached.gatewayUrl) === gatewayCredentialScope(targetGatewayUrl))
   ) {
     return targetGatewayUrl ? { ...cached, gatewayUrl: targetGatewayUrl } : cached;
   }
@@ -482,14 +512,21 @@ export function loadUiPreferences(
   };
 
   try {
-    const selectedGatewayUrl =
-      targetGatewayUrl ??
-      normalizeOptionalString(storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)));
+    const legacySelectedGatewayUrl = normalizeOptionalString(
+      storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)),
+    );
+    const selectedGatewayUrl = targetGatewayUrl ?? legacySelectedGatewayUrl;
     const source =
       (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
       (targetGatewayUrl ? null : readSettingsForGateway(storage, defaultUrl));
     if (!source) {
-      return defaults;
+      const gatewayUrl = selectedGatewayUrl ?? defaultUrl;
+      const selection = loadGatewaySessionSelection(gatewayUrl);
+      return {
+        ...defaults,
+        gatewayUrl,
+        ...selection,
+      };
     }
     const parsed = source.parsed;
     const parsedGatewayUrl = source.gatewayUrl;
@@ -646,7 +683,7 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   const storage = getSafeLocalStorage();
-  const scope = gatewayOriginScope(next.gatewayUrl);
+  const scope = gatewayCredentialScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
   const accent = normalizeAccentColor(next.accent);
   const fontUi = normalizeTypefaceOverride(next.fontUi);
@@ -757,6 +794,9 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     if (options.selectGateway || storage?.getItem(selectionKey) == null) {
       storage?.setItem(selectionKey, next.gatewayUrl);
     }
+    registerGatewayProfileForSettings(next.gatewayUrl, {
+      select: options.selectGateway === true,
+    });
     storage?.removeItem(LEGACY_SETTINGS_KEY);
     if (storage) {
       unpersistedSettings = null;
@@ -767,7 +807,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     // unpersistedSettings keeps this tab consistent until storage recovers
   }
   const owner = livePreferenceOwner;
-  if (owner && gatewayOriginScope(owner.gatewayUrl()) === scope) {
+  if (owner && gatewayCredentialScope(owner.gatewayUrl()) === scope) {
     owner.refresh();
   }
 }
