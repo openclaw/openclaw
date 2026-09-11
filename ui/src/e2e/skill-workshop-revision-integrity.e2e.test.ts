@@ -246,7 +246,16 @@ suite.define(() => {
         });
 
         await setProposalRevision(gateway, H2, status);
-        await gateway.resolveDeferred(method, {});
+        // The action RPC returns the committed terminal record (apply wraps it
+        // in { record, targetSkillFile }, reject returns the record itself), so
+        // the UI's completion authority confirms the action and refreshes.
+        const actionRecord = proposalInspect(H2, status).record;
+        await gateway.resolveDeferred(
+          method,
+          method === "skills.proposals.apply"
+            ? { record: actionRecord, targetSkillFile: `skills/${SKILL_KEY}/SKILL.md` }
+            : actionRecord,
+        );
         await gateway.waitForRequest("skills.proposals.list", { after: secondListCount });
         await expect.poll(() => page.locator(".sw-row").count()).toBe(0);
         await expect
@@ -332,11 +341,20 @@ suite.define(() => {
         proposalId: missing.id,
         expectedRevisionHash: H2_HASH,
       });
+      const rejectedRecord = {
+        ...proposalInspect(H2, "rejected").record,
+        id: missing.id,
+        kind: missing.kind,
+        title: missing.title,
+      };
       await gateway.setMethodResponse("skills.proposals.list", {
         ...validManifest,
-        proposals: [...validManifest.proposals, { ...missing, status: "rejected" }],
+        proposals: [
+          ...validManifest.proposals,
+          { ...missing, status: "rejected", updatedAt: rejectedRecord.updatedAt },
+        ],
       });
-      await gateway.resolveDeferred("skills.proposals.reject", {});
+      await gateway.resolveDeferred("skills.proposals.reject", rejectedRecord);
       await page.getByText(H1.body, { exact: true }).waitFor();
       await expect.poll(() => page.locator(".sw-action-toast").textContent()).toContain("Rejected");
       expect(await page.locator(".sw-error").count()).toBe(0);

@@ -3735,6 +3735,8 @@ export const en: TranslationMap & {
     },
     notices: {
       applied: "Applied",
+      confirmUnconfirmed:
+        "The proposal status did not confirm as expected after the action. Refresh the workshop and check before retrying.",
       proposalChanged:
         "Suggestion changed. Review the updated draft before choosing another action.",
       rejected: "Rejected",
