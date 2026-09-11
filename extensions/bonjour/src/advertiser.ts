@@ -26,7 +26,6 @@ type GatewayBonjourAdvertiseOpts = {
 
 type BonjourServices = Array<{ label: string; svc: CiaoService }>;
 
-type ConsoleLogFn = (...args: unknown[]) => void;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
@@ -185,20 +184,20 @@ function shouldSuppressCiaoConsoleWarn(args: unknown[]): boolean {
 }
 
 function installCiaoConsoleNoiseFilter(): () => void {
-  const previousConsoleLog = console.log as ConsoleLogFn;
-  const previousConsoleWarn = console.warn as ConsoleLogFn;
-  const logWrapper = ((...args: unknown[]) => {
+  const previousConsoleLog = console.log;
+  const previousConsoleWarn = console.warn;
+  const logWrapper = (...args: unknown[]) => {
     if (shouldSuppressCiaoConsoleLog(args)) {
       return;
     }
     previousConsoleLog(...args);
-  }) as ConsoleLogFn;
-  const warnWrapper = ((...args: unknown[]) => {
+  };
+  const warnWrapper = (...args: unknown[]) => {
     if (shouldSuppressCiaoConsoleWarn(args)) {
       return;
     }
     previousConsoleWarn(...args);
-  }) as ConsoleLogFn;
+  };
   console.log = logWrapper;
   console.warn = warnWrapper;
   return () => {
