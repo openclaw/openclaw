@@ -320,9 +320,14 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
 /** Build the login command operators should run after OAuth refresh failure. */
 export function buildOAuthRefreshFailureLoginCommand(
   provider: string | null | undefined,
-  options?: { profileId?: string | null },
+  options?: { profileId?: string | null; surface?: "cli" | "chat" },
 ): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
+  if (options?.surface === "chat") {
+    return sanitizedProvider && sanitizedProvider !== "claude-cli"
+      ? `/login ${sanitizedProvider}`
+      : "/login";
+  }
   const sanitizedProfileId = sanitizeOAuthRefreshFailureProfileId(options?.profileId);
   if (sanitizedProvider === "claude-cli") {
     // claude-cli is not a standalone provider id; it is the Anthropic provider

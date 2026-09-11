@@ -772,8 +772,8 @@ describe("handleLoginCommand", () => {
   });
 
   it("names the pending provider and lets the owner cancel before another sign-in", async () => {
-    const started = createDeferredCore<void>();
-    const finish = createDeferredCore<void>();
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
     runModelsAuthLoginFlowMock.mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
       started.resolve();
       await finish.promise;

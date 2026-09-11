@@ -109,9 +109,18 @@ describe("handleLoginCommand model consent", () => {
         };
         await state.writeConfig(config);
         mockSuccessfulLoginWithRestrictions(config);
+        let authorized = true;
         const command = async (body: string) => {
           const params = buildLoginParams(body, {
-            opts: { ...blockReplyOpts(), getProviderLoginConfig: () => config },
+            opts: {
+              ...blockReplyOpts(),
+              getProviderLoginConfig: () => config,
+              assertProviderLoginAuthority: () => {
+                if (!authorized) {
+                  throw new Error("Owner access was removed.");
+                }
+              },
+            },
           });
           params.cfg = config;
           return handleLoginCommand(params, true);
@@ -141,6 +150,10 @@ describe("handleLoginCommand model consent", () => {
             await command("/login cancel");
           }
           const before = await fs.readFile(state.configPath, "utf8");
+          authorized = false;
+          await expect(command(oldChoice)).rejects.toThrow("Owner access was removed.");
+          expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
+          authorized = true;
           const recovered = await command(oldChoice);
           const freshChoice = modelAccessCommand(recovered?.reply);
           expect(freshChoice).not.toBe(oldChoice);
@@ -160,57 +173,12 @@ describe("handleLoginCommand model consent", () => {
         } finally {
           stop();
           now.mockRestore();
+          authorized = true;
           await command("/login cancel");
         }
       });
     },
   );
-
-  it("checks current authority before renewing an old model-access question", async () => {
-    await withOpenClawTestState({ label: "login-access-authority" }, async (state) => {
-      const config: OpenClawConfig = {
-        ...buildLoginParams("/login codex").cfg,
-        agents: {
-          defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
-          entries: { main: { workspace: state.workspaceDir } },
-        },
-      };
-      await state.writeConfig(config);
-      mockSuccessfulLoginWithRestrictions(config);
-      let authorized = true;
-      const command = (body: string) => {
-        const params = buildLoginParams(body, {
-          opts: {
-            ...blockReplyOpts(),
-            getProviderLoginConfig: () => config,
-            assertProviderLoginAuthority: () => {
-              if (!authorized) {
-                throw new Error("Owner access was removed.");
-              }
-            },
-          },
-        });
-        params.cfg = config;
-        return handleLoginCommand(params, true);
-      };
-      const initial = await command("/login codex");
-      const oldChoice = modelAccessCommand(initial?.reply);
-      await command("/login cancel");
-      const before = await fs.readFile(state.configPath, "utf8");
-      authorized = false;
-      await expect(command(oldChoice)).rejects.toThrow("Owner access was removed.");
-      expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
-      authorized = true;
-      try {
-        const recovered = await command(oldChoice);
-        expect(modelAccessCommand(recovered?.reply)).not.toBe(oldChoice);
-        expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
-        expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
-      } finally {
-        await command("/login cancel");
-      }
-    });
-  });
 
   it("keeps model access answerable after releasing the login reservation", async () => {
     await withOpenClawTestState({ label: "login-access-lifetime" }, async (state) => {

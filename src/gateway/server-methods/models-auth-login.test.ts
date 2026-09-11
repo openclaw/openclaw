@@ -163,7 +163,29 @@ describe("models.authLogin ownership", () => {
     }
   });
 
-  it.each(["all", "keep"])("keeps post-save %s input owner-bound", async (modelAccess) => {
+  it("reports saved credentials with unconfirmed refresh through wizard.next", async () => {
+    hooks.login.mockResolvedValueOnce({ ...result, authRefresh: "gateway-rejected" });
+    const h = harness();
+    await h.start();
+    expect(await h.invoke("wizard.next", { sessionId: "login" })).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        done: true,
+        status: "error",
+        error: expect.stringMatching(/sign-in was saved.*\/login refresh/),
+      }),
+      undefined,
+    );
+    expect(hooks.login).toHaveBeenCalledTimes(1);
+    expect(hooks.writeConfig).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["all", "refreshed"],
+    ["keep", "refreshed"],
+    ["all", "gateway-rejected"],
+    ["keep", "gateway-rejected"],
+  ])("keeps post-save %s input owner-bound with %s refresh", async (modelAccess, authRefresh) => {
     const h = harness();
     let saved = modelConfig;
     hooks.writeConfig.mockImplementationOnce(async (mutator, _refs, beforeCommit) => {
@@ -183,7 +205,7 @@ describe("models.authLogin ownership", () => {
     hooks.login.mockImplementation(async (options: ModelsAuthLoginFlowOptions) => {
       await expectDefined(options.beforePersistentEffect, "credential commit callback")();
       requestModelAccess(options);
-      return result;
+      return { ...result, authRefresh };
     });
     await h.start();
     const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
@@ -230,7 +252,13 @@ describe("models.authLogin ownership", () => {
     const completed = await h.invoke("wizard.next", { sessionId: "login", answer });
     expect(completed).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ done: true, status: "done" }),
+      expect.objectContaining({
+        done: true,
+        status: authRefresh === "refreshed" ? "done" : "error",
+        ...(authRefresh === "refreshed"
+          ? {}
+          : { error: expect.stringMatching(/sign-in was saved.*\/login refresh/) }),
+      }),
       undefined,
     );
     expect(hooks.writeConfig).toHaveBeenCalledTimes(modelAccess === "all" ? 1 : 0);

@@ -396,7 +396,7 @@ describe("SystemAgentChatEngine runtime", () => {
     const reply = await engine.handle("configure search");
 
     expect(reply.text).toContain(
-      "Web search setup stopped: Error: web search provider brave installation failed",
+      "Web search setup stopped: web search provider brave installation failed",
     );
     expect(reply.text).not.toContain("Done — web search setup is complete");
     expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();

@@ -14,7 +14,10 @@ import {
   isProviderLoginChoiceStartable,
 } from "../../plugins/provider-login-options.js";
 import { createNonExitingRuntime } from "../../runtime.js";
-import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
+import {
+  ProviderAuthConfigApplyError,
+  ProviderCredentialsSavedError,
+} from "../../shared/provider-auth-result.js";
 import { WizardSession } from "../../wizard/session.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
@@ -115,8 +118,9 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
             assertCurrent();
             browser?.assertCurrent();
           };
+          let result: Awaited<ReturnType<typeof runModelsAuthLoginFlowCore>>;
           try {
-            const result = await runModelsAuthLoginFlowCore({
+            result = await runModelsAuthLoginFlowCore({
               provider: choice.providerId,
               method: choice.methodId,
               ownerPluginId: choice.pluginId,
@@ -163,6 +167,11 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
             });
           } catch (error) {
             throw new ProviderAuthConfigApplyError(error);
+          }
+          if (result.authRefresh !== "refreshed") {
+            throw new ProviderCredentialsSavedError(
+              "Your sign-in was saved, but the connection update could not be confirmed. Send /login refresh in chat to try again.",
+            );
           }
         },
         { timeoutMs: 25 * 60_000 },
