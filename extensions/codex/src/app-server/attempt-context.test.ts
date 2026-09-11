@@ -152,56 +152,66 @@ describe("Codex app-server attempt context", () => {
     });
   });
 
-  it("passes agent context to Codex memory collaboration guidance", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-memory-"));
-    let observedContext:
-      | { agentId?: string; agentSessionKey?: string; sandboxed?: boolean }
-      | undefined;
-    registerMemoryCapability("memory-core", {
-      promptBuilder: (context) => {
-        observedContext = context;
-        return [
+  it.each([
+    {
+      owner: "ordinary session",
+      agentId: undefined,
+      memoryPromptAgentId: undefined,
+      sessionAgentId: "marketing-agent",
+      sessionKey: "agent:marketing-agent:session-1",
+      expectedGuidance:
+        "agent=marketing-agent session=agent:marketing-agent:session-1 sandboxed=true",
+    },
+    {
+      owner: "explicit memory owner",
+      agentId: "openclaw",
+      memoryPromptAgentId: "marketing-agent",
+      sessionAgentId: "openclaw",
+      sessionKey: "agent:openclaw:session-1",
+      expectedGuidance: "agent=marketing-agent session=agent:openclaw:session-1 sandboxed=true",
+    },
+  ])(
+    "renders memory collaboration guidance for the $owner",
+    async ({ agentId, memoryPromptAgentId, sessionAgentId, sessionKey, expectedGuidance }) => {
+      registerMemoryCapability("memory-core", {
+        promptBuilder: (context) => [
           "## Agent Memory",
-          `agent=${context.agentId} session=${context.agentSessionKey}`,
+          `agent=${context.agentId} session=${context.agentSessionKey} sandboxed=${context.sandboxed}`,
           "",
-        ];
-      },
-    });
+        ],
+      });
 
-    try {
-      const context = await buildCodexWorkspaceBootstrapContext({
-        params: {
-          sessionId: "session-1",
-          sessionKey: "agent:marketing-agent:session-1",
-          config: {
-            agents: {
-              defaults: { workspace: workspaceDir },
-              list: [{ id: "marketing-agent", default: true, workspace: workspaceDir }],
+      await withTempDir("codex-agent-memory-", async (workspaceDir) => {
+        const context = await buildCodexWorkspaceBootstrapContext({
+          params: {
+            agentId,
+            memoryPromptAgentId,
+            sessionId: "session-1",
+            sessionKey,
+            config: {
+              agents: {
+                defaults: { workspace: workspaceDir },
+                list: [
+                  { id: "marketing-agent", default: true, workspace: workspaceDir },
+                  { id: "openclaw", workspace: workspaceDir },
+                ],
+              },
             },
-          },
-        } as EmbeddedRunAttemptParams,
-        resolvedWorkspace: workspaceDir,
-        effectiveWorkspace: workspaceDir,
-        sessionKey: "agent:marketing-agent:session-1",
-        sessionAgentId: "marketing-agent",
-        memoryToolNames: ["memory_search", "memory_get"],
-        ringZeroActive: false,
-        sandboxed: true,
-      });
+          } as EmbeddedRunAttemptParams,
+          resolvedWorkspace: workspaceDir,
+          effectiveWorkspace: workspaceDir,
+          sessionKey,
+          sessionAgentId,
+          memoryToolNames: ["memory_search", "memory_get"],
+          ringZeroActive: false,
+          sandboxed: true,
+        });
 
-      expect(context.memoryToolRouted).toBe(true);
-      expect(observedContext).toMatchObject({
-        agentId: "marketing-agent",
-        agentSessionKey: "agent:marketing-agent:session-1",
-        sandboxed: true,
+        expect(context.memoryToolRouted).toBe(true);
+        expect(context.memoryCollaborationInstructions).toContain(expectedGuidance);
       });
-      expect(context.memoryCollaborationInstructions).toContain(
-        "agent=marketing-agent session=agent:marketing-agent:session-1",
-      );
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("inherits agent workspace instructions when Codex executes in another folder", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-workspace-"));
