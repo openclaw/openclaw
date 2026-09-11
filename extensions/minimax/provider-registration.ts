@@ -144,7 +144,11 @@ async function resolveApiCatalog(ctx: ProviderCatalogContext) {
   return await buildOpenAICompatibleLiveProviderCatalog({
     discoveryMode: "strict",
     providerId: API_PROVIDER_ID,
-    providerConfig: buildMinimaxProvider(ctx.env),
+    providerConfig: {
+      ...buildMinimaxProvider(ctx.env),
+      baseUrl:
+        getProviderBaseUrl(ctx.config, API_PROVIDER_ID) ?? resolveMinimaxCatalogBaseUrl(ctx.env),
+    },
     apiKey: auth.apiKey,
     discoveryApiKey: auth.discoveryApiKey,
     profileId: auth.profileId,
