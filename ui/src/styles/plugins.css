@@ -25,6 +25,7 @@
 .content-header.plugins-hub-header .hub-page-header__tabs {
   grid-area: tabs;
   justify-self: start;
+  padding-block: var(--space-2);
 }
 
 .plugins-hub-header .hub-tabs--sub wa-tab.hub-tab::part(base) {
