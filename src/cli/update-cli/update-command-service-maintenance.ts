@@ -332,6 +332,7 @@ type ManagedServiceStopParams = {
     PreManagedServiceStop,
     "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
   >;
+  allowInstallRootChange?: boolean;
   onStopped?: (state: PreManagedServiceStop) => void;
   timeoutMs?: number;
 };
@@ -422,6 +423,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     root: params.root,
     state: serviceState,
     preManagedServiceStop: params.expectedService,
+    allowInstallRootChange: params.allowInstallRootChange,
   });
   assertCurrent();
   if (params.phase) {
@@ -566,18 +568,13 @@ async function stopManagedServiceBeforeMutableUpdate(
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs: params.timeoutMs,
     });
-    await revalidateManagedGatewayServiceAfterUpdate({
+    const currentVerdict = await revalidateManagedGatewayServiceAfterUpdate({
       state: currentState,
       root: params.root,
-      preManagedServiceStop: {
-        serviceManagerUid: inspected.serviceManagerUid,
-        serviceEnv: serviceState.env,
-        serviceUpdateVerdict:
-          serviceUpdateVerdict.kind === "owned"
-            ? { ...serviceUpdateVerdict, refreshDefinition: false }
-            : serviceUpdateVerdict,
-      },
+      preManagedServiceStop: inspected,
+      allowInstallRootChange: params.allowInstallRootChange,
     });
+    assertGatewayServiceAdmissionUnchanged(inspected, currentVerdict);
     assertCurrent();
     const currentBlockMessage = gatewayMaintenanceBlockMessage(currentState, params.root);
     if (currentBlockMessage) {
