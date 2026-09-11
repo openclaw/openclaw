@@ -203,8 +203,8 @@ describe("provider model access consent", () => {
         if (status === "applied") {
           await expect(result).resolves.toBe("All Sample models are now visible.");
         } else {
-          await expect(result).resolves.toContain("Model access saved.");
-          expect(await result).toContain("openclaw gateway restart");
+          await expect(result).resolves.toContain("Model access was saved");
+          expect(await result).toContain("Open Settings and select Apply changes");
         }
         expect((await readSaved()).agents?.defaults?.modelPolicy?.allow).toEqual([
           "other/current",

@@ -206,7 +206,6 @@ export async function answerProviderLoginModelAccess(params: {
     completeProviderModelAccess,
     prepareProviderModelAccess,
     ProviderModelPolicyChangedError,
-    ProviderModelPolicyApplicationError,
   } = await import("../commands/models/auth-model-policy.js");
   const renew = (message: string, config = params.readConfig()): ProviderLoginReply => {
     assertAuthority();
@@ -275,10 +274,6 @@ export async function answerProviderLoginModelAccess(params: {
       text: `${message}\n\nSend /models to choose a model. To update saved sign-in status, send /login refresh.`,
     };
   } catch (error) {
-    if (error instanceof ProviderModelPolicyApplicationError) {
-      assertAuthority();
-      return { text: error.message };
-    }
     assertCurrent();
     if (error instanceof ProviderModelPolicyChangedError) {
       return renew(

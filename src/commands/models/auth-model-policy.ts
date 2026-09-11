@@ -28,14 +28,6 @@ export class ProviderModelPolicyChangedError extends Error {
   }
 }
 
-export class ProviderModelPolicyApplicationError extends Error {
-  constructor() {
-    super(
-      "Model access was saved, but OpenClaw did not apply it. Open Settings and select Apply changes, then send /models.",
-    );
-  }
-}
-
 export function applyProviderLoginDefaultModel(
   config: OpenClawConfig,
   model: string,
@@ -180,7 +172,9 @@ export async function completeProviderModelAccess(params: {
   logConfigUpdated(params.runtime);
   const message = applied
     ? `All ${prepared.providerLabel} models are now visible.`
-    : "Model access saved. Application by the running Gateway is not confirmed. Run `openclaw gateway restart` to apply it.";
+    : application.claimed
+      ? "Model access was saved, but OpenClaw has not confirmed it is active. Open Settings and select Apply changes, then send /models."
+      : "Model access saved. Application by the running Gateway is not confirmed. Run `openclaw gateway restart` to apply it.";
   params.runtime.log(message);
   return message;
 }

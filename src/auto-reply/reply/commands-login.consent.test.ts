@@ -56,42 +56,45 @@ function mockSuccessfulLoginWithRestrictions(config: OpenClawConfig): void {
 describe("handleLoginCommand model consent", () => {
   setupLoginCommandTests();
 
-  it("reports saved model access separately from a failed runtime application", async () => {
-    await withOpenClawTestState({ label: "login-access-application" }, async (state) => {
-      const config: OpenClawConfig = {
-        ...buildLoginParams("/login codex").cfg,
-        agents: {
-          defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
-          entries: { main: { workspace: state.workspaceDir } },
-        },
-      };
-      await state.writeConfig(config);
-      mockSuccessfulLoginWithRestrictions(config);
-      const command = (body: string) => {
-        const params = buildLoginParams(body, {
-          opts: { ...blockReplyOpts(), getProviderLoginConfig: () => config },
+  it.each(["failed", "restart-pending"] as const)(
+    "reports saved model access when application is %s",
+    async (status) => {
+      await withOpenClawTestState({ label: "login-access-application" }, async (state) => {
+        const config: OpenClawConfig = {
+          ...buildLoginParams("/login codex").cfg,
+          agents: {
+            defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
+            entries: { main: { workspace: state.workspaceDir } },
+          },
+        };
+        await state.writeConfig(config);
+        mockSuccessfulLoginWithRestrictions(config);
+        const command = (body: string) => {
+          const params = buildLoginParams(body, {
+            opts: { ...blockReplyOpts(), getProviderLoginConfig: () => config },
+          });
+          params.cfg = config;
+          return handleLoginCommand(params, true);
+        };
+        const initial = await command("/login codex");
+        const stop = registerRuntimeConfigWriteListener((event) => {
+          getRuntimeConfigWriteApplication(event)?.claim()?.settle(status);
         });
-        params.cfg = config;
-        return handleLoginCommand(params, true);
-      };
-      const initial = await command("/login codex");
-      const stop = registerRuntimeConfigWriteListener((event) => {
-        getRuntimeConfigWriteApplication(event)?.claim()?.settle("failed");
+        try {
+          const result = await command(modelAccessCommand(initial?.reply));
+          const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+          expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current", "openai/*"]);
+          expect(result?.reply?.text).toContain(
+            "Model access was saved, but OpenClaw has not confirmed it is active. Open Settings and select Apply changes, then send /models.",
+          );
+          expect(result?.reply?.presentation).toBeUndefined();
+          expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
+        } finally {
+          stop();
+        }
       });
-      try {
-        const result = await command(modelAccessCommand(initial?.reply));
-        const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-        expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current", "openai/*"]);
-        expect(result?.reply?.text).toBe(
-          "Model access was saved, but OpenClaw did not apply it. Open Settings and select Apply changes, then send /models.",
-        );
-        expect(result?.reply?.presentation).toBeUndefined();
-        expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
-      } finally {
-        stop();
-      }
-    });
-  });
+    },
+  );
 
   it.each(["expired", "changed", "cancelled"] as const)(
     "renews a %s model-access choice without another sign-in or an unconfirmed write",
