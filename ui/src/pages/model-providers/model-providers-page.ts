@@ -88,27 +88,20 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private probeEpochs = new Map<string, number>();
   private readonly refreshTask = new Task(this, {
     autoRun: false,
-    task: (
-      [client, agentId, force]: [GatewayBrowserClient | null, string, boolean],
-      { signal },
-    ) => {
-      if (!client || !agentId) {
-        return initialState;
-      }
-      return loadModelProvidersData(client, {
-        agentId,
-        ...(force ? { refresh: true } : {}),
-        signal,
-      }).then((data) => ({ client, data }));
-    },
+    task: ([client, agentId, force]: [GatewayBrowserClient | null, string, boolean], { signal }) =>
+      client && agentId
+        ? loadModelProvidersData(client, {
+            agentId,
+            ...(force ? { refresh: true } : {}),
+            signal,
+          }).then((data) => ({ client, data }))
+        : initialState,
     onComplete: ({ client, data }) => {
       this.loadClient = null;
       this.catalogDiscovery.reset();
       this.supplemental.adoptCoreData(client, data);
     },
-    onError: () => {
-      this.loadClient = null;
-    },
+    onError: () => (this.loadClient = null),
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () =>
@@ -229,10 +222,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     ) {
       this.catalogDiscovery.reset();
       this.routeDataObserved = true;
-      const selectedAgentId = this.resolveSelectedAgentId();
-      this.setSelectedAgent(selectedAgentId);
+      this.setSelectedAgent(this.resolveSelectedAgentId());
       if (
-        (this.routeData.agentId ?? "") === selectedAgentId &&
+        (this.routeData.agentId ?? "") === this.selectedAgentId &&
         this.gateway.isRouteDataCurrent(this.routeData)
       ) {
         this.supplemental.adoptCoreData(this.routeData.client, this.routeData.data);
