@@ -101,7 +101,13 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
   const rows = [...menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
   const matches: Array<{ row: HTMLButtonElement; score: number; index: number }> = [];
   rows.forEach((row, index) => {
-    const score = query ? modelMatchRank(row, query) : 0;
+    const accountCollapsed =
+      row.hasAttribute("data-chat-account-option") &&
+      row
+        .closest("section")
+        ?.querySelector("[data-chat-account-group-toggle]")
+        ?.getAttribute("aria-expanded") !== "true";
+    const score = query ? modelMatchRank(row, query) : accountCollapsed ? null : 0;
     row.hidden = score === null;
     row.style.removeProperty("--chat-model-rank");
     delete row.dataset.chatModelRank;

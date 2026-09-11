@@ -16,6 +16,7 @@ import {
   type ChatThinkingTarget,
 } from "../../../lib/chat/thinking.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
+import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import type {
   ChatModelPickerOption,
   ChatModelPickerTargetGroup,
@@ -30,7 +31,7 @@ type ChatContextWindowTarget = Pick<
 >;
 
 type ChatModelControlsProps = {
-  renderAccountControl?: (model: string) => unknown;
+  renderAccountSection?: (model: string) => ChatModelAccountSection | undefined;
   activeRunId: string | null;
   agentDefaultModel?: string;
   connected: boolean;
@@ -296,6 +297,15 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     }
     return pickerOption;
   });
+  if (defaultModel && modelOptions.length > 0 && !modelOptions.some((option) => option.isDefault)) {
+    modelOptions.unshift({
+      commitValue: "",
+      isDefault: true,
+      value: defaultModel,
+      label: formatPickerModelLabel(pickerDefaultLabel),
+      provider: catalog.provider(defaultModel, defaultProviderHint),
+    });
+  }
   const currentCatalogEntry = catalog.entry(currentOverride);
   if (
     currentOverride &&
@@ -419,7 +429,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
-        accountControl: props.renderAccountControl?.(currentOverride || defaultModel),
+        accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
         contextWindow:
           contextWindows.length > 1
             ? {
@@ -432,7 +442,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
                 },
               }
             : undefined,
-        defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
         modelCatalogState: managedCatalog,
@@ -444,7 +453,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
-        sessionModelPinned: modelOverrideSource === "user",
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerModelValue,

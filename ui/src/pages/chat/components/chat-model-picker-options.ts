@@ -98,6 +98,10 @@ export function renderChatModelPickerOption(params: {
     params.entry.value === params.selectedModelValue ||
     (params.entry.isDefault && params.selectedModelValue === "");
   const modelLabel = formatModelLabel(params.entry);
+  // A pinned session (even one pinned to the default's own value) can always
+  // return to Default when the default model is unavailable: the row commits the
+  // reset, not that model. An inherited default has nothing to clear.
+  const resetsPin = params.entry.isDefault && params.selectedModelValue !== "";
   const needsAuth =
     params.entry.disabled &&
     (params.entry.unavailableReason === "missing-auth" ||
@@ -136,14 +140,14 @@ export function renderChatModelPickerOption(params: {
       .filter(Boolean)
       .join(". ")}
     type="button"
-    ?disabled=${params.disabled || (params.entry.disabled && !onModelSetup)}
+    ?disabled=${params.disabled || (params.entry.disabled && !onModelSetup && !resetsPin)}
     data-chat-model-setup=${onModelSetup ? "true" : nothing}
     @mouseenter=${(event: MouseEvent) =>
       params.onHighlight(event.currentTarget as HTMLButtonElement)}
     @click=${(event: MouseEvent) => {
       // A sign-in-gated model must not dead-end: the row routes to Model
       // Setup instead of silently ignoring the click on a disabled button.
-      if (params.entry.disabled) {
+      if (params.entry.disabled && !resetsPin) {
         event.stopPropagation();
         onModelSetup?.();
         return;
