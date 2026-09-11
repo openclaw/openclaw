@@ -122,7 +122,6 @@ export const toolIcons = {
     <path d="m16 9 6 6" />`),
   bookmark: strokeIcon(svg`<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />`),
   plus: strokeIcon(svg`<path d="M5 12h14M12 5v14" />`),
-  mousePointer: strokeIcon(svg`<path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />`),
   gitBranch: strokeIcon(svg` <circle cx="6" cy="5" r="2" />
     <circle cx="18" cy="6" r="2" />
     <circle cx="6" cy="19" r="2" />

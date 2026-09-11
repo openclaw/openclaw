@@ -4,6 +4,7 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  browser: TranslationMap & { errors: TranslationMap };
   configPage: TranslationMap;
   connection: TranslationMap;
   configView: TranslationMap;
@@ -2311,8 +2312,6 @@ export const en: TranslationMap & {
     forward: "Forward",
     reload: "Reload",
     openExternal: "Open in your browser",
-    downloading: "Downloading…",
-    downloadFile: "Download file",
     urlPlaceholder: "Enter a URL and press Enter",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
@@ -2334,18 +2333,7 @@ export const en: TranslationMap & {
       "Remove a browser annotation before retrying (maximum 4 cards and 8,000 characters of generated context).",
     inspectUnavailable: "Element inspection is disabled (browser.evaluateEnabled=false).",
     annotationSent: "Annotation added to the chat composer.",
-    errors: {
-      requestFailed: "Browser request failed: {error}",
-      downloadFailed:
-        "Could not download this file: {error}. Try again, or open it in your browser to save it.",
-      downloadEmpty: "No file returned.",
-      screenshotPathMissing: "Browser screenshot did not return a media path.",
-      screenshotFetchTimedOut: "Screenshot fetch timed out.",
-      screenshotFetchFailed: "Screenshot fetch failed ({status}).",
-      screenshotReadFailed: "Screenshot read failed.",
-      screenshotDecodeFailed: "Screenshot decode failed.",
-      canvasUnavailable: "Canvas 2D context unavailable.",
-    },
+    errors: {},
     annotatePrompt: {
       browserTarget: "Browser target: {target}",
       // introTitled/elementDetail (not intro/element): translated keys never

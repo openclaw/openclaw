@@ -4,10 +4,13 @@ import {
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { downloadBlobFile } from "../../lib/download.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { downloadBrowserDocument, type BrowserRequestClient } from "./browser-client.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
+
+registerBrowserEnglish();
 
 interface BrowserPanelDownloadHost {
   readonly host: {

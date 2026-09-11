@@ -1,13 +1,20 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, svg, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { renderDockDestinations } from "../dock-destination-controls.ts";
+import { strokeIcon } from "../icons-tools.ts";
 import { icons } from "../icons.ts";
 import { renderPanelEmptyState } from "../panel-empty-state.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
 
+registerBrowserEnglish();
+
 export type BrowserPanelDock = "bottom" | "right";
+
+// Browser-only artwork stays with this lazy surface, outside the startup icon set.
+const mousePointer = strokeIcon(svg`<path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />`);
 
 function renderTabStrip(controller: BrowserPanelController, embedded: boolean) {
   return renderBrowserPanelTabs({
@@ -208,7 +215,7 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         ?disabled=${!hasView || (!nativeTab && controller.evaluateUnavailable)}
         @click=${() => controller.setMode("inspect")}
       >
-        ${icons.mousePointer}
+        ${mousePointer}
       </button>
     </div>
   `;
