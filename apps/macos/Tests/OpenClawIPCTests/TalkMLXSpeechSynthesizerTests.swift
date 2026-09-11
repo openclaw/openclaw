@@ -217,6 +217,132 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
+    func `stale factory completion closes only its unpublished helper`() async throws {
+        let stale = TestMLXTransport(mode: .stream)
+        let replacement = TestMLXTransport(mode: .stream)
+        let factory = TestMLXTransportFactory([stale, replacement], holdsFirstCall: true)
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+        let staleSynthesis = Task {
+            try await self.collectSynthesis(synthesizer, text: "unpublished helper")
+        }
+        await factory.waitForCall()
+        await synthesizer.shutdown()
+        let replacementResult = await Task {
+            try await self.collectSynthesis(synthesizer, text: "replacement")
+        }.result
+        await factory.releaseFirstCall()
+        do {
+            _ = try await staleSynthesis.value
+            Issue.record("expected unpublished request cancellation")
+        } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {}
+        _ = try replacementResult.get()
+        #expect(await stale.closeCount == 1)
+        _ = try await self.collectSynthesis(synthesizer, text: "reuse replacement")
+        #expect(await factory.callCount == 2)
+        #expect(await stale.sent.isEmpty)
+        await synthesizer.shutdown()
+        #expect(await replacement.closeCount == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func `shutdown revokes ownership while cancel send is suspended`(_ legacyFrame: Bool) async throws {
+        let stale = TestMLXTransport(
+            mode: legacyFrame ? .staleStreamLateAudio : .staleStreamLateChunk,
+            holdsFirstCancelSend: true)
+        let replacement = TestMLXTransport(mode: .stream)
+        let factory = TestMLXTransportFactory([stale, replacement])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+        let staleSynthesis = Task {
+            try await self.collectSynthesis(synthesizer, text: "retiring stream")
+        }
+        await stale.waitForPendingEventRead()
+        let shutdown = Task { await synthesizer.shutdown() }
+        await stale.waitForCancelRequest()
+        await stale.deliverLateOutput()
+        let staleResult = await staleSynthesis.result
+        let playbackResult = await Task {
+            try await synthesizer.synthesizeStream(
+                text: "replacement during shutdown",
+                modelRepo: nil,
+                language: nil,
+                voicePreset: nil,
+                referenceAudioPath: nil,
+                referenceText: nil)
+        }.result
+        #expect(await factory.callCount == 2)
+        await stale.releaseCancelSend()
+        await shutdown.value
+        do {
+            _ = try staleResult.get()
+            Issue.record("expected cancellation before shutdown sends resume")
+        } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {}
+        let playback = try playbackResult.get()
+        var pcm = Data()
+        for try await chunk in playback.chunks {
+            pcm.append(chunk)
+        }
+        #expect(pcm == Data([0x00, 0x00, 0xFF, 0x7F]))
+        #expect(await replacement.closeCount == 0)
+        _ = try await self.collectSynthesis(synthesizer, text: "reuse replacement")
+        #expect(await factory.callCount == 2)
+        await synthesizer.shutdown()
+    }
+
+    @Test
+    func `stale cancel completion preserves replacement cancel escalation`() async throws {
+        let transport = TestMLXTransport(mode: .staleStreamLateChunk, holdsFirstCancelSend: true)
+        let factory = TestMLXTransportFactory([transport])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+        let first = try await synthesizer.synthesizeStream(
+            text: "first",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil,
+            referenceAudioPath: nil,
+            referenceText: nil)
+        await transport.waitForPendingEventRead()
+        let staleCancellation = Task { await synthesizer.cancelCurrent() }
+        await transport.waitForCancelRequest()
+        await transport.cancelFirstSynthesis()
+        let firstResult = await Task {
+            for try await _ in first.chunks {}
+        }.result
+        let replacementResult = await Task {
+            try await synthesizer.synthesizeStream(
+                text: "replacement",
+                modelRepo: nil,
+                language: nil,
+                voicePreset: nil,
+                referenceAudioPath: nil,
+                referenceText: nil,
+                stallTimeoutSeconds: 4)
+        }.result
+        await synthesizer.cancelCurrent()
+        await transport.releaseCancelSend()
+        await staleCancellation.value
+        do {
+            try firstResult.get()
+            Issue.record("expected first request cancellation")
+        } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {}
+        let replacement = try replacementResult.get()
+        do {
+            for try await _ in replacement.chunks {}
+            Issue.record("expected unresponsive replacement cancellation to close the helper")
+        } catch TestMLXTransportError.closed {
+            #expect(await transport.closeCount == 1)
+        } catch {
+            Issue.record("expected cancellation grace to close the helper before the stream stalls: \(error)")
+        }
+        await synthesizer.shutdown()
+    }
+
+    @Test
     func `reuses resident helper across utterances`() async throws {
         let transport = TestMLXTransport(mode: .stream)
         let factory = TestMLXTransportFactory([transport])
@@ -579,9 +705,9 @@ struct TalkMLXSpeechSynthesizerTests {
     private func collectSynthesis(
         _ synthesizer: TalkMLXSpeechSynthesizer,
         text: String,
-        modelRepo: String?,
-        language: String?,
-        voicePreset: String?) async throws -> (sampleRate: Double, pcm: Data)
+        modelRepo: String? = nil,
+        language: String? = nil,
+        voicePreset: String? = nil) async throws -> (sampleRate: Double, pcm: Data)
     {
         let playback = try await synthesizer.synthesizeStream(
             text: text,
@@ -626,16 +752,26 @@ private actor TestMLXTransport: MLXTTSTransport {
     private var events: [MLXTTSEvent] = [.ready]
     private var closed = false
     private var pendingEventRead = false
+    private let holdsFirstCancelSend: Bool
+    private var heldCancelID: String?
+    private var cancelSendReleased = false
 
-    init(mode: Mode) {
+    init(mode: Mode, holdsFirstCancelSend: Bool = false) {
         self.mode = mode
+        self.holdsFirstCancelSend = holdsFirstCancelSend
         if mode == .startupHang || mode == .staleStartupClose || mode == .staleStartupReady {
             self.events = []
         }
     }
 
-    func send(_ request: MLXTTSRequest) {
+    func send(_ request: MLXTTSRequest) async {
         self.sent.append(request)
+        if case let .cancel(id) = request, self.holdsFirstCancelSend, self.heldCancelID == nil {
+            self.heldCancelID = id
+            while !self.cancelSendReleased {
+                await Task.yield()
+            }
+        }
         switch request {
         case let .synthesize(synthesize):
             switch self.mode {
@@ -705,6 +841,10 @@ private actor TestMLXTransport: MLXTTSTransport {
 
     func close() {
         self.closeCount += 1
+        if self.holdsFirstCancelSend {
+            self.closed = true
+            return
+        }
         if self.mode != .staleStartupClose,
            self.mode != .staleStartupReady,
            self.mode != .staleStreamTimeout,
@@ -727,6 +867,18 @@ private actor TestMLXTransport: MLXTTSTransport {
         while !self.pendingEventRead {
             await Task.yield()
         }
+    }
+
+    func releaseCancelSend() {
+        self.cancelSendReleased = true
+    }
+
+    func cancelFirstSynthesis() {
+        guard let request = self.sent.first, case let .synthesize(synthesize) = request else {
+            Issue.record("expected a synthesis request before cancellation")
+            return
+        }
+        self.events.append(.canceled(id: synthesize.id))
     }
 
     func deliverLateOutput() {
@@ -781,17 +933,30 @@ private actor TestMLXTransport: MLXTTSTransport {
 private actor TestMLXTransportFactory {
     private var transports: [TestMLXTransport]
     private(set) var callCount = 0
+    private let holdsFirstCall: Bool
+    private var firstCallReleased = false
 
-    init(_ transports: [TestMLXTransport]) {
+    init(_ transports: [TestMLXTransport], holdsFirstCall: Bool = false) {
         self.transports = transports
+        self.holdsFirstCall = holdsFirstCall
     }
 
-    func make() throws -> any MLXTTSTransport {
+    func make() async throws -> any MLXTTSTransport {
         self.callCount += 1
         guard !self.transports.isEmpty else {
             throw TestMLXTransportError.closed
         }
-        return self.transports.removeFirst()
+        let transport = self.transports.removeFirst()
+        if self.holdsFirstCall, self.callCount == 1 {
+            while !self.firstCallReleased {
+                await Task.yield()
+            }
+        }
+        return transport
+    }
+
+    func releaseFirstCall() {
+        self.firstCallReleased = true
     }
 
     func waitForCall() async {
