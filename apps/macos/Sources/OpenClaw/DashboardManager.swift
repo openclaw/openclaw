@@ -818,7 +818,7 @@ extension DashboardManager {
         return Task { @MainActor in
             guard !Task.isCancelled, self.windowLifetime == lifetime else { return }
             if reuseExisting, let controller = self.dashboardController(for: target) {
-                if target == .primary || (controller.browserSession == nil && !controller.isShowingFailurePage) {
+                if target == .primary || self.canFocusWithoutReload(controller, userGesture: true) {
                     controller.show()
                 } else {
                     await self.switchTarget(target, in: controller, forceReload: true, present: true)?.value
@@ -1337,7 +1337,7 @@ extension DashboardManager {
             self.installMainController(existing.value.controller)
         }
         if let controller, mainTarget != .primary {
-            if controller.isWindowOpen, controller.browserSession == nil, !controller.isShowingFailurePage {
+            if controller.isWindowOpen, self.canFocusWithoutReload(controller, userGesture: userGesture) {
                 controller.show()
                 await self.refreshGatewaySnapshots()
                 return

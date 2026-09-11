@@ -89,6 +89,12 @@ extension DashboardManager {
         return expiresAt <= now.addingTimeInterval(Self.browserSessionRenewalLeadTime)
     }
 
+    func canFocusWithoutReload(_ controller: DashboardWindowController, userGesture: Bool) -> Bool {
+        controller.hasCurrentBrowserSession && !controller.isShowingFailurePage &&
+            !Self.requiresBrowserSignIn(
+                error: nil, expiresAt: controller.browserSession?.expiresAt, userGesture: userGesture)
+    }
+
     func loadWindow(
         _ controller: DashboardWindowController, configuration: WindowConfiguration, present: Bool)
     {

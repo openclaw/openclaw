@@ -967,6 +967,48 @@ struct DashboardManagerGatewayTargetTests {
         #expect(otherAutosaveName != autosaveName)
     }
 
+    @Test(arguments: ["dock", "menu"])
+    func `healthy browser gateway focus preserves document`(_ entry: String) async throws {
+        let url = try #require(URL(string: "https://gateway.example.invalid/"))
+        let endpointURL = try #require(URL(string: "wss://gateway.example.invalid/"))
+        let session = try GatewayBrowserSession(
+            origin: url, issuer: url, audience: "fixture", subject: "fixture",
+            token: "synthetic", expiresAt: Date().addingTimeInterval(7200))
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            websiteDataStore: store.dataStore,
+            browserSessionLease: store.lease(for: session),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        let manager = DashboardManager._testMake(
+            automaticGatewayProfileRefreshEnabled: false,
+            profileEndpointProvider: { _ in
+                GatewayConnection.EndpointSnapshot(
+                    config: (endpointURL, nil, nil), routeAuthority: nil, browserSession: session)
+            })
+        defer { manager.close() }
+        manager._testSetController(controller)
+        manager._testSetMainTarget(.profile("studio"))
+        controller.show()
+        try controller.nativeBrowser.open(
+            tabId: "reading", url: #require(URL(string: "about:blank")), sessionKey: "fixture")
+        let tab = try #require(controller.nativeBrowser.webView(for: "reading"))
+        #expect(controller.hasCurrentBrowserSession)
+
+        if entry == "dock" {
+            try await manager.show()
+        } else {
+            await manager.openOrFocusDashboard(for: .profile("studio")).value
+        }
+
+        #expect(manager._testController() === controller)
+        #expect(controller.nativeBrowser.webView(for: "reading") === tab)
+        #expect(controller.isWindowOpen)
+        #expect(manager._testPendingGatewayAlerts().isEmpty)
+    }
+
     private func withConfiguredPrimary(_ body: @MainActor () async throws -> Void) async throws {
         // An unconfigured app opens the saved profile during show(), before a
         // picker test can release the profile gate it intended to suspend later.
