@@ -43,6 +43,7 @@ import { createMediaVitestConfig } from "../vitest/vitest.media.config.ts";
 import { createPluginSdkLightVitestConfig } from "../vitest/vitest.plugin-sdk-light.config.ts";
 import { createPluginSdkVitestConfig } from "../vitest/vitest.plugin-sdk.config.ts";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
+import { createRuntimeConfigVitestConfig } from "../vitest/vitest.runtime-config.config.ts";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "../vitest/vitest.tui.config.ts";
@@ -397,16 +398,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expect(
             plan
               .filter((job) => job.predictedSeconds! > 150)
-              .every(
-                (job) =>
+              .every((job) => {
+                if (job.groups.length > 1 && job.pretestBuildMode) {
+                  return (
+                    job.predictedSeconds! <= 210 &&
+                    job.planConcurrency === 1 &&
+                    !job.requiresDist &&
+                    job.groups.every((group) => group.pretestBuildMode)
+                  );
+                }
+                return (
                   job.groups.length === 1 &&
                   (job.groups[0]!.includePatterns?.length === 1 ||
                     (job.pretestBuildMode === buildMode &&
                       job.groups[0]!.includePatterns?.length === runtimeConsumers.length &&
                       job.groups[0]!.includePatterns?.every((file) =>
                         runtimeConsumers.some((runtimeConsumer) => runtimeConsumer === file),
-                      ))),
-              ),
+                      )))
+                );
+              }),
           ).toBe(true);
         }
         expect(
@@ -805,56 +815,71 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   ] as const)(
     "retains parent floors and uses higher $profile child timings without changing test partitions",
     ({ profile, timingProfile, addedSeconds }) => {
-      const shardName = "agentic-agents-support-hosted-2";
-      let directTimings: Readonly<Record<string, number>> = {};
-      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation(
-        (runner): Readonly<Record<string, number>> => ({
-          "agentic-agents-support": runner === "blacksmith" ? 165 : 253,
-          ...(runner === timingProfile ? directTimings : {}),
-        }),
-      );
-      const options = {
-        includeReleaseOnlyPluginShards: false,
-        compactMode: "push" as const,
-        runnerBackend: profile,
-      };
-      const unmeasured = createNodeTestShardBundles(options);
-      const initialGroup = unmeasured
-        .flatMap((shard) => shard.groups)
-        .find((group) => group.shard_name === shardName);
-      expect(initialGroup?.timing_key).toMatch(
-        /^agentic-agents-support#selector-.+#generation-.+#part-2-of-2#include-.+$/u,
-      );
-      const timingKey = initialGroup!.timing_key!;
-      directTimings = { [timingKey]: 1 };
-      const belowFloor = createNodeTestShardBundles(options);
-      // Both larger samples exceed the parent share, so their delta measures
-      // direct timing precedence independently of the retained floor.
-      directTimings = { [timingKey]: 200 };
-      const baseline = createNodeTestShardBundles(options);
-      directTimings = { [timingKey]: 240 };
-      const updated = createNodeTestShardBundles(options);
-      const totalSeconds = (plan: typeof baseline) =>
-        plan.reduce((sum, shard) => sum + (shard.predictedSeconds ?? 0), 0);
-      const testPartition = (plan: typeof baseline) =>
-        plan
+      const originalShards = fullSuiteVitestShards.slice();
+      const fixtureShards = originalShards
+        .map((shard) => ({
+          ...shard,
+          projects: shard.projects.filter(
+            (config) => config === agentVitestProjectOwners.support.config,
+          ),
+        }))
+        .filter((shard) => shard.projects.length > 0);
+      // Other families can change packing and job-level rounding without changing these timings.
+      fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...fixtureShards);
+      try {
+        const shardName = "agentic-agents-support-hosted-2";
+        let directTimings: Readonly<Record<string, number>> = {};
+        vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation(
+          (runner): Readonly<Record<string, number>> => ({
+            "agentic-agents-support": runner === "blacksmith" ? 165 : 253,
+            ...(runner === timingProfile ? directTimings : {}),
+          }),
+        );
+        const options = {
+          includeReleaseOnlyPluginShards: false,
+          compactMode: "push" as const,
+          runnerBackend: profile,
+        };
+        const unmeasured = createNodeTestShardBundles(options);
+        const initialGroup = unmeasured
           .flatMap((shard) => shard.groups)
-          .map((group) => ({
-            name: group.shard_name,
-            configs: group.configs,
-            includePatterns: group.includePatterns,
-            runner: group.runner,
-          }))
-          .toSorted((a, b) => a.name.localeCompare(b.name));
+          .find((group) => group.shard_name === shardName);
+        expect(initialGroup?.timing_key).toMatch(
+          /^agentic-agents-support#selector-.+#generation-.+#part-2-of-2#include-.+$/u,
+        );
+        const timingKey = initialGroup!.timing_key!;
+        directTimings = { [timingKey]: 1 };
+        const belowFloor = createNodeTestShardBundles(options);
+        // Both larger samples exceed the parent share, so their delta measures
+        // direct timing precedence independently of the retained floor.
+        directTimings = { [timingKey]: 200 };
+        const baseline = createNodeTestShardBundles(options);
+        directTimings = { [timingKey]: 240 };
+        const updated = createNodeTestShardBundles(options);
+        const totalSeconds = (plan: typeof baseline) =>
+          plan.reduce((sum, shard) => sum + (shard.predictedSeconds ?? 0), 0);
+        const testPartition = (plan: typeof baseline) =>
+          plan
+            .flatMap((shard) => shard.groups)
+            .map((group) => ({
+              name: group.shard_name,
+              configs: group.configs,
+              includePatterns: group.includePatterns,
+              runner: group.runner,
+            }))
+            .toSorted((a, b) => a.name.localeCompare(b.name));
 
-      expect(totalSeconds(belowFloor)).toBe(totalSeconds(unmeasured));
-      expect(totalSeconds(updated) - totalSeconds(baseline)).toBe(addedSeconds);
-      expect(testPartition(baseline)).toEqual(testPartition(unmeasured));
-      expect(testPartition(updated)).toEqual(testPartition(baseline));
-      expect(
-        updated.flatMap((shard) => shard.groups).find((group) => group.shard_name === shardName)
-          ?.timing_key,
-      ).toBe(timingKey);
+        expect(totalSeconds(belowFloor)).toBe(totalSeconds(unmeasured));
+        expect(totalSeconds(updated) - totalSeconds(baseline)).toBe(addedSeconds);
+        expect(testPartition(baseline)).toEqual(testPartition(unmeasured));
+        expect(testPartition(updated)).toEqual(testPartition(baseline));
+        expect(
+          updated.flatMap((shard) => shard.groups).find((group) => group.shard_name === shardName)
+            ?.timing_key,
+        ).toBe(timingKey);
+      } finally {
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
+      }
     },
   );
 
@@ -1293,15 +1318,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           );
         }
         for (const shard of cliProcessJobs) {
-          // The gateway files retain 200s budgets. Hosted runtime preparation
-          // alone costs 160s. Only complete non-build hybrid CLI bins use 250s.
-          const budget =
-            gatewayJobs.has(shard) ||
-            (profile.name === "GitHub-hosted" && shard.pretestBuildMode === "runtime")
-              ? 200
+          // Hosted runtime groups share one preparation within 210s; no-build
+          // gateway files retain 200s and complete hybrid CLI bins retain 250s.
+          const budget = gatewayJobs.has(shard)
+            ? 200
+            : profile.name === "GitHub-hosted" && shard.pretestBuildMode
+              ? 210
               : profile.name === "hybrid" && isCombinedUnbuiltCliJob(shard)
                 ? 250
                 : 150;
+          if (profile.name === "GitHub-hosted" && shard.pretestBuildMode) {
+            expect(shard.groups.every((group) => group.pretestBuildMode)).toBe(true);
+          }
           expect(shard.predictedSeconds, profile.name).toBeLessThanOrEqual(budget);
         }
         expect(
@@ -1523,6 +1551,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expect(actual.toSorted()).toEqual(
             listMatchedTestFiles(createCliProcessVitestConfig({})).toSorted(),
           );
+        } else if (owner.shardName === "core-runtime-config") {
+          expect(actual.toSorted()).toEqual(
+            listMatchedTestFiles(createRuntimeConfigVitestConfig({})).toSorted(),
+          );
         }
       }
     }
@@ -1541,6 +1573,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           listMatchedTestFiles(createCliProcessVitestConfig({})),
           listMatchedTestFiles(createPluginSdkVitestConfig({})),
           listMatchedTestFiles(createPluginSdkLightVitestConfig({})),
+          listMatchedTestFiles(createRuntimeConfigVitestConfig({})),
         )
         .toSorted((a, b) => a.localeCompare(b)),
     );
@@ -1556,6 +1589,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           listMatchedTestFiles(createCliProcessVitestConfig({})),
           listMatchedTestFiles(createPluginSdkVitestConfig({})),
           listMatchedTestFiles(createPluginSdkLightVitestConfig({})),
+          listMatchedTestFiles(createRuntimeConfigVitestConfig({})),
         )
         .toSorted((a, b) => a.localeCompare(b)),
     );
@@ -1663,6 +1697,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           if (isCombinedUnbuiltCliJob(shard)) {
             expect([...hybridCompact, ...hybridPullRequestCompact]).toContain(shard);
             expect(shard.predictedSeconds).toBeLessThanOrEqual(250);
+          } else if (shard.pretestBuildMode && shard.groups.length > 1) {
+            expect([...githubCompact, ...githubPullRequestCompact]).toContain(shard);
+            expect(shard).toMatchObject({ planConcurrency: 1, requiresDist: false });
+            expect(shard.groups.every((entry) => entry.pretestBuildMode)).toBe(true);
+            expect(shard.predictedSeconds).toBeLessThanOrEqual(210);
           } else {
             expect(shard.groups).toHaveLength(1);
           }
@@ -2327,6 +2366,31 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ]);
   });
 
+  it.each(["blacksmith", "github", "hybrid"])(
+    "shares one prepared runtime across affordable %s tooling groups",
+    (runnerBackend) => {
+      const targets = [
+        PRIVATE_QA_TOOLING_TEST,
+        "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+      ];
+      vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+        Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
+      );
+      const plan = createToolingNodeTestShardBundles(targets, { runnerBackend });
+      expect(plan).not.toBeNull();
+      const readers = plan!.filter((shard) => !shard.requiresDist);
+      expect(readers).toHaveLength(1);
+      expect(readers[0]).toMatchObject({ pretestBuildMode: "private-qa", planConcurrency: 1 });
+      expect(readers[0]!.predictedSeconds).toBeLessThanOrEqual(
+        runnerBackend === "github" ? 210 : 150,
+      );
+      expect(readers[0]!.groups.every((group) => group.pretestBuildMode)).toBe(true);
+      expect(readers[0]!.groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        targets.toSorted(),
+      );
+    },
+  );
+
   it("packs serial groups within both the time and group-count budgets", () => {
     const groups = [34, 33, 33, 32, 32, 32, 10, 21, 17, 17, 15, 10, 8, 7, 7, 7, 6, 5, 5];
     const bins = packNodeTestGroups(
@@ -2444,7 +2508,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(job.planConcurrency).toBe(1);
       expect(job.groups.length).toBeLessThanOrEqual(10);
       if (job.groups.length > 1) {
-        expect(job.predictedSeconds).toBeLessThanOrEqual(150);
+        expect(job.predictedSeconds).toBeLessThanOrEqual(job.pretestBuildMode ? 210 : 150);
+        if (job.pretestBuildMode) {
+          expect(job.groups.every((group) => group.pretestBuildMode)).toBe(true);
+        }
       }
       expect(job.runner).toBe(job.groups[0]?.runner);
       expect(
@@ -2488,7 +2555,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(job.planConcurrency).toBe(1);
         expect(job.groups.length).toBeLessThanOrEqual(10);
         if (job.groups.length > 1) {
-          expect(job.predictedSeconds).toBeLessThanOrEqual(150);
+          expect(job.predictedSeconds).toBeLessThanOrEqual(job.pretestBuildMode ? 210 : 150);
+          if (job.pretestBuildMode) {
+            expect(job.groups.every((group) => group.pretestBuildMode)).toBe(true);
+          }
         }
         expect(job.runner).toBe(job.groups[0]?.runner);
         expect(

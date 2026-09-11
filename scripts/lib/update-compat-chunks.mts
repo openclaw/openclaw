@@ -40,6 +40,14 @@ const COALESCED_REGISTRY_RELEASES = [
       "sha512-CzDHMeHdnjlIZ76ZyBb1lvLO4H/yBIMYXupFGGBN87x0853y3hg5nLAnKfxSKqLzqhbUKqy9ebDRAWWV4t8aew==",
     chunk: "registry-lifecycle-BxSg6w0a.mjs",
   },
+  {
+    version: "2026.9.4",
+    buildId: "2026.9.4-release-3a9d69db306c-2026-09-10T22-53-16.719Z",
+    commit: "3a9d69db306cd7f081e06254cb89c4bcc14a7107",
+    integrity:
+      "sha512-lTQpEEe1Xm3u2PCHaPEr+vP8paGk1vLdHuzdItsNToaLI6hAqRVvgJYg+GxukJhETJp4tPy/S1Gftl4KuB8n7A==",
+    chunk: "registry-lifecycle-Dbi3yP7o.mjs",
+  },
 ];
 
 type UpdateCompatibilityOrigin = { module: string; symbol: string };

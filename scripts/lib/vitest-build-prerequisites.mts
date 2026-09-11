@@ -110,6 +110,14 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "src/plugins",
   },
+  ...["src/config/config-startup-corpus.test.ts", "src/config/state-startup-corpus.test.ts"].map(
+    (file) => ({
+      file,
+      configs: ["test/vitest/vitest.runtime-config.config.ts"],
+      mode: "runtime" as const,
+      dir: "src",
+    }),
+  ),
   {
     file: "test/agent-exec-code-mode.live.test.ts",
     configs: ["test/vitest/vitest.live.config.ts"],

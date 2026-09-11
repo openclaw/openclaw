@@ -92,6 +92,9 @@ describe("test runtime prerequisites", () => {
     ],
     ["infra config", ["test/vitest/vitest.infra.config.ts"], "runtime"],
     ["native SDK generation", ["src/plugins/plugin-module-generation.sdk.test.ts"], "runtime"],
+    ["config startup SDK", ["src/config/config-startup-corpus.test.ts"], "runtime"],
+    ["state startup SDK", ["src/config/state-startup-corpus.test.ts"], "runtime"],
+    ["runtime config project", ["test/vitest/vitest.runtime-config.config.ts"], "runtime"],
     [
       "context engine sandbox SDK",
       ["src/agents/runtime-plugins.context-engine.integration.test.ts"],
@@ -244,6 +247,13 @@ describe("test runtime prerequisites", () => {
     ["extensions", ["deepinfra/**", "google-meet/**"], undefined],
     ["tooling", ["test/**"], undefined],
     ["plugins", ["plugin-module-generation.sdk.test.ts"], undefined],
+    ["runtime-config", ["config/config-startup-corpus.test.ts"], "runtime"],
+    ["runtime-config", ["config/state-startup-corpus.test.ts"], "runtime"],
+    [
+      "runtime-config",
+      ["config/config-startup-corpus.test.ts", "config/state-startup-corpus.test.ts"],
+      undefined,
+    ],
     ["agents-core", ["simple-completion-runtime.plugin-scope.test.ts"], "runtime"],
     ["agents", ["simple-completion-runtime.plugin-scope.test.ts"], "runtime"],
     [
