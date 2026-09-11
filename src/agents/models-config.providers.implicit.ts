@@ -10,9 +10,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
+import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -126,7 +126,6 @@ function mergeImplicitProviderConfig(params: {
   implicit: ProviderConfig;
   dynamicProviderModels?: boolean;
   sourceModelFields?: SourceModelFields;
-  manifestPlugins?: ManifestModelIdNormalizationSource;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
   if (!existing) {
@@ -139,7 +138,6 @@ function mergeImplicitProviderConfig(params: {
   return mergeProviderModels(implicit, existing, {
     providerId,
     sourceModelFields: params.sourceModelFields,
-    manifestPlugins: params.manifestPlugins,
     preserveConfiguredModelMembership:
       !params.dynamicProviderModels && Array.isArray(existing.models) && existing.models.length > 0,
   });
@@ -230,13 +228,32 @@ async function resolvePluginImplicitProviders(
   for (const provider of byOrder[order]) {
     const pluginId = provider.pluginId ?? normalizeProviderId(provider.id);
     const ownerProviderIds = ctx.providerDiscoveryScope?.get(pluginId);
-    const providerIds =
+    const manifest = ctx.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
+      (plugin) => plugin.id === pluginId,
+    );
+    const includeProvider = (providerId: string) =>
+      isProviderCatalogSourceAllowed({
+        provider: providerId,
+        config: ctx.config,
+        plugin: manifest,
+      });
+    const scopedProviderIds =
       ctx.providerDiscoveryScope === undefined
         ? undefined
         : catalogCountsByPluginId.get(pluginId) === 1
           ? (ownerProviderIds ?? [])
           : (ownerProviderIds ?? []).filter((id) => matchesProviderPluginRef(provider, id));
-    if (providerIds?.length === 0) {
+    const providerIds = scopedProviderIds?.filter(includeProvider);
+    const catalogProviderRefs = [
+      provider.id,
+      ...(provider.aliases ?? []),
+      ...(provider.hookAliases ?? []),
+      ...(catalogCountsByPluginId.get(pluginId) === 1 ? (manifest?.providers ?? []) : []),
+    ];
+    if (
+      providerIds?.length === 0 ||
+      (providerIds === undefined && !catalogProviderRefs.some(includeProvider))
+    ) {
       continue;
     }
     const catalogConfig = buildPluginCatalogConfig(ctx, provider);
@@ -320,7 +337,10 @@ async function resolvePluginImplicitProviders(
       result,
     });
     for (const [providerId, implicitProvider] of Object.entries(normalizedResult)) {
-      if (selectedProviderIds && !selectedProviderIds.has(normalizeProviderId(providerId))) {
+      if (
+        !includeProvider(providerId) ||
+        (selectedProviderIds && !selectedProviderIds.has(normalizeProviderId(providerId)))
+      ) {
         continue;
       }
       const mergedProvider = mergeImplicitProviderConfig({
@@ -342,7 +362,6 @@ async function resolvePluginImplicitProviders(
           providerId,
         }),
         sourceModelFields: ctx.sourceModelFields,
-        manifestPlugins: ctx.pluginMetadataSnapshot,
       });
       discovered[providerId] = resolveImplicitProviderAuthMarker({
         ctx,
@@ -456,9 +475,34 @@ export async function prepareImplicitProviderStaticCatalog(
   const staticCatalogProviderIds = params.staticCatalogProviderIds
     ? new Set(params.staticCatalogProviderIds.map((provider) => normalizeProviderId(provider)))
     : undefined;
+  const eligibleProviders = providers.filter((provider) => {
+    const pluginId = provider.pluginId ?? normalizeProviderId(provider.id);
+    const plugin = params.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
+      (candidate) => candidate.id === pluginId,
+    );
+
+    const soleStaticCatalog =
+      providers.filter(
+        (candidate) =>
+          (candidate.pluginId ?? normalizeProviderId(candidate.id)) === pluginId &&
+          candidate.staticCatalog,
+      ).length === 1;
+    const providerRefs = discoveryScope?.get(pluginId) ?? [
+      provider.id,
+      ...(provider.aliases ?? []),
+      ...(provider.hookAliases ?? []),
+      ...(soleStaticCatalog ? (plugin?.providers ?? []) : []),
+    ];
+    // A shared static hook can still serve an eligible selected sibling identity.
+    return providerRefs.some(
+      (providerRef) =>
+        (soleStaticCatalog || matchesProviderPluginRef(provider, providerRef)) &&
+        isProviderCatalogSourceAllowed({ provider: providerRef, config: params.config, plugin }),
+    );
+  });
   const prepared = await prepareProviderStaticCatalog({
     providers: staticCatalogProviderIds
-      ? providers.filter((provider) => {
+      ? eligibleProviders.filter((provider) => {
           if ([...staticCatalogProviderIds].some((id) => matchesProviderPluginRef(provider, id))) {
             return true;
           }
@@ -473,13 +517,30 @@ export async function prepareImplicitProviderStaticCatalog(
             ).length === 1
           );
         })
-      : providers,
+      : eligibleProviders,
   });
   // Synthetic auth consumes the complete configured provider entrypoint set. Static results may
   // be narrower because startup only executes hooks for unresolved configured model refs.
   return Object.freeze({
     providers: Object.freeze(providers),
-    entries: prepared.entries,
+    // Record excluded hooks as empty so later static consumers cannot execute them again.
+    entries: Object.freeze([
+      ...prepared.entries.map((entry) => {
+        const plugin = params.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
+          (candidate) => candidate.id === (entry.provider.pluginId ?? entry.provider.id),
+        );
+        const providerEntries = Object.entries(normalizePluginDiscoveryResult(entry));
+        const eligible = providerEntries.filter(([provider]) =>
+          isProviderCatalogSourceAllowed({ provider, config: params.config, plugin }),
+        );
+        return eligible.length === providerEntries.length
+          ? entry
+          : { provider: entry.provider, result: { providers: Object.fromEntries(eligible) } };
+      }),
+      ...providers
+        .filter((provider) => provider.staticCatalog && !eligibleProviders.includes(provider))
+        .map((provider) => ({ provider, result: { providers: {} } })),
+    ]),
   });
 }
 

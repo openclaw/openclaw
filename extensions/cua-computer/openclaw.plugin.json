@@ -1,5 +1,6 @@
 {
   "id": "cua-computer",
+  "categories": ["tools"],
   "activation": {
     "onStartup": true
   },

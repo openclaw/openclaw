@@ -24,7 +24,10 @@ import {
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
-import { renderToolSearchControlText } from "./tool-search-control-result.js";
+import {
+  renderToolSearchControlText,
+  serializeToolSearchControlResult,
+} from "./tool-search-control-result.js";
 import {
   buildLexicalIndex,
   readParameterText,
@@ -51,7 +54,7 @@ import type {
   UnknownToolErrorOptions,
   UnknownToolRecoverySurface,
 } from "./tool-search-types.js";
-import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
+import { asToolParamsRecord, textResult, ToolInputError } from "./tools/common.js";
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
@@ -144,7 +147,11 @@ export function readToolSearchCallArgs(
       .map(([key, value]) => [key.slice(5), value]),
   );
   const nestedInput = params.args ?? params.input;
-  if (nestedInput != null) {
+  // Some local models emit an empty args/input wrapper while flattening the real
+  // arguments to the top level. Treat an empty wrapper as absent so the fallback
+  // below preserves those parameters instead of returning {}.
+  const nestedInputIsEmpty = isRecord(nestedInput) && Object.keys(nestedInput).length === 0;
+  if (nestedInput != null && !nestedInputIsEmpty) {
     return {
       id: readToolSearchId(params),
       input: isRecord(nestedInput) ? { ...dottedInput, ...nestedInput } : nestedInput,
@@ -655,18 +662,21 @@ export class ToolSearchRuntime {
 export function formatToolSearchControlResult<T>(
   payload: T,
   runtime: ToolSearchRuntime | undefined,
-  parentToolCallId?: string,
-  terminalBatchStatus?: "waiting" | "completed" | "failed",
+  options: {
+    parentToolCallId?: string;
+    terminalBatchStatus?: "waiting" | "completed" | "failed";
+    compact?: boolean;
+  } = {},
 ): AgentToolResult<T> {
-  let result: AgentToolResult<T> = jsonResult(payload);
-  const content = result.content[0];
-  if (runtime?.hasNetworkContent(parentToolCallId) && content?.type === "text") {
-    const { text } = renderToolSearchControlText(content.text, true);
-    result = { ...result, content: [{ ...content, text }] };
-  }
+  const serialized = serializeToolSearchControlResult(payload, options.compact);
+  const { text } = renderToolSearchControlText(
+    serialized,
+    runtime?.hasNetworkContent(options.parentToolCallId) ?? false,
+  );
+  const result = textResult(text, payload);
   const terminal =
-    terminalBatchStatus !== "waiting" &&
-    runtime?.takeTerminalTargetBatch(parentToolCallId) === true;
+    options.terminalBatchStatus !== "waiting" &&
+    runtime?.takeTerminalTargetBatch(options.parentToolCallId) === true;
   // A failed guest cannot revoke an already completed tool's explicit terminal outcome.
   return terminal ? { ...result, terminate: true } : result;
 }

@@ -28,7 +28,7 @@ import {
   cleanupCorepackPnpmShimDir,
   createChangedCheckPlan,
   createPnpmManagedCommand,
-  createTargetedCoreLintCommand,
+  createTargetedCoreLintCommands,
   createTargetedExtensionLintCommand,
   createTargetedScriptLintCommand,
   shouldDelegateChangedCheckToCrabbox,
@@ -166,7 +166,7 @@ function createRootTestLintFixture() {
     writeRepoFile(dir, file, source);
   }
   materializeNativeCompiler(dir);
-  for (const name of ["@types/node", "vitest"]) {
+  for (const name of ["@types/node", "vitest", "tsx"]) {
     const destination = path.join(dir, "node_modules", name);
     mkdirSync(path.dirname(destination), { recursive: true });
     symlinkSync(path.join(repoRoot, "node_modules", name), destination, "junction");
@@ -197,6 +197,8 @@ function createRootTestLintFixture() {
   }
   // Stub unrelated package gates at the executable boundary: real pnpm could
   // reconcile this partial install. The CLI and source-only lint wrapper stay real.
+  // The export audit is selected normally, but this fixture has only the lint graph.
+  writeRepoFile(dir, "scripts/check-deadcode-exports.mts", "export {};\n");
   const binDir = path.join(dir, "bin");
   for (const bin of ["pnpm", "corepack"]) {
     writeRepoFile(dir, `bin/${bin}`, "#!/bin/sh\nexit 0\n");
@@ -689,6 +691,7 @@ describe("scripts/changed-lanes", () => {
       "pnpm lint:tmp:tsgo-core-boundary",
       "pnpm tsgo:test:root",
       "pnpm check:coercion-helpers",
+      "node --import tsx scripts/check-deadcode-exports.mts",
       "pnpm lint:scripts",
       "node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/github-activity-helper.test.ts",
     ]);
@@ -1130,7 +1133,17 @@ describe("scripts/changed-lanes", () => {
     // touches, so selection is by path; inspecting changed lines would miss it.
     { name: "import-only edit", changedPaths: ["src/agents/tool-surface-plan.ts"], expected: true },
     { name: "docs tree", changedPaths: ["docs/example.ts"], expected: false },
-    { name: "scripts tree", changedPaths: ["scripts/check-changed.mjs"], expected: false },
+    { name: "script entry", changedPaths: ["scripts/check-changed.mjs"], expected: true },
+    {
+      name: "script helper",
+      changedPaths: ["scripts/lib/budget-number-args.mts"],
+      expected: true,
+    },
+    {
+      name: "root test consumer",
+      changedPaths: ["test/scripts/test-perf-budget.test.ts"],
+      expected: true,
+    },
     // knip never reads these, so they must not pull in the scan.
     { name: "markdown under src", changedPaths: ["src/README.md"], expected: false },
     { name: "sql under src", changedPaths: ["src/state/schema.sql"], expected: false },
@@ -1461,55 +1474,66 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
-  it.each([
-    {
-      owner: "core",
-      paths: [
-        "src/gateway/node-registry.ts",
-        "src/gateway/node-registry.invoke-stream.ts",
-        "src/gateway/server-methods/nodes.invoke.ts",
-        "src/gateway/server-methods/nodes.ts",
-        "src/node-host/runtime.ts",
-        "src/node-host/runner.ts",
-        "src/plugins/provider-self-hosted-setup.ts",
-        "packages/gateway-client/src/timeouts.ts",
-        "packages/normalization-core/src/number-coercion.ts",
-      ],
-      pluralName: "lint core changed files",
-      singularName: "lint core changed file",
-      fullLane: "lint:core",
-    },
-    {
-      owner: "extension",
-      paths: [
-        "extensions/lmstudio/src/embedding-provider.ts",
-        "extensions/lmstudio/src/stream.ts",
-        "extensions/lmstudio/src/model-reasoning.ts",
-        "extensions/lmstudio/src/models.fetch.ts",
-        "extensions/lmstudio/src/setup.ts",
-        "extensions/lmstudio/src/defaults.ts",
-        "extensions/lmstudio/src/provider-auth.ts",
-        "extensions/lmstudio/src/runtime.ts",
-        "extensions/lmstudio/src/models.ts",
-      ],
-      pluralName: "lint extension changed files",
-      singularName: "lint extension changed file",
-      fullLane: "lint:extensions",
-    },
-  ])("batches broad $owner changes without falling back to full lint", (testCase) => {
-    const result = detectChangedLanes(testCase.paths);
-    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
-    const commands = plan.commands.filter(
-      (command) => command.name === testCase.pluralName || command.name === testCase.singularName,
-    );
+  it.each(
+    [
+      {
+        owner: "core",
+        paths: [
+          "src/gateway/node-registry.ts",
+          "src/gateway/node-registry.invoke-stream.ts",
+          "src/gateway/server-methods/nodes.invoke.ts",
+          "src/gateway/server-methods/nodes.ts",
+          "src/node-host/runtime.ts",
+          "src/node-host/runner.ts",
+          "src/plugins/provider-self-hosted-setup.ts",
+          "packages/gateway-client/src/timeouts.ts",
+          "packages/normalization-core/src/number-coercion.ts",
+        ],
+        pluralName: "lint core changed files",
+        singularName: "lint core changed file",
+        fullLane: "lint:core",
+      },
+      {
+        owner: "extension",
+        paths: [
+          "extensions/lmstudio/src/embedding-provider.ts",
+          "extensions/lmstudio/src/stream.ts",
+          "extensions/lmstudio/src/model-reasoning.ts",
+          "extensions/lmstudio/src/models.fetch.ts",
+          "extensions/lmstudio/src/setup.ts",
+          "extensions/lmstudio/src/defaults.ts",
+          "extensions/lmstudio/src/provider-auth.ts",
+          "extensions/lmstudio/src/runtime.ts",
+          "extensions/lmstudio/src/models.ts",
+        ],
+        pluralName: "lint extension changed files",
+        singularName: "lint extension changed file",
+        fullLane: "lint:extensions",
+      },
+    ].flatMap((testCase) =>
+      (["darwin", "win32"] as const).map((platform) => ({ testCase, platform })),
+    ),
+  )(
+    "batches broad $testCase.owner changes on $platform without falling back to full lint",
+    ({ testCase, platform }) => {
+      const result = detectChangedLanes(testCase.paths);
+      const plan = createChangedCheckPlan(result, {
+        env: { PATH: "/usr/bin" },
+        platform,
+      });
+      const commands = plan.commands.filter(
+        (command) => command.name === testCase.pluralName || command.name === testCase.singularName,
+      );
 
-    expect(commands).toHaveLength(2);
-    expect(commands.map((command) => command.args.slice(3).length)).toEqual([8, 1]);
-    expect(commands.flatMap((command) => command.args.slice(3)).toSorted()).toEqual(
-      testCase.paths.toSorted(),
-    );
-    expect(plan.commands.map((command) => command.args[0])).not.toContain(testCase.fullLane);
-  });
+      const batchSizes = testCase.owner === "core" && platform !== "win32" ? [9] : [8, 1];
+      expect(commands).toHaveLength(batchSizes.length);
+      expect(commands.map((command) => command.args.slice(3).length)).toEqual(batchSizes);
+      expect(commands.flatMap((command) => command.args.slice(3)).toSorted()).toEqual(
+        testCase.paths.toSorted(),
+      );
+      expect(plan.commands.map((command) => command.args[0])).not.toContain(testCase.fullLane);
+    },
+  );
 
   it.each([
     {
@@ -1681,12 +1705,79 @@ describe("scripts/changed-lanes", () => {
     },
   );
 
-  it("falls back to full core lint for broad core diffs", () => {
-    const targets = Array.from({ length: 9 }, (_, index) => `src/shared/file-${index}.ts`);
-    const command = createTargetedCoreLintCommand(targets, { PATH: "/usr/bin" });
+  it.each(["darwin", "linux", "win32"] as const)(
+    "preserves core/UI lint coverage and platform batching for 83 targets on %s",
+    (platform) => {
+      const targets = Array.from(
+        { length: 83 },
+        (_, index) => `${index % 2 ? "ui/src" : "src/shared"}/file-${index}.ts`,
+      ).toReversed();
+      const commands = expectDefined(
+        createTargetedCoreLintCommands(
+          targets,
+          { PATH: "/usr/bin" },
+          { fileExists: () => true, platform },
+        ),
+        "core lint commands",
+      );
 
-    expect(command).toBeNull();
-  });
+      expect(commands.map((command) => command.args.slice(3).length)).toEqual(
+        platform === "win32" ? [...Array<number>(10).fill(8), 3] : [83],
+      );
+      expect(commands.flatMap((command) => command.args.slice(3))).toEqual(
+        targets.toSorted((left, right) => left.localeCompare(right)),
+      );
+      for (const command of commands) {
+        expect(command.args.slice(0, 3)).toEqual([
+          "scripts/run-oxlint.mjs",
+          "--tsconfig",
+          "config/tsconfig/oxlint.core.json",
+        ]);
+      }
+    },
+  );
+
+  it.each(["darwin", "linux"] as const)(
+    "bounds encoded core lint commands without dropping long Unicode paths on %s",
+    (platform) => {
+      const targets = Array.from(
+        { length: 160 },
+        (_, index) => `src/shared/${"nested folder/".repeat(20)}界😀^-${index}.ts`,
+      );
+      const env = { PATH: "/usr/bin", OPENCLAW_LOCAL_CHECK: "0" };
+      const commands = expectDefined(
+        createTargetedCoreLintCommands(targets, env, { fileExists: () => true, platform }),
+        "core lint commands",
+      );
+      expect(commands.length).toBeGreaterThan(1);
+      expect(commands[0]?.args.slice(3).length).toBeGreaterThan(8);
+      expect(commands.flatMap((command) => command.args.slice(3))).toEqual(
+        targets.toSorted((left, right) => left.localeCompare(right)),
+      );
+      for (const command of commands) {
+        expect(command.env).toMatchObject({ OPENCLAW_LOCAL_CHECK: "1" });
+        expect(
+          [command.bin, ...command.args].reduce(
+            (size, arg) => size + Buffer.byteLength(arg, "utf8") + 1,
+            0,
+          ),
+        ).toBeLessThanOrEqual(24 * 1024);
+      }
+    },
+  );
+
+  it.each(["darwin", "linux"] as const)(
+    "rejects an oversized core target instead of omitting it on %s",
+    (platform) => {
+      expect(() =>
+        createTargetedCoreLintCommands(
+          [`src/shared/${"long/".repeat(6000)}file.ts`],
+          { PATH: "/usr/bin" },
+          { fileExists: () => true, platform },
+        ),
+      ).toThrow("Core lint target exceeds the command-line budget");
+    },
+  );
 
   it("falls back to full extension lint for broad extension diffs", () => {
     const targets = Array.from(
@@ -1700,7 +1791,7 @@ describe("scripts/changed-lanes", () => {
 
   it("falls back to full core lint when a changed core target was deleted", () => {
     expect(
-      createTargetedCoreLintCommand(
+      createTargetedCoreLintCommands(
         ["src/shared/deleted.ts"],
         { PATH: "/usr/bin" },
         {
@@ -1712,7 +1803,7 @@ describe("scripts/changed-lanes", () => {
 
   it("falls back to full core lint for mixed core lint configuration diffs", () => {
     expect(
-      createTargetedCoreLintCommand(
+      createTargetedCoreLintCommands(
         [
           "config/assertion-safety-baseline.txt",
           "config/tsconfig/oxlint.core.json",
@@ -1727,7 +1818,7 @@ describe("scripts/changed-lanes", () => {
   it.each([
     {
       name: "targets small core lint diffs",
-      create: createTargetedCoreLintCommand,
+      create: createTargetedCoreLintCommands,
       targets: [
         "config/assertion-safety-baseline.txt",
         ".github/workflows/ci.yml",
@@ -1770,7 +1861,11 @@ describe("scripts/changed-lanes", () => {
       },
     },
   ])("$name", ({ create, targets, expected }) => {
-    expect(create(targets, { PATH: "/usr/bin" }, { fileExists: () => true })).toEqual({
+    const result = create(targets, { PATH: "/usr/bin" }, { fileExists: () => true });
+    if (Array.isArray(result)) {
+      expect(result).toHaveLength(1);
+    }
+    expect(Array.isArray(result) ? result[0] : result).toEqual({
       name: expected.name,
       bin: "node",
       args: ["scripts/run-oxlint.mjs", "--tsconfig", expected.tsconfig, expected.path],
@@ -1789,6 +1884,12 @@ describe("scripts/changed-lanes", () => {
       OPENCLAW_TSGO_SPARSE_SKIP: "1",
       PATH: "/usr/bin",
     });
+    expect(plan.commands.find((command) => command.name === "lint core changed file")?.env).toEqual(
+      {
+        OPENCLAW_LOCAL_CHECK: "1",
+        PATH: "/usr/bin",
+      },
+    );
   });
 
   it("runs CI changed-check children through Corepack pnpm", () => {
@@ -1874,23 +1975,26 @@ describe("scripts/changed-lanes", () => {
     expect(shouldDelegateChangedCheckToCrabbox([], {}, { result })).toBe(false);
   });
 
-  it("adds the dead export scan only for production source changes", () => {
+  it.each([
+    ["core source", "src/config/config.ts"],
+    ["script consumer", "scripts/test-perf-budget.mts"],
+    ["root test consumer", "test/scripts/test-perf-budget.test.ts"],
+  ])("adds the dead export scan for %s changes", (_name, changedPath) => {
     const command = {
       name: "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
       bin: "node",
       args: ["--import", "tsx", "scripts/check-deadcode-exports.mts"],
-      env: expect.any(Object),
     };
-    const sourceResult = detectChangedLanes(["src/config/config.ts"]);
-    const toolingResult = detectChangedLanes(["scripts/check-changed.mjs"]);
+    const sourceResult = detectChangedLanes([changedPath]);
+    const commands = (env = {}) =>
+      createChangedCheckPlan(sourceResult, { env }).commands.map(({ name, bin, args }) => ({
+        name,
+        bin,
+        args,
+      }));
 
-    expect(createChangedCheckPlan(sourceResult).commands).toContainEqual(command);
-    expect(createChangedCheckPlan(toolingResult).commands).not.toContainEqual(command);
-    expect(
-      createChangedCheckPlan(sourceResult, {
-        env: { OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" },
-      }).commands,
-    ).not.toContainEqual(command);
+    expect(commands()).toContainEqual(command);
+    expect(commands({ OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" })).not.toContainEqual(command);
   });
 
   it("keeps classified changed gates local", () => {
@@ -2171,7 +2275,7 @@ describe("scripts/changed-lanes", () => {
       paths: ["assets/avatar-placeholder.svg", "assets/chrome-extension/icons/icon128.png"],
       excludesTests: false,
     },
-  ])("$name", ({ paths, excludesTests, broad = false }) => {
+  ])("$name", ({ paths, excludesTests, broad }) => {
     const result = detectChangedLanes(paths);
     const commands = createChangedCheckPlan(result).commands.map((command) => command.args[0]);
 

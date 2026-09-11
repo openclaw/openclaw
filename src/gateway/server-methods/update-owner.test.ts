@@ -8,6 +8,7 @@ import type { GatewayRequestContext } from "./types.js";
 import {
   adoptUpdateCampaignMock,
   detectRespawnSupervisorMock,
+  initializeGatewayUpdateStatusMock,
   runGatewayUpdateMock,
   scheduleGatewaySigusr1RestartMock,
   sendGatewayLifecycleNoticeMock,
@@ -123,6 +124,39 @@ describe("update.run current owner authority", () => {
       }),
     );
   });
+
+  it.each([false, true])(
+    "refuses before acknowledgement after discovery revokes ownership (managed=%s)",
+    async (managed) => {
+      detectRespawnSupervisorMock.mockReturnValue(managed ? "launchd" : null);
+      initializeGatewayUpdateStatusMock.mockImplementationOnce(async () => {
+        config = { commands: { ownerAllowFrom: ["replacement"] } };
+        return {
+          root: "/tmp/openclaw",
+          status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+          installReceipt: null,
+        };
+      });
+
+      const result = await runOwnerTool(
+        createGatewayTool({ senderIsOwner: true, requesterSenderId: "owner" }),
+      );
+
+      expect(result.details).toMatchObject({
+        ok: false,
+        reason: "owner_required",
+        ackDelivered: false,
+      });
+      expect(listUpdateRuns()).toEqual([
+        expect.objectContaining({ phase: "finished", status: "failed", reason: "owner_required" }),
+      ]);
+      expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
+      expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(sentinelState.capturedPayload).toBeUndefined();
+    },
+  );
 
   it.each([false, true])("rechecks after awaited acknowledgement (managed=%s)", async (managed) => {
     detectRespawnSupervisorMock.mockReturnValue(managed ? "launchd" : null);

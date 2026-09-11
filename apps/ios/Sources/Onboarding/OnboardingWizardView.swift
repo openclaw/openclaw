@@ -53,6 +53,7 @@ struct OnboardingWizardView: View {
     @State private var setupCode: String = ""
     @State private var setupCodeStatus: String?
     @State private var setupAttemptID: UUID?
+    @State private var manualConnectGeneration: UInt64 = 0
     @FocusState private var focusedField: OnboardingFocusedField?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
@@ -1209,6 +1210,7 @@ extension OnboardingWizardView {
 
     private func beginSetupAttempt() -> UUID? {
         guard self.connectingGateway == nil else { return nil }
+        self.manualConnectGeneration &+= 1
         let attemptID = UUID()
         self.setupAttemptID = attemptID
         self.connectingGateway = .setupCode
@@ -1221,6 +1223,7 @@ extension OnboardingWizardView {
     }
 
     private func invalidateSetupAttempt() {
+        self.manualConnectGeneration &+= 1
         self.setupAttemptID = nil
         self.connectingGateway = nil
     }
@@ -1417,6 +1420,14 @@ extension OnboardingWizardView {
             self.gatewayCredentialFieldStableID = stableID
             self.gatewayToken = credentials.token ?? ""
             self.gatewayPassword = credentials.password ?? ""
+        } else if let fields = self.pendingManualAuthOverride?.refreshedFieldsAfterHandoff(
+            token: self.gatewayToken,
+            password: self.gatewayPassword,
+            instanceId: instanceId,
+            targetStableID: stableID)
+        {
+            self.gatewayToken = fields.token
+            self.gatewayPassword = fields.password
         }
         self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
             current: self.pendingManualAuthOverride,
@@ -1497,13 +1508,8 @@ extension OnboardingWizardView {
             port: port,
             contextPath: self.manualContextPath)
         self.selectGatewayCredentialTarget(stableID, allowManualOverride: true)
-        if GatewayStableIdentifier.matches(
-            self.appModel.activeGatewayConnectConfig?.effectiveStableID,
-            stableID),
-            self.appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true
-        {
-            self.pendingManualAuthOverride = nil
-        }
+        self.manualConnectGeneration &+= 1
+        let generation = self.manualConnectGeneration
         let fieldsMatchTarget = GatewayStableIdentifier.matches(
             self.gatewayCredentialFieldStableID,
             stableID)
@@ -1527,16 +1533,23 @@ extension OnboardingWizardView {
                 suppressStoredDeviceAuth: authOverride?.suppressStoredDeviceAuth == true,
                 instanceId: instanceId)
         }
-        await self.gatewayController.connectManual(
+        let result = await self.gatewayController.connectManual(
             host: host,
             port: port,
             useTLS: self.manualTLS,
             contextPath: self.manualContextPath,
             authOverride: authOverride,
             forceReconnect: forceReconnect)
-        // The controller now owns this attempt's immutable override. A later retry must reload
-        // durable state so a spent bootstrap token cannot be resurrected from the live view.
-        self.pendingManualAuthOverride = nil
+        guard !Task.isCancelled,
+              generation == self.manualConnectGeneration,
+              GatewayStableIdentifier.matches(self.currentManualGatewayStableID, stableID)
+        else { return }
+        self.pendingManualAuthOverride = authOverride?.unconsumed
+        if case let .failed(message) = result,
+           !self.appModel.hasGatewayPreconnectProblem(for: stableID)
+        {
+            self.setConnectionFailure(message)
+        }
     }
 
     private func retryLastAttempt(silent: Bool = false) async {
@@ -1549,10 +1562,12 @@ extension OnboardingWizardView {
         }
         defer { self.connectingGateway = nil }
 
-        switch GatewaySettingsStore.activeGatewayEntry()?.kind {
+        switch self.gatewayController.pendingGatewayRetryKind ?? GatewaySettingsStore.activeGatewayEntry()?.kind {
         case .discovered:
-            if case let .failed(message) = await self.gatewayController.connectActiveGateway() {
-                self.setConnectionFailure(message)
+            if case let .failed(message) = await self.gatewayController.retryGatewayConnection() {
+                if self.gatewayController.pendingGatewayRetryKind == nil {
+                    self.setConnectionFailure(message)
+                }
             }
         case .manual, .none:
             // connectActiveGateway() replays the persisted endpoint and credentials,

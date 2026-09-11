@@ -2,7 +2,7 @@
 
 Every top-level bundled plugin ships one package-local `assets/icon.png`. This ledger records the exact source used for each redistributed or derived asset. Third-party names and marks remain the property of their respective owners and are used to identify the integration.
 
-OpenClaw-owned plugins without a distinct published mark use the OpenClaw app icon. Generated brand tiles preserve the identifying mark while normalizing its surrounding presentation to a common rounded plate with enough contrast on both light and dark backgrounds. The runtime never fetches these source URLs.
+OpenClaw-owned plugins without a distinct published mark use the OpenClaw app icon on a near-black rounded plate. Generated brand tiles preserve the identifying mark while normalizing its surrounding presentation to a common rounded plate with enough contrast on both light and dark backgrounds. The runtime never fetches these source URLs.
 
 | Plugin                 | Source class                         | Artwork source                                                                                                                                                                                                                                |
 | ---------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

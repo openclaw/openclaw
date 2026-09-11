@@ -17,7 +17,6 @@ import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectGatewayHeapLimit, type GatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
-import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
@@ -64,6 +63,7 @@ import {
   type GatewayStatusSummary,
   type PortStatusSummary,
 } from "./status.gateway.js";
+import type { LaunchdJobDiagnostics } from "./status.launchd.js";
 import type { GatewayRpcOpts } from "./types.js";
 
 type ConfigSummary = {
@@ -100,7 +100,7 @@ type GatewayConnectFailureKind = ReturnType<typeof classifyGatewayConnectFailure
 const loadGatewayProbeAuthModule = createLazyPromise(() => import("../../gateway/probe-auth.js"));
 const loadConfigIoRuntime = createLazyPromise(() => import("../../config/io.runtime.js"));
 const loadDaemonInspectModule = createLazyPromise(() => import("../../daemon/inspect.js"));
-const loadLaunchdModule = createLazyPromise(() => import("../../daemon/launchd.js"));
+const loadLaunchdDiagnosticsModule = createLazyPromise(() => import("./status.launchd.js"));
 const loadServiceAuditModule = createLazyPromise(() => import("../../daemon/service-audit.js"));
 const loadGatewayTlsModule = createLazyPromise(() => import("../../infra/tls/gateway.js"));
 const loadDaemonProbeModule = createLazyPromise(() => import("./probe.js"));
@@ -205,7 +205,7 @@ async function readStatusConfig(params: {
 export type DaemonStatus = {
   cli?: CliStatusSummary;
   logFile?: string;
-  service: {
+  service: LaunchdJobDiagnostics & {
     label: string;
     loaded: boolean | null;
     loadState: GatewayServiceLoadState;
@@ -217,7 +217,6 @@ export type DaemonStatus = {
     configAudit?: ServiceConfigAudit;
     gatewayHeap?: GatewayHeapLimitReport;
     restartHandoff?: GatewayRestartHandoff;
-    staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   };
   config?: {
     cli: ConfigSummary;
@@ -459,14 +458,12 @@ export async function gatherDaemonStatus(
         )
         .catch(() => [])
     : [];
-  const staleUpdateLaunchdJobs =
-    opts.deep && process.platform === "darwin"
-      ? await loadLaunchdModule()
-          .then(({ findStaleOpenClawUpdateLaunchdJobs }) =>
-            findStaleOpenClawUpdateLaunchdJobs(serviceEnv),
-          )
-          .catch(() => [])
-      : [];
+  const launchdDiagnostics =
+    process.platform === "darwin"
+      ? await loadLaunchdDiagnosticsModule().then(({ gatherLaunchdJobDiagnostics }) =>
+          gatherLaunchdJobDiagnostics(serviceEnv, Boolean(opts.deep)),
+        )
+      : {};
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const localCertificate =
@@ -682,7 +679,7 @@ export async function gatherDaemonStatus(
           }
         : {}),
       ...(restartHandoff ? { restartHandoff } : {}),
-      ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),
+      ...launchdDiagnostics,
     },
     config: {
       cli: cliConfigSummary,

@@ -1,5 +1,5 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
-import { nothing, type TemplateResult } from "lit";
+import { nothing } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { i18n, t } from "../../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
@@ -62,19 +62,14 @@ import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
 } from "./chat-transcript-render-guard.ts";
-import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
+import type {
+  ChatTranscriptProjection,
+  ChatTranscriptSession,
+  TranscriptHeader,
+} from "./chat-transcript-session.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
-
-type ChatTranscriptProjection = {
-  positionMessages: readonly unknown[];
-  isDirectThread: boolean;
-  isEmpty: boolean;
-  showLoadingSkeleton: boolean;
-  searchOpen: boolean;
-  renderRows: (overlay?: unknown, header?: TranscriptHeader | null) => TemplateResult;
-};
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 
@@ -104,9 +99,7 @@ export function projectChatTranscript(
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
   const archiveActor = activeSession?.archivedBy;
   const archiveLabel = archiveActor?.id
-    ? t("sessionsView.archivedBy", {
-        name: archiveActor.label ?? archiveActor.id,
-      })
+    ? t("sessionsView.archivedBy", { name: archiveActor.label ?? archiveActor.id })
     : activeSession?.archiveReason
       ? formatSessionArchiveReason(activeSession.archiveReason)
       : undefined;
@@ -135,6 +128,15 @@ export function projectChatTranscript(
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     pendingInputs: props.pendingInputs,
+    workerSetupPending: ["requested", "provisioning", "syncing", "starting"].includes(
+      activeSession?.placement?.state ?? "",
+    ),
+    workspaceSyncPendingRunIds:
+      (activeSession?.placement?.state === "active" ||
+        activeSession?.placement?.state === "draining") &&
+      activeSession.placement.workspaceResultReconciling === true
+        ? activeSession.activeRunIds
+        : undefined,
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
@@ -257,12 +259,11 @@ export function projectChatTranscript(
     props.userId,
   );
   const isDirectThread = defaultAvatarPlacement === "footer";
-  // Precedence: explicit prop, subagent classification/key → none, direct → footer, else gutter.
+  // Subagent sessions omit avatars; direct chats use the footer, others the gutter.
   const avatarPlacement =
-    props.avatarPlacement ??
-    (activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
+    activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
       ? "none"
-      : defaultAvatarPlacement);
+      : defaultAvatarPlacement;
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -273,6 +274,7 @@ export function projectChatTranscript(
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const loadedReplySources = new Map<string, LoadedReplySource>();
   const messageRowKeysById = new Map<string, string>();
+  const transcriptMessageKeys = new Map<string, string>();
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
     presented: props.presented,
@@ -282,7 +284,7 @@ export function projectChatTranscript(
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
-    agentId: props.fullMessageAgentId,
+    agentId: props.currentAgentId ?? props.fullMessageAgentId,
     runActive: props.runActive,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onRequestUpdate: requestUpdate,
@@ -298,6 +300,7 @@ export function projectChatTranscript(
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
     fetchLinkFavicon: props.fetchLinkFavicon,
+    pluginToolIcons: props.pluginToolIcons,
     githubRepo: props.githubRepo,
     showAssistantAvatar: avatarPlacement === "gutter" && Boolean(assistantIdentity.avatar),
   } satisfies StreamGroupOptions;
@@ -320,6 +323,7 @@ export function projectChatTranscript(
         : null;
     return {
       ...sharedMessageRenderOptions,
+      transcriptVisible: props.transcriptVisible,
       latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
@@ -339,7 +343,6 @@ export function projectChatTranscript(
       onToggleToolExpanded: toggleToolCardExpanded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
-      agentId: props.currentAgentId ?? props.fullMessageAgentId,
       agents: props.agents,
       senderAgentAvatars: props.senderAgentAvatars,
       mainKey: props.mainKey,
@@ -571,6 +574,7 @@ export function projectChatTranscript(
     });
     for (const group of groups) {
       for (const source of group.messages) {
+        transcriptMessageKeys.set(source.key, item.key);
         const sourceMessageId = persistedMessageEntryId(source.message);
         // The preview resolves content lazily; indexing only needs persisted identities.
         if (sourceMessageId) {
@@ -584,7 +588,7 @@ export function projectChatTranscript(
       }
     }
   }
-  transcript.syncMessageRows(messageRowKeysById);
+  transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null && tailStatusOwner?.runId === turnRecap.runId) {
     turnRecapByGroupKey.set(tailStatusOwner.key, turnRecap);
@@ -645,6 +649,7 @@ export function projectChatTranscript(
     JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
     props.presented,
+    props.transcriptVisible,
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
     avatarPlacement,
     props.boardProvider,
@@ -678,6 +683,7 @@ export function projectChatTranscript(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     Boolean(props.fetchLinkFavicon),
+    props.pluginToolIcons,
     props.githubRepo?.owner,
     props.githubRepo?.repo,
     threadContextWindow,

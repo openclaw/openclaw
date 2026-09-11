@@ -77,6 +77,7 @@ jobs:
             scripts/ci-run-timings.mjs
             scripts/lib/ci-test-timings-refit.mts
             scripts/lib/ci-test-timings-schema.mts
+            scripts/lib/vitest-shard-metadata.mts
             scripts/lib/direct-run.mjs
             scripts/lib/numeric-options.mjs
             scripts/lib/plain-gh.mjs

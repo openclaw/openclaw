@@ -3,6 +3,7 @@ import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spa
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { drainAgentRunTerminalWrites } from "../infra/agent-run-terminal-writes.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -193,7 +194,15 @@ export function prepareAgentCommandExecutionIdentity(params: {
     ...admission,
     // Observational events do not await consumers. Finish their recovery write
     // before releasing the admission; explicit close remains immediate.
-    finish: () => Promise.resolve(turnRegistration).finally(admission.close),
+    finish: async () => {
+      try {
+        await turnRegistration;
+      } finally {
+        await drainAgentRunTerminalWrites(admission.operationalRunInstance).finally(
+          admission.close,
+        );
+      }
+    },
     onRuntimeTurnStarted: (): Promise<void> | undefined => {
       if (!recovery || !isActive()) {
         return undefined;

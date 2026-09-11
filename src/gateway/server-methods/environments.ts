@@ -9,6 +9,7 @@ import {
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
   validateEnvironmentsListParams,
+  validateEnvironmentsPrepareParams,
   validateEnvironmentsStatusParams,
   validateWorkerDesktopObserveParams,
   validateWorkerDesktopLaunchParams,
@@ -142,7 +143,11 @@ export function summarizeWorkerEnvironment(
       ? {}
       : { trust: record.sharedHost ? "persistent" : "disposable" }),
     ...(record.desktopAvailable ? { desktop: true } : {}),
+    ...(record.preparation
+      ? { preparation: { purpose: record.preparation.purpose, key: record.preparation.key } }
+      : {}),
     worker: {
+      profileId: record.profileId,
       providerId: record.providerId,
       ...(record.leaseId ? { leaseId: record.leaseId } : {}),
       state: record.state,
@@ -239,9 +244,16 @@ async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
         executionMode ? { executionMode, executionModes } : {},
       );
       try {
-        const options = await context.workerEnvironmentService?.listMachineOptions?.(summary.id);
+        const [options, operatingSystems] = await Promise.all([
+          context.workerEnvironmentService?.listMachineOptions?.(summary.id),
+          context.workerEnvironmentService?.listOperatingSystems?.(summary.id),
+        ]);
         const machines = options ?? [];
-        return machines.length > 0 ? Object.assign(resolvedSummary, { machines }) : resolvedSummary;
+        return Object.assign(
+          resolvedSummary,
+          machines.length > 0 ? { machines } : {},
+          operatingSystems && operatingSystems.length > 1 ? { operatingSystems } : {},
+        );
       } catch (error) {
         context.logGateway.warn(
           `worker machine catalog unavailable (${summary.id}): ${formatForLog(error)}`,
@@ -542,6 +554,47 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       ["profile_not_found", "invalid_profile"],
       "worker environment creation failed",
     );
+  },
+  "environments.prepare": async ({ params, respond, context, hasCurrentClientAuthority }) => {
+    if (
+      !assertValidParams(params, validateEnvironmentsPrepareParams, "environments.prepare", respond)
+    ) {
+      return;
+    }
+    const service = context.workerEnvironmentService;
+    if (!service) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "cloud worker environments are not configured"),
+      );
+      return;
+    }
+    try {
+      respond(
+        true,
+        await service.prepare(params, () => {
+          if (hasCurrentClientAuthority?.() === false) {
+            throw new Error("Worker preparation caller authority was revoked");
+          }
+        }),
+        undefined,
+      );
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      const invalid =
+        code === "profile_not_found" || code === "invalid_profile" || code === "invalid_project";
+      const known = invalid || code === "capacity";
+      respond(
+        false,
+        undefined,
+        errorShape(
+          invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+          known && error instanceof Error ? error.message : "worker environment preparation failed",
+          known ? { details: { code } } : undefined,
+        ),
+      );
+    }
   },
   "environments.destroy": async ({ params, respond, context }) => {
     if (

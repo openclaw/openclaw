@@ -49,19 +49,22 @@ function resolveAgentSystemPromptConfig(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  promptMode?: AgentSystemPromptRenderParams["promptMode"];
   sourceReplyDeliveryMode?: AgentSystemPromptRenderParams["sourceReplyDeliveryMode"];
 }): ResolvedAgentSystemPromptConfig {
   const { config, agentId, sessionKey, sourceReplyDeliveryMode } = params;
+  const includeFullSections = params.promptMode !== "minimal" && params.promptMode !== "none";
   return {
     ownerDisplay: "raw",
     ownerDisplaySecret: undefined,
     subagentDelegationMode: resolveMainSessionDelegationMode({ config, agentId, sessionKey }),
-    ttsHint: config
-      ? buildTtsSystemPromptHint(config, agentId, {
-          messageToolOnly: sourceReplyDeliveryMode === "message_tool_only",
-        })
-      : undefined,
-    modelAliasLines: buildModelAliasLines(config),
+    ttsHint:
+      config && includeFullSections
+        ? buildTtsSystemPromptHint(config, agentId, {
+            messageToolOnly: sourceReplyDeliveryMode === "message_tool_only",
+          })
+        : undefined,
+    modelAliasLines: includeFullSections ? buildModelAliasLines(config) : [],
     memoryCitationsMode: config?.memory?.citations,
     fsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }),
   };
@@ -75,6 +78,7 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
         config,
         agentId,
         sessionKey: renderParams.runtimeInfo?.sessionKey,
+        promptMode: renderParams.promptMode,
         sourceReplyDeliveryMode: renderParams.sourceReplyDeliveryMode,
       })
     : {};

@@ -37,7 +37,7 @@ import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
@@ -47,11 +47,8 @@ import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
-import { defineSplitHealthCheckInput } from "./health-check-adapter.js";
-import type {
-  SplitHealthCheckDefinition,
-  SplitHealthCheckInput,
-} from "./health-check-runner-types.js";
+import { copyHealthCheck } from "./health-check-adapter.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
   HealthCheckContext,
@@ -373,7 +370,9 @@ const skillWorkshopRelocationCheck: HealthCheck = {
       inspection.legacyBackupRootCount > inspection.preservedLegacyBackupRootCount
     ) {
       fixHints.push(
-        "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
+        ctx.mode === "doctor"
+          ? "Review the remaining targets and migration warnings above. Resolve their ownership or recovery blockers before retrying Doctor; repeating the same repair alone will not resolve them."
+          : "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
       );
     }
     if (inspection.preservedLegacyBackupRootCount > 0) {
@@ -391,7 +390,7 @@ const skillWorkshopRelocationCheck: HealthCheck = {
           .map(([agentId, count]) => `${agentId}: ${count}`)
           .join(
             ", ",
-          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).`,
+          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).${inspection.externalProposalDetails?.length ? `\nRemaining proposal targets (showing ${inspection.externalProposalDetails.length} of ${inspection.externalProposalCount}):\n${inspection.externalProposalDetails.join("\n")}` : ""}`,
         path: "skills.workshop",
         fixHint: fixHints.join(" "),
       },
@@ -461,7 +460,7 @@ export async function detectGatewayAuthHealth(
         unresolvedReasonStyle: "detailed",
         ...(gatewayTokenRef ? { envFallback: "never" as const } : {}),
       });
-  if (resolved.token && !isInvalidGatewayToken(resolved.token)) {
+  if (resolved.token && !isInvalidGatewaySecret(resolved.token)) {
     return [];
   }
   if (gatewayTokenRef) {
@@ -472,7 +471,7 @@ export async function detectGatewayAuthHealth(
         message: buildGatewayTokenSecretRefUnavailableMessage({
           cfg: ctx.cfg,
           ref: gatewayTokenRef,
-          unresolvedRefReason: isInvalidGatewayToken(resolved.token)
+          unresolvedRefReason: isInvalidGatewaySecret(resolved.token)
             ? "the resolved token is blank or the literal string undefined/null"
             : resolved.unresolvedRefReason,
         }),
@@ -482,7 +481,7 @@ export async function detectGatewayAuthHealth(
     ];
   }
   const invalid =
-    isInvalidGatewayToken(resolved.token) || isInvalidGatewayToken(ctx.cfg.gateway?.auth?.token);
+    isInvalidGatewaySecret(resolved.token) || isInvalidGatewaySecret(ctx.cfg.gateway?.auth?.token);
   return [
     {
       checkId: "core/doctor/gateway-auth",
@@ -515,7 +514,7 @@ const hooksModelCheck: HealthCheck = {
       return [];
     }
     const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
-    const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
+    const { readPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
     const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
       await import("../agents/model-selection.js");
     const hooksModelRef = resolveHooksGmailModel({
@@ -537,7 +536,7 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadPreparedModelCatalog({
+    const catalog = await readPreparedModelCatalog({
       config: ctx.cfg,
       readOnly: true,
       providerDiscoveryProviderIds: [],
@@ -616,12 +615,14 @@ const bootstrapSizeCheck: HealthCheck = {
     if (!ctx.cwd) {
       return [];
     }
-    const { buildBootstrapInjectionStats, analyzeBootstrapBudget } =
+    const { buildBootstrapInjectionStats, analyzeBootstrapBudget, isFixedUserCapFile } =
       await import("../agents/bootstrap-budget.js");
     const { resolveBootstrapContextForDiagnostics } =
       await import("../agents/bootstrap-files-diagnostics.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
+    const { USER_BOOTSTRAP_MAX_CHARS } =
+      await import("../agents/embedded-agent-helpers/bootstrap.js");
     const defaultAgentId = tryResolveSoleAgentId(ctx.cfg);
     const workspaceDir = ctx.cwd;
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
@@ -637,15 +638,26 @@ const bootstrapSizeCheck: HealthCheck = {
       bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg, defaultAgentId),
       bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg, defaultAgentId),
     });
+    // USER.md's fixed cap makes per-file tuning advice a dead end: name the cap
+    // and the compaction action instead, matching the interactive Doctor note.
+    const fixedCapHint = `Reduce the file size; USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS.toLocaleString("en-US")}-character bootstrap cap that \`bootstrapMaxChars\` cannot raise.`;
     const findings: HealthFinding[] = [];
     for (const file of analysis.truncatedFiles) {
+      let fixHint =
+        "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.";
+      if (file.causes.includes("per-file-limit") && isFixedUserCapFile(file)) {
+        fixHint = fixedCapHint;
+        if (file.causes.includes("total-limit")) {
+          fixHint +=
+            " Also reduce total bootstrap size or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.";
+        }
+      }
       findings.push({
         checkId: "core/doctor/bootstrap-size",
         severity: "warning",
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
-        fixHint:
-          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
+        fixHint,
       });
     }
     for (const file of analysis.nearLimitFiles) {
@@ -657,8 +669,9 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "info",
         message: `${file.name} is near the configured bootstrap file limit.`,
         path: file.path,
-        fixHint:
-          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+        fixHint: isFixedUserCapFile(file)
+          ? fixedCapHint
+          : "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       });
     }
     if (analysis.totalNearLimit) {
@@ -941,7 +954,7 @@ const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false
   },
 };
 
-const legacyCronStoreCheck: SplitHealthCheckDefinition = {
+const legacyCronStoreCheck: DoctorHealthCheck = {
   id: "core/doctor/legacy-cron-store",
   kind: "core",
   description: "Legacy cron store, run-log, and payload state is normalized.",
@@ -1095,7 +1108,7 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
-function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDefinition {
+function createGatewayHealthCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
   return {
     id: GATEWAY_HEALTH_CHECK_ID,
     kind: "core",
@@ -1108,7 +1121,7 @@ function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDe
   };
 }
 
-function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDefinition {
+function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
   return {
     id: GATEWAY_DAEMON_CHECK_ID,
     kind: "core",
@@ -1120,6 +1133,18 @@ function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDe
     },
   };
 }
+
+const nodeRuntimeCheck: HealthCheck = {
+  id: "core/doctor/node-runtime",
+  kind: "core",
+  description:
+    "Node SQLite capabilities and version support are represented as structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    const { collectNodeRuntimeFindings } = await import("../commands/node-runtime-diagnostics.js");
+    return collectNodeRuntimeFindings(ctx.env);
+  },
+};
 
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
@@ -1419,9 +1444,7 @@ function createWorkspaceSuggestionsCheck(
   };
 }
 
-function createConvertedWorkflowChecks(
-  deps: CoreHealthCheckDeps,
-): readonly SplitHealthCheckDefinition[] {
+function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly DoctorHealthCheck[] {
   return [
     claudeCliCheck,
     gatewayAuthCheck,
@@ -1437,6 +1460,7 @@ function createConvertedWorkflowChecks(
     gatewayPlatformNotesCheck,
     createGatewayHealthCheck(deps),
     createGatewayDaemonCheck(deps),
+    nodeRuntimeCheck,
     createSecurityCheck(deps),
     browserCheck,
     openAIOAuthTlsCheck,
@@ -1488,8 +1512,8 @@ function createConvertedWorkflowChecks(
 
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
-): readonly SplitHealthCheckInput[] {
-  const checks: readonly SplitHealthCheckDefinition[] = [
+): readonly DoctorHealthCheck[] {
+  const checks: readonly DoctorHealthCheck[] = [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
@@ -1497,8 +1521,8 @@ export function createCoreHealthChecks(
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
   ];
-  return checks.map(defineSplitHealthCheckInput);
+  return checks.map(copyHealthCheck);
 }
 
-export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();
+export const CORE_HEALTH_CHECKS: readonly DoctorHealthCheck[] = createCoreHealthChecks();
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

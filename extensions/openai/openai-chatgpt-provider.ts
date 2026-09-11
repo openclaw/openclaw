@@ -557,7 +557,7 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
           ctx.isRemote
             ? "Open this URL in your LOCAL browser and enter the code below."
             : "Open this URL in your browser and enter the code below.",
-          `URL: ${verificationUrl}`,
+          `URL: <${verificationUrl}>`,
         ].join("\n");
         if (ctx.isRemote) {
           await ctx.openUrl(verificationUrl);

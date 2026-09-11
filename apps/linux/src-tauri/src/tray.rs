@@ -14,6 +14,8 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 const OPEN_ID: &str = "open-dashboard";
 const QUICKCHAT_ID: &str = "quickchat";
 const CHECK_UPDATES_ID: &str = "check-for-updates";
+const UPDATE_ACTION_ID: &str = "update-action";
+const NO_UPDATE_ACTION_LABEL: &str = "No update action available";
 const START_AT_LOGIN_ID: &str = "start-at-login";
 const QUICKCHAT_SHORTCUT_ID: &str = "quickchat-shortcut";
 const GLOBAL_SHORTCUT_ID: &str = "global-shortcut";
@@ -29,6 +31,7 @@ pub struct TrayHandles {
     _tray: TrayIcon<tauri::Wry>,
     status: MenuItem<tauri::Wry>,
     status_line: Mutex<StatusLine>,
+    update_action: MenuItem<tauri::Wry>,
     quickchat_shortcut: Option<CheckMenuItem<tauri::Wry>>,
     start: MenuItem<tauri::Wry>,
     stop: MenuItem<tauri::Wry>,
@@ -106,6 +109,23 @@ impl TrayHandles {
             set_quickchat_shortcut_checked(item, checked);
         }
     }
+
+    pub fn refresh_update_action(&self, app: &AppHandle) {
+        let item = self.update_action.clone();
+        let current_app = app.clone();
+        // Read at dispatch time: queued refreshes must not replay stale action snapshots.
+        if let Err(error) = app.run_on_main_thread(move || {
+            let (text, enabled) = match crate::updater::current_action(&current_app) {
+                crate::updater::UpdateAction::Unavailable => (NO_UPDATE_ACTION_LABEL, false),
+                crate::updater::UpdateAction::OpenDownloadPage => ("Open download page", true),
+                crate::updater::UpdateAction::RestartToUpdate => ("Restart to update", true),
+            };
+            let _ = item.set_text(text);
+            let _ = item.set_enabled(enabled);
+        }) {
+            eprintln!("Could not refresh update menu: {error}");
+        }
+    }
 }
 
 pub fn build(
@@ -117,6 +137,13 @@ pub fn build(
         app,
         "gateway-status",
         "Gateway: Checking…",
+        false,
+        None::<&str>,
+    )?;
+    let update_action = MenuItem::with_id(
+        app,
+        UPDATE_ACTION_ID,
+        NO_UPDATE_ACTION_LABEL,
         false,
         None::<&str>,
     )?;
@@ -175,6 +202,7 @@ pub fn build(
         .text(QUICKCHAT_ID, "Quick Chat")
         .text(OPEN_ID, "Open Dashboard")
         .text(CHECK_UPDATES_ID, "Check for Updates")
+        .item(&update_action)
         .item(&start_at_login);
     let menu_builder = if let Some(quickchat_shortcut) = quickchat_shortcut.as_ref() {
         menu_builder.item(quickchat_shortcut)
@@ -271,6 +299,7 @@ pub fn build(
             gateway: "Checking…".to_string(),
             pending_count: 0,
         }),
+        update_action,
         quickchat_shortcut,
         start,
         stop,
@@ -310,6 +339,7 @@ fn handle_menu(
             show_window(app);
             crate::updater::spawn_check(app.clone());
         }
+        UPDATE_ACTION_ID => crate::updater::perform_action(app),
         START_AT_LOGIN_ID => toggle_autostart(app, start_at_login),
         QUICKCHAT_SHORTCUT_ID => {
             if let Some(quickchat_shortcut) = quickchat_shortcut {

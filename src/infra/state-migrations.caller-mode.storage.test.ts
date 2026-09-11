@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -30,15 +31,6 @@ function candidateAt(
   return { root, version };
 }
 
-function linkBundledCandidateRoot(candidateRoot: string): void {
-  fs.mkdirSync(candidateRoot, { recursive: true });
-  fs.symlinkSync(
-    path.resolve("extensions"),
-    path.join(candidateRoot, "extensions"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-}
-
 async function makeFixture() {
   const root = await tempDirs.make("openclaw-doctor-caller-mode-");
   const homeDir = path.join(root, "home");
@@ -46,8 +38,21 @@ async function makeFixture() {
   const configPath = path.join(root, "copied-openclaw.json");
   fs.mkdirSync(homeDir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
-  linkBundledCandidateRoot(root);
-  linkBundledCandidateRoot(path.join(root, "candidate"));
+  // Storage receipts need a real candidate inventory, not unrelated bundled Doctor runtimes.
+  const bundledRoot = path.join(root, "extensions");
+  const pluginRoot = path.join(bundledRoot, "candidate-plugin");
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  createColdPluginFixture({
+    rootDir: pluginRoot,
+    pluginId: "candidate-plugin",
+    manifest: {
+      providers: [],
+      channels: [],
+      channelConfigs: {},
+      providerAuthChoices: [],
+      doctorContract: { stateMigrations: [] },
+    },
+  });
   const cfg: OpenClawConfig = {
     plugins: { entries: { "candidate-plugin": { enabled: true } } },
   };
@@ -55,7 +60,7 @@ async function makeFixture() {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: homeDir,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",

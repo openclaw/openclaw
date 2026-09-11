@@ -4,9 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
-import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   isModelKeyAllowedBySet,
   parseConfiguredModelVisibilityEntries,
@@ -19,127 +17,21 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
-import { buildAgentRuntimeAuthPlan } from "../../agents/runtime-plan/auth.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readSessionFallbackModel } from "../../status/session-fallback-model.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { resolveSupportedThinkingLevel } from "../thinking.js";
 import type { ThinkingCatalogEntry } from "../thinking.shared.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
-import {
-  formatAuthLabel,
-  type ModelAuthDetailMode,
-  resolveAuthLabel,
-} from "./directive-handling.auth.js";
-import {
-  type ModelPickerCatalogEntry,
-  resolveProviderEndpointLabel,
-} from "./directive-handling.model-picker.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ThinkLevel } from "./directives.js";
 
-function isMissingAuthLabel(auth: { label: string; source: string }): boolean {
-  return auth.label === "missing" && auth.source === "missing";
-}
-
-function resolveStatusHarnessRuntime(params: {
-  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
-  defaultRuntime: string;
-  provider: string;
-  cfg: OpenClawConfig;
-}): string {
-  const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
-    provider: params.provider,
-    entry: params.sessionEntry,
-    cfg: params.cfg,
-  });
-  if (sessionRuntime) {
-    return sessionRuntime;
-  }
-  return params.defaultRuntime;
-}
-
-function resolveStatusAcceptedProfileTypes(params: {
-  provider: string;
-  harnessRuntime: string;
-}): readonly AuthProfileCredential["type"][] | undefined {
-  if (normalizeProviderId(params.provider) !== "openai" || params.harnessRuntime === "codex") {
-    return undefined;
-  }
-  return ["api_key"];
-}
-
-async function resolveStatusAuthLabel(params: {
-  provider: string;
-  modelId: string;
-  cfg: OpenClawConfig;
-  modelsPath: string;
-  agentDir: string;
-  activeAgentId: string;
-  authMode: ModelAuthDetailMode;
-  workspaceDir?: string;
-  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
-}): Promise<string> {
-  const provider = normalizeProviderId(params.provider);
-  const harnessPolicy = resolveAgentHarnessPolicy({
-    provider,
-    modelId: params.modelId,
-    config: params.cfg,
-    agentId: params.activeAgentId,
-  });
-  const harnessRuntime = resolveStatusHarnessRuntime({
-    sessionEntry: params.sessionEntry,
-    defaultRuntime: harnessPolicy.runtime,
-    provider,
-    cfg: params.cfg,
-  });
-  const auth = await resolveAuthLabel(
-    params.provider,
-    params.cfg,
-    params.modelsPath,
-    params.agentDir,
-    params.authMode,
-    params.workspaceDir,
-    {
-      acceptedProfileTypes: resolveStatusAcceptedProfileTypes({
-        provider,
-        harnessRuntime,
-      }),
-    },
-  );
-  if (!isMissingAuthLabel(auth)) {
-    return formatAuthLabel(auth);
-  }
-
-  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
-    provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    harnessRuntime,
-  });
-  const effectiveAuthProvider = runtimeAuthPlan.harnessAuthProvider;
-  if (!effectiveAuthProvider || effectiveAuthProvider === provider) {
-    return formatAuthLabel(auth);
-  }
-
-  const runtimeAuth = await resolveAuthLabel(
-    effectiveAuthProvider,
-    params.cfg,
-    params.modelsPath,
-    params.agentDir,
-    params.authMode,
-    params.workspaceDir,
-  );
-  if (isMissingAuthLabel(runtimeAuth)) {
-    return formatAuthLabel(auth);
-  }
-  return `via ${harnessRuntime} runtime / ${effectiveAuthProvider} ${formatAuthLabel(runtimeAuth)}`;
-}
+type ModelPickerCatalogEntry = { provider: string; id: string; name?: string };
 
 function pushUniqueCatalogEntry(params: {
   keys: Set<string>;
@@ -341,11 +233,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
   currentThinkLevel: ThinkLevel;
   thinkingCatalog?: ThinkingCatalogEntry[];
   runtimePolicySessionKey?: string;
+  sessionKey?: string;
+  storePath?: string;
   resetModelOverride: boolean;
   workspaceDir?: string;
   surface?: string;
-  sessionEntry?: Pick<SessionEntry, "modelProvider" | "model"> &
-    Partial<Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">>;
+  sessionEntry?: InternalSessionEntry;
 }): Promise<ReplyPayload | undefined> {
   if (!params.directives.hasModelDirective) {
     return undefined;
@@ -389,17 +282,30 @@ export async function maybeHandleModelDirectiveInfo(params: {
       agentId: params.activeAgentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      sessionEntry: isCompleteSessionEntry(params.sessionEntry) ? params.sessionEntry : undefined,
+      sessionEntry: params.sessionEntry,
     });
     return reply ?? { text: "No models available." };
   }
 
+  const modelParams = {
+    selectedProvider: params.provider,
+    selectedModel: params.model,
+    sessionEntry: params.sessionEntry,
+  };
+  const completedModel = readSessionFallbackModel({
+    ...modelParams,
+    config: params.cfg,
+    sessionScope: {
+      agentId: params.activeAgentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+  });
+  const modelRefs = resolveSelectedAndActiveModel({
+    ...modelParams,
+    sessionEntry: completedModel ?? params.sessionEntry,
+  });
   if (wantsSummary) {
-    const modelRefs = resolveSelectedAndActiveModel({
-      selectedProvider: params.provider,
-      selectedModel: params.model,
-      sessionEntry: params.sessionEntry,
-    });
     const current = modelRefs.selected.label;
     const thinkingRuntime = resolveEffectiveAgentRuntime({
       cfg: params.cfg,
@@ -470,38 +376,23 @@ export async function maybeHandleModelDirectiveInfo(params: {
     allowedModelKeys: params.allowedModelKeys,
     allowedModelCatalog: params.allowedModelCatalog,
   });
-  const modelsPath = `${params.agentDir}/models.json`;
   const formatPath = (value: string) => shortenHomePath(value);
-  const authMode: ModelAuthDetailMode = "verbose";
   if (pickerCatalog.length === 0) {
     return { text: "No models available." };
   }
 
-  const authByProvider = new Map<string, string>();
-  for (const entry of pickerCatalog) {
-    const provider = normalizeProviderId(entry.provider);
-    if (authByProvider.has(provider)) {
-      continue;
-    }
-    const authLabel = await resolveStatusAuthLabel({
-      provider,
-      modelId: entry.id,
-      cfg: params.cfg,
-      modelsPath,
-      agentDir: params.agentDir,
-      activeAgentId: params.activeAgentId,
-      authMode,
-      workspaceDir: params.workspaceDir,
-      sessionEntry: params.sessionEntry,
-    });
-    authByProvider.set(provider, authLabel);
-  }
-
-  const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider: params.provider,
-    selectedModel: params.model,
+  const { loadPreparedModelCatalogView } = await import("../../agents/model-catalog-view.js");
+  const prepared = await loadPreparedModelCatalogView({
+    kind: "status",
+    config: params.cfg,
+    agentId: params.activeAgentId,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    entries: pickerCatalog,
     sessionEntry: params.sessionEntry,
   });
+  const authByProvider = prepared.providerAuthLabels;
+
   const current = modelRefs.selected.label;
   const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
   const lines = [
@@ -537,11 +428,11 @@ export async function maybeHandleModelDirectiveInfo(params: {
       continue;
     }
     const authLabel = authByProvider.get(provider) ?? "missing";
-    const endpoint = resolveProviderEndpointLabel(provider, params.cfg);
-    const endpointSuffix = endpoint.endpoint
-      ? ` endpoint: ${endpoint.endpoint}`
+    const endpoint = prepared.providerEndpoints.get(provider);
+    const endpointSuffix = endpoint?.endpoint
+      ? ` endpoint: ${endpoint?.endpoint}`
       : " endpoint: default";
-    const apiSuffix = endpoint.api ? ` api: ${endpoint.api}` : "";
+    const apiSuffix = endpoint?.api ? ` api: ${endpoint?.api}` : "";
     lines.push("");
     lines.push(`[${provider}]${endpointSuffix}${apiSuffix} auth: ${authLabel}`);
     for (const entry of models) {
@@ -552,14 +443,4 @@ export async function maybeHandleModelDirectiveInfo(params: {
     }
   }
   return { text: lines.join("\n") };
-}
-
-function isCompleteSessionEntry(
-  entry: Pick<SessionEntry, "modelProvider" | "model"> | undefined,
-): entry is SessionEntry {
-  return Boolean(
-    entry &&
-    typeof (entry as Partial<SessionEntry>).sessionId === "string" &&
-    typeof (entry as Partial<SessionEntry>).updatedAt === "number",
-  );
 }

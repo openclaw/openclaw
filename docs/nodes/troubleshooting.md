@@ -57,6 +57,7 @@ openclaw channels status --probe
 Then run node-specific checks:
 
 ```bash
+openclaw nodes pending
 openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 openclaw approvals get --node <idOrNameOrIp>
@@ -100,26 +101,39 @@ If you see `NODE_BACKGROUND_UNAVAILABLE`, bring the node app to the foreground a
 
 ## Pairing versus approvals
 
-Three separate gates control whether a node command succeeds:
+Four separate approval and policy gates control whether a node command succeeds:
 
 1. **Device pairing**: can this node connect to the gateway?
-2. **Gateway node command policy**: is the RPC command ID allowed by `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny` and platform defaults?
-3. **Exec approvals**: can this node run a specific shell command locally?
+2. **Node command surface approval**: has the declared command been approved through `openclaw nodes pending` and `openclaw nodes approve <nodeRequestId>`?
+3. **Gateway node command policy**: is the RPC command ID allowed by `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny` and platform defaults?
+4. **Exec approvals**: can this node run a specific shell command locally?
 
-Node pairing is an identity/trust gate, not a per-command approval surface. For `system.run`, the per-node policy lives in that node's exec approvals file (`openclaw approvals get --node ...`), not in the gateway pairing record.
+Device pairing admits the identity; surface approval limits the commands on its
+paired-device record. The two request IDs are distinct. An initial unapproved
+surface exposes no effective commands. A pending expansion retains only commands
+that were already approved, remain declared, and pass Gateway policy. For
+`system.run`, shell allowlist and ask policy live in the node's exec approvals
+(`openclaw approvals get --node ...`), not the pairing record. Platform permissions
+and foreground requirements still apply.
 
 Quick checks:
 
 ```bash
 openclaw devices list
+openclaw nodes pending
 openclaw nodes status
 openclaw approvals get --node <idOrNameOrIp>
 openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 ```
 
-- Pairing missing: approve the node device first.
+- Pairing missing: approve the current device request with `openclaw devices approve <deviceRequestId>`, then restart or rerun a node paused on `PAIRING_REQUIRED`. The reconnect creates the separate surface request.
+- Node paired and connected with an initial empty command list: inspect `openclaw nodes pending` and approve its distinct `<nodeRequestId>` with `openclaw nodes approve <nodeRequestId>`.
 - `nodes describe` missing a command: check the gateway node command policy and whether the node actually declared that command on connect.
-- Pairing fine but `system.run` fails: fix exec approvals/allowlist on that node.
+- Surface approved but `system.run` fails: check Gateway policy, then exec approvals/allowlist on that node.
+
+SSH-verified and bootstrap enrollment can approve the first surface automatically.
+Trusted-network device approval does not. Later command, capability, or permission
+expansion still needs surface approval.
 
 For approval-backed `host=node` runs, the gateway also binds execution to the prepared canonical `systemRunPlan`. If a later caller mutates the command, cwd, or session metadata before the approved run is forwarded, the gateway rejects the run as an approval mismatch instead of trusting the edited payload.
 
@@ -150,6 +164,7 @@ openclaw logs --follow
 If still stuck:
 
 - Re-approve device pairing.
+- Restart or rerun a node paused for manual pairing, then approve its pending surface request with `openclaw nodes pending` / `openclaw nodes approve <nodeRequestId>`.
 - Re-open the node app (foreground).
 - Re-grant OS permissions.
 - Recreate/adjust the exec approval policy.

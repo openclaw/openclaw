@@ -328,21 +328,6 @@ runs:
         echo "NODE_COMPILE_CACHE_PORTABLE=1" >> "$GITHUB_ENV"
         echo "OPENCLAW_NODE_COMPILE_CACHE_WRITER=0" >> "$GITHUB_ENV"
 
-    - name: Setup Bun
-      if: inputs.install-bun == 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        npm install -g bun@1.4.0
-
-    - name: Runtime versions
-      shell: bash
-      run: |
-        node -v
-        npm -v
-        pnpm -v
-        if command -v bun &>/dev/null; then bun -v; fi
-
     - name: Capture node path
       shell: bash
       run: |
@@ -353,6 +338,27 @@ runs:
         # zizmor: ignore[github-env] node_bin comes from trusted actions/setup-node output in this composite action.
         echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
         echo "$node_bin" >> "$GITHUB_PATH"
+
+    - name: Setup Bun
+      if: inputs.install-bun == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        bun_bin="$(node "$GITHUB_ACTION_PATH/seed-bun-from-image.mjs")"
+        if [[ -n "$bun_bin" ]]; then
+          export PATH="$bun_bin:$PATH"
+          echo "$bun_bin" >> "$GITHUB_PATH"
+        else
+          npm install -g bun@1.4.0
+        fi
+
+    - name: Runtime versions
+      shell: bash
+      run: |
+        node -v
+        npm -v
+        pnpm -v
+        if command -v bun &>/dev/null; then bun -v; fi
 
     - name: Install dependencies
       if: inputs.install-deps == 'true'

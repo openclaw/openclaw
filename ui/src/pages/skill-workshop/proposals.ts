@@ -31,7 +31,7 @@ import {
   type SkillProposalInspectResult,
   type SkillProposalManifest,
 } from "./proposal-records.ts";
-import { createSkillWorkshopHistoryScanState, type SkillWorkshopState } from "./state.ts";
+import type { SkillWorkshopState } from "./state.ts";
 export {
   createSkillWorkshopState,
   skillWorkshopRouteData,
@@ -85,7 +85,6 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
   state.skillWorkshopRevisionDraft = "";
   state.skillWorkshopFilePreviewKey = null;
   state.skillWorkshopFilePreviewQuery = "";
-  state.skillWorkshopHistoryScan = createSkillWorkshopHistoryScanState();
   inspectRequestsByState.delete(state);
   selectionRequestByState.delete(state);
 }

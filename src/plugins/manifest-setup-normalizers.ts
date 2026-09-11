@@ -1,6 +1,9 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import {
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+} from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import {
   normalizeCommandDescriptorName,
@@ -355,6 +358,23 @@ export function normalizeManifestControlUi(
   return ok({ entry, ...(styles.length > 0 ? { styles } : {}) });
 }
 
+function normalizeProviderChannelLogin(
+  value: unknown,
+): PluginManifestProviderAuthChoice["channelLogin"] | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "aliases")) {
+    return undefined;
+  }
+  if (
+    value.aliases !== undefined &&
+    (!Array.isArray(value.aliases) ||
+      value.aliases.some((alias) => typeof alias !== "string" || !alias.trim()))
+  ) {
+    return undefined;
+  }
+  const aliases = normalizeUniqueTrimmedStringList(value.aliases);
+  return aliases.length > 0 ? { aliases } : {};
+}
+
 export function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -404,6 +424,7 @@ export function normalizeProviderAuthChoices(
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
     );
     const appGuidedDiscovery = entry.appGuidedDiscovery === true;
+    const channelLogin = normalizeProviderChannelLogin(entry.channelLogin);
     normalized.push({
       provider,
       method,
@@ -428,6 +449,8 @@ export function normalizeProviderAuthChoices(
       ...(entry.personalAccount === true ? { personalAccount: true } : {}),
       ...(appGuidedActionLabel ? { appGuidedActionLabel } : {}),
       ...(appGuidedAuth ? { appGuidedAuth } : {}),
+      ...(entry.credentialOnly === true ? { credentialOnly: true } : {}),
+      ...(channelLogin ? { channelLogin } : {}),
       ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
     });
   }

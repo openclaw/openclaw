@@ -15,6 +15,9 @@ import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-en
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
+// Materializing checkout objects gets extra time without extending other Git commands or setup.
+export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
+
 type WorktreeListEntry = {
   path: string;
   lockedReason?: string;
@@ -72,6 +75,7 @@ export async function runGit(
   options: {
     env?: NodeJS.ProcessEnv;
     input?: string | Uint8Array;
+    maxOutputBytes?: number;
     timeoutMs?: number;
     signal?: AbortSignal;
   } = {},

@@ -110,10 +110,13 @@ restart_registry_pid=""
 restart_runtime_evidence=""
 restart_fixture_package=""
 restart_inference=""
+survival_assert_stage="survival"
 baseline_spec=""
 baseline_version=""
+baseline_plugin_version=""
 baseline_version_expected="0"
 candidate_version=""
+candidate_contract=""
 candidate_tarball=""
 restart_fixture_version=""
 restart_fixture_evidence=""
@@ -692,11 +695,20 @@ configure_plugin_registry() {
     if [ "$stage" = "baseline" ]; then
       mkdir -p "$fixture_root/baseline"
       # A moving selector preserves ordinary plugin updates; an exact spec is a pin.
+      # Numeric core corrections retain the base release's plugin cohort, as
+      # declared by release-version.ts and the shipped correction manifests.
+      baseline_plugin_version="$(node --input-type=module - "$baseline_version" <<'NODE'
+import { parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+const release = parseReleaseVersion(process.argv[2]);
+if (!release) throw new Error("Invalid baseline release version");
+process.stdout.write(release.correctionNumber === undefined ? release.version : release.baseVersion);
+NODE
+      )"
       local baseline_tarball
-      baseline_tarball="$(npm pack "@openclaw/discord@$baseline_version" \
+      baseline_tarball="$(npm pack "@openclaw/discord@$baseline_plugin_version" \
         --registry=https://registry.npmjs.org --pack-destination "$fixture_root/baseline" --silent)"
-      registry_args+=("@openclaw/discord" "$baseline_version" "$fixture_root/baseline/$baseline_tarball")
-      registry_dist_tags="latest=$baseline_version,beta=$baseline_version"
+      registry_args+=("@openclaw/discord" "$baseline_plugin_version" "$fixture_root/baseline/$baseline_tarball")
+      registry_dist_tags="latest=$baseline_plugin_version,beta=$baseline_plugin_version"
     else
       registry_dist_tags="latest=$candidate_version,beta=$candidate_version"
     fi
@@ -940,7 +952,7 @@ apply_baseline_config_recipe() {
 install_companion_plugins() {
   openclaw_e2e_fixture_plugin_command openclaw -- \
     plugins install "@openclaw/discord@latest"
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-baseline-plugin "$baseline_version"
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-baseline-plugin "$baseline_plugin_version"
 }
 
 seed_legacy_operator_gateway() {
@@ -990,7 +1002,7 @@ assert.deepEqual(result.steps, [], "second update executed package mutations");
 assert(!result.nextAction, "second update requested repair");
 console.log("Second update: already-current, no package mutations or repair required.");
 NODE
-  assert_survival
+  assert_survival || return "$?"
   check_gateway_probes
 }
 
@@ -1225,11 +1237,11 @@ prepare_update_restart_probe() {
 
 assert_baseline_state() {
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals || return "$?"
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config || return "$?"
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state || return "$?"
 }
 
 resolve_candidate_version() {
@@ -1237,17 +1249,28 @@ resolve_candidate_version() {
     echo "missing OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC" >&2
     return 1
   fi
+  candidate_contract=""
   case "$CANDIDATE_KIND" in
     tarball)
-      candidate_version="$(
+      candidate_contract="$(
         node -e '
+          const assert = require("node:assert/strict");
           const { execFileSync } = require("node:child_process");
           const packageJson = execFileSync("tar", ["-xOf", process.argv[1], "package/package.json"], {
             encoding: "utf8",
           });
-          process.stdout.write(JSON.parse(packageJson).version);
-        ' "$CANDIDATE_SPEC"
-      )"
+          const manifest = JSON.parse(packageJson);
+          assert(typeof manifest.version === "string" && manifest.version.length > 0, "candidate package version is missing");
+          const contract = { version: manifest.version };
+          if (process.argv[2] === "2026.9.2" && manifest.version === "2026.9.3") {
+            const stateVersion = manifest.openclaw?.schemaVersions?.state;
+            assert(Number.isSafeInteger(stateVersion) && stateVersion >= 0, "invalid candidate state schema version");
+            contract.stateSchemaVersion = stateVersion;
+          }
+          process.stdout.write(JSON.stringify(contract));
+        ' "$CANDIDATE_SPEC" "$baseline_version"
+      )" || return "$?"
+      candidate_version="$(node -p 'JSON.parse(process.argv[1]).version' "$candidate_contract")" || return "$?"
       ;;
     npm)
       candidate_version="$(npm view "$CANDIDATE_SPEC" version --silent)"
@@ -1537,7 +1560,7 @@ fs.writeFileSync(process.env.EVIDENCE_PATH, `${JSON.stringify(evidence, null, 2)
 });
 fs.chmodSync(process.env.EVIDENCE_PATH, 0o600);
 NODE
-  assert_survival
+  assert_survival || return "$?"
 }
 
 assert_root_managed_vps_cli_usable() {
@@ -1637,7 +1660,12 @@ repair_update_restart_auth() {
     phase recovery-update-restart update_candidate 1 "file:$restart_fixture_package" "$restart_fixture_version"
     local recovery_status=$?
     [ "$recovery_status" -eq 0 ] || return "$recovery_status"
-    assert_survival
+    if [ "$SCENARIO" != "watchos-direct-node" ] && [ "$SCENARIO" != "mobile-pairing-reconnect" ]; then
+      phase assert-restart-serving-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+        assert-restart-serving-turn "$ARTIFACT_ROOT/restart-serving-turn.json" || return "$?"
+      survival_assert_stage="post-inference"
+    fi
+    assert_survival || return "$?"
     if [ "$update_repair_required" = "1" ]; then
       node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
         assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
@@ -1656,10 +1684,10 @@ repair_fixture_plugin_consent() {
       openclaw_e2e_print_log "$REPAIR_JSON" >&2
       return 1
     fi
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON"
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON" || return "$?"
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
-    assert_survival
+      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version" || return "$?"
+    assert_survival || return "$?"
   fi
   repair_update_restart_auth || return "$?"
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
@@ -1682,7 +1710,8 @@ assert_volume_idempotence() {
     echo "SQLite volume idempotence exceeded budget: ${idempotence_seconds}s > ${budget}s" >&2
     return 1
   fi
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$survival_assert_stage" \
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 }
 
 validate_post_doctor_config() {
@@ -1694,12 +1723,26 @@ validate_post_doctor_config() {
 }
 
 assert_survival() {
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
-  installed_version="$(read_installed_version)"
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals || return "$?"
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config || return "$?"
+  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$survival_assert_stage" \
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state || return "$?"
+  installed_version="$(read_installed_version)" || return "$?"
   if [ "$baseline_version" = "2026.9.2" ] && [ "$candidate_version" = "2026.9.3" ]; then
-    node scripts/e2e/lib/external-package-transition.mjs schema 16 \
+    local expected_state_schema
+    if [ "$CANDIDATE_KIND" = "tarball" ]; then
+      expected_state_schema="$(node --input-type=module - "$candidate_contract" "$candidate_version" <<'NODE'
+import assert from "node:assert/strict";
+const contract = JSON.parse(process.argv[2]);
+assert.equal(contract.version, process.argv[3], "schema contract belongs to another candidate");
+process.stdout.write(String(contract.stateSchemaVersion));
+NODE
+)" || return "$?"
+    else
+      # Published openclaw@2026.9.3 declares state schema 16.
+      expected_state_schema=16
+    fi
+    node scripts/e2e/lib/external-package-transition.mjs schema "$expected_state_schema" \
       >"$ARTIFACT_ROOT/schema-after-update.json" || return "$?"
   fi
   local expected_version="${restart_fixture_version:-$candidate_version}"
@@ -1844,6 +1887,12 @@ phase validate-update-restart-mode validate_update_restart_mode
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
+if [ "$SCENARIO" = "abandoned-update" ]; then
+  source scripts/e2e/lib/upgrade-survivor/abandoned-update.sh
+  run_abandoned_update_survivor
+  run_completed="1"
+  exit 0
+fi
 phase apply-baseline-config-recipe apply_baseline_config_recipe
 if [ "$SCENARIO" = "watchos-direct-node" ]; then
   phase configure-watchos-tls configure_watchos_tls_fixture
@@ -1900,9 +1949,16 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
     phase prepare-baseline-update-manager install_update_restart_systemctl_shim
     phase prepare-baseline-update-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
   fi
+  # Reload is disabled: retain the serving baseline while reproducing missing-plugin config.
+  phase seed-formerly-bundled-plugin node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    seed-legacy-operator-external-plugin
 fi
 phase update-candidate update_candidate_for_install_mode
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase assert-formerly-bundled-plugin node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-npm-plugin-install duckduckgo @openclaw/duckduckgo-plugin "$candidate_version" 1
+  phase assert-formerly-bundled-plugin-config node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-legacy-operator-external-plugin "$candidate_version"
   phase assert-candidate-schemas assert_schema_outcome
 fi
 if [ "$candidate_install_mode" = "historical-package-replacement" ]; then
@@ -1969,6 +2025,8 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase legacy-operator-plugin assert_prepublish_plugin_install
   phase legacy-operator-update-noop assert_legacy_operator_update_noop
   phase legacy-operator-doctor-clean assert_legacy_operator_doctor_clean
+  phase formerly-bundled-doctor node scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs \
+    "$candidate_version"
 fi
 if [ "$SCENARIO" = "watchos-direct-node" ]; then
   phase watchos-candidate-reconnect watchos_reconnect_candidate

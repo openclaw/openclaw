@@ -7,6 +7,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
+import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
 import type {
   OAuthCredentials as SessionOAuthCredentials,
   OAuthLoginCallbacks,
@@ -94,6 +95,8 @@ import type {
 export type ProviderPlugin = {
   id: string;
   pluginId?: string;
+  /** Loader-owned dependency root, shared by lightweight and full registration. */
+  pluginRoot?: string;
   label: string;
   docsPath?: string;
   aliases?: string[];
@@ -479,6 +482,8 @@ export type ProviderPlugin = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
+  /** Whether Fast can affect this selected request; undefined retains existing unknown behavior. */
+  resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *
@@ -624,7 +629,11 @@ export type ProviderPlugin = {
    * Keep process/network I/O here; OpenClaw publishes the completed result for this generation.
    */
   prepareSyntheticAuth?: (
-    ctx: ProviderResolveSyntheticAuthContext & { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+    ctx: ProviderResolveSyntheticAuthContext & {
+      env?: NodeJS.ProcessEnv;
+      signal?: AbortSignal;
+      pluginRoot?: string;
+    },
   ) => Promise<ProviderSyntheticAuthResult | null | undefined>;
   /**
    * Provider-owned external auth profile discovery.
@@ -651,4 +660,13 @@ export type ProviderPlugin = {
     ctx: ProviderDeferSyntheticProfileAuthContext,
   ) => boolean | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
+};
+
+/** Provider runtime registered with its owning plugin and source. */
+export type PluginProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
 };

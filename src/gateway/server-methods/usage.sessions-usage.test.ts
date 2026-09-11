@@ -105,9 +105,9 @@ import {
   loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
-import { testApi, usageHandlers } from "./usage.js";
+import { usageHandlers } from "./usage.js";
 
-const TEST_RUNTIME_CONFIG = {
+let TEST_RUNTIME_CONFIG = {
   agents: {
     list: [{ id: "main", default: true }, { id: "opus" }],
   },
@@ -158,6 +158,7 @@ function mockCombinedStore(
   store: Record<string, SessionEntry>,
   owners: ReadonlyArray<readonly [string, string]>,
 ) {
+  const loadSessionEntry = (key: string) => store[key];
   vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
     durableTargets: [],
     storePath: "(multiple)",
@@ -167,6 +168,7 @@ function mockCombinedStore(
         key,
         {
           agentId,
+          modelSource: { entry: store[key], loadSessionEntry },
           storeTarget: { agentId, storePath: `/tmp/agents/${agentId}/agent/openclaw-agent.sqlite` },
         },
       ]),
@@ -213,7 +215,7 @@ async function withUsageState(
 
 describe("sessions.usage", () => {
   beforeEach(() => {
-    testApi.sessionsUsageCache.clear();
+    TEST_RUNTIME_CONFIG = { ...TEST_RUNTIME_CONFIG };
     vi.useRealTimers();
     vi.clearAllMocks();
   });

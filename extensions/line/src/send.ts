@@ -19,8 +19,9 @@ import { messageAction, normalizeLineMessage } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { recordLineSentMessages } from "./outbound-message-log.js";
+import { applyLineQuoteToken, withoutLineQuoteTokens } from "./quote-tokens.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import { runLinePushWithRetries } from "./send-retry.js";
+import { findLineHttpError, runLinePushWithRetries } from "./send-retry.js";
 import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
@@ -109,10 +110,14 @@ interface LineSendOpts {
   durationMs?: number;
   trackingId?: string;
   replyToken?: string;
+  quoteToken?: string;
 }
 
 type LineClientOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId">;
-type LinePushOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId" | "verbose">;
+type LinePushOpts = Pick<
+  LineSendOpts,
+  "cfg" | "channelAccessToken" | "accountId" | "verbose" | "quoteToken"
+>;
 
 interface LinePushBehavior {
   errorContext?: string;
@@ -208,12 +213,44 @@ function createLinePushContext(
   return { account, token, chatId };
 }
 
+type LineProviderRequest = messagingApi.PushMessageRequest | messagingApi.ReplyMessageRequest;
+type LineProviderResponse = messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse;
+
 async function sendLineProviderMessages(
   operation: "push" | "reply",
   token: string,
-  request: messagingApi.PushMessageRequest | messagingApi.ReplyMessageRequest,
+  request: LineProviderRequest,
   retryKey?: string,
-): Promise<messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse> {
+): Promise<LineProviderResponse> {
+  try {
+    return await postLineProviderMessages(operation, token, request, retryKey);
+  } catch (error) {
+    // LINE refuses the whole request for a quote token it no longer accepts and
+    // names no field in the answer, so a quoted reply would simply disappear.
+    // A 400 is LINE rejecting that request atomically, so nothing was delivered
+    // and offering the same messages without their quote cannot duplicate it.
+    const unquoted =
+      findLineHttpError(error)?.status === 400
+        ? withoutLineQuoteTokens(request.messages)
+        : undefined;
+    if (!unquoted) {
+      throw error;
+    }
+    return await postLineProviderMessages(
+      operation,
+      token,
+      { ...request, messages: unquoted },
+      retryKey,
+    );
+  }
+}
+
+async function postLineProviderMessages(
+  operation: "push" | "reply",
+  token: string,
+  request: LineProviderRequest,
+  retryKey?: string,
+): Promise<LineProviderResponse> {
   const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
     `https://api.line.me/v2/bot/message/${operation}`,
     {
@@ -246,11 +283,11 @@ async function sendLineProviderMessages(
   }
 
   try {
-    return await readProviderJsonResponse<
-      messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse
-    >(response, `LINE ${operation} response`, {
-      maxBytes: LINE_PROVIDER_RESPONSE_MAX_BYTES,
-    });
+    return await readProviderJsonResponse<LineProviderResponse>(
+      response,
+      `LINE ${operation} response`,
+      { maxBytes: LINE_PROVIDER_RESPONSE_MAX_BYTES },
+    );
   } catch (error) {
     // LINE accepted this exact request before its receipt became unreadable; retrying duplicates it.
     throw createChannelPartialDeliveryError(error, { messageIds: [], visibleReplySent: true });
@@ -361,7 +398,9 @@ async function pushLineMessages(
   }
 
   const { account, token, chatId } = createLinePushContext(to, opts);
-  const normalizedMessages = messages.map(normalizeLineMessage);
+  const normalizedMessages = applyLineQuoteToken(messages, opts.quoteToken).map(
+    normalizeLineMessage,
+  );
   // One retry key per logical push: every attempt reuses it so LINE deduplicates
   // an attempt that was accepted before its outcome reached us.
   const retryKey = randomUUID();
@@ -412,7 +451,9 @@ async function replyLineMessages(
   opts: LinePushOpts,
 ): Promise<{ messageId: string; messageIds: string[]; accountId: string }> {
   const { account, token } = resolveLineMessagingAccount(opts);
-  const normalizedMessages = messages.map(normalizeLineMessage);
+  const normalizedMessages = applyLineQuoteToken(messages, opts.quoteToken).map(
+    normalizeLineMessage,
+  );
 
   const response = await sendLineProviderMessages("reply", token, {
     replyToken,

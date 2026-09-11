@@ -43,6 +43,10 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       max-width: 320px;
       margin-block: 6px;
     }
+    /* Document menu styles cannot reach dropdown items inside this shadow root. */
+    wa-dropdown {
+      --wa-color-neutral-fill-normal: var(--bg-hover);
+    }
     .card {
       overflow: hidden;
       background: var(--card);

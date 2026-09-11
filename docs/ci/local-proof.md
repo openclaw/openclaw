@@ -111,6 +111,11 @@ Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by
 - release metadata-only version bumps run targeted version/config/root-dependency checks;
 - unknown root/config changes fail safe to all check lanes.
 
+JavaScript and TypeScript changes under `src/`, `extensions/`, `ui/`, `packages/`,
+`scripts/`, and `test/` also run the existing full unused-export audit.
+Import-only edits and deleted source or test files can orphan exports in
+unchanged files.
+
 Schema dependency selection reuses the local relative-import graph, including re-exports and deleted leaf paths still referenced by surviving source. Shared SDK channel UI-hint and secret-input schema owners, plus the workspace sensitive-URL hint owner, are explicit roots across alias boundaries. Edits to their SDK facades are also selected without traversing unrelated facade runtime dependencies. This is not universal alias or computed-import resolution.
 
 Local changed-test routing lives in `scripts/test-projects.test-support.mts` and is intentionally cheaper than `check:changed`: direct test edits run themselves, source edits prefer explicit mappings, then sibling tests and import-graph dependents. Shared group-room delivery config is one of the explicit mappings: changes to the group visible-reply config, source reply delivery mode, or the message-tool system prompt route through the core reply tests plus Discord and Slack delivery regressions so a shared default change fails before the first PR push. Use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when the change is harness-wide enough that the cheap mapped set is not a trustworthy proxy.
@@ -126,11 +131,12 @@ is not generic compute offload. `.crabbox.yaml` defaults remote proof to
 `blacksmith-testbox`. Its configured workflow hydrates provider and agent
 credentials, so untrusted contributor or fork code must use secretless fork CI
 or sanitized direct AWS Crabbox instead.
-Blacksmith Testbox proof requires Crabbox 0.48.0 or newer. That release binds
-stop and reuse to exact local claims, fences cleanup against ownership changes,
-retains failed-cleanup state for recovery, and reconciles terminal state before
-dropping local ownership. Older binaries are rejected before OpenClaw acquires
-or reuses Testbox capacity.
+The wrapper uses the bundled Crabbox plugin's binary manager. OpenClaw supports
+the current Crabbox CLI contract, starting at 0.55.0. If the selected binary is
+missing or older, the plugin installs a verified current release in its own
+managed directory before provider discovery or lease work. It leaves the original
+binary untouched. Provider readiness and broker authentication still determine
+which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
@@ -149,6 +155,32 @@ Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` from clean `main`
 alongside `--fresh-pr`; it installs pinned Node/pnpm, verifies the SHA and
 package-manager pin, isolates `HOME`, installs dependencies, then executes the
 requested test.
+When an image supplies `/opt/crabbox/toolchain-archives`, the bootstrap copies
+the matching Node, pnpm wrapper, and pnpm native archives into private temporary
+storage and verifies the copied bytes against digests in the trusted script.
+It still extracts fresh Node and Corepack installations on every invocation;
+existing executables, adjacent checksums, and completion markers are not trust
+anchors. Missing or invalid cached archives use the authenticated download path.
+A candidate cannot advance the package-manager pin; update the trusted bootstrap
+and its digest anchors when advancing the toolchain.
+
+Trusted Linux hydration uses the shared Node compatibility selector and can
+seed a job-private Corepack home from the same authenticated pnpm archives.
+These runtime archives do not replace the frozen-lockfile dependency install
+or change the dependency-store cache keys.
+
+With `install-bun: "true"`, `setup-node-env` can also reuse the original pinned
+Bun 1.4.0 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
+It authenticates a private copy before extracting a fresh job-private `bun`
+and `bunx`, then publishes their directory after the Node PATH entry.
+The baseline archive is the default; the optimized x64 archive requires AVX
+and AVX2 evidence for every visible guest CPU. Missing CPU evidence uses baseline.
+A missing matching archive or an unsupported platform keeps the pinned npm
+installation path. A present corrupt or malformed archive fails setup instead
+of falling back to an existing Bun. `install-bun: "false"` skips both paths;
+it does not remove Bun already supplied by the runner. This reuse does not
+cover ARM, musl, or the untrusted bootstrap.
+
 Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
@@ -241,12 +273,9 @@ The repo wrapper validates the selected Crabbox binary and provider before runni
 node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
 ```
 
-When using the sibling checkout, rebuild the ignored local binary before timing or proof work:
-
-```bash
-version="$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//')" \
-  && go build -C ../crabbox -trimpath -ldflags "-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}" -o bin/crabbox ./cmd/crabbox
-```
+A supported sibling or `PATH` binary can run directly. The wrapper automatically
+replaces an outdated selection with the plugin-managed binary; rebuilding the
+sibling checkout is no longer a prerequisite for proof.
 
 The `blacksmith:` block in `.crabbox.yaml` already pins the org, workflow, job, and ref defaults, so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
 

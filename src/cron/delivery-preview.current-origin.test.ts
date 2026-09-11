@@ -1,8 +1,14 @@
+import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../state/openclaw-agent-db.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
@@ -13,7 +19,7 @@ import {
   normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
-import { resolveCronDeliveryPreview } from "./delivery-preview.js";
+import { resolveCronDeliveryPreview, resolveCronDeliveryPreviews } from "./delivery-preview.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import type { CronDelivery, CronJob } from "./types.js";
@@ -48,7 +54,8 @@ async function withCurrentOrigin(
       agents: { entries: { main: { workspace: state.workspaceDir } } },
       session: { store: storePath },
     };
-    await replaceSessionEntry(
+    // Keep fixture maintenance outside the preview read counter.
+    replaceSessionEntrySync(
       { agentId: "main", sessionKey, storePath },
       {
         sessionId: "source-session",
@@ -70,6 +77,67 @@ async function withCurrentOrigin(
 }
 
 describe("current cron delivery origin", () => {
+  it("shares alias reads across a preview batch and refreshes routes on the next request", async () => {
+    await withCurrentOrigin({ channelCount: 1 }, async ({ cfg, job }) => {
+      const storePath = cfg.session!.store!;
+      for (let index = 0; index < 64; index++) {
+        replaceSessionEntrySync(
+          { agentId: "main", storePath, sessionKey: `agent:main:dashboard:other-${index}` },
+          { sessionId: `other-${index}`, updatedAt: 1 },
+        );
+      }
+      const database = getOpenClawAgentDatabaseIfOpen({ agentId: "main" })!;
+      const reads = trackSqliteStatementExecutions(database.db, ["sessions"], (sql) =>
+        sql.includes('from "session_nodes"') ? "sessions" : null,
+      );
+      const jobs = Array.from({ length: 53 }, (_, index) => ({ ...job, id: `preview-${index}` }));
+      const agentsRoot = path.dirname(path.dirname(path.dirname(storePath)));
+      // Observe the real filesystem call; the discovery owner and its results stay intact.
+      const rosterReads = vi.spyOn(fs, "readdirSync");
+      try {
+        const previews = await resolveCronDeliveryPreviews({ cfg, jobs });
+        expect(Object.keys(previews)).toEqual(jobs.map((entry) => entry.id));
+        expect(
+          Object.values(previews).every(
+            (preview) => preview.label === "announce -> current session",
+          ),
+        ).toBe(true);
+        // One store-sized read scope, independent of the number of repeated jobs.
+        expect(reads.rowCounts.sessions).toBeLessThanOrEqual(4 * 65);
+        expect(
+          rosterReads.mock.calls.filter(([directory]) => directory === agentsRoot),
+        ).toHaveLength(1);
+      } finally {
+        reads.restore();
+        rosterReads.mockRestore();
+      }
+      await replaceSessionEntry(
+        { agentId: "main", storePath, sessionKey: job.sessionKey! },
+        {
+          sessionId: "source-session",
+          updatedAt: 1,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "telegram", to: "recipient" },
+          }),
+        },
+      );
+      const refreshedRosterReads = vi.spyOn(fs, "readdirSync");
+      try {
+        const refreshed = await resolveCronDeliveryPreviews({ cfg, jobs });
+        expect(
+          Object.values(refreshed).every(
+            (preview) => preview.label === "announce -> telegram:recipient",
+          ),
+        ).toBe(true);
+        expect(
+          refreshedRosterReads.mock.calls.filter(([directory]) => directory === agentsRoot),
+        ).toHaveLength(1);
+      } finally {
+        refreshedRosterReads.mockRestore();
+      }
+    });
+  });
+
   it.each(
     ["dashboard", "webchat"].flatMap((surface) =>
       [0, 1, 2].map((channelCount) => ({ surface, channelCount })),

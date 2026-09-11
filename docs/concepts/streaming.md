@@ -8,7 +8,7 @@ title: "Streaming and chunking"
 ---
 
 OpenClaw has two independent streaming layers, and there is **no true
-token-delta streaming** to channel messages today:
+token-delta streaming** to channel messages:
 
 - **Block streaming (channels):** emit completed **blocks** as the assistant
   writes. These are normal channel messages, not token deltas.
@@ -462,8 +462,10 @@ the same policy under `streaming.progress`:
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop) - the turn lifecycle that emits these stream events
 - [Channel outbound API](/plugins/sdk-channel-outbound) - shared preview, durable send, and finalization APIs
 - [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) - message lifecycle and delivery
 - [Retry](/concepts/retry) - retry behavior on delivery failure
+- [Typing indicators](/concepts/typing-indicators) - typing state shown while a turn is in flight
 - [Channels](/channels) - per-channel streaming support

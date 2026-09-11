@@ -5,7 +5,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
 import { isActiveTaskStatus, ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
-import { cloneTaskRecord, normalizeTaskTimestamps } from "./task-registry-records.js";
+import {
+  cloneTaskRecord,
+  cloneTaskRecordForObserver,
+  normalizeTaskTimestamps,
+} from "./task-registry-records.js";
 import {
   TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
   TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY,
@@ -21,7 +25,6 @@ import {
   ensureTaskRegistryReady,
   getTasksByRunId,
   taskRegistryLog,
-  persistTaskRegistry,
   pickPreferredRunIdTask,
   readTaskRegistryRevision,
   rebuildRunIdIndex,
@@ -451,12 +454,12 @@ export function deleteTaskRecordById(taskId: string): boolean {
   emitTaskRegistryObserverEvent(() => ({
     kind: "deleted",
     taskId: current.taskId,
-    previous: cloneTaskRecord(current),
+    previous: cloneTaskRecordForObserver(current),
   }));
   return true;
 }
 
-export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
+export function resetTaskRegistryForTests() {
   getTaskRegistryProcessState().runOwners.clear();
   clearTaskRegistryMemory();
   resetTaskRegistryRestoreState();
@@ -464,11 +467,7 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   resetTaskRegistryListenerState();
   deliveryRuntimeLoader.clear();
   controlRuntimeLoader.clear();
-  if (opts?.persist !== false) {
-    persistTaskRegistry();
-  }
-  // Always close the sqlite handle so Windows temp-dir cleanup can remove the
-  // state directory even when a test intentionally skips persisting the reset.
+  // Close the default SQLite handle too, even when a custom store was configured.
   getTaskRegistryStore().close?.();
 }
 

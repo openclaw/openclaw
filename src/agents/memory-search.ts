@@ -20,6 +20,7 @@ import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-own
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveMemorySearchSourcePolicy } from "./memory-search-source-policy.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
@@ -133,30 +134,9 @@ const DEFAULT_CACHE_ENABLED = true;
 // without limit. Must stay above a typical live chunk count: a cap below the working set
 // evicts rows the next sync needs and forces paid re-embedding.
 const DEFAULT_CACHE_MAX_ENTRIES = 50_000;
-const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES = 60;
-
-function normalizeSources(
-  sources: Array<"memory" | "sessions"> | undefined,
-  sessionMemoryEnabled: boolean,
-): Array<"memory" | "sessions"> {
-  const normalized = new Set<"memory" | "sessions">();
-  const input = sources?.length ? sources : DEFAULT_SOURCES;
-  for (const source of input) {
-    if (source === "memory") {
-      normalized.add("memory");
-    }
-    if (source === "sessions" && sessionMemoryEnabled) {
-      normalized.add("sessions");
-    }
-  }
-  if (normalized.size === 0) {
-    normalized.add("memory");
-  }
-  return Array.from(normalized);
-}
 
 function getConfiguredMemoryEmbeddingProvider(providerId: string, cfg: OpenClawConfig) {
   // `none` is the built-in FTS-only sentinel, never a plugin capability.
@@ -179,17 +159,12 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
   const rememberAcrossConversations = resolveRememberAcrossConversations(cfg, agentId);
   const configuredSessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
-  const sessionMemory = rememberAcrossConversations || configuredSessionMemory;
   const configuredSources = overrides?.sources ?? defaults?.sources;
-  const searchSources = normalizeSources(
+  const { sessionMemory, searchSources, sources } = resolveMemorySearchSourcePolicy({
     configuredSources,
-    configuredSessionMemory ||
-      (rememberAcrossConversations && configuredSources?.includes("sessions") === true),
-  );
-  const sources = normalizeSources(
-    rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
-    sessionMemory,
-  );
+    rememberAcrossConversations,
+    configuredSessionMemory,
+  });
   return {
     enabled,
     rememberAcrossConversations,

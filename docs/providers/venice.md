@@ -126,15 +126,15 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
   </Accordion>
 </AccordionGroup>
 
-Grok-backed Venice models (`grok-4-3` and similar) get the same tool-schema
+Grok-backed Venice models (`grok-4-5` and similar) get the same tool-schema
 compat patch as the native xAI provider, since they share the same upstream
 tool-call format.
 
 ## Model discovery
 
-The bundled catalog above is a manifest-backed seed list. At runtime OpenClaw
-refreshes it from the Venice `/models` API and falls back to the seed list if
-the API is unreachable. The `/models` endpoint is public (no auth needed for
+The built-in catalog above is the manifest-backed seed catalog. At runtime
+OpenClaw refreshes it from the Venice `/models` API and falls back to the seed
+catalog if the API is unreachable. The `/models` endpoint is public (no auth needed for
 listing), but inference requires a valid API key.
 
 Venice may continue accepting retired model IDs as provider-owned aliases. The
@@ -168,8 +168,8 @@ OpenClaw reads live prices from Venice's public
 [`GET /api/v1/models`](https://docs.venice.ai/api-reference/endpoint/models/list)
 response during model discovery. The same plugin parser supplies the hosted
 catalog publisher. Known and newly discovered models use the API's complete
-schedule in USD per million tokens; the manifest prices are an offline seed.
-Missing or invalid live prices retain the complete seed schedule for known
+schedule in USD per million tokens; the seed catalog prices are the offline
+fallback. Missing or invalid live prices retain the complete seed catalog schedule for known
 models. Unknown models without valid pricing keep zero estimates; that does not
 mean the model is free. Explicit API zero rates are valid.
 
@@ -178,7 +178,7 @@ only when total prompt input **exceeds** `context_token_threshold`. Prompt input
 includes uncached input, cache reads, and cache writes; output tokens do not
 select the tier. A request exactly at the threshold still uses base rates.
 Base and extended rates always come from one schedule. An invalid extended
-schedule is not combined with seed or other-source prices.
+schedule is not combined with seed catalog or other-source prices.
 
 Explicit `models.providers.venice.models[].cost` entries override catalog
 estimates, including zero. Omitted `cost` or `{}` inherits the catalog schedule.
@@ -189,9 +189,9 @@ Agent-local root `models.json` prices retain highest priority.
 New onboarding in `models.mode: "merge"` leaves generated catalog rows out of the
 configuration so they cannot become price pins. Re-onboarding preserves existing
 model entries, aliases, and model selection. In `models.mode: "replace"`,
-onboarding retains explicit seed rows because that mode disables discovery.
+onboarding retains explicit seed catalog rows because that mode disables discovery.
 Existing serialized costs are never automatically removed or migrated, even if
-they match an old seed. With merge mode enabled, back up your configuration and
+they match an old seed catalog entry. With merge mode enabled, back up your configuration and
 remove only unwanted `cost` fields to resume catalog pricing; keep intentional
 overrides.
 

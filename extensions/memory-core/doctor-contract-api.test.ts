@@ -663,7 +663,7 @@ describe("memory-core doctor dreaming migration", () => {
     ).resolves.toMatchObject([{ query: "after recovery generation" }]);
   });
 
-  it("fails closed when a checkpointed host event archive changes other than by append", async () => {
+  it("warns without importing when a checkpointed host event archive changes other than by append", async () => {
     const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
     const archivedPath = `${eventPath}.migrated`;
     await fs.writeFile(
@@ -691,14 +691,47 @@ describe("memory-core doctor dreaming migration", () => {
       "utf8",
     );
 
+    const laterSource = `${JSON.stringify({
+      type: "memory.recall.recorded",
+      timestamp: "2026-07-01T00:00:00.000Z",
+      query: "later generation",
+      resultCount: 0,
+      results: [],
+    })}\n`;
+    await fs.writeFile(eventPath, laterSource);
     const result = await migration.migrateLegacyState(migrationParams());
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([expect.stringContaining("changed other than by append")]);
+    expect(result).toMatchObject({ warningDisposition: "recoverable" });
     await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toMatchObject([
       { query: "original archive row" },
     ]);
     await expect(fs.readFile(archivedPath, "utf8")).resolves.toContain("rewritten archive row");
+    await expect(fs.readFile(eventPath, "utf8")).resolves.toBe(laterSource);
+
+    const invalidWorkspace = path.join(rootDir, "invalid-workspace");
+    const invalidPath = path.join(invalidWorkspace, "memory", ".dreams", "events.jsonl");
+    await fs.mkdir(path.dirname(invalidPath), { recursive: true });
+    await fs.writeFile(invalidPath, "invalid JSON\n");
+    const mixed = await migration.migrateLegacyState(
+      migrationParams({
+        agents: {
+          list: [
+            { id: "main", workspace: workspaceDir },
+            { id: "invalid", workspace: invalidWorkspace },
+          ],
+        },
+      }),
+    );
+    expect(mixed).not.toHaveProperty("warningDisposition");
+    expect(mixed.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("changed other than by append"),
+        expect.stringContaining("Skipped malformed Memory Core host event"),
+      ]),
+    );
+    await expect(fs.readFile(invalidPath, "utf8")).resolves.toBe("invalid JSON\n");
   });
 
   it("orders and limits migrated host events by archive generation", async () => {
@@ -949,13 +982,34 @@ describe("memory-core doctor dreaming migration", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "rejects legacy host events beneath symlinked workspace parents",
-    async () => {
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "ignores symlinked memory with no legacy sources (dreams directory: %s)",
+    async (hasDreamsDirectory) => {
+      const sharedMemory = path.join(rootDir, "shared-memory");
+      await fs.mkdir(hasDreamsDirectory ? path.join(sharedMemory, ".dreams") : sharedMemory, {
+        recursive: true,
+      });
+      await fs.rm(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.symlink(sharedMemory, path.join(workspaceDir, "memory"));
+
+      await expect(hostEventsMigration().detectLegacyState(migrationParams())).resolves.toBeNull();
+      await expect(hostEventsMigration().migrateLegacyState(migrationParams())).resolves.toEqual({
+        changes: [],
+        warnings: [],
+      });
+      expect((await fs.lstat(path.join(workspaceDir, "memory"))).isSymbolicLink()).toBe(true);
+    },
+  );
+
+  it
+    .runIf(process.platform !== "win32")
+    .each(["events.jsonl", "events.jsonl.migrated", ".events.jsonl.doctor-importing"])(
+    "rejects legacy host events beneath symlinked workspace parents: %s",
+    async (fileName) => {
       const externalMemoryDir = await fs.mkdtemp(
         path.join(os.tmpdir(), "openclaw-memory-core-external-events-"),
       );
-      const externalEventPath = path.join(externalMemoryDir, ".dreams", "events.jsonl");
+      const externalEventPath = path.join(externalMemoryDir, ".dreams", fileName);
       try {
         await fs.rm(path.join(workspaceDir, "memory"), { recursive: true });
         await fs.mkdir(path.dirname(externalEventPath), { recursive: true });
@@ -979,10 +1033,12 @@ describe("memory-core doctor dreaming migration", () => {
 
         expect(result.changes).toEqual([]);
         expect(result.warnings).toEqual([
-          expect.stringContaining(path.join(workspaceDir, "memory", ".dreams", "events.jsonl")),
+          expect.stringContaining(path.join(workspaceDir, "memory", ".dreams", fileName)),
         ]);
         expect(result.warnings[0]).toContain("memory.search.extraPaths");
         expect(result.warnings[0]).toContain("regular files and directories");
+        expect(result.warnings[0]).toContain("FsSafeError: path alias escape blocked");
+        expect(result).not.toHaveProperty("warningDisposition");
         await expect(hostEventsMigration().detectLegacyState(migrationParams())).resolves.toEqual({
           preview: result.warnings.map((warning) => `- ${warning}`),
         });

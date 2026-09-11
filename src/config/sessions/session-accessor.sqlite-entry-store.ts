@@ -3,6 +3,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -23,7 +24,7 @@ import {
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
   readExactSessionEntryRow,
-  readSessionEntryRow,
+  readSessionEntryRowScan,
 } from "./session-accessor.sqlite-entry-read.js";
 import {
   clearSessionCollaborationForKey,
@@ -93,10 +94,51 @@ export function readSessionEntrySelectionSnapshot(
   sessionKey: string,
   exact: boolean,
 ): SqliteLifecycleTargetSnapshot {
-  const selected = exact
-    ? readExactSessionEntryRow(database, sessionKey)
-    : readSessionEntryRow(database, sessionKey);
-  return selected ? [{ entry: selected.entry, sessionKey: selected.row.session_key }] : [];
+  if (exact) {
+    const selected = readExactSessionEntryRow(database, sessionKey);
+    return selected
+      ? [
+          {
+            entry: selected.entry,
+            sessionKey: selected.row.session_key,
+            persistedRows: {
+              lookupKeys: [sessionKey.trim()],
+              rows: [selected.row],
+            },
+          },
+        ]
+      : [];
+  }
+  const scanned = readSessionEntryRowScan(database, sessionKey);
+  return scanned?.selected
+    ? [
+        {
+          entry: scanned.selected.entry,
+          sessionKey: scanned.selected.row.session_key,
+          persistedRows: { lookupKeys: scanned.lookupKeys, rows: scanned.rows },
+        },
+      ]
+    : [];
+}
+
+/** Reuses preparation only when every persisted column still matches; otherwise hydrate. */
+export function readUnchangedLifecycleTargetSnapshot(
+  database: OpenClawAgentDatabase,
+  prepared: SqliteLifecycleTargetSnapshot,
+): SqliteLifecycleTargetSnapshot | undefined {
+  const persisted = prepared[0]?.persistedRows;
+  if (!persisted || persisted.lookupKeys.length === 0) {
+    return undefined;
+  }
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("session_nodes")
+      .selectAll()
+      .where("session_key", "in", sqliteStringSet(persisted.lookupKeys))
+      .orderBy("session_key", "asc"),
+  ).rows;
+  return isDeepStrictEqual(rows, persisted.rows) ? prepared : undefined;
 }
 
 export function resolveLifecyclePrimaryEntry(
@@ -107,7 +149,7 @@ export function resolveLifecyclePrimaryEntry(
   const rows = target.storeKeys.flatMap((key) => {
     const sessionKey = key.trim();
     const row = readExactSessionEntryRow(database, sessionKey);
-    return row ? [{ sessionKey, entry: row.entry }] : [];
+    return row ? [{ sessionKey, entry: row.entry, rawRow: row.row }] : [];
   });
   if (rows.length > 1) {
     throw canonicalSessionKeyMigrationRequiredError(
@@ -120,7 +162,16 @@ export function resolveLifecyclePrimaryEntry(
       `non-canonical persisted row resolves to session key ${target.canonicalKey}`,
     );
   }
-  return row;
+  return row
+    ? {
+        entry: row.entry,
+        sessionKey: row.sessionKey,
+        persistedRows: {
+          lookupKeys: target.storeKeys.map((key) => key.trim()),
+          rows: [row.rawRow],
+        },
+      }
+    : undefined;
 }
 
 export function readLifecycleTargetSnapshot(
@@ -386,6 +437,8 @@ export function writeSessionEntry(
   entry: SessionEntry,
   options: {
     allowStoredAliases?: boolean;
+    /** Canonical row revalidated in this write transaction; null proves absence. */
+    canonicalPreviousEntry?: SessionEntry | null;
     consumePendingReset?: boolean;
     preserveNodeSuggestions?: boolean;
     previousEntry?: SessionEntry | null;
@@ -408,10 +461,13 @@ export function writeSessionEntry(
   }
   // Doctor validated the raw rejected row before entering the transaction and passes its
   // hydrated snapshot explicitly; re-reading it through the runtime parser must stay fail-closed.
+  // The commit owner can supply its revalidated canonical row instead of decoding it again.
   const canonicalPreviousEntry =
-    options.allowStoredAliases && options.previousEntry !== undefined
-      ? (options.previousEntry ?? undefined)
-      : readExactSessionEntryRow(database, sessionKey)?.entry;
+    options.canonicalPreviousEntry !== undefined
+      ? (options.canonicalPreviousEntry ?? undefined)
+      : options.allowStoredAliases && options.previousEntry !== undefined
+        ? (options.previousEntry ?? undefined)
+        : readExactSessionEntryRow(database, sessionKey)?.entry;
   if (canonicalPreviousEntry?.sandbox === "required") {
     if (
       normalizedEntry.sandbox !== "required" ||

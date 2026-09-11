@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   COMPUTER_STALE_OBSERVATION,
   COMPUTER_USE_V2_ACTION_NAMES,
@@ -289,6 +290,166 @@ describe("Computer Use wire contract", () => {
 });
 
 describe("Computer Use provider registration", () => {
+  it.each(["same", "different", "same-close", "different-close"] as const)(
+    "preserves queued acquisition and close order for %s",
+    async (laterOwner) => {
+      const firstId = "123e4567-e89b-42d3-a456-426614174000";
+      const nextId = "223e4567-e89b-42d3-a456-426614174000";
+      const laterId = laterOwner.startsWith("same")
+        ? nextId
+        : "323e4567-e89b-42d3-a456-426614174000";
+      const closeLater = laterOwner.endsWith("-close");
+      const commands: OpenClawPluginNodeHostCommand[] = [];
+      const firstClose = createDeferredCore();
+      const nextClose = createDeferredCore();
+      const close = vi
+        .fn(async () => {})
+        .mockImplementationOnce(() => firstClose.promise)
+        .mockImplementationOnce(() => nextClose.promise);
+      const openExecution = vi.fn(async () => ({
+        snapshot: async () => "snapshot",
+        act: async () => "act",
+        close,
+      }));
+      registerComputerUseProvider(
+        { registerNodeHostCommand: (command) => commands.push(command) },
+        {
+          id: "fixture",
+          label: "Fixture",
+          capabilities: () => ({
+            contractVersion: 2,
+            provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+            actions: ["screenshot"],
+            targets: ["screen"],
+            deliveryModes: ["foreground"],
+            observations: ["image"],
+            features: { recording: false, agentCursor: false, multiDisplay: false },
+          }),
+          isAvailable: () => true,
+          openExecution,
+        },
+      );
+      const snapshot = commands[0]!;
+      const computer = commands[1]!;
+      await snapshot.handle(JSON.stringify({ executionId: firstId }));
+      const retiringFirst = computer.handle(
+        JSON.stringify({ executionId: firstId, action: "__close_execution" }),
+      );
+      const openingNext = snapshot.handle(JSON.stringify({ executionId: nextId }));
+      const retiringNext = computer.handle(
+        JSON.stringify({ executionId: nextId, action: "__close_execution" }),
+      );
+      const laterSnapshot = snapshot.handle(JSON.stringify({ executionId: laterId }));
+      const retiringLater = closeLater
+        ? computer.handle(JSON.stringify({ executionId: laterId, action: "__close_execution" }))
+        : undefined;
+      const laterSettled = vi.fn();
+      const observedLater = laterSnapshot.then(laterSettled, laterSettled);
+      const laterCloseSettled = vi.fn();
+      const observedLaterClose = retiringLater?.then(laterCloseSettled, laterCloseSettled);
+      const operations = Promise.allSettled([
+        retiringFirst,
+        openingNext,
+        retiringNext,
+        laterSnapshot,
+        ...(retiringLater ? [retiringLater] : []),
+      ]);
+      try {
+        firstClose.resolve();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(openExecution).toHaveBeenCalledTimes(2);
+        expect(close).toHaveBeenCalledTimes(2);
+        expect(laterSettled).not.toHaveBeenCalled();
+        expect(laterCloseSettled).not.toHaveBeenCalled();
+        nextClose.resolve();
+        expect(await operations).toEqual([
+          { status: "fulfilled", value: '{"ok":true}' },
+          { status: "fulfilled", value: "snapshot" },
+          { status: "fulfilled", value: '{"ok":true}' },
+          { status: "fulfilled", value: "snapshot" },
+          ...(closeLater ? [{ status: "fulfilled", value: '{"ok":true}' }] : []),
+        ]);
+        expect(openExecution).toHaveBeenCalledTimes(3);
+        expect(close).toHaveBeenCalledTimes(closeLater ? 3 : 2);
+      } finally {
+        firstClose.resolve();
+        nextClose.resolve();
+        await operations;
+        await observedLater;
+        await observedLaterClose;
+        await snapshot.onDisconnect?.();
+      }
+    },
+  );
+
+  it("retains terminal close failure without confusing it with failed-open recovery", async () => {
+    const executionId = "123e4567-e89b-42d3-a456-426614174000";
+    const otherId = "223e4567-e89b-42d3-a456-426614174000";
+    const commands: OpenClawPluginNodeHostCommand[] = [];
+    const openFailure = new Error("native driver startup failed");
+    const closeFailure = new Error("native driver shutdown failed");
+    const failedOpening =
+      createDeferredCore<Awaited<ReturnType<ComputerUseProvider["openExecution"]>>>();
+    const physicalClose = vi.fn(async () => {
+      throw closeFailure;
+    });
+    let terminalClose: Promise<void> | undefined;
+    const close = vi.fn(() => (terminalClose ??= physicalClose()));
+    const openExecution = vi
+      .fn<ComputerUseProvider["openExecution"]>(async () => ({
+        snapshot: async () => "snapshot",
+        act: async () => "act",
+        close,
+      }))
+      .mockImplementationOnce(() => failedOpening.promise);
+    registerComputerUseProvider(
+      { registerNodeHostCommand: (command) => commands.push(command) },
+      {
+        id: "fixture",
+        label: "Fixture",
+        capabilities: () => ({
+          contractVersion: 2,
+          provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+          actions: ["screenshot"],
+          targets: ["screen"],
+          deliveryModes: ["foreground"],
+          observations: ["image"],
+          features: { recording: false, agentCursor: false, multiDisplay: false },
+        }),
+        isAvailable: () => true,
+        openExecution,
+      },
+    );
+    const snapshot = commands[0]!;
+    const computer = commands[1]!;
+    const params = JSON.stringify({ executionId });
+    const closeParams = JSON.stringify({ executionId, action: "__close_execution" });
+    const opening = snapshot.handle(params);
+    const closingFailedOpen = computer.handle(closeParams);
+    const failedOpenResults = Promise.allSettled([opening, closingFailedOpen]);
+    failedOpening.reject(openFailure);
+    expect(await failedOpenResults).toEqual([
+      { status: "rejected", reason: openFailure },
+      { status: "rejected", reason: openFailure },
+    ]);
+    await expect(snapshot.handle(params)).resolves.toBe("snapshot");
+    await expect(computer.handle(closeParams)).rejects.toBe(closeFailure);
+    await expect(
+      computer.handle(JSON.stringify({ executionId: otherId, action: "__close_execution" })),
+    ).resolves.toBe('{"ok":true}');
+    expect(close).toHaveBeenCalledOnce();
+
+    await expect(computer.handle(closeParams)).rejects.toBe(closeFailure);
+    await expect(snapshot.handle(JSON.stringify({ executionId: otherId }))).rejects.toBe(
+      closeFailure,
+    );
+    expect(openExecution).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(physicalClose).toHaveBeenCalledOnce();
+  });
+
   it("registers one command pair and dispatches both through one execution", async () => {
     const executionId = "123e4567-e89b-42d3-a456-426614174000";
     const commands: OpenClawPluginNodeHostCommand[] = [];

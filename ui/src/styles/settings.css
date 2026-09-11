@@ -13,6 +13,28 @@
  * ui/src/components/settings-ui.ts rather than hand-rolled markup.
  */
 
+.settings-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+}
+
+.settings-summary__tile {
+  padding: var(--space-3) var(--space-4);
+}
+
+.settings-summary dt {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-summary dd {
+  margin: var(--space-2) 0 0;
+  font-size: var(--control-ui-text-lg);
+  font-weight: 600;
+}
+
 /* ── Workspace shell (shared by every settings takeover page) ── */
 
 .settings-workspace {
@@ -540,11 +562,13 @@ wa-switch.settings-toggle {
    shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation {
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input-with-hint {
   width: 340px;
 }
 
-.settings-phone-presentation {
+.settings-phone-presentation,
+.settings-input-with-hint {
   display: inline-flex;
   flex-direction: column;
   gap: 4px;
@@ -552,7 +576,8 @@ wa-switch.settings-toggle {
 }
 
 .settings-phone-presentation > .settings-input,
-.settings-phone-presentation > .settings-secret {
+.settings-phone-presentation > .settings-secret,
+.settings-input-with-hint > .settings-secret {
   width: 100%;
 }
 
@@ -959,6 +984,7 @@ textarea.settings-input {
         .settings-select,
         .settings-secret,
         .settings-phone-presentation,
+        .settings-input-with-hint,
         .settings-segmented
       ) {
       width: 100%;

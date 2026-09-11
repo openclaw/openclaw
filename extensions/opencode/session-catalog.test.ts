@@ -848,6 +848,7 @@ describe("OpenCode session catalog", () => {
       kind: "node",
       nodeId: "node-1",
       command: OPENCODE_TERMINAL_RESUME_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ threadId: "ses_remote" }),
       cwd: "/remote/workspace",
       title: "opencode --session ses_remote…",

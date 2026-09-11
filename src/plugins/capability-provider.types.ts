@@ -52,9 +52,19 @@ export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 export type WorkerMachineOption = Readonly<{
   id: string;
   label: string;
+  os?: string;
   cpu?: number;
   memoryGb?: number;
   default?: boolean;
+}>;
+
+/** Provider-owned operating system choices for one configured worker profile. */
+export type WorkerOperatingSystem = Readonly<{
+  id: string;
+  label: string;
+  default?: boolean;
+  /** Why this advertised target cannot currently be selected, including a repair hint. */
+  disabledReason?: string;
 }>;
 
 /** SSH endpoint material returned by a worker provider after provisioning. */
@@ -226,6 +236,7 @@ export type WorkerProvider = {
   id: string;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
+  listOperatingSystems?: (profile: WorkerProfile) => Promise<readonly WorkerOperatingSystem[]>;
   /** Omission advertises no placement support; multiple modes use their canonical order. */
   supportedExecutionModes?:
     | readonly [WorkerExecutionMode]
@@ -238,7 +249,24 @@ export type WorkerProvider = {
   /** Provider allocates a node host through the environment-owned enrollment callback. */
   requiresNodeEnrollment?: boolean;
   /** Prepare a pristine project before enrollment so it can be included in a reusable image. */
-  supportsProjectPreparation?: (profile: WorkerProfile, machineClass?: string) => boolean;
+  supportsProjectPreparation?: (
+    profile: WorkerProfile,
+    machineClass?: string,
+    os?: string,
+  ) => boolean;
+  /** Immutable target resolved before project preparation or allocation. */
+  resolvePreparationTarget?: (
+    profile: WorkerProfile,
+    machineClass?: string,
+    os?: string,
+  ) => { machineClass: string; platform: string; arch?: string } | undefined;
+  /** Maximum unused ready-worker lifetime, measured from the original session demand. */
+  resolvePreparedIdleTimeoutMs?: (profile: WorkerProfile) => number | undefined;
+  /** Record successful demand in metadata only; must not allocate, capture, or renew reserves. */
+  notePreparedDemand?: (
+    lease: { leaseId: string; profile: WorkerProfile },
+    demand: { preparationKey: string; demandAtMs: number },
+  ) => Promise<void>;
   /**
    * Resolve the exact cleanup handle for this operation, even if no machine was created.
    * Must not provision, start, renew, run setup, enroll, or wait for transport readiness.
@@ -256,23 +284,57 @@ export type WorkerProvider = {
     profile: WorkerProfile,
     operationId: string,
     options?: {
+      /** Configured profile id for display; settings and operation id own allocation identity. */
+      profileId?: string;
       /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
       signal?: AbortSignal;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
+      os?: string;
       nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
       prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
       project?: {
         key: string;
         baseCommit: string;
+        label?: string;
+        /** Gateway-local checkout root for display and explicit rebuild requests. */
+        root?: string;
+        preparation?: {
+          key: string;
+          cacheKey: string;
+          purpose: "session" | "reserve";
+          demandAtMs: number;
+        };
         signal: AbortSignal;
         assertCurrent: () => void;
+        /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
+        inspectPreparedWorkspace?: (transport: {
+          runScript: (script: string, signal: AbortSignal) => Promise<string>;
+        }) => Promise<void>;
         /** Bound to this provision attempt; retained callbacks reject after it closes. */
         prepare: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
+          /** Render using this provider command's remaining budget before repository code runs. */
+          runScriptWithBudget?: (
+            createScript: (timeoutMs: number) => string,
+            signal: AbortSignal,
+          ) => Promise<string>;
           upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
-        }) => Promise<{ seedKey: string; cacheHit: boolean }>;
+        }) => Promise<{
+          seedKey: string;
+          cacheHit: boolean;
+          /** New completed setup must enter the reusable image before enrollment. */
+          captureRequired?: true;
+          preparedWorkspace?: {
+            preparationKey: string;
+            cacheKey: string;
+            workspaceDir: string;
+            homeDir: string;
+            sourceManifestRef: string;
+            preparedManifestRef: string;
+          };
+        }>;
       };
     },
   ) => Promise<WorkerLease>;

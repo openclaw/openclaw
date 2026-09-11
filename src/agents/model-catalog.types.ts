@@ -57,6 +57,8 @@ export type ModelCatalogSnapshot = {
   routeVariants: ModelCatalogEntry[];
   /** Provider-owned outcome of each live catalog request in this generation. */
   providerOutcomes?: readonly ProviderCatalogOutcome[];
+  /** The current acquisition failed while this published inventory remained available. */
+  refreshFailed?: boolean;
   /** Static provider-hook rows captured alongside the full lifecycle generation. */
   staticEntries?: ModelCatalogEntry[];
   /**

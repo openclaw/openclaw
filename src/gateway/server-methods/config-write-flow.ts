@@ -24,7 +24,6 @@ import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/
 import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
 import { resolveGatewayAuth } from "../auth.js";
-import { invalidateConfigGetResponseCache } from "../config-get-response.js";
 import { buildGatewayReloadPlan, isNoopGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
@@ -251,7 +250,7 @@ export async function commitGatewayConfigWrite(params: {
     : undefined;
   holdGatewayPolicyResponse(params.respond);
   const result = await replaceConfigFile({
-    nextConfig: params.nextConfig,
+    sourceConfig: params.nextConfig,
     // The early RPC hash check is only advisory until this lock-time CAS. Without
     // it, concurrent writers can both succeed and overwrite each other's config.
     baseHash: resolveConfigSnapshotHash(params.snapshot) ?? undefined,
@@ -268,9 +267,6 @@ export async function commitGatewayConfigWrite(params: {
     ),
     afterWrite: { mode: "auto" },
   });
-  // Watcher acceptance is debounced; clear now so the writer's immediate
-  // follow-up config.get observes the committed bytes before that hook runs.
-  invalidateConfigGetResponseCache();
   return {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,

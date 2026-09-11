@@ -60,6 +60,7 @@ import {
 } from "./attempt-llm-boundary.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import {
+  mergeOrphanedTrailingUserPrompt,
   resolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
 } from "./attempt-prompt-helpers.js";
@@ -152,6 +153,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     modelProviderId: attempt.model.provider,
     modelId: attempt.model.id,
     trigger: attempt.trigger,
+    inputProvenance: attempt.inputProvenance,
     ...buildAgentHookContextChannelFields(attempt),
     ...buildAgentHookContextIdentityFields({
       trigger: attempt.trigger,
@@ -260,13 +262,12 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 
   const leafEntry = input.orphanRepair?.messageEntry;
   if (leafEntry && input.orphanRepair) {
-    const messageMergeStrategy = input.orphanRepair.strategy;
-    const orphanPromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
+    const orphanPromptMerge = mergeOrphanedTrailingUserPrompt({
       prompt: effectivePrompt,
       trigger: attempt.trigger,
       leafMessage: leafEntry.message,
     });
-    const transcriptPromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
+    const transcriptPromptMerge = mergeOrphanedTrailingUserPrompt({
       prompt: effectiveTranscriptPrompt,
       trigger: attempt.trigger,
       leafMessage: leafEntry.message,

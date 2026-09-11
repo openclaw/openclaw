@@ -1,5 +1,6 @@
 /** Tests BTW side-question execution, session context, auth, and harness routing. */
 
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,8 @@ import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import {
@@ -16,6 +19,8 @@ import {
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -57,6 +62,7 @@ const migrateSessionEntriesMock = vi.fn();
 const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
 const loadPreparedModelRuntimeSnapshotMock = vi.fn();
+let acquireSnapshotResources: (() => { release: () => void }) | undefined;
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
 const getModelRegistryRuntimeMock = vi.fn();
@@ -144,9 +150,8 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
   getModelRegistryRuntime: (...args: unknown[]) => getModelRegistryRuntimeMock(...args),
 }));
 
-vi.mock("./prepared-model-runtime.js", () => ({
-  preparedModelRuntimeConfigsMatch: (left: unknown, right: unknown) => left === right,
-  loadPreparedModelRuntimeSnapshot: async (params: {
+vi.mock("./prepared-model-runtime.js", () => {
+  const loadSnapshot = async (params: {
     agentId?: string;
     agentDir: string;
     config: unknown;
@@ -179,8 +184,16 @@ vi.mock("./prepared-model-runtime.js", () => ({
       inlineProviderModels: [],
       createStores: () => ({ authStorage, modelRegistry }),
     };
-  },
-}));
+  };
+  return {
+    preparedModelRuntimeConfigsMatch: (left: unknown, right: unknown) => left === right,
+    loadPreparedModelRuntimeSnapshot: loadSnapshot,
+    acquirePublishedPreparedModelRuntime: async (params: Parameters<typeof loadSnapshot>[0]) => {
+      const snapshot = await loadSnapshot(params);
+      return { snapshot, release: acquireSnapshotResources?.().release ?? (() => {}) };
+    },
+  };
+});
 
 vi.mock("./model-discovery-context.js", () => ({
   resolveModelPluginMetadataSnapshot: () => undefined,
@@ -719,6 +732,7 @@ describe("runBtwSideQuestion", () => {
     buildSessionContextMock.mockReset();
     ensureOpenClawModelsJsonMock.mockReset();
     loadPreparedModelRuntimeSnapshotMock.mockReset();
+    acquireSnapshotResources = undefined;
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
     getModelRegistryRuntimeMock.mockReset();
@@ -1033,6 +1047,121 @@ describe("runBtwSideQuestion", () => {
     );
   });
 
+  it.each(["harness cleanup", "harness error", "stream output and transport"] as const)(
+    "keeps the source database through %s after its publication retires",
+    async (mode) => {
+      const file = state.path(`btw-${mode.replaceAll(" ", "-")}.sqlite`);
+      const database = new DatabaseSync(file);
+      database.exec("CREATE TABLE answer (value INTEGER); INSERT INTO answer VALUES (42)");
+      const source = new PluginRegistryInspectionResources();
+      source.attach(createEmptyPluginRegistry());
+      let disposals = 0;
+      source.runRegistration("btw-fixture", () =>
+        source.register("btw-fixture", {
+          id: "database",
+          dispose: () => {
+            disposals++;
+            database.close();
+          },
+        }),
+      );
+      acquireSnapshotResources = () => {
+        const claim = source.retain();
+        return {
+          release: () => {
+            void claim.release();
+          },
+        };
+      };
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const tailEntered = createDeferredCore();
+      const finishTail = createDeferredCore();
+      const owner = new AsyncWorkScope();
+      let operation: Promise<unknown> | undefined;
+      let tailValue: unknown;
+      try {
+        if (mode !== "stream output and transport") {
+          const runHarness = registerCodexSideQuestionHarness();
+          runHarness.mockImplementationOnce(async () => {
+            try {
+              entered.resolve();
+              await finish.promise;
+              if (mode === "harness error") {
+                throw new Error("side question failed");
+              }
+              return { text: String(database.prepare("SELECT value FROM answer").get()?.value) };
+            } finally {
+              tailEntered.resolve();
+              await finishTail.promise;
+              tailValue = database.prepare("SELECT value FROM answer").get()?.value;
+            }
+          });
+          operation = owner.track(() => runSideQuestion());
+        } else {
+          streamSimpleMock.mockImplementationOnce(() => {
+            void trackAsyncWork(async () => {
+              tailEntered.resolve();
+              await finishTail.promise;
+              tailValue = database.prepare("SELECT value FROM answer").get()?.value;
+            });
+            return makeAsyncEvents([{ type: "text_start" }, createDoneEvent("The answer is 42.")]);
+          });
+          operation = owner.track(() =>
+            runSideQuestion({
+              opts: {
+                onAssistantMessageStart: async () => {
+                  entered.resolve();
+                  await finish.promise;
+                  expect(database.prepare("SELECT value FROM answer").get()?.value).toBe(42);
+                },
+              },
+            }),
+          );
+        }
+        const outcome = operation.catch((error: unknown) => error);
+        await Promise.race([
+          entered.promise,
+          operation.then(() => {
+            throw new Error("Side question completed before its controlled operation");
+          }),
+        ]);
+        await source.release();
+        expect(database.isOpen).toBe(true);
+        expect(disposals).toBe(0);
+        finish.resolve();
+        await tailEntered.promise;
+        if (mode === "stream output and transport") {
+          expect(await outcome).toEqual({ text: "The answer is 42." });
+        }
+        expect(database.isOpen).toBe(true);
+        finishTail.resolve();
+        if (mode === "harness cleanup") {
+          expect(await outcome).toEqual({ text: "42" });
+        } else if (mode === "harness error") {
+          expect(await outcome).toEqual(new Error("side question failed"));
+        }
+        await owner.drain();
+        expect(tailValue).toBe(42);
+        await expect.poll(() => disposals).toBe(1);
+        expect(database.isOpen).toBe(false);
+        const reopened = new DatabaseSync(file, { readOnly: true });
+        try {
+          expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);
+        } finally {
+          reopened.close();
+        }
+      } finally {
+        finish.resolve();
+        finishTail.resolve();
+        await Promise.allSettled([operation, owner.drain(), source.release()]);
+        if (database.isOpen) {
+          database.close();
+        }
+      }
+    },
+  );
+
   it("keeps model, runtime auth, and stream selection on prepared A after current advances to B", async () => {
     const cfg = { agents: { entries: { main: { default: true } } } } as never;
     const generationA = createModelGenerationFixture({
@@ -1265,14 +1394,37 @@ describe("runBtwSideQuestion", () => {
     );
   });
 
-  it.each([false, true])(
-    "exposes side-question usage with diagnostics enabled: %s",
-    async (enabled) => {
-      const usage = { input: 13, output: 9, cacheRead: 7, cacheWrite: 3, total: 32 };
-      const harness = registerCodexSideQuestionHarness();
-      harness.mockResolvedValue({ text: "Codex side answer.", usage });
-      const runId = `btw-usage-reply-${enabled}`;
-      const authorityRunId = `btw-usage-authority-${enabled}`;
+  it.each(
+    ["harness", "direct", "direct-block"].flatMap((mode) =>
+      [false, true, undefined].map((enabled) => ({ mode, enabled })),
+    ),
+  )(
+    "exposes $mode side-question usage with diagnostics enabled: $enabled",
+    async ({ mode, enabled }) => {
+      const tokens = { input: 13, output: 9, cacheRead: 7, cacheWrite: 3 };
+      const usage = { ...tokens, total: 41 };
+      const cost = { input: 0.1, output: 0.1, cacheRead: 0.03, cacheWrite: 0.02, total: 0.25 };
+      const text = "Side answer.";
+      const onBlockReply = vi.fn().mockResolvedValue(undefined);
+      if (mode === "harness") {
+        registerCodexSideQuestionHarness().mockResolvedValue({ text, usage: { ...usage, cost } });
+      } else {
+        const done = createDoneEvent(text);
+        done.message.usage = { ...tokens, totalTokens: 41, cost };
+        streamSimpleMock.mockReturnValue(
+          makeAsyncEvents([
+            ...(mode === "direct-block"
+              ? [
+                  { type: "text_delta", delta: text },
+                  { type: "text_end", content: text, contentIndex: 0 },
+                ]
+              : []),
+            done,
+          ]),
+        );
+      }
+      const runId = `btw-usage-reply-${mode}-${enabled}`;
+      const authorityRunId = `btw-usage-authority-${mode}-${enabled}`;
       const sessionEntry = createSessionEntry({ inputTokens: 200, cacheRead: 100 });
       const originalEntry = structuredClone(sessionEntry);
       const diagnostics: unknown[] = [];
@@ -1287,22 +1439,43 @@ describe("runBtwSideQuestion", () => {
             cfg: { diagnostics: { enabled } },
             sessionEntry,
             authorityRunId,
-            opts: { runId },
+            ...(mode === "direct-block"
+              ? {
+                  blockReplyChunking: {
+                    minChars: 1,
+                    maxChars: 200,
+                    breakPreference: "paragraph" as const,
+                  },
+                  resolvedBlockStreamingBreak: "text_end" as const,
+                }
+              : {}),
+            opts: { runId, onBlockReply },
           }),
-        ).resolves.toEqual({ text: "Codex side answer." });
-        expect(consumeReplyUsageState(runId)).toMatchObject({ usage, sessionId: "session-1" });
+        ).resolves.toEqual(mode === "direct-block" ? undefined : { text });
+        if (mode === "direct-block") {
+          expect(onBlockReply).toHaveBeenCalledExactlyOnceWith({
+            text,
+            btw: { question: DEFAULT_QUESTION },
+          });
+        }
+        expect.soft(consumeReplyUsageState(runId)).toMatchObject({
+          usage,
+          sessionId: "session-1",
+          turnUsd: 0.25,
+        });
         expect(consumeReplyUsageState(authorityRunId)).toBeUndefined();
         expect(sessionEntry).toEqual(originalEntry);
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
-        expect(diagnostics).toEqual(
-          enabled
+        expect.soft(diagnostics).toEqual(
+          enabled !== false
             ? [
                 expect.objectContaining({
                   type: "model.usage",
                   sessionId: "session-1",
                   usage: { ...usage, promptTokens: 23 },
+                  costUsd: 0.25,
                 }),
               ]
             : [],
@@ -1876,31 +2049,39 @@ describe("runBtwSideQuestion", () => {
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
-  it("preserves the explicit no-timeout override for CLI-runtime BTW", async () => {
-    mockCliOutput({ text: "CLI side answer." });
+  it.each([
+    { options: { timeoutOverrideSeconds: 0 }, expected: MAX_TIMER_TIMEOUT_MS },
+    { options: { timeoutOverrideMs: 0 }, expected: MAX_TIMER_TIMEOUT_MS },
+    { options: { timeoutOverrideMs: 1500 }, expected: 1500 },
+    { options: { timeoutOverrideSeconds: 1800, timeoutOverrideMs: 1500 }, expected: 1500 },
+  ])(
+    "preserves the timeout override $options for CLI-runtime BTW",
+    async ({ options, expected }) => {
+      mockCliOutput({ text: "CLI side answer." });
 
-    await runSideQuestion({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+      await runSideQuestion({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+              },
             },
           },
-        },
-      } as never,
-      model: "claude-opus-4-7",
-      opts: { timeoutOverrideSeconds: 0 },
-      sessionKey: DEFAULT_SESSION_KEY,
-    });
+        } as never,
+        model: "claude-opus-4-7",
+        opts: options,
+        sessionKey: DEFAULT_SESSION_KEY,
+      });
 
-    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
-      timeoutMs?: unknown;
-      runTimeoutOverrideMs?: unknown;
-    };
-    expect(prepareParams.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(prepareParams.runTimeoutOverrideMs).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
+      const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+        timeoutMs?: unknown;
+        runTimeoutOverrideMs?: unknown;
+      };
+      expect(prepareParams.timeoutMs).toBe(expected);
+      expect(prepareParams.runTimeoutOverrideMs).toBe(expected);
+    },
+  );
 
   it("runs auth-order-selected CLI BTW through the CLI side-question path", async () => {
     const { cleanup } = mockCliOutput({ text: "CLI auth-order side answer." });

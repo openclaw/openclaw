@@ -15,6 +15,7 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
+  canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
@@ -31,7 +32,7 @@ import {
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -48,9 +49,6 @@ import {
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
-
-const CLI_NAME = resolveCliName();
-
 export async function readPackageUpdateIdentity(root: string) {
   const [version, buildId] = await Promise.all([
     readPackageVersion(root),
@@ -149,6 +147,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     killed: completedDoctorStep.killed,
     termination: completedDoctorStep.termination,
     advisory: completedDoctorStep.advisory,
+    warnings: completedDoctorStep.warnings,
   });
   return completedDoctorStep;
 }
@@ -278,7 +277,9 @@ export async function runPackageInstallUpdate(
     installSpec,
     packageName,
     packageRoot: pkgRoot,
-    requirePackageReplacement: params.installKind === "git",
+    // Explicit artifacts identify the payload; an equal version is not artifact equality.
+    requirePackageReplacement:
+      params.installKind === "git" || !canResolveRegistryVersionForPackageTarget(installSpec),
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),
@@ -287,7 +288,7 @@ export async function runPackageInstallUpdate(
         ...stepParams,
         progress: params.progress,
       }),
-    postVerifyStep: (root) => runPackageUpdateDoctor({ ...params, root }),
+    postVerifyStep: (root: string) => runPackageUpdateDoctor({ ...params, root }),
   });
 
   const afterBuildId = packageUpdate.activePackageRoot

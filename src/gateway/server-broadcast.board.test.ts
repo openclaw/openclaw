@@ -288,8 +288,8 @@ describe("board and progress event session ownership", () => {
             sessionKey: "agent:work:global",
             markdown: "Ordinary session",
           });
-          expect(progressCardStore.get("global", "work")).toBeNull();
-          expect(progressCardStore.get("agent:work:global", "work")?.markdown).toBe(
+          expect(await progressCardStore.get("global", "work")).toBeNull();
+          expect((await progressCardStore.get("agent:work:global", "work"))?.markdown).toBe(
             "Ordinary session",
           );
           const changed = (revision: number | null) => ({

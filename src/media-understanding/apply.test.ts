@@ -2421,6 +2421,47 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain('<file name="totally-not-a-spreadsheet.txt"');
   });
 
+  it.each(["files-only", "audio-and-files"] as const)(
+    "delivers pasted text without image interpretation in %s mode",
+    async (processingMode) => {
+      const filePath = await createTempMediaFile({
+        fileName: "pasted-text-123.txt",
+        content: "Synthetic diagnostic: connection refused",
+      });
+      const imagePath = await createTempMediaFile({ fileName: "photo.jpg", content: "image" });
+      const describeImage = vi.fn(async () => ({ text: "image description" }));
+      const ctx: MsgContext = {
+        Body: "Is this related?",
+        media: [
+          { path: filePath, contentType: "text/plain" },
+          { path: imagePath, contentType: "image/jpeg" },
+        ],
+      };
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg: {
+          tools: {
+            media: {
+              models: [{ provider: "openai", model: "gpt-5.4", capabilities: ["image"] }],
+              image: { enabled: true },
+            },
+          },
+        },
+        providers: { openai: { id: "openai", describeImage } },
+        processingMode,
+      });
+      expect(result.appliedFile).toBe(true);
+      expect(result.decisions.map((decision) => decision.capability)).toEqual(
+        processingMode === "files-only" ? [] : ["audio"],
+      );
+      expect(ctx.agentText).toContain("Is this related?");
+      expect(ctx.agentText).toContain("Synthetic diagnostic: connection refused");
+      expect(ctx.agentText).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+      expect(describeImage).not.toHaveBeenCalled();
+      expect(result.appliedImage).toBe(false);
+    },
+  );
+
   it("wraps extracted file text as untrusted external content", async () => {
     const filePath = await createTempMediaFile({
       fileName: "prompt.txt",

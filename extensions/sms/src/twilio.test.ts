@@ -289,21 +289,9 @@ describe("Twilio SMS helpers", () => {
 
     await expect(
       sendSmsViaTwilio({
-        account: {
-          accountId: "default",
-          enabled: true,
-          accountSid: "AC123",
-          authToken: "secret",
-          fromNumber: "+15557654321",
-          messagingServiceSid: "",
-          defaultTo: "",
-          webhookPath: "/webhooks/sms",
+        account: createAccount({
           publicWebhookUrl: "https://gateway.example.com/webhooks/sms#rp=4xx",
-          dangerouslyDisableSignatureValidation: false,
-          dmPolicy: "pairing",
-          allowFrom: [],
-          textChunkLimit: 1500,
-        },
+        }),
         to: "+15551234567",
         text: "hello",
         fetchImpl,
@@ -723,21 +711,7 @@ describe("Twilio SMS helpers", () => {
     );
 
     await sendSmsViaTwilio({
-      account: {
-        accountId: "default",
-        enabled: true,
-        accountSid: "AC123",
-        authToken: "secret",
-        fromNumber: "",
-        messagingServiceSid: "MG123",
-        defaultTo: "",
-        webhookPath: "/webhooks/sms",
-        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-        dangerouslyDisableSignatureValidation: false,
-        dmPolicy: "pairing",
-        allowFrom: [],
-        textChunkLimit: 1500,
-      },
+      account: createAccount({ fromNumber: "", messagingServiceSid: "MG123" }),
       to: "+15551234567",
       text: "hello",
       fetchImpl,
@@ -763,21 +737,7 @@ describe("Twilio SMS helpers", () => {
     );
 
     await sendSmsViaTwilio({
-      account: {
-        accountId: "default",
-        enabled: true,
-        accountSid: "AC123",
-        authToken: "secret",
-        fromNumber: "+15557654321",
-        messagingServiceSid: "MG123",
-        defaultTo: "",
-        webhookPath: "/webhooks/sms",
-        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-        dangerouslyDisableSignatureValidation: false,
-        dmPolicy: "pairing",
-        allowFrom: [],
-        textChunkLimit: 1500,
-      },
+      account: createAccount({ fromNumber: "+15557654321", messagingServiceSid: "MG123" }),
       to: "+15551234567",
       text: "hello",
       fetchImpl,

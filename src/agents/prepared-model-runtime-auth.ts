@@ -1,6 +1,7 @@
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelRuntimeAuth = Readonly<{
@@ -10,6 +11,7 @@ export type PreparedModelRuntimeAuth = Readonly<{
 
 export type PreparedModelCatalogAuth = PreparedModelRuntimeAuth &
   Readonly<{
+    providerAuthLabels: ModelCatalogAuthLabels;
     /** Unobserved discovery credentials cannot authorize account-inventory retention. */
     credentials?: Readonly<AuthStorageData>;
   }>;
@@ -21,6 +23,7 @@ export type PreparedModelRuntimeAuthScope = Readonly<{
 
 /** Private auth facts owned by an immutable prepared model generation. */
 const authStoreBySnapshot = new WeakMap<object, AuthProfileStore>();
+const authLabelsBySnapshot = new WeakMap<object, ModelCatalogAuthLabels>();
 const materializationsBySnapshot = new WeakMap<object, readonly RuntimeAuthMaterialization[]>();
 const authLoaderBySnapshot = new WeakMap<
   object,
@@ -38,6 +41,21 @@ export function setPreparedModelRuntimeAuthStore(
 
 export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {
   return authStoreBySnapshot.get(snapshot);
+}
+
+export function setPreparedModelRuntimeAuthLabels(
+  snapshot: object,
+  labels: ModelCatalogAuthLabels,
+): void {
+  authLabelsBySnapshot.set(snapshot, labels);
+}
+
+export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalogAuthLabels {
+  const labels = authLabelsBySnapshot.get(snapshot);
+  if (!labels) {
+    throw new Error("Prepared model runtime omitted auth display labels");
+  }
+  return labels;
 }
 
 export function setPreparedModelFullCatalogAuth(
@@ -85,10 +103,14 @@ export function getPreparedModelRuntimeAuthMaterializations(
 
 export function copyPreparedModelRuntimeAuthBindings(source: object, target: object): void {
   const authStore = authStoreBySnapshot.get(source);
+  const labels = authLabelsBySnapshot.get(source);
   const authLoader = authLoaderBySnapshot.get(source);
   const materializations = materializationsBySnapshot.get(source);
   if (authStore) {
     authStoreBySnapshot.set(target, authStore);
+  }
+  if (labels) {
+    authLabelsBySnapshot.set(target, labels);
   }
   if (authLoader) {
     authLoaderBySnapshot.set(target, authLoader);

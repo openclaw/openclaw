@@ -32,6 +32,7 @@ import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
+import { retirePreparedModelRuntimeOwnerIfUnused } from "./prepared-model-runtime.retention.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -90,61 +91,6 @@ export function prepareModelRuntimeOwner(
     catalogMode,
     provenance,
   });
-}
-
-export function retirePreparedModelRuntimeOwnerIfUnused(
-  owners: Map<string, PreparedModelRuntimeOwner>,
-  key: string,
-  owner: PreparedModelRuntimeOwner,
-  retained = false,
-): void {
-  if (
-    (owner.provenance === "run" || owner.provenance === "ephemeral") &&
-    (owner.admissionCount ?? 0) === 0 &&
-    (owner.leaseCount ?? 0) === 0 &&
-    !retained &&
-    owners.get(key) === owner
-  ) {
-    owners.delete(key);
-  }
-}
-
-export class PreparedModelRuntimeOwnerRetention {
-  readonly #retained = new Map<string, PreparedModelRuntimeOwner>();
-  constructor(private readonly maxSize: number) {}
-
-  clear(owners: Map<string, PreparedModelRuntimeOwner>): void {
-    // Released run owners retire here; active leases retire on release.
-    for (const [key, owner] of this.#retained) {
-      retirePreparedModelRuntimeOwnerIfUnused(owners, key, owner);
-    }
-    this.#retained.clear();
-  }
-
-  has(key: string, owner: PreparedModelRuntimeOwner): boolean {
-    return this.#retained.get(key) === owner;
-  }
-
-  retain(
-    key: string,
-    owner: PreparedModelRuntimeOwner,
-    owners: Map<string, PreparedModelRuntimeOwner>,
-  ): void {
-    if (owner.provenance !== "run") {
-      return;
-    }
-    this.#retained.delete(key);
-    this.#retained.set(key, owner);
-    while (this.#retained.size > this.maxSize) {
-      const oldest = this.#retained.entries().next().value;
-      if (!oldest) {
-        return;
-      }
-      const [oldestKey, oldestOwner] = oldest;
-      this.#retained.delete(oldestKey);
-      retirePreparedModelRuntimeOwnerIfUnused(owners, oldestKey, oldestOwner);
-    }
-  }
 }
 
 export {
@@ -538,6 +484,8 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
       inventoryOwner: owner,
       pluginGeneration: owner.pendingPluginGeneration,
       prepareInboundPluginRegistry: owner.provenance === "configured",
+      ownsRegistryResources:
+        owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
       isGenerationCurrent,
       isBuildCurrent: params.isBuildCurrent ?? isCurrent,
       isPreparationCurrent: params.isBuildCurrent,
@@ -566,6 +514,9 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
     }
   }
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
+  const unpublishedClaims = new Set<
+    NonNullable<PreparedModelRuntimeBuildResult["resourceClaim"]>
+  >();
   const publication = (async () => {
     try {
       while (true) {
@@ -610,7 +561,11 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
             }
             const built = await build.pending;
             for (const [index, candidate] of currentGroup.entries()) {
-              results.set(candidate.owner, built[index]!);
+              const result = built[index]!;
+              if (result.resourceClaim) {
+                unpublishedClaims.add(result.resourceClaim);
+              }
+              results.set(candidate.owner, result);
             }
           }
           break;
@@ -644,6 +599,12 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
         const snapshot = publishPreparedModelRuntimeOwnerSnapshot(candidate.owner, result.snapshot);
         results.set(candidate.owner, { ...result, snapshot });
         candidate.owner.pluginGeneration = result.pluginGeneration;
+        const previousClaim = candidate.owner.resourceClaim;
+        candidate.owner.resourceClaim = result.resourceClaim;
+        if (result.resourceClaim) {
+          unpublishedClaims.delete(result.resourceClaim);
+        }
+        previousClaim?.release();
         candidate.owner.needsRefresh = false;
       }
     } catch (error) {
@@ -659,6 +620,10 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
         candidate.owner.refreshError = refreshError;
       }
       throw refreshError;
+    } finally {
+      for (const claim of unpublishedClaims) {
+        claim.release();
+      }
     }
   })();
   await publication;
@@ -693,6 +658,8 @@ export async function publishModelRuntimeSnapshot(
         isGenerationCurrent,
         isBuildCurrent: isGenerationCurrent,
         prepareInboundPluginRegistry: provenance === "configured",
+        ownsRegistryResources:
+          provenance === "run" || (provenance === "ephemeral" && input.readOnly === true),
         pluginGeneration: reusablePluginGeneration,
       },
     ],
@@ -710,8 +677,10 @@ export async function publishModelRuntimeSnapshot(
   });
   owners.set(key, owner);
   const publication = (async () => {
+    let result: PreparedModelRuntimeBuildResult | undefined;
+    let transferred = false;
     try {
-      const result = (await build.pending)[0]!;
+      result = (await build.pending)[0]!;
       if (!isGenerationCurrent()) {
         throw new PreparedModelRuntimePublicationSupersededError(
           `prepared model runtime publication was superseded for ${input.agentDir}`,
@@ -719,6 +688,10 @@ export async function publishModelRuntimeSnapshot(
       }
       const snapshot = publishPreparedModelRuntimeOwnerSnapshot(owner, result.snapshot);
       owner.pluginGeneration = result.pluginGeneration;
+      const previousClaim = owner.resourceClaim;
+      owner.resourceClaim = result.resourceClaim;
+      transferred = true;
+      previousClaim?.release();
       owner.pendingPluginGeneration = undefined;
       owner.pending = undefined;
       owner.needsRefresh = false;
@@ -737,6 +710,10 @@ export async function publishModelRuntimeSnapshot(
         }
       }
       throw refreshError;
+    } finally {
+      if (!transferred) {
+        result?.resourceClaim?.release();
+      }
     }
   })();
   // Every waiter observes the publication guard, not the underlying discovery result. This keeps

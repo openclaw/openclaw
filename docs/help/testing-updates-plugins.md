@@ -15,6 +15,17 @@ install, load, update, and uninstall plugins from every supported source.
 For the broader test runner map, see [Testing](/help/testing). For live provider
 keys and network-touching suites, see [Testing live](/help/testing-live).
 
+## On this page
+
+- [What we protect](#what-we-protect) - the guarantees these lanes exist to defend.
+- [Local proof during development](#local-proof-during-development) - the commands to run while you iterate.
+- [Docker lanes](#docker-lanes) - lane reference: what each lane runs and when.
+- [Package Acceptance](#package-acceptance) - lane reference: the acceptance matrix and its gates.
+- [Release default](#release-default) - which lanes a release candidate must clear.
+- [Legacy compatibility](#legacy-compatibility) - older package and plugin states still covered.
+- [Adding coverage](#adding-coverage) - where a new regression belongs.
+- [Failure triage](#failure-triage) - what to do when a lane goes red.
+
 ## What we protect
 
 - A package tarball is complete, has a valid `dist/postinstall-inventory.json`,
@@ -161,7 +172,15 @@ The `legacy-operator-state` scenario uses the published baseline's own CLI to
 create a second agent, allowlist exec approvals, and two command cron jobs: one
 without an explicit agent and one owned by `ops`. It leaves `systemAgent`
 unset, installs one version-matched npm plugin through the local registry, and
-preserves a workspace skill. A mock OpenAI server verifies a real agent turn
+preserves a workspace skill. It also configures DuckDuckGo without an install
+record: bundled baselines use their own CLI web-search settings; newer baselines
+receive the retained configuration of an already-broken upgrade. The local
+registry supplies the candidate's official external DuckDuckGo package. Before
+standalone Doctor or consent repair, assertions require the npm install record,
+candidate package version and integrity, `plugins list` entry, and clean
+`config validate --json`. A separate isolated missing-plugin state exercises
+`doctor --fix --non-interactive` without an update or capability acceptance.
+A mock OpenAI server verifies a real agent turn
 before and after the update without provider credentials. After the update,
 the lane checks approvals and legacy-file retirement, effective cron owners,
 the candidate plugin artifact, the candidate state schema, an idempotent update,
@@ -451,3 +470,9 @@ Start with the artifact identity:
 
 Prefer rerunning the failed exact lane with the same package artifact over
 rerunning the whole release umbrella.
+
+## Related
+
+- [Tests](/reference/test) - index of the testing reference, one page per reader job
+- [Testing](/help/testing) - the full testing kit: suites, live lanes, and Docker runners
+- [Release policy](/reference/RELEASING) - the release process this checklist gates

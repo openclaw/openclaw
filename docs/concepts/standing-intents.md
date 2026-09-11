@@ -87,5 +87,6 @@ Standing intents live in `agents/<agentId>/agent/openclaw-agent.sqlite`. They ad
 ## Related
 
 - [Memory overview](/concepts/memory)
+- [Memory architecture](/concepts/memory-architecture)
 - [User model](/concepts/user-model)
 - [Scheduled tasks](/automation/cron-jobs)

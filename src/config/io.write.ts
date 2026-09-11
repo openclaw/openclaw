@@ -21,6 +21,7 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
+import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import {
   EnvRefArrayMutationError,
   restoreEnvRefsFromMap,
@@ -53,6 +54,7 @@ import {
 } from "./io.read-helpers.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
+  ConfigWriteInputBasis,
   ConfigWriteOptions,
   InternalConfigWriteResult,
   ReadConfigFileSnapshotInternalResult,
@@ -76,19 +78,35 @@ import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
-import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
+import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 export async function writeConfigFileFromContext(
   context: ConfigIoContext,
   cfg: OpenClawConfig,
-  options: ConfigWriteOptions,
+  writeOptions: ConfigWriteOptions,
   readSnapshot: () => Promise<ReadConfigFileSnapshotInternalResult>,
 ): Promise<InternalConfigWriteResult> {
   const { deps, configPath } = context;
+  let options = writeOptions;
+  const sourceGuard = captureConfigWriteLockGuard(configPath);
+  if (sourceGuard) {
+    const original = options;
+    options = {
+      ...options,
+      assertConfigPathForWrite: () => {
+        sourceGuard();
+        original.assertConfigPathForWrite?.();
+      },
+      beforeCommit: async () => {
+        await original.beforeCommit?.();
+        sourceGuard();
+      },
+    };
+  }
   options.assertConfigPathForWrite?.();
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
@@ -99,6 +117,10 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
+  const inputBasis: ConfigWriteInputBasis = {
+    kind: options.inputBase ?? "runtime",
+    config: options.inputBase === "source" ? snapshot.sourceConfig : snapshot.runtimeConfig,
+  };
   if (options.baseSnapshot) {
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
@@ -129,7 +151,7 @@ export async function writeConfigFileFromContext(
   let persistCandidate: unknown = nextConfig;
   let envRefMap: Map<string, string> | null = null;
   const changedPaths = new Set<string>();
-  collectChangedPaths(snapshot.config, nextConfig, "", changedPaths);
+  collectChangedPaths(inputBasis.config, nextConfig, "", changedPaths);
   for (const changedPath of [...explicitSetPaths, ...(options.unsetPaths ?? [])]) {
     const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
     if (normalizedPath) {
@@ -147,6 +169,7 @@ export async function writeConfigFileFromContext(
       provenance: snapshot.includeProvenance,
     });
     persistCandidate = resolvePersistCandidateForWrite({
+      inputBasis,
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
       sourceConfigValid: snapshot.valid,
@@ -192,14 +215,16 @@ export async function writeConfigFileFromContext(
     }
   }
 
-  persistCandidate = applyUnsetPathsForWrite(persistCandidate as OpenClawConfig, unsetPaths);
   const envForRestore = options.envSnapshotForRestore ?? deps.env;
-  const resolveValidationCandidate = (candidate: unknown) =>
-    containsConfigIncludeDirective(candidate)
+  const resolveValidationCandidate = (candidate: unknown) => {
+    // Validate removals now; apply them once to the final authored output after materialization.
+    const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
+    return containsConfigIncludeDirective(config)
       ? context.resolveRuntimePreflightSourceConfig(
-          restoreEnvVarRefs(candidate, snapshot.parsed, envForRestore) as OpenClawConfig,
+          restoreEnvVarRefs(config, snapshot.parsed, envForRestore) as OpenClawConfig,
         )
-      : candidate;
+      : config;
+  };
   const validationCandidate = resolveValidationCandidate(persistCandidate);
   const validateCandidate = (candidate: unknown) => {
     const result = validateConfigObjectRawWithPlugins(candidate, {
@@ -477,6 +502,8 @@ export async function writeConfigFileFromContext(
       options.assertConfigPathForWrite?.();
     } catch (error) {
       try {
+        // A post-publication refusal cannot grant a stale executor compensation.
+        sourceGuard?.();
         await rollbackConfigFileWriteIfUnchanged({
           configPath,
           previousSnapshot: snapshot,
@@ -556,6 +583,7 @@ export async function writeConfigFileFromContext(
       persistedHash: nextHash,
       persistedConfig: stampedOutputConfig,
       [configWritePostCommitRollback]: () => {
+        sourceGuard?.();
         restoreConfigSnapshotAuditRecord({
           env: deps.env,
           homedir: deps.homedir,
@@ -574,6 +602,18 @@ export async function writeConfigFileFromContext(
       },
     };
   } catch (error) {
+    try {
+      sourceGuard?.();
+    } catch (ownershipError) {
+      if (ownershipError === error) {
+        throw error;
+      }
+      throw new AggregateError(
+        [error, ownershipError],
+        "Config write failed after source ownership changed",
+        { cause: ownershipError },
+      );
+    }
     await appendWriteAudit("failed", error);
     throw error;
   }

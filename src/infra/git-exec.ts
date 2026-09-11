@@ -75,11 +75,12 @@ export function createGitCommandError(
   result: (SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>) & { timeoutMs?: number },
 ): Error {
   // Buffered Git uses the fixed default; text results carry their applied budget.
+  const timeoutMs = result.timeoutMs ?? GIT_TIMEOUT_MS;
   const error = createCommandError(command, result, {
-    timeoutMs: result.timeoutMs ?? GIT_TIMEOUT_MS,
+    timeoutMs,
   });
   if (result.termination === "timeout") {
-    error.message += "\nCheck repository access and disk space.";
+    error.message += `\nGit did not finish within its ${timeoutMs / 1000}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`;
   }
   return error;
 }
@@ -133,4 +134,17 @@ export async function requireGitCommandBuffer(
     throw createGitCommandError(`git ${args.join(" ")}`, result);
   }
   return result.stdout;
+}
+
+/**
+ * Null device path that Git for Windows can open as a config file.
+ *
+ * `os.devNull` returns `\.\nul` on Windows, which Git rejects with
+ * "unable to access '\.\nul': Invalid argument" (exit 128) when passed via
+ * `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM` — it must open and parse those
+ * files. "NUL" is the path Git for Windows understands. Config *values* such
+ * as `core.hooksPath` accept the device path and need no change.
+ */
+export function gitNullConfigPath(): string {
+  return process.platform === "win32" ? "NUL" : "/dev/null";
 }

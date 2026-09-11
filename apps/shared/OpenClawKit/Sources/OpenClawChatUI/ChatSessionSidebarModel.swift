@@ -180,12 +180,17 @@ public enum ChatSessionSidebarModel {
     }
 
     public static func displayName(for session: OpenClawChatSessionEntry) -> String {
-        for candidate in [session.displayName, session.label] {
-            if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !trimmed.isEmpty
-            {
-                return trimmed
-            }
+        let label = session.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generated = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let autoLabel = session.autoLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let label, !label.isEmpty {
+            return label
+        }
+        if let generated, !generated.isEmpty {
+            return generated
+        }
+        if let autoLabel, !autoLabel.isEmpty {
+            return autoLabel
         }
         return self.displayName(forKey: session.key)
     }

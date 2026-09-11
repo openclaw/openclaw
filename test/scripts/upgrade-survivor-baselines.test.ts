@@ -270,6 +270,24 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
     },
   );
 
+  it("omits the unpublished candidate version from expanded supported lines", () => {
+    withJsonFixture("tags.json", { latest: "2026.9.3" }, (tagsFile) => {
+      withJsonFixture("versions.json", ["2026.6.34", "2026.9.2", "2026.9.3"], (versionsFile) => {
+        expect(
+          resolveBaselines(
+            new Map([
+              ["requested", "supported-lines"],
+              ["candidate-version", "2026.9.3"],
+              ["candidate-published", "false"],
+              ["npm-dist-tags-json", tagsFile],
+              ["npm-versions-json", versionsFile],
+            ]),
+          ),
+        ).toEqual(["openclaw@2026.9.2", "openclaw@2026.6.34"]);
+      });
+    });
+  });
+
   it.each([
     {
       tags: {},
@@ -342,6 +360,36 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
         "openclaw@2026.4.22",
         "openclaw@2026.4.23",
         "openclaw@2026.3.13-1",
+      ]);
+    });
+  });
+
+  it("preserves the release-history count when the unpublished candidate is newest", () => {
+    const releases = ["2026.9.4", "2026.9.3", "2026.9.2", "2026.9.1", "2026.8.30"].map(
+      (version, index) => ({
+        isPrerelease: false,
+        publishedAt: `2026-09-${String(5 - index).padStart(2, "0")}T00:00:00Z`,
+        tagName: `v${version}`,
+      }),
+    );
+
+    withReleaseFixture(releases, (file) => {
+      expect(
+        resolveBaselines(
+          new Map([
+            ["requested", "release-history"],
+            ["candidate-version", "2026.9.4"],
+            ["candidate-published", "false"],
+            ["releases-json", file],
+            ["history-count", "4"],
+            ["include-version", "2026.9.3"],
+          ]),
+        ),
+      ).toEqual([
+        "openclaw@2026.9.3",
+        "openclaw@2026.9.2",
+        "openclaw@2026.9.1",
+        "openclaw@2026.8.30",
       ]);
     });
   });
@@ -423,6 +471,41 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
             "openclaw@2026.4.29",
             "openclaw@2026.4.23",
             "openclaw@2026.4.15",
+          ]);
+        },
+      );
+    });
+  });
+
+  it("preserves the last-stable count when the unpublished candidate is newest", () => {
+    const releases = ["2026.9.4", "2026.9.3", "2026.9.2", "2026.9.1", "2026.8.30"].map(
+      (version, index) => ({
+        isPrerelease: false,
+        publishedAt: `2026-09-${String(5 - index).padStart(2, "0")}T00:00:00Z`,
+        tagName: `v${version}`,
+      }),
+    );
+
+    withReleaseFixture(releases, (releasesFile) => {
+      withJsonFixture(
+        "versions.json",
+        ["2026.8.30", "2026.9.1", "2026.9.2", "2026.9.3", "2026.9.4"],
+        (versionsFile) => {
+          expect(
+            resolveBaselines(
+              new Map([
+                ["requested", "last-stable-4"],
+                ["candidate-version", "2026.9.4"],
+                ["candidate-published", "false"],
+                ["releases-json", releasesFile],
+                ["npm-versions-json", versionsFile],
+              ]),
+            ),
+          ).toEqual([
+            "openclaw@2026.9.3",
+            "openclaw@2026.9.2",
+            "openclaw@2026.9.1",
+            "openclaw@2026.8.30",
           ]);
         },
       );

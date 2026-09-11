@@ -610,6 +610,11 @@ unix(
     const { createManagedHandoffLeaseStore, resolveManagedUpdateLeaseDatabasePath } =
       await import("./update-managed-service-handoff-lease.js");
     const { to } = fixture();
+    const tmpDirOwner = await import("./tmp-openclaw-dir.js");
+    // Keep the legacy fixture row away from concurrent config writers.
+    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      path.join(path.dirname(to), "coordinator"),
+    );
     const store = createManagedHandoffLeaseStore();
     const reserved = store.acquire(to, "legacy-owner", { kind: "update" });
     expect(reserved.kind).toBe("acquired");

@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -73,7 +74,7 @@ export function createFollowupTurnTestTurn(
         blockReplyBreak: "message_end",
       },
     },
-    operation: { abortSignal: new AbortController().signal } as AdmittedFollowupTurn["operation"],
+    operation: createMockReplyOperation().replyOperation,
     config: {},
     session: {
       kind: "session",

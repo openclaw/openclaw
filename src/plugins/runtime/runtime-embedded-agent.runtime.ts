@@ -26,7 +26,8 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
     "onCompactionAccounting" in params ||
     "onContextAccountingEvent" in params ||
     "onDeferredLifecycleOwner" in params ||
-    "onDeferredLifecycleAbort" in params
+    "onDeferredLifecycleAbort" in params ||
+    "onRetryWait" in params
   ) {
     throw new Error("Plugin embedded-agent execution cannot supply host run authority.");
   }

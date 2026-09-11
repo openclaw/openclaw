@@ -14,20 +14,16 @@ import {
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
 } from "./model-definitions.js";
-import { XAI_OAUTH_AUTO_MODEL_ID } from "./model-id.js";
 
 export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
-// OAuth resolves this stable ref against xAI's authenticated catalog and
-// remote default setting. API-key setup stays on the pinned default above.
-export const XAI_OAUTH_DEFAULT_MODEL_REF = `xai/${XAI_OAUTH_AUTO_MODEL_ID}`;
 
 const xaiPresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: XAI_DEFAULT_MODEL_REF,
-  resolveParams: () => ({
+  resolveParams: (cfg) => ({
     providerId: "xai",
     api: "openai-responses",
     baseUrl: XAI_BASE_URL,
-    catalogModels: buildXaiCatalogModels(),
+    catalogModels: cfg.models?.mode === "replace" ? buildXaiCatalogModels() : [],
     aliases: [{ modelRef: XAI_DEFAULT_MODEL_REF, alias: "Grok" }],
   }),
 });
@@ -70,7 +66,7 @@ export function applyXaiOAuthConfig(
 ): OpenClawConfig {
   const next = applyOnboardAuthAgentModelsAndProviders(cfg, {
     agentModels: withAgentModelAliases(cfg.agents?.defaults?.models, [
-      { modelRef: XAI_OAUTH_DEFAULT_MODEL_REF, alias: "Grok" },
+      { modelRef: XAI_DEFAULT_MODEL_REF, alias: "Grok" },
     ]),
     providers: {
       xai: {
@@ -79,12 +75,10 @@ export function applyXaiOAuthConfig(
         authHeader: undefined,
         headers: undefined,
         request: { auth: undefined, headers: undefined },
-        // The moving alias must come from discovery, never a persisted target.
-        models: provider.models.filter((model) => model.id !== XAI_OAUTH_AUTO_MODEL_ID),
       },
     },
   });
   return resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)
     ? next
-    : applyAgentDefaultModelPrimary(next, XAI_OAUTH_DEFAULT_MODEL_REF);
+    : applyAgentDefaultModelPrimary(next, XAI_DEFAULT_MODEL_REF);
 }

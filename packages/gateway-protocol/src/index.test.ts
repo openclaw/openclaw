@@ -1020,18 +1020,27 @@ describe("validateModelsListParams", () => {
   it("accepts the supported model catalog views", () => {
     expectAccepted(validateModelsListParams, [
       {},
+      { sessionKey: "agent:work:saved", view: "configured" },
+      { agentId: "work", authProfileId: "personal:reader:account" },
       { view: "default" },
       { view: "configured" },
       { view: "all" },
       { view: "configured", preparedOnly: true },
       { view: "all", refresh: true },
+      { view: "configured", provider: "minimax", includeDetails: true },
     ]);
   });
 
   it("rejects unknown model catalog views and extra fields", () => {
     expectRejected(validateModelsListParams, [
       { view: "available" },
-      { view: "configured", provider: "minimax" },
+      { sessionKey: "agent:work:saved", authProfileId: "personal:reader:account" },
+      { sessionKey: "" },
+      { authProfileId: "" },
+      { preparedOnly: true, refresh: true },
+      { view: "configured", unexpected: true },
+      { provider: "" },
+      { includeDetails: "yes" },
     ]);
   });
 });

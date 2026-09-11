@@ -407,6 +407,48 @@ describe("stable release closeout", () => {
     expect(replay.manifest).toBeNull();
   });
 
+  it("records the independently verified split attempts and refuses missing or changed replay proof", () => {
+    const publishRecovery = {
+      npmDockerVerified: true,
+      mode: "split-publication-v1",
+      releaseTag: "v2026.6.8",
+      sourceSha: "tag-sha",
+      toolingSha: "a".repeat(40),
+      fullReleaseValidation: { runId: "11", runAttempt: "2" },
+      originalParent: { runId: "12", runAttempt: "3", conclusion: "failure" },
+      npm: { runId: "13", runAttempt: "1", jobId: "130" },
+      docker: { runId: "14", runAttempt: "1", jobId: "140" },
+    };
+    const params = {
+      ...validCloseoutParams,
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+      allowFailedPublishRecovery: true,
+      publishRecovery,
+    };
+    const first = verifyStableMainCloseout(params);
+    expect(first.errors).toEqual([]);
+    expect(first.manifest?.releasePublishRecovery).toEqual(publishRecovery);
+    const replay = { ...params, existingManifest: first.manifest };
+    expect(verifyStableMainCloseout(replay).manifest).toEqual(first.manifest);
+    for (const replacement of [
+      undefined,
+      { ...publishRecovery, docker: { ...publishRecovery.docker, runAttempt: "2" } },
+    ]) {
+      expect(
+        verifyStableMainCloseout({ ...replay, publishRecovery: replacement }).manifest,
+      ).toBeNull();
+    }
+    for (const patch of [
+      { allowFailedPublishRecovery: false },
+      { releaseTagSha: "another-sha" },
+      { tag: "v2026.6.8-2", release: { ...release, tagName: "v2026.6.8-2" } },
+      { fullReleaseValidationRunAttempt: "3" },
+      { releasePublishRunId: "15" },
+    ]) {
+      expect(verifyStableMainCloseout({ ...params, ...patch }).manifest).toBeNull();
+    }
+  });
+
   it("rejects calendar-normalized rollback drill dates", () => {
     const result = verifyStableMainCloseout({
       ...validCloseoutParams,

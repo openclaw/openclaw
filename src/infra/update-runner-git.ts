@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -14,10 +15,12 @@ import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
+import { runGitDoctorStep, runGitUpstreamStep } from "./update-runner-git-steps.js";
 import {
   prepareGitMutation,
   readBranchName,
   resolveChannelTag,
+  resolveReleaseTagRemote,
   selectGitInspectionTarget,
   withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
@@ -291,6 +294,66 @@ export async function updateGitCheckout(params: {
     }
     return mutationPrepared ? rollbackError(reason) : buildError(reason);
   };
+  const fetchTarget = async (root: string, targetStep: typeof step, name: string) => {
+    const fetch = await runStep(
+      targetStep(
+        name,
+        ["git", "-C", root, "fetch", "--all", "--prune", "--no-tags", "--no-prune-tags"],
+        root,
+      ),
+    );
+    if (fetch.exitCode !== 0 || channel === "dev") {
+      return fetch.exitCode === 0;
+    }
+    const remote = await runStep(targetStep("git remote", ["git", "-C", root, "remote"], root));
+    if (remote.exitCode !== 0) {
+      return false;
+    }
+    const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
+    const tracked = await runStep(
+      targetStep(
+        "git config update upstream",
+        ["git", "-C", root, "config", "--get", `branch.${DEV_BRANCH}.remote`],
+        root,
+      ),
+    );
+    if (tracked.exitCode !== 0 && tracked.exitCode !== 1) {
+      return false;
+    }
+    const tagRemote = resolveReleaseTagRemote(remotes, (tracked.stdoutTail ?? "").trim());
+    if (!tagRemote) {
+      steps.push({
+        name: "git release remote",
+        command: "git remote",
+        cwd: root,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail:
+          "Cannot determine the release remote. Set branch.main.remote to the remote that publishes releases.",
+      });
+      return false;
+    }
+    // Only the release authority may replace shared tag refs. Disable pruning
+    // even when Git config enables it, so operator-only tags survive.
+    const tags = await runStep(
+      targetStep(
+        `git fetch tags ${tagRemote}`,
+        [
+          "git",
+          "-C",
+          root,
+          "fetch",
+          "--no-tags",
+          "--no-prune",
+          "--no-prune-tags",
+          tagRemote,
+          "+refs/tags/*:refs/tags/*",
+        ],
+        root,
+      ),
+    );
+    return tags.exitCode === 0;
+  };
 
   const statusCheck = await runStep(step("clean check", gitCleanCheckArgs(gitRoot), gitRoot));
   if (statusCheck.exitCode !== 0) {
@@ -332,22 +395,7 @@ export async function updateGitCheckout(params: {
         ...step(...args),
         runCommand: runInspectionCommand,
       });
-      const fetched = await runStep(
-        inspectionStep(
-          "git target inspection fetch",
-          [
-            "git",
-            "-C",
-            inspectionRoot,
-            "fetch",
-            "--all",
-            "--prune",
-            channel === "dev" ? "--no-tags" : "--tags",
-          ],
-          inspectionRoot,
-        ),
-      );
-      if (fetched.exitCode !== 0) {
+      if (!(await fetchTarget(inspectionRoot, inspectionStep, "git target inspection fetch"))) {
         return { status: "error" as const, reason: "fetch-failed" };
       }
       const inspectTarget = async (revision: string, root = inspectionRoot) => {
@@ -461,7 +509,15 @@ export async function updateGitCheckout(params: {
     };
     const inspectedTarget = opts.inspectGitTarget
       ? await withGitTargetInspectionRoot(
-          { root: gitRoot, runCommand, timeoutMs },
+          {
+            root: gitRoot,
+            runCommand,
+            timeoutMs,
+            onWarning: (warning) => {
+              steps.push(warning);
+              opts.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+            },
+          },
           inspectAndPrepare,
         )
       : undefined;
@@ -472,21 +528,8 @@ export async function updateGitCheckout(params: {
       return buildError("target-metadata-preflight");
     }
     if (!inspectedTarget) {
-      const fetchFailure = await runRequiredStep(
-        "git fetch",
-        [
-          "git",
-          "-C",
-          gitRoot,
-          "fetch",
-          "--all",
-          "--prune",
-          channel === "dev" ? "--no-tags" : "--tags",
-        ],
-        "fetch-failed",
-      );
-      if (fetchFailure) {
-        return fetchFailure;
+      if (!(await fetchTarget(gitRoot, step, "git fetch"))) {
+        return buildError("fetch-failed");
       }
     }
     const tag =
@@ -524,7 +567,7 @@ export async function updateGitCheckout(params: {
     if (preflight.status !== "ok") {
       return buildError(preflight.reason, preflight.status);
     }
-    // Candidate validation and worktree cleanup finish while the old gateway serves.
+    // Candidate validation and cleanup attempts finish while the old gateway serves.
     // Its exact build is retained on this filesystem; activation never installs or builds.
     const sourceChanged = await checkSourceUnchanged();
     if (sourceChanged) {
@@ -544,21 +587,23 @@ export async function updateGitCheckout(params: {
     }
     createdDevBranchDuringUpdate = activateBranch && preflight.localDevBranchExists === false;
     if (createdDevBranchDuringUpdate && preflight.selectedDevUpstream) {
-      const upstreamFailure = await runRequiredStep(
+      const upstreamArgs = [
+        "git",
+        "-C",
+        gitRoot,
+        "branch",
+        "--set-upstream-to",
+        preflight.selectedDevUpstream,
+        DEV_BRANCH,
+      ];
+      const upstreamOptions = step(
         `git branch --set-upstream-to ${preflight.selectedDevUpstream} ${DEV_BRANCH}`,
-        [
-          "git",
-          "-C",
-          gitRoot,
-          "branch",
-          "--set-upstream-to",
-          preflight.selectedDevUpstream,
-          DEV_BRANCH,
-        ],
-        "checkout-failed",
+        upstreamArgs,
+        gitRoot,
       );
-      if (upstreamFailure) {
-        return upstreamFailure;
+      const upstreamStep = await runGitUpstreamStep(upstreamOptions);
+      if (upstreamStep.exitCode !== 0 && !upstreamStep.advisory) {
+        return await rollbackError("checkout-failed");
       }
     }
     if (!runtimePromotion) {
@@ -604,26 +649,20 @@ export async function updateGitCheckout(params: {
       });
       stateMigrationStarted = true;
       recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
-      const doctorStep = await runStep(
-        step(
-          "openclaw doctor",
-          [
-            doctorNodePath,
-            doctorEntry,
-            "doctor",
-            "--non-interactive",
-            ...(doctorPolicy.fix ? ["--fix"] : []),
-          ],
-          gitRoot,
-          buildUpdateDoctorEnv({
-            allowGatewayServiceRepair,
-            allowGatewayActivation,
-            serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
-            deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
-          }),
-        ),
-      );
-      if (doctorStep.exitCode !== 0) {
+      const doctorStep = await runGitDoctorStep({
+        root: gitRoot,
+        entryPath: doctorEntry,
+        nodePath: doctorNodePath,
+        fix: doctorPolicy.fix,
+        step,
+        env: buildUpdateDoctorEnv({
+          allowGatewayServiceRepair,
+          allowGatewayActivation,
+          serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
+          deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
+        }),
+      });
+      if (doctorStep.exitCode !== 0 && !doctorStep.advisory) {
         return await rollbackError("doctor-failed");
       }
     }

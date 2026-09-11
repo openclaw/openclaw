@@ -37,6 +37,7 @@ import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-deliver
 const startTurn = vi.hoisted(() => vi.fn());
 const deliver = vi.hoisted(() => vi.fn());
 const registryRead = vi.hoisted(() => ({
+  getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => undefined),
   hasDescendantRunAwaitingSettle: vi.fn(() => false),
   listSubagentRunsForRequester: vi.fn<() => SubagentRunRecord[]>(() => []),
   getLatestSubagentRunByChildSessionKey: vi.fn(() => undefined),
@@ -400,6 +401,7 @@ describe("requester settle dispatch deadline", () => {
         } as AgentCommandOpts,
         prepare: async () => ({
           ...target,
+          sessionAgentId: "main",
           sessionId: "requester-session",
           isNewSession: false,
           sessionEntry: loadSessionEntry(target),

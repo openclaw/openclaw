@@ -9,6 +9,7 @@ type WorkerPlacementDestination =
       profileId: string;
       deviceId?: undefined;
       machineClass?: string;
+      os?: string;
       inheritedProfile?: undefined;
     }
   | {
@@ -22,6 +23,7 @@ export function resolveWorkerPlacementDestination(params: {
   profileId?: string;
   deviceId?: string;
   machineClass?: string;
+  os?: string;
 }): Result<WorkerPlacementDestination | undefined, string> {
   const profileId = normalizeOptionalString(params.profileId);
   if (profileId) {
@@ -32,7 +34,14 @@ export function resolveWorkerPlacementDestination(params: {
     if (params.machineClass !== undefined && !machineClass) {
       return err("cloud worker machine class must be non-empty");
     }
-    return ok({ profileId, ...(machineClass ? { machineClass } : {}) });
+    const os = normalizeOptionalString(params.os);
+    if (params.os !== undefined && !os) {
+      return err("cloud worker operating system must be non-empty");
+    }
+    return ok({ profileId, ...(machineClass ? { machineClass } : {}), ...(os ? { os } : {}) });
+  }
+  if (params.os !== undefined || params.machineClass !== undefined) {
+    return err("cloud worker machine class and operating system require a profile id");
   }
   const deviceId = normalizeOptionalString(params.deviceId);
   if (!deviceId) {

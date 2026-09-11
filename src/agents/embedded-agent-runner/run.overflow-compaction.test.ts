@@ -38,7 +38,8 @@ afterEach(() => {
   }
 });
 const completionMocks = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
+  acquireSimpleCompletionModelForAgent:
+    vi.fn<typeof import("../simple-completion-runtime.js").acquireSimpleCompletionModelForAgent>(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
@@ -139,11 +140,9 @@ function makeRecoveryInput(
     sessionAgentId: "main",
     agentDir: "/tmp/agent",
     workspaceDir: "/tmp/workspace",
-    provider: "openai",
-    modelId: "gpt-5.5",
+    modelSelection: { provider: "openai", model: "gpt-5.5", authProfileIdSource: "auto" },
     harnessRuntime: "openclaw",
     thinkLevel: "off",
-    authProfileIdSource: "auto",
     resolveContextEnginePluginId: () => undefined,
     buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
       buildContextEngineRuntimeSettings({
@@ -172,16 +171,17 @@ function makeRecoveryInput(
 describe("compactEmbeddedRunForRecovery", () => {
   beforeEach(() => {
     compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockReset();
-    completionMocks.prepareSimpleCompletionModelForAgent.mockReset();
+    completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
     completionMocks.completeWithPreparedSimpleCompletionModel.mockReset();
     completionMocks.resolveSimpleCompletionSelectionForAgent.mockReset();
-    completionMocks.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+    completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
       selection: { provider: "openai", modelId: "gpt-5.5", agentDir: "/tmp/main" },
       model: {
         provider: "openai",
         id: "gpt-5.5",
         name: "gpt-5.5",
         api: "openai",
+        baseUrl: "https://fixture.invalid/v1",
         input: ["text"],
         reasoning: false,
         contextWindow: 128_000,
@@ -189,6 +189,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
+      release: vi.fn(),
     });
     completionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [{ type: "text", text: "done" }],
@@ -233,8 +234,12 @@ describe("compactEmbeddedRunForRecovery", () => {
         attempt: makeAttempt({ promptCache }),
         runtimeAuthPlan,
         thinkLevel: "ultra",
-        authProfileId: "openai:work",
-        authProfileIdSource: "user",
+        modelSelection: {
+          provider: "openai",
+          model: "gpt-5.5",
+          authProfileId: "openai:work",
+          authProfileIdSource: "user",
+        },
       }),
       {
         tokenBudget: 200_000,
@@ -350,7 +355,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         reason: expect.stringContaining("not bound to an active session agent"),
       },
     });
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
   it.each(["returned", "failed", "cancelled", "failed-result"] as const)(

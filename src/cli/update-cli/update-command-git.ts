@@ -531,11 +531,9 @@ export async function updateGitInstall(params: {
               expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
               activateGitRoot: updateRoot,
               onTransaction: params.onTransaction,
-              postVerifyStep: (root) =>
+              postVerifyStep: (root: string) =>
                 runPackageUpdateDoctor({
                   ...params,
-                  // Inspection is deferred until the Git target is known; read
-                  // its admitted service profile when backup and Doctor run.
                   managedServiceEnv: params.getManagedServiceEnv(),
                   root,
                   timeoutMs: effectiveTimeout,

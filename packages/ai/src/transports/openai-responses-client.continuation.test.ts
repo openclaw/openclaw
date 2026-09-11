@@ -169,6 +169,7 @@ async function run(
   context: Context,
   options: {
     sessionId?: string;
+    cacheRetention?: "none" | "short";
     onPayload: (payload: Record<string, unknown>) => Record<string, unknown>;
     signal?: AbortSignal;
     reasoningEffort?: "low" | "medium" | "high";
@@ -182,6 +183,7 @@ async function run(
   const stream = await createOpenAIResponsesTransportStreamFn()(requestModel, context, {
     apiKey: "test-key",
     sessionId: options.sessionId ?? "session-1",
+    cacheRetention: options.cacheRetention,
     transport: options.transport ?? "sse",
     authProfileId: options.authProfileId,
     reasoningEffort: options.reasoningEffort ?? "low",
@@ -231,35 +233,48 @@ describe("native OpenAI Responses SSE continuation", () => {
     vi.useRealTimers();
   });
 
-  it("continues stateful literal SSE turns with only appended input", async () => {
-    sseState.outcomes.push(
-      sdkCompletion("resp_1", "first answer"),
-      sdkCompletion("resp_2", "second answer"),
-    );
-    const firstUser = userMessage("first question", 1);
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-    const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
-    const second = await run(
-      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
-      { onPayload },
-    );
+  it.each([undefined, "short", "none"] as const)(
+    "continues stateful SSE turns with %s retention and matching affinity",
+    async (cacheRetention) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+      );
+      const firstUser = userMessage("first question", 1);
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+      const requestModel =
+        cacheRetention === undefined ? model : { ...model, compat: { sendSessionIdHeader: true } };
+      const first = await run(
+        { messages: [firstUser], tools: [] },
+        { onPayload, cacheRetention },
+        requestModel,
+      );
+      const second = await run(
+        { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+        { onPayload, cacheRetention },
+        requestModel,
+      );
 
-    expect(second.stopReason).toBe("stop");
-    expect(sseState.clientHeaders).toMatchObject([
-      { "x-openclaw-turn-id": "turn-1" },
-      { "x-openclaw-turn-id": "turn-2" },
-    ]);
-    expect(sseState.requests[1]).toMatchObject({
-      previous_response_id: "resp_1",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "second question" }],
-        },
-      ],
-    });
-  });
+      expect(second.stopReason).toBe("stop");
+      expect(sseState.clientHeaders).toMatchObject([
+        { "x-openclaw-turn-id": "turn-1" },
+        { "x-openclaw-turn-id": "turn-2" },
+      ]);
+      expect(sseState.clientHeaders.map((headers) => headers.session_id)).toEqual(
+        cacheRetention === "short" ? ["session-1", "session-1"] : [undefined, undefined],
+      );
+      expect(sseState.requests[1]).toMatchObject({
+        previous_response_id: "resp_1",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "second question" }],
+          },
+        ],
+      });
+    },
+  );
 
   it("keeps final store:false turns stateless and sends full history", async () => {
     sseState.outcomes.push(

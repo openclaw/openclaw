@@ -948,7 +948,7 @@ function buildSystemPrompt(
   const split = splitSystemPromptCacheBoundary(systemPrompt);
   const stablePrefix = split?.stablePrefix ?? systemPrompt;
   const blocks: SystemContentBlock[] = stablePrefix
-    ? [{ text: sanitizeSurrogates(stablePrefix) }]
+    ? [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(stablePrefix)) }]
     : [];
 
   if (stablePrefix && cachePoint) {

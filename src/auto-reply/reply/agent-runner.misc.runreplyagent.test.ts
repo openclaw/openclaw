@@ -3,10 +3,11 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 // Tests miscellaneous run-reply-agent behaviors and artifact output.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { parseCliOutput } from "../../agents/cli-output.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   abortEmbeddedAgentRun,
@@ -52,7 +53,11 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { VerboseLevel } from "../thinking.shared.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -2797,14 +2802,51 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
-  it("does not append session key when responseUsage=tokens", async () => {
+  it.each([
+    {
+      name: "split token counts",
+      usage: { input_tokens: 12, output_tokens: 3, cacheRead: 4, cacheWrite: 2 },
+      expected: "Usage: 12 in / 3 out · cache 4 cached / 2 new",
+    },
+    {
+      name: "input-only counts",
+      usage: { input_tokens: 12, total_tokens: 15 },
+      expected: "Usage: 12 in / ? out",
+    },
+    {
+      name: "output-only counts",
+      usage: { output_tokens: 3, total_tokens: 15 },
+      expected: "Usage: ? in / 3 out",
+    },
+    {
+      name: "total-only counts",
+      usage: { total_tokens: 1250 },
+      expected: "Usage: 1.3k total",
+    },
+    {
+      name: "cache-only counts",
+      usage: { cacheRead: 800, cacheWrite: 200 },
+      expected: "Usage: ? in / ? out · cache 800 cached / 200 new",
+    },
+    {
+      name: "total and cache counts without a split",
+      usage: { total_tokens: 1250, cacheRead: 800, cacheWrite: 200 },
+      expected: "Usage: 1.3k total · cache 800 cached / 200 new",
+    },
+  ])("shows $name without cost or session keys in tokens mode", async ({ usage, expected }) => {
+    const output = parseCliOutput({
+      raw: JSON.stringify({ result: "ok", usage }),
+      backend: { command: "fixture-cli" },
+      providerId: "fixture-cli",
+      outputMode: "json",
+    });
     runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
+      payloads: [{ text: output.text }],
       meta: {
         agentMeta: {
           provider: "amazon-bedrock",
           model: "us.anthropic.claude-sonnet-4-6",
-          usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 2 },
+          usage: output.usage,
         },
       },
     });
@@ -2833,8 +2875,7 @@ describe("runReplyAgent response usage footer", () => {
     });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("Usage:");
-    expect(text).toContain("cache 4 cached / 2 new");
+    expect(text).toBe(`ok\n${expected}`);
     expect(text).not.toContain("est $");
     expect(text).not.toContain("· session ");
   });
@@ -3066,6 +3107,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     didDeliverSourceReplyViaMessageTool?: boolean;
     finalAssistantText?: string;
     finalAssistantRawText?: string;
+    stopReason?: string;
     payloads?: ReplyPayload[];
     payloadText?: string;
     successfulCronAdds?: number;
@@ -3105,6 +3147,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       meta: {
         agentMeta: {},
         finalAssistantVisibleText: finalAssistantText,
+        ...(params.stopReason ? { stopReason: params.stopReason } : {}),
         ...(params.pendingContinuation ? { yielded: true } : {}),
         ...(params.finalAssistantRawText
           ? { finalAssistantRawText: params.finalAssistantRawText }
@@ -3396,6 +3439,42 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     });
 
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "does not recover a source-owned terminal reply before delivery (retry=%s)",
+    async (strandedReplyRetry) => {
+      const text =
+        "The requested action completed once. This recovered answer contains the result of the completed work and is ready for delivery to the original conversation. No completed action needs to run again.";
+      const { result } = await runPrivateFinalCase({
+        finalAssistantText: text,
+        payloads: [markReplyPayloadForSourceSuppressionDelivery({ text })],
+        strandedReplyRetry,
+      });
+
+      const payloads = normalizeReplyPayloads(result);
+      expect(payloads).toEqual([expect.objectContaining({ text })]);
+      const [payload] = payloads;
+      assert(payload);
+      expect(getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression).toBe(true);
+      expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    },
+  );
+
+  it("surfaces a canonical failure despite a private partial reply", async () => {
+    const privateText =
+      "Private partial output before the provider failed. These internal notes describe unfinished work and must stay private. They are not a completed answer or a substitute for the terminal failure.";
+    const { result } = await runPrivateFinalCase({
+      finalAssistantText: privateText,
+      stopReason: "error",
+    });
+
+    const deliverable = normalizeReplyPayloads(result).filter(
+      (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+    );
+    expect(deliverable).toEqual([expect.objectContaining({ isError: true })]);
+    expect(deliverable[0]?.text).not.toBe(privateText);
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 

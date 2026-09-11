@@ -109,6 +109,9 @@ function hasScopedProviderAuthAlias(
   scopedProviderIds: ReadonlySet<string>,
 ): boolean {
   return Object.entries(record.providerAuthAliases ?? {}).some(([rawAlias, rawTarget]) => {
+    if (typeof rawTarget !== "string") {
+      return false;
+    }
     const target = normalizeProviderId(rawTarget);
     return (
       scopedProviderIds.has(normalizeProviderId(rawAlias)) &&
@@ -515,7 +518,9 @@ function filterPluginDoctorStateMigrationRecords(
     }
     records.push(record);
   }
-  return records;
+  // Alias cleanup can change discovery order without changing migration owners.
+  // Stabilize owner order while preserving each owner's declared action order.
+  return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 export type PluginDoctorStateMigrationInventory = {

@@ -21,6 +21,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
 import {
   applyChatPendingInputs,
+  buildPendingInputItems,
   getChatPendingInputs,
   loadChatPendingInputs,
 } from "./chat-pending-inputs.ts";
@@ -107,6 +108,47 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it("shows a durable receipt while an accepted input waits for workspace sync", () => {
+    const queued = { ...input, state: "queued" as const };
+
+    const items = buildPendingInputItems([queued], undefined, [], ["run-queued"]);
+
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "notice",
+          text: "Received · waiting for workspace sync",
+        }),
+      ]),
+    );
+  });
+
+  it.each([
+    { state: "queued", runId: undefined, notice: undefined },
+    {
+      state: "interrupted",
+      runId: "run-queued",
+      notice:
+        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+    },
+    {
+      state: "cancelled",
+      runId: "run-queued",
+      notice:
+        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+    },
+  ] as const)(
+    "keeps $state custody out of the worker-setup notice without eligible execution",
+    ({ state, runId, notice }) => {
+      const items = buildPendingInputItems([{ ...input, state, runId }], undefined, [], [], true);
+
+      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
+        notice ? [notice] : [],
+      );
+      expect(items.some((item) => item.kind === "message")).toBe(true);
+    },
+  );
+
   it("keeps cached local submissions available after pane remount", async () => {
     const host = makeChatHost({ sessionKey, currentSessionId: sessionId, requestHandlers: {} });
     const runId = "cached-delivery";
@@ -132,7 +174,7 @@ describe("server-owned pending input display", () => {
     expect(remounted.chatMessages).toHaveLength(1);
   });
 
-  it.each(["pending", "consumed", "canonical", "canonical-first"])(
+  it.each(["pending", "pending-first", "consumed", "canonical", "canonical-first"])(
     "keeps a %s delivered source retired when its terminal is replayed",
     async (receipt) => {
       const host = makeChatHost({ sessionKey, currentSessionId: sessionId });
@@ -144,6 +186,8 @@ describe("server-owned pending input display", () => {
       };
       if (receipt === "canonical-first") {
         reduceChatSessionProjection(host, { type: "snapshotLoaded", messages: [canonical] });
+      } else if (receipt === "pending-first") {
+        applyChatPendingInputs(host, { items: [{ ...input, runId }], total: 1 });
       }
       const scope = await retainDeliveredUserTurn(host, {
         id: runId,
@@ -153,7 +197,10 @@ describe("server-owned pending input display", () => {
         text: "Collected input",
         createdAt: 1,
       });
-      if (receipt === "pending" || receipt === "consumed") {
+      if (receipt === "pending-first") {
+        expect(host.chatMessages).toEqual([]);
+        applyChatPendingInputs(host, { items: [], total: 0 });
+      } else if (receipt === "pending" || receipt === "consumed") {
         const inputReceipt: ChatInputReceipts[number] =
           receipt === "pending"
             ? { runId, state: receipt }
@@ -172,6 +219,26 @@ describe("server-owned pending input display", () => {
       expect(listStoredChatOutboxes(host)).toEqual([]);
     },
   );
+
+  it("keeps a local delivery fallback when custody belongs to a replaced physical session", async () => {
+    const host = makeChatHost({ sessionKey, currentSessionId: sessionId });
+    applyChatPendingInputs(host, page);
+    host.currentSessionId = "replacement-session";
+
+    await retainDeliveredUserTurn(host, {
+      id: "current-session-delivery",
+      sendRunId: input.runId,
+      sessionKey,
+      sessionId: host.currentSessionId,
+      text: "Current session input",
+      createdAt: 1,
+    });
+
+    expect(host.chatMessages).toHaveLength(1);
+    expect(host.chatMessages[0]).toMatchObject({
+      content: [{ type: "text", text: "Current session input" }],
+    });
+  });
 
   it("does not share receipt queries between panes with different provisional sources", async () => {
     const response = createDeferred<unknown>();

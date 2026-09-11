@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
+import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 import type { ConnectedRfbStream, DesktopRfbAttachment } from "./attachment.js";
 
 const DEFAULT_LINGER_MS = 60_000;
@@ -23,6 +24,7 @@ export class DesktopSessionStoppedError extends Error {
 
 type DesktopSessionObserver = {
   control: boolean;
+  operatorName?: string;
   /** Epoch the observer token was minted against; a stale token must not reach a newer entry. */
   ownerEpoch: number;
   close(code: number, reason: string): void;
@@ -271,7 +273,11 @@ export function createDesktopSessionRegistry(
       previous.released = true;
       entry.observers.delete(previous);
       entry.controller = undefined;
-      closeObserver(previous, 4000, "control-taken");
+      // WebSocket close reasons allow 123 UTF-8 bytes, including the takeover marker.
+      const reason = observer.operatorName
+        ? `control-taken:${observer.operatorName}`
+        : "control-taken";
+      closeObserver(previous, 4000, truncateUtf8Prefix(reason, 123));
     }
     const attached: ObserverEntry = { ...observer, released: false };
     entry.observers.add(attached);

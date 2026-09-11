@@ -33,6 +33,7 @@ vi.mock("./attempt-async-tasks.js", () => ({
   waitForCompletionRequiredAsyncTasks: hoisted.waitForCompletionRequiredAsyncTasks,
 }));
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 
@@ -384,7 +385,9 @@ describe("embedded attempt phase lifecycle state", () => {
             sessionFile: target.sessionKey,
             provider: "test",
             modelId: "model",
-            model: { api: "openai-responses" },
+            model: { api: "openai-responses", contextWindow: 180_000 },
+            modelContextWindow: 200_000,
+            contextTokenBudget: 180_000,
             userTurnTranscriptRecorder: recorder,
             onContextEngineTurnCandidate,
           } as never,
@@ -440,6 +443,12 @@ describe("embedded attempt phase lifecycle state", () => {
             boundary: {
               admission: recorder.getAdmissionReceipt(),
               terminal: expectedTerminalAnchor,
+            },
+            runtimeContext: {
+              provider: "test",
+              modelId: "model",
+              modelContextWindow: 200_000,
+              tokenBudget: 180_000,
             },
           }),
         );
@@ -553,14 +562,9 @@ describe("embedded attempt phase lifecycle state", () => {
           stopReason: "toolUse",
         }),
       );
-      const toolResultEntryId = sessionManager.appendMessage({
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "read",
-        content: [{ type: "text", text: "Current verified result." }],
-        isError: false,
-        timestamp: 3,
-      });
+      const toolResultEntryId = sessionManager.appendMessage(
+        makeTextToolResult("call-1", "read", "Current verified result.", false, 3),
+      );
       sessionManager.appendMessage(
         makeAgentAssistantMessage({ content: [{ type: "text", text: "Suppressed terminal." }] }),
       );

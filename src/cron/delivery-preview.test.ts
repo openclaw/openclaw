@@ -10,6 +10,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./isolated-agent/delivery-target.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./isolated-agent/delivery-target.js")>()),
   resolveDeliveryTarget: mocks.resolveDeliveryTarget,
+  prepareCronDeliveryTargetContexts: async (_cfg: unknown, requests: unknown[]) =>
+    requests.map(() => ({
+      ok: true,
+      value: { mainSessionKey: "agent:main:main", usedSharedMainFallback: false },
+    })),
 }));
 
 const { resolveCronDeliveryPreviews } = await import("./delivery-preview.js");
@@ -48,7 +53,7 @@ describe("resolveCronDeliveryPreview", () => {
         sessionKey: "agent:avery:telegram:direct:direct-123",
         sessionTarget: job.sessionTarget,
       }),
-      { dryRun: true },
+      expect.objectContaining({ dryRun: true }),
     );
     expect(preview.detail).toBe(
       "resolved from last, session agent:avery:telegram:direct:direct-123",
@@ -93,7 +98,7 @@ describe("resolveCronDeliveryPreview", () => {
         sessionKey: undefined,
         sessionTarget: "isolated",
       }),
-      { dryRun: true },
+      expect.objectContaining({ dryRun: true }),
     );
     expect(preview).toEqual({
       label: "none -> telegram:direct-123",
@@ -168,7 +173,7 @@ describe("resolveCronDeliveryPreview", () => {
         sessionKey: undefined,
         sessionTarget: "isolated",
       }),
-      { dryRun: true },
+      expect.objectContaining({ dryRun: true }),
     );
     expect(preview).toEqual({
       label: "none -> last",

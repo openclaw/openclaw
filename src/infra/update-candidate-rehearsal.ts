@@ -13,10 +13,8 @@ import { tryListenOnPort } from "./ports-probe.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
-import {
-  resolveUpdateCandidateStatePath,
-  UpdateCandidateStateSnapshotSchema,
-} from "./update-candidate-state.js";
+import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
+import { UpdateCandidateStateSnapshotSchema } from "./update-candidate-state.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   UPDATE_RUN_ID_ENV,
@@ -236,6 +234,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
             USERPROFILE: sourceEnv.USERPROFILE,
             OPENCLAW_AGENT_DIR: sourceEnv.OPENCLAW_AGENT_DIR,
             PI_CODING_AGENT_DIR: sourceEnv.PI_CODING_AGENT_DIR,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: sourceEnv.OPENCLAW_BUNDLED_PLUGINS_DIR,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: sourceEnv.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
           },
         }),
         baseEnv: env,

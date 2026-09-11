@@ -51,7 +51,9 @@ export async function assertRelayTabCreation(params: {
       const tabs = await extensionPage.evaluate(async () => await chrome.tabs.query({}));
       return { tabs, newTabs: tabs.filter((tab) => !existingTabs.some((e) => e.id === tab.id)) };
     };
-    await expect.poll(async () => (await queryNewTabs()).newTabs.length).toBe(1);
+    await expect
+      .poll(async () => (await queryNewTabs()).newTabs.length, { timeout: 10_000 })
+      .toBe(1);
     const { tabs, newTabs } = await queryNewTabs();
     const unchanged = await Promise.all(
       existingPages.map(

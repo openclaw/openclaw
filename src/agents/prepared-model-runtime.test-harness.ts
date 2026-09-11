@@ -22,6 +22,8 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     pluginIds: [],
     index: { plugins: [] },
     manifestRegistry: { plugins: [], diagnostics: [] },
+    registryDiagnostics: [],
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -46,7 +48,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   },
   modelRegistry: {
     fork: vi.fn((authStorage: unknown) => ({ authStorage })),
-    getAll: vi.fn(() => []),
+    getAll: vi.fn<() => ModelCatalogSnapshot["entries"]>(() => []),
     find: vi.fn(() => null),
   },
   buildPreparedModelCatalogSnapshot: vi.fn<BuildPreparedModelCatalogSnapshot>(async () => ({
@@ -124,6 +126,7 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         setPreparedModelFullCatalogAuth(
           catalog,
           getPreparedModelFullCatalogAuth(catalog) ?? {
+            providerAuthLabels: new Map(),
             authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
             authModes: {},
             credentials: preparedModelRuntimeMocks.authStorage.getAll(),
@@ -358,6 +361,10 @@ vi.mock("./models-config.providers.implicit.js", () => ({
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
+  acquireAgentRuntimePluginRegistry: async (...args: unknown[]) => {
+    const registry = preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args);
+    return { registry, primaryRegistry: registry };
+  },
   loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
     preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));

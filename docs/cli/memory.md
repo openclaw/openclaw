@@ -93,6 +93,16 @@ both groups without reindexing their retained transcripts. Ordinary retained,
 reset, and deleted user-session archives remain eligible until explicitly
 targeted.
 
+When an embedding provider rate-limits indexing, each embedding operation gets
+up to five attempts. Retries honor valid provider cooldown hints, capped at
+60 seconds per wait. Other transient errors keep the shorter three-attempt
+budget. Permanent quota errors without a cooldown hint stop that operation.
+The verbose output shows each retry wait.
+
+Interactive `memory_search` keeps three attempts and at most eight seconds of
+total retry sleep within the agent tool's 15-second deadline. A cancelled caller
+interrupts its retry wait.
+
 If status reports an index identity warning after changing embedding settings,
 check the affected agent's provider, model, sources, and extra paths, then rebuild:
 
@@ -272,9 +282,16 @@ review what remains.
 The purge removes matching promotion-marker entries and session-reference
 sections from scanned memory files, selected session-corpus lines, and
 selected-session transcript index chunks. It clears associated full-text and
-vector rows, cached embeddings, matching short-term state, ingestion seen-hash
-scopes, and origin rows. Matching content is scrubbed from dreaming rewrite
-backups, rather than deleting every backup.
+vector rows, matching short-term state, ingestion seen-hash scopes, and origin
+rows. Matching content is scrubbed from dreaming rewrite backups, rather than
+deleting every backup.
+
+For a nonempty session selection, Forget also clears the selected agent's entire
+embedding cache, including results retained from unfinished index rebuilds. Those
+results may not yet be linked to published index chunks. Unrelated published
+index entries remain usable, but later indexing may need to regenerate their
+cached embeddings. The dry-run report includes the whole-cache removal count;
+a dry run or an empty session selection does not clear the cache.
 
 Consolidation preserves origins for replaced promotion markers while retained
 rewrite preimages reference them. Those origins are pruned only after live
@@ -356,15 +373,15 @@ openclaw memory promote [--agent <id>] [--limit <n>] [--min-score <n>] \
   [--min-recall-count <n>] [--min-unique-queries <n>] [--apply] [--include-promoted] [--json]
 ```
 
-| Flag                       | Default      | Effect                                                            |
-| -------------------------- | ------------ | ----------------------------------------------------------------- |
-| `--limit <n>`              |              | Max candidates to return/apply.                                   |
-| `--min-score <n>`          | `0.75`       | Minimum weighted promotion score.                                 |
-| `--min-recall-count <n>`   | `3`          | Minimum recall count required.                                    |
-| `--min-unique-queries <n>` | `3`          | Minimum distinct query count required.                            |
-| `--apply`                  | preview only | Append selected candidates to `MEMORY.md` and mark them promoted. |
-| `--include-promoted`       |              | Include candidates already promoted in previous cycles.           |
-| `--json`                   |              | Print JSON.                                                       |
+| Flag                       | Default        | Effect                                                            |
+| -------------------------- | -------------- | ----------------------------------------------------------------- |
+| `--limit <n>`              | all candidates | Max candidates to return/apply.                                   |
+| `--min-score <n>`          | `0.75`         | Minimum weighted promotion score.                                 |
+| `--min-recall-count <n>`   | `3`            | Minimum recall count required.                                    |
+| `--min-unique-queries <n>` | `3`            | Minimum distinct query count required.                            |
+| `--apply`                  | preview only   | Append selected candidates to `MEMORY.md` and mark them promoted. |
+| `--include-promoted`       | off            | Include candidates already promoted in previous cycles.           |
+| `--json`                   | off            | Print JSON.                                                       |
 
 The CLI and scheduled dreaming sweep share the deep-phase defaults below.
 Explicit CLI flags override them for a one-off manual run.
@@ -442,14 +459,14 @@ openclaw memory session-backfill --agent <id> --rollback [--json]
 
 | Flag                        | Default      | Effect                                                                                                        |
 | --------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------- |
-| `--from YYYY-MM-DD`         |              | Include messages on or after this day in the dreaming timezone.                                               |
-| `--to YYYY-MM-DD`           |              | Include messages on or before this day in the dreaming timezone.                                              |
+| `--from YYYY-MM-DD`         | none         | Include messages on or after this day in the dreaming timezone.                                               |
+| `--to YYYY-MM-DD`           | none         | Include messages on or before this day in the dreaming timezone.                                              |
 | `--limit-days <n>`          | `92`         | Process at most this many hash-untracked days, oldest first.                                                  |
-| `--archive-files <path...>` |              | Also inspect foreign transcript files as untrusted input; embedded owner metadata is not accepted.            |
-| `--rem`                     |              | Write deterministic grounded per-day previews to `DREAMS.md` and retain their source-origin records.          |
+| `--archive-files <path...>` | none         | Also inspect foreign transcript files as untrusted input; embedded owner metadata is not accepted.            |
+| `--rem`                     | off          | Write deterministic grounded per-day previews to `DREAMS.md` and retain their source-origin records.          |
 | `--apply`                   | preview only | Drain all bounded batches, stage trusted candidates, and write reversible `DREAMS.md` diary blocks.           |
-| `--rollback`                |              | Remove all grounded backfill candidates and shared backfill diary blocks, including `rem-backfill` artifacts. |
-| `--json`                    |              | Print machine-readable per-day counts and top candidates.                                                     |
+| `--rollback`                | off          | Remove all grounded backfill candidates and shared backfill diary blocks, including `rem-backfill` artifacts. |
+| `--json`                    | off          | Print machine-readable per-day counts and top candidates.                                                     |
 
 The command reads the selected agent's canonical session store, including
 retained SQLite transcript identities from session rotation. It uses the same

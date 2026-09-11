@@ -7,6 +7,13 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  readRawTextBounds,
+  isAsciiWhitespace,
+  readTagToken,
+  skipHtmlComment,
+  startsLikeHtmlTag,
+} from "./web-fetch-html-tag.js";
 
 // Compile property matchers once: this list is checked for every styled element.
 const HIDDEN_STYLE_PATTERNS = (
@@ -118,15 +125,64 @@ function isStyleHidden(style: string): boolean {
   return false;
 }
 
-// The fixed visibility attributes share one grammar; each reader compiles it once per process.
-function createAttributeReader(attribute: "aria-hidden" | "class" | "hidden" | "style" | "type") {
-  const pattern = new RegExp(
-    `(?:^|\\s)${attribute}(?:\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\`]+)))?`,
-    "i",
-  );
+// Consume complete attributes so quoted values and framework names cannot become visibility names.
+function createAttributeReader(
+  attribute: "aria-hidden" | "class" | "hidden" | "style" | "type" | "encoding",
+) {
   return (attrs: string): string | undefined => {
-    const match = attrs.match(pattern);
-    return match ? (match[1] ?? match[2] ?? match[3] ?? "") : undefined;
+    let pos = 0;
+    while (pos < attrs.length) {
+      while (
+        pos < attrs.length &&
+        (isAsciiWhitespace(attrs.charAt(pos)) || attrs.charAt(pos) === "/")
+      ) {
+        pos += 1;
+      }
+      const nameStart = pos;
+      // A leading equals sign is part of a malformed name, not a new value boundary.
+      if (attrs.charAt(pos) === "=") {
+        pos += 1;
+      }
+      while (
+        pos < attrs.length &&
+        !isAsciiWhitespace(attrs.charAt(pos)) &&
+        attrs.charAt(pos) !== "/" &&
+        attrs.charAt(pos) !== "="
+      ) {
+        pos += 1;
+      }
+      if (pos === nameStart) {
+        break;
+      }
+      const name = attrs.slice(nameStart, pos).toLowerCase();
+      while (pos < attrs.length && isAsciiWhitespace(attrs.charAt(pos))) {
+        pos += 1;
+      }
+      let value = "";
+      if (attrs.charAt(pos) === "=") {
+        pos += 1;
+        while (pos < attrs.length && isAsciiWhitespace(attrs.charAt(pos))) {
+          pos += 1;
+        }
+        const quote = attrs.charAt(pos);
+        if (quote === '"' || quote === "'") {
+          const valueStart = pos + 1;
+          const valueEnd = attrs.indexOf(quote, valueStart);
+          value = valueEnd === -1 ? attrs.slice(valueStart) : attrs.slice(valueStart, valueEnd);
+          pos = valueEnd === -1 ? attrs.length : valueEnd + 1;
+        } else {
+          const valueStart = pos;
+          while (pos < attrs.length && !isAsciiWhitespace(attrs.charAt(pos))) {
+            pos += 1;
+          }
+          value = attrs.slice(valueStart, pos);
+        }
+      }
+      if (name === attribute) {
+        return value;
+      }
+    }
+    return undefined;
   };
 }
 
@@ -135,10 +191,9 @@ const readAriaHidden = createAttributeReader("aria-hidden");
 const readHidden = createAttributeReader("hidden");
 const readClass = createAttributeReader("class");
 const readStyle = createAttributeReader("style");
+const readEncoding = createAttributeReader("encoding");
 
-function shouldRemoveElement(tagNameRaw: string, attrs: string): boolean {
-  const tagName = normalizeLowercaseStringOrEmpty(tagNameRaw);
-
+function shouldRemoveElement(tagName: string, attrs: string): boolean {
   if (["meta", "template", "svg", "canvas", "iframe", "object", "embed"].includes(tagName)) {
     return true;
   }
@@ -168,153 +223,480 @@ function shouldRemoveElement(tagNameRaw: string, attrs: string): boolean {
   return false;
 }
 
-type HtmlTagToken = {
-  tagName: string;
-  attrs: string;
-  closing: boolean;
-  selfClosing: boolean;
+const LIST_CONTAINERS = new Set(["ul", "ol", "menu"]);
+const OPAQUE_TEXT_ELEMENTS = new Set([
+  "script",
+  "style",
+  "noscript",
+  "textarea",
+  "title",
+  "xmp",
+  "iframe",
+  "noembed",
+  "noframes",
+  "plaintext",
+]);
+const MATH_TEXT_INTEGRATION_POINTS = new Set(["mi", "mo", "mn", "ms", "mtext"]);
+const SVG_HTML_INTEGRATION_POINTS = new Set(["foreignobject", "desc", "title"]);
+// HTML's li start-tag rule stops at special elements other than address, div, and p.
+// Foreign-content containers also retain scope; void elements never enter the stack.
+const LIST_ITEM_BOUNDARIES = new Set([
+  "applet",
+  "article",
+  "aside",
+  "blockquote",
+  "body",
+  "button",
+  "caption",
+  "center",
+  "colgroup",
+  "dd",
+  "details",
+  "dialog",
+  "dir",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "frameset",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "head",
+  "header",
+  "hgroup",
+  "html",
+  "iframe",
+  "listing",
+  "main",
+  "marquee",
+  "math",
+  "menu",
+  "nav",
+  "noembed",
+  "noframes",
+  "noscript",
+  "object",
+  "ol",
+  "plaintext",
+  "pre",
+  "script",
+  "search",
+  "section",
+  "select",
+  "style",
+  "summary",
+  "svg",
+  "table",
+  "tbody",
+  "td",
+  "template",
+  "textarea",
+  "tfoot",
+  "th",
+  "thead",
+  "title",
+  "tr",
+  "ul",
+  "xmp",
+]);
+
+const DEFINITION_ITEMS = new Set(["dt", "dd"]);
+const LIST_ITEMS = new Set(["li"]);
+const DEFINITION_CONTAINERS = new Set(["dl"]);
+const PARAGRAPH_CLOSE_START = new Set([
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "dd",
+  "details",
+  "dialog",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hgroup",
+  "hr",
+  "li",
+  "listing",
+  "main",
+  "menu",
+  "nav",
+  "ol",
+  "p",
+  "plaintext",
+  "pre",
+  "search",
+  "section",
+  "table",
+  "ul",
+  "xmp",
+]);
+const BUTTON_SCOPE_BOUNDARIES = new Set([
+  "applet",
+  "button",
+  "caption",
+  "html",
+  "marquee",
+  "math",
+  "object",
+  "svg",
+  "table",
+  "td",
+  "template",
+  "th",
+]);
+const TABLE_SCOPE_BOUNDARIES = new Set(["html", "math", "svg", "table", "template"]);
+const PARAGRAPH_REQUIRED_END_PARENTS = new Set([
+  "a",
+  "audio",
+  "del",
+  "ins",
+  "map",
+  "noscript",
+  "video",
+]);
+const ROW_GROUPS = new Set(["tbody", "thead", "tfoot"]);
+
+type OpenElement = {
+  name: string;
+  previousSameName: number | undefined;
+  special: number;
+  buttonBoundary: number;
+  tableBoundary: number;
+  selectOwner: number;
+  namespace: "html" | "math" | "svg";
+  childNamespace: "html" | "math" | "svg";
 };
-
-function findTagEnd(html: string, start: number): number {
-  let quote: '"' | "'" | undefined;
-  for (let index = start + 1; index < html.length; index += 1) {
-    const char = html[index];
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char === ">") {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function readTagName(source: string, start: number): { tagName: string; end: number } | null {
-  let end = start;
-  while (end < source.length) {
-    const code = source.charCodeAt(end);
-    const isNameChar =
-      (code >= 65 && code <= 90) ||
-      (code >= 97 && code <= 122) ||
-      (code >= 48 && code <= 57) ||
-      source[end] === "-" ||
-      source[end] === "_" ||
-      source[end] === ":";
-    if (!isNameChar) {
-      break;
-    }
-    end += 1;
-  }
-  if (end === start) {
-    return null;
-  }
-  return {
-    tagName: normalizeLowercaseStringOrEmpty(source.slice(start, end)),
-    end,
-  };
-}
-
-function parseHtmlTagToken(token: string): HtmlTagToken | null {
-  let inner = token.slice(1, -1).trim();
-  if (!inner || inner.startsWith("!") || inner.startsWith("?")) {
-    return null;
-  }
-
-  const closing = inner.startsWith("/");
-  if (closing) {
-    inner = inner.slice(1).trimStart();
-  }
-
-  const name = readTagName(inner, 0);
-  if (!name) {
-    return null;
-  }
-
-  const attrs = closing ? "" : inner.slice(name.end);
-  return {
-    tagName: name.tagName,
-    attrs,
-    closing,
-    selfClosing: !closing && attrs.trimEnd().endsWith("/"),
-  };
-}
-
-function popDroppedElement(dropStack: string[], tagName: string): void {
-  const index = dropStack.lastIndexOf(tagName);
-  if (index >= 0) {
-    dropStack.length = index;
-  }
-}
 
 function removeMarkedElements(html: string): string {
   let output = "";
   let cursor = 0;
-  const dropStack: string[] = [];
+  // Scope facts belong to each open frame and restore when it closes. Indexed names
+  // avoid rescanning unchanged ancestry for malformed closers or repeated siblings.
+  const elements: OpenElement[] = [
+    {
+      name: "",
+      previousSameName: undefined,
+      special: 0,
+      buttonBoundary: 0,
+      tableBoundary: 0,
+      selectOwner: -1,
+      namespace: "html",
+      childNamespace: "html",
+    },
+  ];
+  const positions = new Map<string, number>();
+  let hiddenRoot = -1;
+
+  function closeElements(index: number): void {
+    while (elements.length > index) {
+      const element = elements.pop()!;
+      if (element.previousSameName === undefined) {
+        positions.delete(element.name);
+      } else {
+        positions.set(element.name, element.previousSameName);
+      }
+    }
+  }
+
+  function closeOptionalElement(index: number): void {
+    // Recovery cannot close a genuinely unclosed, non-optional hidden descendant.
+    if (
+      index > 0 &&
+      elements[index]!.namespace === "html" &&
+      (hiddenRoot < 0 || hiddenRoot <= index)
+    ) {
+      closeElements(index);
+      if (hiddenRoot === index) {
+        hiddenRoot = -1;
+      }
+    }
+  }
+
+  function lastOpen(names: readonly string[]): number {
+    let index = -1;
+    for (const name of names) {
+      const position = positions.get(name);
+      if (position !== undefined && position > index) {
+        index = position;
+      }
+    }
+    return index;
+  }
+
+  function scopedItem(items: Set<string>, owners: Set<string>): number {
+    const index = elements.at(-1)!.special;
+    if (index > 0 && items.has(elements[index]!.name)) {
+      const owner = elements[index - 1]!.special;
+      if (owners.has(elements[owner]!.name)) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  function paragraph(): number {
+    const index = positions.get("p");
+    return index !== undefined && index > elements.at(-1)!.buttonBoundary ? index : -1;
+  }
+
+  function tableScope() {
+    const table = elements.at(-1)!.tableBoundary;
+    const owner = elements[table]!.name === "table" ? table : -1;
+    const group = lastOpen(["tbody", "thead", "tfoot"]);
+    const row = lastOpen(["tr"]);
+    const cell = lastOpen(["td", "th"]);
+    return {
+      owner,
+      group: owner >= 0 && group > owner ? group : owner,
+      row: owner >= 0 && row > owner ? row : -1,
+      cell: owner >= 0 && row > owner && cell > row ? cell : -1,
+    };
+  }
+
+  function optionScope() {
+    const owner = elements.at(-1)!.selectOwner;
+    const group = lastOpen(["optgroup"]);
+    const option = lastOpen(["option"]);
+    return {
+      owner,
+      group: owner >= 0 && group > owner ? group : -1,
+      option: owner >= 0 && option > owner ? option : -1,
+    };
+  }
+
+  function closesOptionalElement(element: number, index: number): boolean {
+    if (element <= 0 || index >= element || elements[element]!.namespace !== "html") {
+      return false;
+    }
+    const name = elements[element]!.name;
+    if (name === "li" || DEFINITION_ITEMS.has(name)) {
+      const item =
+        name === "li"
+          ? scopedItem(LIST_ITEMS, LIST_CONTAINERS)
+          : scopedItem(DEFINITION_ITEMS, DEFINITION_CONTAINERS);
+      return item === element && elements[element - 1]!.special === index;
+    }
+    if (name === "p") {
+      const parent = elements[element - 1]!.name;
+      return (
+        paragraph() === element &&
+        !PARAGRAPH_REQUIRED_END_PARENTS.has(parent) &&
+        !parent.includes("-") &&
+        (index === element - 1 || closesOptionalElement(element - 1, index))
+      );
+    }
+    if (name === "td" || name === "th" || name === "tr" || ROW_GROUPS.has(name)) {
+      const scope = tableScope();
+      if (name === "td" || name === "th") {
+        return scope.cell === element && [scope.row, scope.group, scope.owner].includes(index);
+      }
+      if (name === "tr") {
+        return scope.row === element && [scope.group, scope.owner].includes(index);
+      }
+      return scope.group === element && index === scope.owner;
+    }
+    if (name === "option" || name === "optgroup") {
+      const scope = optionScope();
+      return name === "option"
+        ? scope.option === element && [scope.group, scope.owner].includes(index)
+        : scope.group === element && index === scope.owner;
+    }
+    return false;
+  }
+
+  function closeForStart(name: string): void {
+    if (PARAGRAPH_CLOSE_START.has(name)) {
+      closeOptionalElement(paragraph());
+    }
+    if (name === "li") {
+      closeOptionalElement(scopedItem(LIST_ITEMS, LIST_CONTAINERS));
+    } else if (DEFINITION_ITEMS.has(name)) {
+      closeOptionalElement(scopedItem(DEFINITION_ITEMS, DEFINITION_CONTAINERS));
+    } else if (name === "td" || name === "th" || name === "tr" || ROW_GROUPS.has(name)) {
+      if (tableScope().cell > 0) {
+        closeOptionalElement(paragraph());
+      }
+      closeOptionalElement(tableScope().cell);
+      if (name === "tr" || ROW_GROUPS.has(name)) {
+        closeOptionalElement(tableScope().row);
+      }
+      if (ROW_GROUPS.has(name)) {
+        const scope = tableScope();
+        if (scope.group > scope.owner) {
+          closeOptionalElement(scope.group);
+        }
+      }
+    } else if (name === "option" || name === "optgroup") {
+      const scope = optionScope();
+      const inSelect = scope.owner >= 0 && elements[scope.owner]!.name === "select";
+      // Body-mode datalist parsing only closes an option that is the current node.
+      if (inSelect || elements.at(-1)!.name === "option") {
+        closeOptionalElement(scope.option);
+      }
+      if (name === "optgroup" && inSelect) {
+        closeOptionalElement(scope.group);
+      }
+    }
+  }
+
+  function openElement(name: string, attrs: string, namespace: OpenElement["namespace"]): void {
+    const parent = elements.at(-1)!;
+    const index = elements.length;
+    const foreign = name === "math" || name === "svg";
+    const encoding =
+      namespace === "math" && name === "annotation-xml"
+        ? readEncoding(attrs)?.toLowerCase()
+        : undefined;
+    const htmlChildren =
+      (namespace === "math" &&
+        (MATH_TEXT_INTEGRATION_POINTS.has(name) ||
+          encoding === "text/html" ||
+          encoding === "application/xhtml+xml")) ||
+      (namespace === "svg" && SVG_HTML_INTEGRATION_POINTS.has(name));
+    elements.push({
+      name,
+      previousSameName: positions.get(name),
+      special: name === "li" || LIST_ITEM_BOUNDARIES.has(name) ? index : parent.special,
+      buttonBoundary: BUTTON_SCOPE_BOUNDARIES.has(name) ? index : parent.buttonBoundary,
+      tableBoundary: TABLE_SCOPE_BOUNDARIES.has(name) ? index : parent.tableBoundary,
+      selectOwner:
+        name === "select" || name === "datalist"
+          ? index
+          : foreign || name === "html" || name === "template"
+            ? -1
+            : parent.selectOwner,
+      namespace,
+      childNamespace: htmlChildren ? "html" : namespace,
+    });
+    positions.set(name, index);
+  }
 
   while (cursor < html.length) {
     const tagStart = html.indexOf("<", cursor);
     if (tagStart < 0) {
-      if (dropStack.length === 0) {
+      if (hiddenRoot < 0) {
         output += html.slice(cursor);
       }
       break;
     }
 
-    if (dropStack.length === 0) {
+    if (hiddenRoot < 0) {
       output += html.slice(cursor, tagStart);
     }
 
     if (html.startsWith("<!--", tagStart)) {
-      const commentEnd = html.indexOf("-->", tagStart + 4);
-      cursor = commentEnd < 0 ? html.length : commentEnd + 3;
+      cursor = skipHtmlComment(html, tagStart);
       continue;
     }
 
-    const tagEnd = findTagEnd(html, tagStart);
-    if (tagEnd < 0) {
-      if (dropStack.length === 0) {
+    if (!startsLikeHtmlTag(html, tagStart)) {
+      if (hiddenRoot < 0) {
+        output += "<";
+      }
+      cursor = tagStart + 1;
+      continue;
+    }
+
+    const read = readTagToken(html, tagStart, "visibility");
+    if (!read) {
+      if (hiddenRoot < 0) {
         output += html.slice(tagStart);
       }
       break;
     }
 
-    const token = html.slice(tagStart, tagEnd + 1);
-    const parsed = parseHtmlTagToken(token);
+    const token = html.slice(tagStart, read.next);
+    const parsed = read.token;
     if (!parsed) {
-      if (dropStack.length === 0) {
+      if (hiddenRoot < 0) {
         output += token;
       }
-      cursor = tagEnd + 1;
+      cursor = read.next;
       continue;
     }
 
-    if (dropStack.length > 0) {
-      if (parsed.closing) {
-        popDroppedElement(dropStack, parsed.tagName);
-      } else if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.tagName)) {
-        dropStack.push(parsed.tagName);
+    const parent = elements.at(-1)!;
+    let namespace = parent.childNamespace;
+    if (
+      parent.namespace === "math" &&
+      MATH_TEXT_INTEGRATION_POINTS.has(parent.name) &&
+      (parsed.name === "mglyph" || parsed.name === "malignmark")
+    ) {
+      namespace = "math";
+    } else if (namespace === "html" && (parsed.name === "math" || parsed.name === "svg")) {
+      namespace = parsed.name;
+    }
+    if (!parsed.closing && namespace === "html" && OPAQUE_TEXT_ELEMENTS.has(parsed.name)) {
+      closeForStart(parsed.name);
+      const bounds =
+        parsed.name === "plaintext"
+          ? { contentEnd: html.length, end: html.length }
+          : readRawTextBounds(html, parsed.name, read.next, "visibility");
+      if (hiddenRoot < 0 && !shouldRemoveElement(parsed.name, parsed.attrs)) {
+        // Readability's DOM parser does not recognize double-escaped script data.
+        // Empty comments preserve token boundaries without retaining their hidden text.
+        output +=
+          parsed.name === "script"
+            ? token +
+              html
+                .slice(read.next, bounds.contentEnd)
+                .replace(/<!--[\s\S]*?(?:-->|$)/g, "<!---->") +
+              html.slice(bounds.contentEnd, bounds.end)
+            : html.slice(tagStart, bounds.end);
       }
-      cursor = tagEnd + 1;
+      cursor = bounds.end;
       continue;
     }
 
     if (parsed.closing) {
-      output += token;
-    } else if (shouldRemoveElement(parsed.tagName, parsed.attrs)) {
-      if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.tagName)) {
-        dropStack.push(parsed.tagName);
+      const index = positions.get(parsed.name);
+      const visible = hiddenRoot < 0;
+      const closesHiddenOptional = index !== undefined && closesOptionalElement(hiddenRoot, index);
+      if (index !== undefined && (visible || index >= hiddenRoot || closesHiddenOptional)) {
+        closeElements(index);
+        if (hiddenRoot >= index) {
+          hiddenRoot = -1;
+        }
+      }
+      if (visible || closesHiddenOptional) {
+        output += token;
       }
     } else {
-      output += token;
+      if (namespace === "html") {
+        closeForStart(parsed.name);
+      }
+      const hidden = hiddenRoot >= 0 || shouldRemoveElement(parsed.name, parsed.attrs);
+      if (!hidden) {
+        output += token;
+      }
+      if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.name)) {
+        if (hidden && hiddenRoot < 0) {
+          hiddenRoot = elements.length;
+        }
+        openElement(parsed.name, parsed.attrs, namespace);
+      }
     }
-    cursor = tagEnd + 1;
+    cursor = read.next;
   }
 
   return output;

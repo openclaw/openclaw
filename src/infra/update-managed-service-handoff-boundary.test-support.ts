@@ -7,10 +7,8 @@ import { waitForFile } from "../../test/helpers/process-wait.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
 import { writeTriageUpdateFailure } from "../commands/triage-update.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { writeRestartSentinel } from "./restart-sentinel.js";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import {
@@ -22,6 +20,7 @@ import {
 import {
   createManagedServiceCancellationPreload,
   createManagedServiceLaunchdClockPreload,
+  prepareManagedServiceTriageClockPreload,
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
   type ManagedServiceCommandTiming,
@@ -35,10 +34,16 @@ import {
   releaseManagedRepairInference,
 } from "./update-managed-service-handoff-repair.test-support.js";
 import { prepareManagedServiceRuntimeFixture } from "./update-managed-service-handoff-runtime.test-support.js";
-import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+import {
+  managedServiceStateUpdateScript,
+  readRestartSentinelPayload,
+} from "./update-managed-service-handoff-state.test-support.js";
+import {
+  createManagedServiceActivationScript,
+  readNativeState,
+  readSavedFailure,
+} from "./update-managed-service-native.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
-
-type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
 
 export async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -47,21 +52,6 @@ export async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): unknown {
-  const { db } = openOpenClawStateDatabase({ env });
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("gateway_restart_sentinel")
-      .select(["version", "payload_json", "updated_at_ms"])
-      .where("sentinel_key", "=", key),
-  );
-  return row
-    ? { version: row.version, payload: JSON.parse(row.payload_json), revision: row.updated_at_ms }
-    : null;
 }
 
 export function createManagedServiceManagerBoundary({
@@ -169,6 +159,8 @@ export function createManagedServiceManagerBoundary({
     const env = {
       ...process.env,
       ...(kind === "launchd" ? LAUNCHD_GATEWAY_IDENTITY_ENV : {}),
+      // Source descendants run from the durable helper cwd, outside this checkout.
+      TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
       OPENCLAW_STATE_DIR: root,
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -176,8 +168,11 @@ export function createManagedServiceManagerBoundary({
     const run = options?.ledger
       ? createUpdateRun(
           {
-            trigger: options.requester ? "chat" : "api",
-            origin: options.requester ? { requester: options.requester } : {},
+            trigger: options.requester ? "chat" : (options.trigger ?? "api"),
+            origin: {
+              ...options.origin,
+              ...(options.requester ? { requester: options.requester } : {}),
+            },
           },
           { env },
         )
@@ -297,9 +292,14 @@ export function createManagedServiceManagerBoundary({
               })
             : options.validationResult
               ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
-              : options.runnerFallback
-                ? `void (async () => { ${sourceRuntimeImport} const { activateManagedServiceUpdateHandoff } = await import(${JSON.stringify(new URL("./update-managed-service-handoff.ts", import.meta.url).href)}); await activateManagedServiceUpdateHandoff(); ${updaterScript} })().catch((error) => { console.error(error); process.exit(18); });`
-                : `process.stdin.once("data", (reply) => { if (reply.toString() !== "parked\\n") process.exit(18); ${updaterScript} }); process.stdout.write("park\\n");`;
+              : createManagedServiceActivationScript({
+                  ...options,
+                  installRoot: root,
+                  runId: run?.runId,
+                  sourceRuntimeImport,
+                  statePath,
+                  updaterScript,
+                });
         updaterScript = `
         const validationFs = require("node:fs");
         const validationStartedAt = Date.now();
@@ -329,7 +329,8 @@ export function createManagedServiceManagerBoundary({
             ? {}
             : { parentExitDeadlineAt: Date.now() + options.systemdHandoffDeadlineMs }),
           ...commandFixture,
-          ...(options?.recoveryHang || options?.triageHang ? { recoveryTimeoutMs: 1000 } : {}),
+          // Triage hangs must reach the diagnostic cap without timing out healthy recovery.
+          ...(options?.recoveryHang ? { recoveryTimeoutMs: 1000 } : {}),
           recovery: { serviceRestartSafe: true, version: "1.0.0" },
           recoveryModulePath,
           commandArgv: [process.execPath, "-e", updaterScript],
@@ -355,6 +356,15 @@ export function createManagedServiceManagerBoundary({
       let helperEnv = options?.repair
         ? await prepareManagedRepairSpawnEnv(root, childEnv)
         : childEnv;
+      const triageDeadlinePath = path.join(root, "triage-deadline.json");
+      if (options?.triageHang) {
+        helperEnv = await prepareManagedServiceTriageClockPreload(
+          { root, scriptPath, statePath },
+          commandFixture.triageCommandArgv,
+          String(generated.triageInputPath),
+          helperEnv,
+        );
+      }
       if (options?.launchdTeardown?.clockEachCommandMs || options?.recoveryClockAdvanceMs) {
         const preloadPath = path.join(root, "launchd-clock-preload.cjs");
         await fs.writeFile(
@@ -544,7 +554,11 @@ export function createManagedServiceManagerBoundary({
           !options.validationResult &&
           !options.cancelDuringValidation &&
           !options.cancelAtActivation &&
-          !options.revokeWhileValidating;
+          !options.revokeWhileValidating &&
+          options.nativePreparation !== "refuse-stop" &&
+          options.nativePreparation !== "fail-preparation" &&
+          options.nativePreparation !== "fail-persistence-ack" &&
+          options.nativePreparation !== "fail-commit-ack";
         if (activated) {
           await vi.waitFor(
             async () => {
@@ -562,7 +576,8 @@ export function createManagedServiceManagerBoundary({
         if (!options.repair) {
           expect(code, `${stderr}\n${helperLog}`).toBe(options.helperExitCode ?? 0);
         }
-        await expect(pathExists(updaterPath)).resolves.toBe(activated);
+        const updated = activated && options.nativePreparation !== "timeout-stop";
+        await expect(pathExists(updaterPath)).resolves.toBe(updated);
       } else if (options?.parentExitTimeoutMs !== undefined) {
         const timeout = options.parentExitTimeoutMs + (options.launchdTeardown ? 8_000 : 3_000);
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -587,15 +602,7 @@ export function createManagedServiceManagerBoundary({
         await expect(pathExists(commandsPath)).resolves.toBe(false);
         expect(stdout).not.toContain("committed\n");
         await expect(pathExists(updaterPath)).resolves.toBe(false);
-      } else if (options?.launchdFault === "wrong-parent") {
-        const cancelled = waitForHandoffResponse(runningHelper.stdout, "cancelled");
-        runningHelper.stdin?.write("park\n");
-        await cancelled;
-        expect(await completion, stderr).toBe(0);
-        expect(parent.exitCode).toBeNull();
-        expect(parent.signalCode).toBeNull();
-        await expect(pathExists(updaterPath)).resolves.toBe(false);
-      } else if (options?.overdueCommit) {
+      } else if (options?.launchdFault === "wrong-parent" || options?.overdueCommit) {
         const cancelled = waitForHandoffResponse(runningHelper.stdout, "cancelled");
         runningHelper.stdin?.write("park\n");
         await cancelled;
@@ -643,14 +650,6 @@ export function createManagedServiceManagerBoundary({
         );
         db.close();
       }
-      const contextPath = String(generated.triageContextPath);
-      const savedFailure = (await pathExists(contextPath))
-        ? {
-            path: contextPath,
-            mode: (await fs.stat(contextPath)).mode & 0o777,
-            contents: JSON.parse(await fs.readFile(contextPath, "utf8")),
-          }
-        : null;
       return {
         ...(options?.repair
           ? {
@@ -664,13 +663,13 @@ export function createManagedServiceManagerBoundary({
           .split("\n")
           .filter(Boolean),
         parentSignal: parent.signalCode,
-        state: JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}")) as Record<
-          string,
-          unknown
-        >,
+        state: await readNativeState(statePath),
         sentinel: readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
         log: await fs.readFile(String(generated.logPath), "utf8"),
-        savedFailure,
+        ...(options?.triageHang
+          ? { triageDeadline: JSON.parse(await fs.readFile(triageDeadlinePath, "utf8")) }
+          : {}),
+        savedFailure: await readSavedFailure(String(generated.triageContextPath)),
         sensitiveFilesRemoved: (
           await Promise.all((generated.sensitivePaths as string[]).map(pathExists))
         ).every((exists) => !exists),
@@ -695,8 +694,7 @@ export function createManagedServiceManagerBoundary({
             process.kill(-updaterPid, "SIGKILL");
           } catch {}
         }
-        // Let the helper reap native commands after their parent exits; killing it
-        // first orphans manager fixtures that can write during directory cleanup.
+        // Reap native commands before helper cleanup so fixtures cannot outlive their directory.
         await parentClosed;
         await helperCompletion;
       }

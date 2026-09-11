@@ -261,6 +261,7 @@ export async function finishGatewayStartup(params: {
           pluginRuntimeClaim: startupPluginRuntimeClaim,
           getCurrentPluginRegistry: () => pluginRuntime.registry,
           getCurrentPluginMetadataSnapshot: getPluginMetadataSnapshot,
+          getCurrentActivationSourceConfig: getRuntimeConfigSourceSnapshot,
           ambientEnvTriggers,
           pluginRegistry: pluginRuntime.registry,
           defaultWorkspaceDir,
@@ -342,9 +343,6 @@ export async function finishGatewayStartup(params: {
           sidecarStartup,
           waitForPostReadyWork: params.waitForPostReadyWork,
           activeWorkInspectors,
-          providerAuthPrewarm: {
-            getConfig: getRuntimeConfig,
-          },
         }),
       ),
     ),

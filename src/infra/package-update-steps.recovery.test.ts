@@ -260,17 +260,17 @@ describe("package update recovery safety", () => {
             activationFailed ? "old launcher\n" : "new launcher\n",
           );
           if (outcome !== "confirm") {
-            const restored = await transaction.rollback();
+            const restored = await transaction.rollback(() => {});
             expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
-            expect(await transaction.rollback()).toEqual(restored);
+            expect(await transaction.rollback(() => {})).toEqual(restored);
             await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
           }
-          await transaction.complete({ activationVerified: outcome === "confirm" });
-          await transaction.complete({ activationVerified: outcome === "confirm" });
+          await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
+          await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
           await expect(
             fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
           ).resolves.toContain(`"version":"${outcome === "confirm" ? "2.0.0" : "1.0.0"}"`);
-          expect((await transaction.rollback()).exitCode).toBe(1);
+          expect((await transaction.rollback(() => {})).exitCode).toBe(1);
         }
         expect((await fs.readdir(globalRoot)).filter((entry) => entry.startsWith("."))).toEqual([]);
       });
@@ -660,7 +660,7 @@ describe("package update recovery safety", () => {
       const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
         const source = String(args[0]);
         if (
-          String(args[1]) === targetCmdShim &&
+          path.basename(source) === "openclaw.cmd" &&
           path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-")
         ) {
           throw Object.assign(new Error("launcher restoration denied"), { code: "EACCES" });
@@ -724,7 +724,7 @@ describe("package update recovery safety", () => {
       });
       expect(result.afterVersion).toBe("1.0.0");
       await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old openclaw\n");
-      await expect(fs.readFile(targetCmdShim, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(targetCmdShim, "utf8")).resolves.toBe("new openclaw.cmd\n");
       const backupDirs = (await fs.readdir(globalRoot)).filter((entry) =>
         entry.startsWith(".openclaw.shim-backup-"),
       );
