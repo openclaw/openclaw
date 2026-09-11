@@ -58,7 +58,7 @@ export type DownloadableInstallCandidate = {
 export type BundledPluginPackageDescriptor = {
   name?: string;
   packageName?: string;
-  sourceCheckout?: boolean;
+  preserveExternalInstallRecord?: boolean;
 };
 
 /** Keep doctor diagnostics and actual package repair on the same discovery snapshot. */
@@ -94,12 +94,21 @@ export async function resolveConfiguredPluginInstallContext(params: {
   });
   const bundledPluginsById = new Map<string, BundledPluginPackageDescriptor>(
     currentBundledPlugins.flatMap((plugin) => {
+      const external = isExternallyDistributedPlugin(plugin);
       const sourceCheckout = isBundledPluginInsideDevSourceRoot({
         rootDir: plugin.rootDir,
         env: params.env,
       });
-      return !isExternallyDistributedPlugin(plugin) || sourceCheckout
-        ? [[plugin.pluginId, { packageName: plugin.packageName, sourceCheckout }] as const]
+      return !external || sourceCheckout
+        ? [
+            [
+              plugin.pluginId,
+              {
+                packageName: plugin.packageName,
+                preserveExternalInstallRecord: external && sourceCheckout,
+              },
+            ] as const,
+          ]
         : [];
     }),
   );

@@ -260,7 +260,7 @@ async function repairMissingPluginInstallsWithLease(
     if (!bundled || !recordMatchesBundledPackage(record, bundled)) {
       continue;
     }
-    if (bundled.sourceCheckout) {
+    if (bundled.preserveExternalInstallRecord) {
       const message = formatSourceBundledPluginNotice(pluginId);
       notices.push(message);
       sourceOutcomes.push({
