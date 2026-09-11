@@ -21,6 +21,20 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+Cron run receipts use the bare nullable `trigger_state_retired INTEGER` column
+without changing state schema 17. The receipt owner adds it on first use. A
+committed condition, script-payload, or shared-state edit sets it to `1` for the
+receipt still awaiting run reconciliation in the same transaction as the job edit.
+This includes an exact receipt already closed by an agent-owner edit. Normal completion and
+restart recovery then preserve the replacement's state while retaining the old
+run's history. Queued receipts are unchanged because execution captures current
+state when it starts. Receipt retention and deletion remain unchanged.
+
+Missing or `NULL` values mean no recorded retirement; earlier edits cannot be
+reconstructed from the final job definition. Older compatible readers ignore the
+column but do not enforce this protection. Finish active runs before downgrading
+if their edited watcher state must be preserved.
+
 Agent schema 19 records collected input consumption in the nullable
 `session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
 first-use ensure add it when needed; the schema version stays 19. The column

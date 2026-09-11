@@ -1479,6 +1479,7 @@ CREATE TABLE IF NOT EXISTS cron_run_receipts (
   started_at_ms INTEGER NOT NULL,
   finished_at_ms INTEGER,
   error_text TEXT,
+  trigger_state_retired INTEGER,
   CHECK (status IN ('running', 'ok', 'error', 'skipped', 'interrupted', 'superseded')),
   CHECK (
     (status = 'running' AND finished_at_ms IS NULL)

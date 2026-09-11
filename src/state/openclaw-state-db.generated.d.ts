@@ -398,6 +398,7 @@ export interface CronRunReceipts {
   started_at_ms: number;
   status: string;
   store_key: string;
+  trigger_state_retired: number | null;
 }
 
 export interface CurrentConversationBindings {

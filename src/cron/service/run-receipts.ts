@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isCronSelfRemovalCurrent, type CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { cronStoreKey } from "../store/key.js";
+import { loadedCronStoreFromRows, loadCronRows } from "../store/row-codec.js";
 import {
   activateCronRunReceiptInDatabase,
   adjudicateActiveCronRunReceiptInDatabase,
@@ -11,9 +13,11 @@ import {
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
+  findActiveCronRunReceiptInDatabase,
   isCronRunReceiptSettlementPending,
   prepareCronRunReceiptAdjudication,
   prepareCronRunReceiptClaim,
+  retireCronRunTriggerStateInDatabase,
   trackCronRunReceiptSettlement,
   type PreparedCronRunReceiptClaim,
   type CronRunReceiptHandle,
@@ -22,6 +26,7 @@ import {
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import type { CronServiceState } from "./state.js";
+import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 
 export type CronRunReceiptSettlementDisposition = "owner-unavailable";
 
@@ -99,6 +104,41 @@ export function cronRunReceiptOwnerMutationHooks(params: {
       });
     },
   };
+}
+
+export function retireServiceCronRunTriggerStateInDatabase(params: {
+  state: CronServiceState;
+  database: DatabaseSync;
+  jobId: string;
+}): void {
+  const { database, jobId } = params;
+  const storePath = params.state.deps.storePath;
+  const active = findActiveCronRunReceiptInDatabase({ database, storePath, jobId });
+  if (active) {
+    retireCronRunTriggerStateInDatabase({ database, handle: active });
+    return;
+  }
+  const storeKey = cronStoreKey(storePath);
+  const job = loadedCronStoreFromRows(loadCronRows(database, storeKey, new Set([jobId]))).store
+    .jobs[0];
+  const startedAtMs = job?.state.runningAtMs;
+  if (startedAtMs === undefined) {
+    return;
+  }
+  // An owner edit can terminalize the receipt before its completed task is
+  // reconciled. The selected task's exact receipt still owns those pending facts.
+  const { receiptId } = findCronTaskRunRecoveryInDatabase({
+    database,
+    jobId,
+    storeKey,
+    startedAt: startedAtMs,
+  });
+  if (receiptId) {
+    retireCronRunTriggerStateInDatabase({
+      database,
+      handle: { receiptId, storeKey, jobId, startedAtMs },
+    });
+  }
 }
 
 export function assertServiceCronRunReceiptCurrent(

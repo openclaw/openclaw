@@ -7,6 +7,7 @@ import {
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import {
+  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -35,9 +36,11 @@ import {
   CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceipt,
+  isCronRunTriggerStateRetiredInDatabase,
   listActiveCronRunReceiptJobIdsInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
+  retireCronRunTriggerStateInDatabase,
   type CronRunReceiptHandle,
 } from "./run-receipt-store.js";
 
@@ -213,6 +216,101 @@ describe("cron run receipt store", () => {
           )
           .get(),
       ).toEqual({ name: "cron_run_receipts" });
+    },
+  );
+
+  it.each(["current", "legacy"] as const)(
+    "keeps trigger-state retirement atomic across a %s receipt schema",
+    async (schema) => {
+      const { storePath } = await makeStorePath();
+      const startedAtMs = Date.now();
+      const editedJob = makeJob(`retirement-${schema}`);
+      const untouchedJob = makeJob(`untouched-${schema}`);
+      for (const job of [editedJob, untouchedJob]) {
+        job.trigger = { script: "return true", once: true };
+        job.state.runningAtMs = startedAtMs;
+      }
+      await saveCronStore(storePath, { version: 1, jobs: [editedJob, untouchedJob] });
+      const editedReceipt = claim(storePath, editedJob, startedAtMs);
+      const untouchedReceipt = claim(storePath, untouchedJob, startedAtMs);
+      let database = openOpenClawStateDatabase();
+      const schemaVersion = database.db.prepare("PRAGMA user_version").get();
+      const readColumn = () =>
+        database.db
+          .prepare(
+            `SELECT type, "notnull", dflt_value
+               FROM pragma_table_info('cron_run_receipts')
+              WHERE name = 'trigger_state_retired'`,
+          )
+          .get();
+      const readRetirements = () =>
+        runOpenClawStateWriteTransaction(({ db }) => ({
+          edited: isCronRunTriggerStateRetiredInDatabase({ database: db, handle: editedReceipt }),
+          untouched: isCronRunTriggerStateRetiredInDatabase({
+            database: db,
+            handle: untouchedReceipt,
+          }),
+        }));
+
+      try {
+        if (schema === "legacy") {
+          // Preserve real receipts while restoring the pre-column database shape.
+          database.db.exec("ALTER TABLE cron_run_receipts DROP COLUMN trigger_state_retired");
+        }
+        closeOpenClawStateDatabaseByPath(database.path);
+        database = openOpenClawStateDatabase();
+        const previousColumn = readColumn();
+        if (schema === "legacy") {
+          expect(previousColumn).toBeUndefined();
+        }
+        expect(readRetirements()).toEqual({ edited: false, untouched: false });
+
+        expect(() =>
+          runOpenClawStateWriteTransaction(({ db }) => {
+            retireCronRunTriggerStateInDatabase({
+              database: db,
+              handle: editedReceipt,
+            });
+            expect(
+              isCronRunTriggerStateRetiredInDatabase({ database: db, handle: editedReceipt }),
+            ).toBe(true);
+            throw new Error("cron edit did not commit");
+          }),
+        ).toThrow("cron edit did not commit");
+
+        expect(readColumn()).toEqual(previousColumn);
+        expect(readRetirements()).toEqual({ edited: false, untouched: false });
+        runOpenClawStateWriteTransaction(({ db }) => {
+          retireCronRunTriggerStateInDatabase({
+            database: db,
+            handle: editedReceipt,
+          });
+        });
+        expect(readColumn()).toEqual({ type: "INTEGER", notnull: 0, dflt_value: null });
+        expect(database.db.prepare("PRAGMA user_version").get()).toEqual(schemaVersion);
+        expect(
+          database.db
+            .prepare("SELECT trigger_state_retired FROM cron_run_receipts WHERE receipt_id = ?")
+            .get(untouchedReceipt.receiptId),
+        ).toEqual({ trigger_state_retired: null });
+
+        closeOpenClawStateDatabaseByPath(database.path);
+        database = openOpenClawStateDatabase();
+        expect(readRetirements()).toEqual({ edited: true, untouched: false });
+        expect(receipts(storePath, editedJob.id)).toEqual([
+          {
+            receiptId: editedReceipt.receiptId,
+            status: "running",
+            agentId: editedJob.agentId,
+            startedAtMs,
+            error: null,
+          },
+        ]);
+      } finally {
+        for (const handle of [editedReceipt, untouchedReceipt]) {
+          finishCronRunReceipt({ handle, status: "ok", finishedAtMs: startedAtMs + 1 });
+        }
+      }
     },
   );
 

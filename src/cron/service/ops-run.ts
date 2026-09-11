@@ -5,6 +5,7 @@ import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import {
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
+  isCronRunTriggerStateRetiredInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
@@ -231,13 +232,17 @@ async function finishPreparedManualRun(
                 : {}),
             },
           }),
-          mutate: ({ jobs }) => {
+          mutate: ({ database, jobs }) => {
             const current = jobs.get(jobId);
             if (!current) {
               return { value: undefined };
             }
             const removed = applyOutcomeToAuthoritativeJob(state, current, outcome, {
               ...outcomeOptions,
+              triggerStateRetired: isCronRunTriggerStateRetiredInDatabase({
+                database,
+                handle: prepared.runReceipt,
+              }),
               deferredNotifications: postPersistNotifications,
             });
             return {

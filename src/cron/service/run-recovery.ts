@@ -15,6 +15,7 @@ import {
   finishCronRunReceiptInDatabase,
   inspectActiveCronRunReceipt,
   isCronRunReceiptOwnerStale,
+  isCronRunTriggerStateRetiredInDatabase,
   listActiveCronRunReceiptJobIdsInDatabase,
   type CronRunReceiptRecoveryCandidate,
 } from "../store/run-receipt-store.js";
@@ -148,12 +149,26 @@ function repairInDatabase(params: {
       receiptId: proposal.receipt?.receiptId,
     });
     const finalized = task.finalized;
+    const triggerStateRetired = currentReceipt
+      ? currentReceipt.triggerStateRetired
+      : task.receiptId
+        ? isCronRunTriggerStateRetiredInDatabase({
+            database: database.db,
+            handle: {
+              receiptId: task.receiptId,
+              storeKey,
+              jobId: proposal.jobId,
+              startedAtMs: proposal.runningAtMs,
+            },
+          })
+        : false;
     const restored = finalized
       ? restoreFinalizedStartupRun({
           state,
           job,
           runningAtMs: proposal.runningAtMs,
           entry: finalized.entry,
+          triggerStateRetired,
           ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
           ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
           deferredNotifications: notifications,
