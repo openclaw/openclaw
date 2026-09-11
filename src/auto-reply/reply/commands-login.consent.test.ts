@@ -9,12 +9,17 @@ import type { ReplyPayload } from "../types.js";
 import {
   blockReplyOpts,
   buildLoginParams,
+  dispatchLoginCommand,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
 } from "./commands-login.harness-test-support.js";
 
+const refreshAuthRuntime = vi.hoisted(() => vi.fn<() => Promise<void>>());
+vi.mock("../../gateway/model-auth-refresh.js", () => ({
+  refreshModelAuthStateAfterMutation: refreshAuthRuntime,
+}));
+
 const { handleLoginCommand } = await import("./commands-login.js");
-const { handleCommands } = await import("./commands-core.js");
 const { prepareProviderModelAccess } = await import("../../commands/models/auth-model-policy.js");
 const {
   getRuntimeConfigSnapshot,
@@ -26,12 +31,15 @@ const { getRuntimeConfigWriteApplication } =
   await import("../../config/runtime-write-application.js");
 const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
 
-function modelAccessCommand(reply: ReplyPayload | undefined): string {
+function loginChoiceCommand(
+  reply: ReplyPayload | undefined,
+  label = "Show all OpenAI models",
+): string {
   const button = reply?.presentation?.blocks
     .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
-    .find((entry) => entry.label === "Show all OpenAI models");
+    .find((entry) => entry.label === label);
   if (button?.action?.type !== "command") {
-    throw new Error("Expected a model-access choice in the reply.");
+    throw new Error(`Expected ${label} in the login choices.`);
   }
   return button.action.command;
 }
@@ -60,6 +68,96 @@ function mockSuccessfulLoginWithRestrictions(config: OpenClawConfig): void {
 describe("handleLoginCommand model consent", () => {
   setupLoginCommandTests();
 
+  it.each([
+    { provider: "refresh", label: "Refresh" },
+    { provider: "access", label: "Access" },
+  ])(
+    "dispatches the manifest menu for $provider without shadowing reserved commands",
+    async ({ provider, label }) => {
+      await withOpenClawTestState({ label: "login-reserved-provider" }, async (state) => {
+        const pluginId = "reserved-login";
+        const pluginFile = await state.writeText(
+          `${pluginId}/index.cjs`,
+          "module.exports = { register() {} };\n",
+        );
+        await state.writeJson(`${pluginId}/openclaw.plugin.json`, {
+          id: pluginId,
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+          providers: ["refresh", "access"],
+          providerAuthChoices: ["refresh", "access"].flatMap((id) =>
+            ["device-code", "oauth"].map((method) => ({
+              provider: id,
+              method,
+              choiceId: method === "device-code" ? id : `${id}-browser`,
+              choiceLabel: `${id} ${method}`,
+              groupId: id,
+              groupLabel: id === "refresh" ? "Refresh" : "Access",
+              appGuidedAuth: method,
+              credentialOnly: true,
+              channelLogin: {},
+            })),
+          ),
+        });
+        const config: OpenClawConfig = {
+          ...buildLoginParams("/login").cfg,
+          plugins: {
+            allow: [pluginId],
+            load: { paths: [pluginFile] },
+            entries: { [pluginId]: { enabled: true } },
+          },
+        };
+        await state.writeConfig(config);
+        const before = await fs.readFile(state.configPath, "utf8");
+        const delivery = blockReplyOpts();
+        const command = (body: string) => {
+          const params = buildLoginParams(body, {
+            opts: { ...delivery, getProviderLoginConfig: () => config },
+          });
+          params.cfg = config;
+          return dispatchLoginCommand(params);
+        };
+        const menu = await command("/login");
+        const providerCommand = loginChoiceCommand(menu.reply, label);
+        expect(providerCommand).toBe(`/login oauth/${pluginId}/${provider}`);
+        const methods = await command(providerCommand);
+        const methodCommand = loginChoiceCommand(methods.reply, `${provider} device-code`);
+        expect(methodCommand).toBe(`/login ${pluginId}/${provider}`);
+        expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
+        runModelsAuthLoginFlowMock.mockImplementationOnce(
+          async (opts: ModelsAuthLoginFlowOptions) => {
+            await opts.prompter.note(`Continue with the ${provider} provider.`);
+            return {
+              providerId: provider,
+              methodId: "device-code",
+              authRefresh: "refreshed",
+              profiles: [{ profileId: `${provider}:owner`, provider, mode: "oauth" }],
+            };
+          },
+        );
+        const completed = await command(methodCommand);
+        expect(runModelsAuthLoginFlowMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ ownerPluginId: pluginId, provider, method: "device-code" }),
+        );
+        expect(delivery.onBlockReply).toHaveBeenCalledWith({
+          text: `Continue with the ${provider} provider.`,
+        });
+        expect(completed.reply?.text).toBe(`${label} login complete. Try your request again now.`);
+
+        const refreshed = await command("/login refresh");
+        expect(refreshed.reply?.text).toBe(
+          "Sign-in status refreshed. Send /models to see available models.",
+        );
+        expect(refreshAuthRuntime).toHaveBeenCalledOnce();
+        const access = await command("/login access");
+        expect(access.reply?.text).toBe(
+          "This model access choice is no longer available. Open Models to change which models are allowed.",
+        );
+        expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
+      });
+    },
+  );
+
   it.each(["applied", "failed", "restart-pending"] as const)(
     "waits for registered model-access application and reports %s",
     async (status) => {
@@ -78,13 +176,7 @@ describe("handleLoginCommand model consent", () => {
             opts: { ...blockReplyOpts(), getProviderLoginConfig: () => config },
           });
           params.cfg = config;
-          return handleCommands({
-            ...params,
-            resolveModelLevels: async () => ({
-              resolvedThinkLevel: params.resolvedThinkLevel,
-              resolvedReasoningLevel: params.resolvedReasoningLevel,
-            }),
-          });
+          return dispatchLoginCommand(params);
         };
         const initial = await command("/login openai");
         const claimReady = createDeferredCore<RuntimeConfigWriteApplicationClaim>();
@@ -96,7 +188,7 @@ describe("handleLoginCommand model consent", () => {
             claimReady.resolve(claim);
           }
         });
-        const response = command(modelAccessCommand(initial.reply));
+        const response = command(loginChoiceCommand(initial.reply));
         try {
           const claim = await Promise.race([
             claimReady.promise,
@@ -158,7 +250,7 @@ describe("handleLoginCommand model consent", () => {
           return handleLoginCommand(params, true);
         };
         const initial = await command("/login codex");
-        const oldChoice = modelAccessCommand(initial?.reply);
+        const oldChoice = loginChoiceCommand(initial?.reply);
         const now = vi.spyOn(Date, "now");
         const stop = registerRuntimeConfigWriteListener((event) => {
           getRuntimeConfigWriteApplication(event)?.claim()?.settle("applied");
@@ -187,7 +279,7 @@ describe("handleLoginCommand model consent", () => {
           expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
           authorized = true;
           const recovered = await command(oldChoice);
-          const freshChoice = modelAccessCommand(recovered?.reply);
+          const freshChoice = loginChoiceCommand(recovered?.reply);
           expect(freshChoice).not.toBe(oldChoice);
           expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
           expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
@@ -231,7 +323,7 @@ describe("handleLoginCommand model consent", () => {
         return handleLoginCommand(params, true);
       };
       const initial = await command("/login codex");
-      const choice = modelAccessCommand(initial?.reply);
+      const choice = loginChoiceCommand(initial?.reply);
       runModelsAuthLoginFlowMock.mockResolvedValueOnce({
         providerId: "openrouter",
         methodId: "oauth",
@@ -306,13 +398,14 @@ describe("handleLoginCommand model consent", () => {
             return {
               providerId: "openai",
               methodId: "device-code",
-              authRefresh: "refreshed",
+              authRefresh: "gateway-rejected",
               profiles: [{ profileId: "openai:new", provider: "openai", mode: "oauth" }],
             };
           },
         );
-        const login = await handleLoginCommand(params, true);
+        const login = await dispatchLoginCommand(params);
         expect(login?.shouldContinue).toBe(false);
+        expect(login.reply?.text).toContain("Sign-in status could not be confirmed.");
         const button = login?.reply?.presentation?.blocks
           .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
           .find((entry) => entry.label === label);
@@ -324,20 +417,20 @@ describe("handleLoginCommand model consent", () => {
           ...params.cfg,
           commands: { ...params.cfg.commands, allowFrom: { slack: ["replacement"] } },
         };
-        const wrongSession = await handleLoginCommand(
+        const beforeDenied = await fs.readFile(state.configPath, "utf8");
+        const wrongSession = await dispatchLoginCommand(
           buildLoginParams(command, { sessionKey: "agent:main:other" }),
-          true,
         );
-        expect(modelAccessCommand(wrongSession?.reply)).not.toBe(command);
-        const denied = await handleLoginCommand(
+        expect(loginChoiceCommand(wrongSession?.reply)).not.toBe(command);
+        const denied = await dispatchLoginCommand(
           buildLoginParams(command, { command: { senderIsOwner: false } }),
-          true,
         );
         expect(denied?.reply?.text).toContain("Only an OpenClaw owner can sign in here.");
         setRuntimeConfigSnapshot(revokedConfig);
-        await expect(handleLoginCommand(buildLoginParams(command), true)).rejects.toThrow(
+        await expect(dispatchLoginCommand(buildLoginParams(command))).rejects.toThrow(
           "Provider login authority is no longer active.",
         );
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(beforeDenied);
         setRuntimeConfigSnapshot(params.cfg);
         const unchanged: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
         expect(unchanged.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current"]);
@@ -358,12 +451,19 @@ describe("handleLoginCommand model consent", () => {
           });
         }
         if (revocation === "preflight" || revocation === "runtime-preflight") {
-          await expect(handleLoginCommand(buildLoginParams(command), true)).rejects.toThrow(
-            outcome,
-          );
+          await expect(dispatchLoginCommand(buildLoginParams(command))).rejects.toThrow(outcome);
         } else {
-          const result = await handleLoginCommand(buildLoginParams(command), true);
+          const result = await dispatchLoginCommand(buildLoginParams(command));
           expect(result?.reply?.text).toContain(outcome);
+          if (revocation === "authorized") {
+            expect(result.reply?.text).not.toContain("Sign-in status could not be confirmed.");
+            expect(result.reply?.text).toContain(
+              "To update saved sign-in status, send /login refresh.",
+            );
+            expect(result.reply?.presentation).toBeUndefined();
+            const cancelled = await dispatchLoginCommand(buildLoginParams("/login cancel"));
+            expect(cancelled.reply?.text).toBe("No provider login is active in this chat.");
+          }
         }
         const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
         expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(allow);
@@ -387,11 +487,14 @@ describe("handleLoginCommand model consent", () => {
         }
         const beforeReplay = await fs.readFile(state.configPath, "utf8");
         if (revocation === "preflight" || revocation === "runtime-preflight") {
-          await expect(handleLoginCommand(buildLoginParams(command), true)).rejects.toThrow(
+          await expect(dispatchLoginCommand(buildLoginParams(command))).rejects.toThrow(
             "Provider login authority is no longer active.",
           );
         } else {
-          await handleLoginCommand(buildLoginParams(command), true);
+          const replay = await dispatchLoginCommand(buildLoginParams(command));
+          if (revocation === "authorized") {
+            expect(loginChoiceCommand(replay.reply)).not.toBe(command);
+          }
         }
         expect(await fs.readFile(state.configPath, "utf8")).toBe(beforeReplay);
         expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();

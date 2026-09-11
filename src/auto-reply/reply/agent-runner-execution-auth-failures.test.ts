@@ -12,7 +12,6 @@ import {
   createMinimalRunAgentTurnParams,
   createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
-import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
@@ -114,19 +113,6 @@ describe("executeAgentTurn: authentication failures", () => {
       );
       expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
-  });
-
-  it("preserves provider login recovery in known failure payloads", () => {
-    const payload = buildKnownAgentRunFailureReplyPayload({
-      err: new OAuthRefreshFailureError({
-        provider: "openai",
-        message: "refresh_token_invalidated",
-      }),
-      sessionCtx: { Provider: "telegram", ChatType: "direct" } as TemplateContext,
-      resolvedVerboseLevel: "off",
-    });
-
-    expect(payload?.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
   });
 
   it("preserves OAuth profile guidance through failover wrappers", async () => {

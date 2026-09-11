@@ -154,8 +154,9 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
             signal.throwIfAborted();
             assertCurrent();
           };
+          let modelAccessOutcome: Awaited<ReturnType<typeof completeProviderModelAccess>>;
           try {
-            await completeProviderModelAccess({
+            modelAccessOutcome = await completeProviderModelAccess({
               prepared: modelAccess,
               prompter,
               runtime,
@@ -167,6 +168,11 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
             });
           } catch (error) {
             throw new ProviderAuthConfigApplyError(error);
+          }
+          if (modelAccessOutcome.kind === "saved" && modelAccessOutcome.application !== "applied") {
+            throw new ProviderCredentialsSavedError(
+              "Your sign-in and model access were saved, but OpenClaw has not confirmed that model access is active. Close this dialog. Open Settings and select Apply changes, then send /models.",
+            );
           }
           if (result.authRefresh !== "refreshed") {
             throw new ProviderCredentialsSavedError(

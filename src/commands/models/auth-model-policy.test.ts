@@ -54,8 +54,8 @@ describe("provider model access consent", () => {
     }
     await state.writeConfig(config);
     const outcome = await completeProviderModelAccess({ prepared: prepare(), prompter, runtime });
-    expect(outcome).toContain("Application by the running Gateway is not confirmed");
-    expect(outcome).toContain("openclaw gateway restart");
+    expect(outcome.message).toContain("Application by the running Gateway is not confirmed");
+    expect(outcome.message).toContain("openclaw gateway restart");
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("models are now visible"));
     const saved = await readSaved();
     expect(saved.agents?.defaults?.model).toBe("other/current");

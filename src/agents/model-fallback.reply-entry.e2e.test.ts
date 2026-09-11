@@ -22,6 +22,7 @@ import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-suppor
 import {
   makeModelFallbackConfig,
   withModelFallbackWorkspace,
+  writeFallbackAuthStore,
   writeFallbackMultiProfileAuthStore,
 } from "./model-fallback.run-embedded.e2e.test-support.js";
 import {
@@ -86,6 +87,15 @@ let getReplyFromConfig: typeof import("../auto-reply/reply/get-reply.js").getRep
 let withFullRuntimeReplyConfig: typeof import("../auto-reply/reply/get-reply-fast-path.js").withFullRuntimeReplyConfig;
 let createReplyDispatcher: typeof import("../auto-reply/reply/reply-dispatcher.js").createReplyDispatcher;
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
+const completedWriteToolMetas = [
+  {
+    toolName: "write",
+    toolCallId: "write-report",
+    meta: "path=report.txt",
+    replaySafe: false,
+    isError: false,
+  },
+];
 
 beforeAll(async () => {
   installReplyEntryMocks();
@@ -112,30 +122,37 @@ describe("getReplyFromConfig fallback availability", () => {
   it.each([
     {
       title: "returns the pinned rate-limit surface through the reply entry",
+      provider: "openai",
       errorMessage: RATE_LIMIT_ERROR_MESSAGE,
       toolMetas: [],
+      loginCommand: undefined,
     },
     {
       title: "delivers a returned API-key error after a write without OAuth sign-in",
+      provider: "openai",
       errorMessage: "401 invalid API key",
-      toolMetas: [
-        {
-          toolName: "write",
-          toolCallId: "write-report",
-          meta: "path=report.txt",
-          replaySafe: false,
-          isError: false,
-        },
-      ],
+      toolMetas: completedWriteToolMetas,
+      loginCommand: undefined,
     },
-  ])("$title", async ({ errorMessage, toolMetas }) => {
+    ...["openai", "xai", "minimax-portal"].map((provider) => ({
+      title: `delivers returned ${provider} OAuth recovery after a write`,
+      provider,
+      errorMessage: `OAuth token refresh failed for ${provider}: refresh_token_invalidated`,
+      toolMetas: completedWriteToolMetas,
+      loginCommand: `/login ${provider}`,
+    })),
+  ])("$title", async ({ provider, errorMessage, toolMetas, loginCommand }) => {
     // Pre-fix this chain returned "The AI service is temporarily rate-limited. Please try again
     // in a moment." because run preparation rebuilt fallbackConfigured from config defaults instead
     // of carrying the disabled model-fallback availability into the embedded runner.
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
-      await writeFallbackMultiProfileAuthStore(agentDir);
+      if (provider === "openai") {
+        await writeFallbackMultiProfileAuthStore(agentDir);
+      } else {
+        await writeFallbackAuthStore(agentDir, undefined, { primaryProvider: provider });
+      }
       const authStore = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
-      const baseConfig = makeModelFallbackConfig();
+      const baseConfig = makeModelFallbackConfig(provider);
       const groqProvider = baseConfig.models?.providers?.groq;
       if (!groqProvider) {
         throw new Error("expected fallback provider fixture");
@@ -149,7 +166,7 @@ describe("getReplyFromConfig fallback availability", () => {
           defaults: {
             ...baseConfig.agents?.defaults,
             workspace: workspaceDir,
-            model: { primary: "openai/mock-1", fallbacks: ["anthropic/mock-2"] },
+            model: { primary: `${provider}/mock-1`, fallbacks: ["anthropic/mock-2"] },
           },
           list: [{ id: "test", agentDir, workspace: workspaceDir }],
         },
@@ -167,17 +184,17 @@ describe("getReplyFromConfig fallback availability", () => {
         {
           sessionId: "session-pinned-rate-limit",
           updatedAt: Date.now(),
-          providerOverride: "openai",
+          providerOverride: provider,
           modelOverride: "mock-1",
           modelOverrideSource: "user",
         },
       );
       runEmbeddedAttemptMock.mockImplementation(async (attemptParams) => {
-        if (attemptParams.provider !== "openai") {
+        if (attemptParams.provider !== provider) {
           throw new Error(`unexpected fallback attempt: ${attemptParams.provider}`);
         }
         const assistant = buildEmbeddedRunnerAssistant({
-          provider: "openai",
+          provider,
           model: attemptParams.modelId,
           stopReason: "error",
           errorMessage,
@@ -230,7 +247,7 @@ describe("getReplyFromConfig fallback availability", () => {
         expect(
           authStore.profiles[expectDefined(attempt.authProfileId, "selected auth profile")],
         ).toMatchObject({
-          provider: "openai",
+          provider,
           type: "api_key",
         });
       }
@@ -242,8 +259,24 @@ describe("getReplyFromConfig fallback availability", () => {
         expect(countProviderAttempts("openai")).toBeGreaterThan(2);
         expect(text).toContain("API rate limit reached");
         expect(delivered[0]?.payload.text).toContain("API rate limit reached");
+      } else if (loginCommand) {
+        expect(countProviderAttempts(provider)).toBe(1);
+        expect(delivered[0]?.payload.text).toContain(loginCommand);
+        expect(delivered[0]?.payload.presentation).toEqual({
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Sign in",
+                  action: { type: "command", command: loginCommand },
+                },
+              ],
+            },
+          ],
+        });
       } else {
-        expect(countProviderAttempts("openai")).toBe(1);
+        expect(countProviderAttempts(provider)).toBe(1);
         expect(delivered[0]?.payload.text).toContain("Authentication failed");
         expect(delivered[0]?.payload.text).not.toContain("/login");
         expect(delivered[0]?.payload.presentation).toBeUndefined();

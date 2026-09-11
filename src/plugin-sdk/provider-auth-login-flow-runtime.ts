@@ -256,7 +256,7 @@ export async function answerProviderLoginModelAccess(params: {
     );
   }
   try {
-    const message = await completeProviderModelAccess({
+    const outcome = await completeProviderModelAccess({
       prepared: record.prepared,
       prompter: {
         select: async ({ options }) => {
@@ -271,7 +271,7 @@ export async function answerProviderLoginModelAccess(params: {
       assertCurrent,
     });
     return {
-      text: `${message}\n\nSend /models to choose a model. To update saved sign-in status, send /login refresh.`,
+      text: `${outcome.message}\n\nSend /models to choose a model. To update saved sign-in status, send /login refresh.`,
     };
   } catch (error) {
     assertCurrent();
