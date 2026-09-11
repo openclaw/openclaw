@@ -651,7 +651,7 @@ class Tooltip extends OpenClawLitElement {
 
   private resolvedPlacement(): WaTooltip["placement"] {
     return this.placement === "right-start" &&
-      this.ownerDocument.defaultView?.matchMedia("(max-width: 640px)").matches
+      this.ownerDocument.defaultView?.matchMedia?.("(max-width: 640px)").matches
       ? "bottom-start"
       : this.placement;
   }

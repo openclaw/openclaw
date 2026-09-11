@@ -3,12 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
-import {
-  renderSessionMenuItem,
-  renderCloudMachineSelect,
-  renderCloudOsSelect,
-  renderCloudProfileMenuItems,
-} from "./cloud-target.ts";
+import { renderSessionMenuItem, renderCloudProfileMenuItems } from "./cloud-target.ts";
 
 describe("cloud target menu", () => {
   it("renders explicit remediation commands on separate lines", () => {
@@ -106,9 +101,11 @@ describe("cloud target menu", () => {
   ])("includes available compute details in $machine.id option", ({ machine, expected }) => {
     const container = document.createElement("div");
     render(
-      renderCloudMachineSelect({
-        machines: [machine],
-        selectedId: machine.id,
+      renderCloudProfileMenuItems({
+        profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
+        selectedId: "aws",
+        selectedMachine: machine.id,
+        compact: true,
         submitting: false,
         onSelect: vi.fn(),
       }),
@@ -158,19 +155,28 @@ describe("cloud target menu", () => {
     const container = document.createElement("div");
     const onSelect = vi.fn();
     const params = {
-      machines: [
-        { id: "small", label: "Small" },
-        { id: "large", label: "Large" },
+      profiles: [
+        {
+          id: "aws",
+          providerId: "aws",
+          machines: [
+            { id: "small", label: "Small" },
+            { id: "large", label: "Large" },
+          ],
+        },
       ],
-      selectedId: "small",
+      selectedId: "aws",
+      selectedMachine: "small",
+      compact: true,
       submitting: false,
-      onSelect,
+      onSelect: vi.fn(),
+      onSelectMachine: onSelect,
     };
-    render(renderCloudMachineSelect(params), container);
+    render(renderCloudProfileMenuItems(params), container);
     const select = container.querySelector<SelectPicker>("openclaw-select-picker")!;
     select.params.onChange("large");
     expect(onSelect).toHaveBeenCalledWith("large");
-    render(renderCloudMachineSelect({ ...params, submitting: true }), container);
+    render(renderCloudProfileMenuItems({ ...params, submitting: true }), container);
     expect(container.querySelector<SelectPicker>("openclaw-select-picker")?.params.disabled).toBe(
       true,
     );
@@ -180,23 +186,32 @@ describe("cloud target menu", () => {
     const container = document.createElement("div");
     const onSelect = vi.fn();
     const params = {
-      operatingSystems: [
-        { id: "linux", label: "Linux" },
-        { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
-        { id: "macos", label: "macOS" },
+      profiles: [
+        {
+          id: "aws",
+          providerId: "aws",
+          operatingSystems: [
+            { id: "linux", label: "Linux" },
+            { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
+            { id: "macos", label: "macOS" },
+          ],
+        },
       ],
-      selectedId: "linux",
+      selectedId: "aws",
+      selectedOs: "linux",
+      compact: true,
       submitting: false,
-      onSelect,
+      onSelect: vi.fn(),
+      onSelectOs: onSelect,
     };
-    render(renderCloudOsSelect(params), container);
+    render(renderCloudProfileMenuItems(params), container);
     const select = container.querySelector<SelectPicker>("openclaw-select-picker")!;
     expect(select.params.value).toBe("linux");
     expect(select.params.options[1]?.disabled).toBe(true);
     expect(select.params.options[1]?.description).toBe("Install WSL2");
     select.params.onChange("macos");
     expect(onSelect).toHaveBeenCalledWith("macos");
-    render(renderCloudOsSelect({ ...params, submitting: true }), container);
+    render(renderCloudProfileMenuItems({ ...params, submitting: true }), container);
     expect(container.querySelector<SelectPicker>("openclaw-select-picker")?.params.disabled).toBe(
       true,
     );

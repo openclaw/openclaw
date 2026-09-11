@@ -281,7 +281,7 @@ function machineShapeText(machine: DraftMachineOption): string | undefined {
   return memory ? t("newSession.machineMemory", { memory }) : undefined;
 }
 
-export function renderCloudMachineSelect(params: {
+function renderCloudMachineSelect(params: {
   machines: readonly DraftMachineOption[];
   selectedId: string;
   submitting: boolean;
@@ -293,7 +293,7 @@ export function renderCloudMachineSelect(params: {
   </div>`;
 }
 
-export function renderCloudOsSelect(params: {
+function renderCloudOsSelect(params: {
   operatingSystems: readonly DraftOperatingSystem[];
   selectedId: string;
   submitting: boolean;

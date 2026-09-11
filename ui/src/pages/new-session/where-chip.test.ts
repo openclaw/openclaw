@@ -493,7 +493,7 @@ describe("Where chip", () => {
     );
     expect(picker?.params.options.find((option) => option.value === "linux")?.disabled).toBe(false);
     for (const os of ["macos", "windows/wsl2"]) {
-      const option = picker?.params.options.find((option) => option.value === os);
+      const option = picker?.params.options.find((candidate) => candidate.value === os);
       expect(option?.disabled).toBe(true);
       expect(option?.description).toBe(reason);
     }
