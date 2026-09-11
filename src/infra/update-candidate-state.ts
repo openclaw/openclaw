@@ -9,11 +9,18 @@ import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.j
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
+import {
+  resolveOpenClawRegisteredAgentDatabasePath,
+  resolveOpenClawStateDirForDatabasePath,
+} from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { hasNodeErrorCode, normalizeWindowsPathPreservingCase } from "./path-guards.js";
+import {
+  hasNodeErrorCode,
+  isPathInside,
+  normalizeWindowsPathPreservingCase,
+} from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
@@ -104,11 +111,16 @@ function collectRegisteredPaths(db: DatabaseSync, shared: string, files: string[
     : [];
   return rows.map(({ path: stored }) => {
     const source = resolveOpenClawRegisteredAgentDatabasePath(shared, stored);
-    // Windows registries can carry extended-length \\?\ spellings of a database
-    // that directory discovery already listed; both spellings project to the same
-    // candidate target, so discover the case-preserving plain spelling once.
+    // Discover one projection identity per database. An in-root extended-length
+    // \\?\ alias dedupes against the plain spelling directory discovery already
+    // listed, because projection rebases both to the same candidate path. External
+    // locators keep their raw spelling so the copy and the registry rebound write
+    // share one hashed destination.
     const discovered =
-      process.platform === "win32" ? normalizeWindowsPathPreservingCase(source) : source;
+      process.platform === "win32" &&
+      isPathInside(resolveOpenClawStateDirForDatabasePath(shared), source)
+        ? normalizeWindowsPathPreservingCase(source)
+        : source;
     // Discover registrations from the exact private generation being inspected.
     if (!files.includes(discovered)) {
       files.push(discovered);

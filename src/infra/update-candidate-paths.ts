@@ -10,23 +10,25 @@ export function resolveUpdateCandidateStatePath(
   targetRoot: string,
   source: string,
 ): string {
-  // Extended-length \\?\ spellings name the same files as their plain
-  // counterparts, but path.relative cannot see across the namespace prefix: it
-  // returns the absolute source unchanged, and joining that under the target
-  // root would embed the prefix mid-path. Rebase through the case-preserving
-  // plain spelling so namespaced registered paths project like any other.
-  const projectionRoot =
-    process.platform === "win32" ? normalizeWindowsPathPreservingCase(sourceRoot) : sourceRoot;
-  const projectionSource =
-    process.platform === "win32" ? normalizeWindowsPathPreservingCase(source) : source;
-  // Registered link/../ locators can identify a different inode from their
-  // normalized spelling; flattening them would overwrite another copied database.
-  const relative =
-    path.normalize(projectionSource) === projectionSource &&
-    isPathInside(projectionRoot, projectionSource)
-      ? path.relative(projectionRoot, projectionSource)
-      : path.join("candidate-external", sha256Hex(source));
-  return path.join(targetRoot, relative);
+  // The canonical-spelling guard reads the raw locator first: only a canonically
+  // spelled in-root source is an alias eligible for rebasing.
+  if (path.normalize(source) === source && isPathInside(sourceRoot, source)) {
+    // Extended-length \\?\ spellings name the same files as their plain
+    // counterparts, but path.relative cannot see across the namespace prefix: it
+    // returns the absolute source unchanged, and joining that under the target
+    // root would embed the prefix mid-path. Rebase in-root aliases through the
+    // case-preserving plain spelling.
+    const projectionRoot =
+      process.platform === "win32" ? normalizeWindowsPathPreservingCase(sourceRoot) : sourceRoot;
+    const projectionSource =
+      process.platform === "win32" ? normalizeWindowsPathPreservingCase(source) : source;
+    return path.join(targetRoot, path.relative(projectionRoot, projectionSource));
+  }
+  // External and noncanonical locators keep their raw spelling as their
+  // projection identity: registered link/../ locators can identify a different
+  // inode from their normalized spelling; flattening them would overwrite
+  // another copied database.
+  return path.join(targetRoot, "candidate-external", sha256Hex(source));
 }
 
 /** Plugin locators cannot overwrite the separately snapshotted state databases. */

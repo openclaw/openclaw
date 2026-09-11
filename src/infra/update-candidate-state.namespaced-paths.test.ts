@@ -111,3 +111,42 @@ it.skipIf(process.platform !== "win32")(
     ]);
   },
 );
+
+// A namespaced registration outside the state root must keep one projection
+// identity: the copy and the rebound registry entry must name the same hashed
+// candidate-external destination.
+it.skipIf(process.platform !== "win32")(
+  "keeps a namespaced external registered database on one hashed projection identity",
+  async () => {
+    const source = path.join(root, "source");
+    const target = path.join(root, "copy");
+    const external = path.join(root, "external", "openclaw-agent.sqlite");
+    await createDatabase(external);
+    const namespacedExternal = `\\\\?\\${external}`;
+    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
+    registry
+      .prepare(
+        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
+      )
+      .run("external", namespacedExternal);
+    closeOpenClawStateDatabaseByPath(path.join(source, "state", "openclaw.sqlite"));
+    await runSnapshotWorker({
+      stateDir: source,
+      targetStateDir: target,
+      config: {},
+    });
+    const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
+    const rebound = copiedRegistry
+      .prepare("SELECT path FROM agent_databases WHERE agent_id = 'external'")
+      .get() as { path: string };
+    copiedRegistry.close();
+    expect(path.isAbsolute(rebound.path)).toBe(false);
+    expect(rebound.path).toMatch(/^candidate-external/);
+    // The rebound registry entry must name the database the snapshot copied.
+    const copied = openNodeSqliteDatabase(path.join(target, rebound.path));
+    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
+      value: "preserved",
+    });
+    copied.close();
+  },
+);
