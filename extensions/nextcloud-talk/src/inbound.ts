@@ -53,6 +53,7 @@ import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig, NextcloudTalkInboundMessage, NextcloudTalkRoomConfig } from "./types.js";
+import { canonicalizeNextcloudTalkNativeVoiceMedia } from "./voice-media.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 
@@ -366,6 +367,7 @@ export async function handleNextcloudTalkInbound(params: {
 
   let stagedMedia: { path: string; contentType?: string } | undefined;
   let stagedMediaId: string | undefined;
+  let sourceModality: "audio" | "voice" | undefined;
   let authorizedMediaUnavailable = false;
   let performedAsyncMediaWork = false;
   // Claim retirement may race a store write that ignores or narrowly loses the abort.
@@ -492,6 +494,7 @@ export async function handleNextcloudTalkInbound(params: {
               : { status: authenticatedSource.status }),
           });
         } else {
+          sourceModality = authenticatedSource.sourceModality;
           access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
           throwIfIngressAborted();
           if (access.ingress.admission !== "dispatch") {
@@ -517,14 +520,32 @@ export async function handleNextcloudTalkInbound(params: {
               signal: ingressAbortSignal,
             });
             stagedMediaId = saved.id;
-            stagedMedia = {
-              path: saved.path,
-              ...(authenticatedSource.contentTypeOverride
-                ? { contentType: authenticatedSource.contentTypeOverride }
-                : saved.contentType
-                  ? { contentType: saved.contentType }
+            const canonicalized =
+              sourceModality === "voice"
+                ? await canonicalizeNextcloudTalkNativeVoiceMedia(saved)
+                : { ok: true as const, media: saved };
+            if (!canonicalized.ok) {
+              await deleteStagedMedia();
+              authorizedMediaUnavailable = true;
+              logNextcloudTalkMediaNonOutcome({
+                log: (messageLocal) => runtime.log?.(messageLocal),
+                reason: "media_unsupported",
+                accountId: account.accountId,
+                messageId: message.messageId,
+                senderId,
+              });
+            } else {
+              stagedMediaId = canonicalized.media.id;
+              stagedMedia = {
+                path: canonicalized.media.path,
+                ...(canonicalized.media.contentType
+                  ? { contentType: canonicalized.media.contentType }
                   : {}),
-            };
+              };
+              if (!sourceModality && stagedMedia.contentType?.startsWith("audio/")) {
+                sourceModality = "audio";
+              }
+            }
             if (ingressAbortSignal?.aborted) {
               await cleanupAndThrowIfIngressAborted();
             }
@@ -608,7 +629,13 @@ export async function handleNextcloudTalkInbound(params: {
       routeSessionKey: route.sessionKey,
     },
     reply: { to: `nextcloud-talk:${roomToken}`, originatingTo: `nextcloud-talk:${roomToken}` },
-    message: { body, bodyForAgent: agentBody, rawBody, commandBody },
+    message: {
+      body,
+      bodyForAgent: agentBody,
+      rawBody,
+      commandBody,
+      ...(sourceModality ? { sourceModality } : {}),
+    },
     access: {
       commands: { authorized: access.commandAccess.authorized },
       mentions: { canDetectMention: isGroup, wasMentioned: isGroup && wasMentioned },

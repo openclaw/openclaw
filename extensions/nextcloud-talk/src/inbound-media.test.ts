@@ -346,78 +346,85 @@ describe("Nextcloud Talk inbound media policy", () => {
     );
   });
 
-  it("normalizes authenticated native voice-message video MIME to audio MIME", async () => {
-    const fetchGuarded = vi
-      .fn()
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ ocs: { data: { id: "alice" } } }), {
-          status: 200,
-        }),
-        finalUrl: "https://nextcloud.example/ocs/v1.php/cloud/user?format=json",
-        release: vi.fn(async () => undefined),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            ocs: {
-              data: [
-                {
-                  id: 4250,
-                  token: "room-token",
-                  actorType: "users",
-                  actorId: "alice",
-                  messageType: "voice-message",
-                  messageParameters: {
-                    file: {
-                      type: "file",
-                      id: "9010",
-                      name: "voice-note.mp3",
-                      size: "18351",
-                      path: "Talk/voice-note.mp3",
-                      mimetype: "video/mp4",
-                      "hide-download": "no",
+  it.each([
+    { declaredMimeType: "audio/mpeg", expectedOverride: undefined },
+    { declaredMimeType: "video/mp4", expectedOverride: "audio/mp4" },
+  ])(
+    "preserves authenticated native voice intent declared as $declaredMimeType",
+    async ({ declaredMimeType, expectedOverride }) => {
+      const fetchGuarded = vi
+        .fn()
+        .mockResolvedValueOnce({
+          response: new Response(JSON.stringify({ ocs: { data: { id: "alice" } } }), {
+            status: 200,
+          }),
+          finalUrl: "https://nextcloud.example/ocs/v1.php/cloud/user?format=json",
+          release: vi.fn(async () => undefined),
+        })
+        .mockResolvedValueOnce({
+          response: new Response(
+            JSON.stringify({
+              ocs: {
+                data: [
+                  {
+                    id: 4250,
+                    token: "room-token",
+                    actorType: "users",
+                    actorId: "alice",
+                    messageType: "voice-message",
+                    messageParameters: {
+                      file: {
+                        type: "file",
+                        id: "9010",
+                        name: "voice-note.mp3",
+                        size: "18351",
+                        path: "Talk/voice-note.mp3",
+                        mimetype: declaredMimeType,
+                        "hide-download": "no",
+                      },
                     },
                   },
-                },
-              ],
-            },
-          }),
-          { status: 200 },
-        ),
-        finalUrl: "https://nextcloud.example/ocs/v2.php/apps/spreed/api/v1/chat/room-token",
-        release: vi.fn(async () => undefined),
+                ],
+              },
+            }),
+            { status: 200 },
+          ),
+          finalUrl: "https://nextcloud.example/ocs/v2.php/apps/spreed/api/v1/chat/room-token",
+          release: vi.fn(async () => undefined),
+        });
+
+      const result = await resolveNextcloudTalkAuthenticatedMediaSource({
+        baseUrl: "https://nextcloud.example",
+        roomToken: "room-token",
+        messageId: "4250",
+        senderId: "users/alice",
+        attachment: {
+          fileId: "9010",
+          name: "voice-note.mp3",
+          mimeType: declaredMimeType,
+          declaredSizeBytes: 18_351,
+          shareUrl: "https://nextcloud.example/s/redacted-token",
+          hideDownload: false,
+        },
+        accountConfig: { apiUser: "alice", apiPassword: "test-password" },
+        reference: {
+          ok: true,
+          origin: "https://nextcloud.example",
+          hostname: "nextcloud.example",
+          fileName: "voice-note.mp3",
+        },
+        fetchGuarded,
       });
 
-    const result = await resolveNextcloudTalkAuthenticatedMediaSource({
-      baseUrl: "https://nextcloud.example",
-      roomToken: "room-token",
-      messageId: "4250",
-      senderId: "users/alice",
-      attachment: {
-        fileId: "9010",
-        name: "voice-note.mp3",
-        mimeType: "video/mp4",
-        declaredSizeBytes: 18_351,
-        shareUrl: "https://nextcloud.example/s/redacted-token",
-        hideDownload: false,
-      },
-      accountConfig: { apiUser: "alice", apiPassword: "test-password" },
-      reference: {
-        ok: true,
-        origin: "https://nextcloud.example",
-        hostname: "nextcloud.example",
-        fileName: "voice-note.mp3",
-      },
-      fetchGuarded,
-    });
-
-    expect(result).toEqual(
-      expect.objectContaining({
-        ok: true,
-        contentTypeOverride: "audio/mp4",
-      }),
-    );
-  });
+      expect(result).toEqual(
+        expect.objectContaining({
+          ok: true,
+          sourceModality: "voice",
+          ...(expectedOverride ? { contentTypeOverride: expectedOverride } : {}),
+        }),
+      );
+    },
+  );
 
   it("fails closed when API credentials are unavailable", async () => {
     const fetchGuarded = vi.fn();

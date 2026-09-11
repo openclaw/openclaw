@@ -43,6 +43,7 @@ export type NextcloudTalkAuthenticatedMediaSourceResult =
       fileName: string;
       authorization: string;
       contentTypeOverride?: string;
+      sourceModality?: "voice";
     }
   | {
       ok: false;
@@ -181,7 +182,9 @@ function resolveExactHistoryMedia(params: {
   messageId: string;
   senderId: string;
   attachment: NextcloudTalkInboundAttachment;
-}): { encodedFilePath: string; contentTypeOverride?: string } | undefined {
+}):
+  | { encodedFilePath: string; contentTypeOverride?: string; sourceModality?: "voice" }
+  | undefined {
   if (!isRecord(params.payload) || !isRecord(params.payload.ocs)) {
     return undefined;
   }
@@ -246,6 +249,7 @@ function resolveExactHistoryMedia(params: {
   return {
     encodedFilePath,
     ...(contentTypeOverride ? { contentTypeOverride } : {}),
+    ...(messageType === "voice-message" ? { sourceModality: "voice" as const } : {}),
   };
 }
 
@@ -419,6 +423,9 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
     authorization,
     ...(exactHistoryMedia.contentTypeOverride
       ? { contentTypeOverride: exactHistoryMedia.contentTypeOverride }
+      : {}),
+    ...(exactHistoryMedia.sourceModality
+      ? { sourceModality: exactHistoryMedia.sourceModality }
       : {}),
   };
 }
