@@ -12,6 +12,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
+  readUpdateStateSchemaVersions,
   type snapshotUpdateCandidateState,
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
@@ -209,11 +210,25 @@ it.skipIf(process.platform !== "win32")(
       )
       .run("main", path.join("agents", "main", "agent", "openclaw-agent.sqlite"));
     closeOpenClawStateDatabaseByPath(path.join(plainState, "state", "openclaw.sqlite"));
-    await runSnapshotWorker({
+    const inspected = await readUpdateStateSchemaVersions({
+      stateDir: namespacedState,
+      config: {},
+    });
+    // Older updaters captured rollback baselines with the namespaced spelling;
+    // versions-mode responses must keep that path identity.
+    const namespacedDb =
+      namespacedState +
+      path.sep +
+      ["agents", "main", "agent", "openclaw-agent.sqlite"].join(path.sep);
+    expect(inspected.map((entry) => entry.path)).toContain(namespacedDb);
+    expect(inspected.map((entry) => entry.path)).not.toContain(canonical);
+    const versions = await runSnapshotWorker({
       stateDir: namespacedState,
       targetStateDir: target,
       config: {},
     });
+    // Snapshot mode reports the same legacy identities for the deduped copy.
+    expect(versions).toEqual(inspected);
     const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
     const rebound = copiedRegistry
       .prepare("SELECT path FROM agent_databases WHERE agent_id = 'main'")

@@ -98,7 +98,7 @@ async function fileExists(file: string): Promise<boolean> {
   }
 }
 
-function collectRegisteredPaths(db: DatabaseSync, shared: string, files: string[]) {
+function collectRegisteredPaths(db: DatabaseSync, shared: string, files: Map<string, string>) {
   const rows = tableExists(db, "agent_databases")
     ? executeSqliteQuerySync(
         db,
@@ -110,16 +110,15 @@ function collectRegisteredPaths(db: DatabaseSync, shared: string, files: string[
     : [];
   return rows.map(({ path: stored }) => {
     const source = resolveOpenClawRegisteredAgentDatabasePath(shared, stored);
-    // Discover one projection identity per database so every spelling of a
-    // database dedupes to the destination the copy and the registry rebound
-    // write both derive.
-    const discovered = resolveUpdateCandidateStateIdentity(
+    // Discover registrations from the exact private generation being inspected,
+    // deduped on one projection identity per database while keeping the raw
+    // spelling as the published path identity.
+    const identity = resolveUpdateCandidateStateIdentity(
       resolveOpenClawStateDirForDatabasePath(shared),
       source,
     );
-    // Discover registrations from the exact private generation being inspected.
-    if (!files.includes(discovered)) {
-      files.push(discovered);
+    if (!files.has(identity)) {
+      files.set(identity, source);
     }
     return { stored, source };
   });
@@ -155,15 +154,23 @@ async function withStateDatabaseSnapshot<T>(
   return outcome.value;
 }
 
-async function collectStateDatabasePaths(input: StateInput): Promise<string[]> {
+async function collectStateDatabasePaths(input: StateInput): Promise<Map<string, string>> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
-  const files = new Set([shared]);
   // Every discovery source queues one projection identity per database: with an
   // extended-length state root, directory enumeration and a registry
   // registration spell the same file differently, and queuing both copies
-  // breaks the snapshot with a duplicate destination.
+  // breaks the snapshot with a duplicate destination. The first raw spelling
+  // wins so versions-mode responses keep the path identities older updaters
+  // captured in their rollback baselines.
   const stateRoot = path.resolve(input.stateDir);
-  const queue = (file: string) => files.add(resolveUpdateCandidateStateIdentity(stateRoot, file));
+  const files = new Map<string, string>();
+  const queue = (file: string) => {
+    const identity = resolveUpdateCandidateStateIdentity(stateRoot, file);
+    if (!files.has(identity)) {
+      files.set(identity, file);
+    }
+  };
+  queue(shared);
   let directories: string[] = [];
   try {
     directories = (await fs.readdir(path.join(input.stateDir, "agents"), { withFileTypes: true }))
@@ -190,7 +197,7 @@ async function collectStateDatabasePaths(input: StateInput): Promise<string[]> {
   for (const id of new Set(["main", ...directories])) {
     queue(path.resolve(input.stateDir, "agents", id, "agent", "openclaw-agent.sqlite"));
   }
-  return [...files].toSorted();
+  return new Map([...files.entries()].sort(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
 /** Missing databases stay explicit so creation is schema-checked and loss blocks rollback. */
@@ -200,7 +207,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
   const versions: UpdateStateSchemaVersion[] = [];
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const files = await collectStateDatabasePaths(input);
-  for (const file of files) {
+  for (const file of files.values()) {
     versions.push({
       path: file,
       ...((await fileExists(file))
@@ -287,7 +294,7 @@ export async function snapshotUpdateCandidateState(
     );
   const versions: UpdateStateSchemaVersion[] = [];
   const files = await collectStateDatabasePaths(input);
-  for (const file of files) {
+  for (const file of files.values()) {
     if (!(await fileExists(file))) {
       versions.push({ path: file, userVersion: null });
       continue;
