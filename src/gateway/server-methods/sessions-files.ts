@@ -53,7 +53,7 @@ import {
   type LoadedSessionFiles,
   type TouchedFile,
 } from "./workspace-files.js";
-import { WORKSPACE_PREVIEW_MAX_BYTES } from "./workspace-fs.js";
+import { resolveWorkspacePreviewMaxBytes } from "./workspace-fs.js";
 
 type FileKind = TouchedFile["kind"];
 
@@ -62,7 +62,6 @@ type TouchedFilesCacheEntry = {
   files: Map<string, TouchedFile>;
 };
 
-const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 // Control UI requests fan out per visible session; keep enough folds to avoid
 // eviction and full-transcript reparsing across realistic concurrent viewers.
 const TOUCHED_FILES_CACHE_LIMIT = 256;
@@ -372,12 +371,17 @@ function respondSessionFileNotFound(respond: RespondFn, filePath: string) {
   );
 }
 
-function respondSessionFileTooLarge(respond: RespondFn, file: SessionFileEntry, filePath: string) {
+function respondSessionFileTooLarge(
+  respond: RespondFn,
+  file: SessionFileEntry,
+  filePath: string,
+  maxPreviewBytes: number,
+) {
   respond(
     false,
     undefined,
     sessionFilesError("session_file_too_large", "session file is too large to preview", {
-      maxPreviewBytes: MAX_PREVIEW_BYTES,
+      maxPreviewBytes,
       path: file.path || filePath,
       size: file.size,
     }),
@@ -452,13 +456,14 @@ async function handleSessionFilesRead(
             : await listSessionWorkspaceFiles({ ...loaded, ...query });
       read?.assertCurrent();
     } else {
+      const maxPreviewBytes = resolveWorkspacePreviewMaxBytes(context.getRuntimeConfig());
       const query = { files: loaded.files, path: request.params.path };
       const fileResult =
         loaded.repository?.kind === "stored"
-          ? await getRepositoryArtifact(loaded.repository, request.params.path)
+          ? await getRepositoryArtifact(loaded.repository, request.params.path, maxPreviewBytes)
           : loaded.repository
             ? await loaded.repository.inspect("get", query)
-            : await getSessionWorkspaceFile({ ...loaded, ...query });
+            : await getSessionWorkspaceFile({ ...loaded, ...query, maxPreviewBytes });
       read?.assertCurrent();
       const { file } = fileResult;
       if (!file || file.missing) {
@@ -466,7 +471,7 @@ async function handleSessionFilesRead(
         return;
       }
       if (typeof file.content !== "string" && file.previewKind !== "unsupported") {
-        respondSessionFileTooLarge(respond, file, request.params.path);
+        respondSessionFileTooLarge(respond, file, request.params.path, maxPreviewBytes);
         return;
       }
       result = fileResult;
@@ -516,6 +521,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       throw new Error("Start this cloud session before editing its repository files.");
     }
     const authorize = () => sessionMutationAuthorization?.assertCurrent();
+    const maxPreviewBytes = resolveWorkspacePreviewMaxBytes(context.getRuntimeConfig());
     const update = repository
       ? await repository.inspect(
           "set",
@@ -527,6 +533,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           root: loaded.root,
           fileRoot: loaded.fileRoot,
           assertCurrent: authorize,
+          maxPreviewBytes,
         });
     if (update.status === "missing") {
       respondSessionFileNotFound(respond, params.path);
@@ -537,7 +544,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         sessionFilesError("session_file_too_large", "session file content is too large", {
-          maxPreviewBytes: MAX_PREVIEW_BYTES,
+          maxPreviewBytes,
           path: params.path,
           size: update.size,
         }),

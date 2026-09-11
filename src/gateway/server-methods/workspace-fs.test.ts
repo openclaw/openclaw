@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as fsSafe from "../../infra/fs-safe.js";
-import { readWorkspaceFilePrefix, updateWorkspaceFile } from "./workspace-fs.js";
+import { readWorkspaceFilePrefix, resolveWorkspacePreviewMaxBytes, updateWorkspaceFile } from "./workspace-fs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -47,6 +47,18 @@ it("preserves the workspace file when editor authority expires during write prep
   expect(authorized).toBe(false);
   expect(error).toBe(revoked);
   expect(await readFile(filePath, "utf8")).toBe(original);
+
+describe("resolveWorkspacePreviewMaxBytes", () => {
+  it("falls back to the shared default without configured value", () => {
+    expect(resolveWorkspacePreviewMaxBytes(undefined)).toBe(256 * 1024);
+    expect(resolveWorkspacePreviewMaxBytes({ gateway: {} })).toBe(256 * 1024);
+  });
+
+  it("returns the configured cap", () => {
+    expect(
+      resolveWorkspacePreviewMaxBytes({ gateway: { workspacePreviewMaxBytes: 1024 * 1024 } }),
+    ).toBe(1024 * 1024);
+  });
 });
 
 type FileHandleRead = (
