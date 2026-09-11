@@ -46,10 +46,10 @@ import {
 } from "./subagent-announce-active-wake.js";
 import {
   deliverCompletionDirect,
-  hasMessagingToolDeliveryToSource,
   isDirectMessageDeliveryTarget,
   isGatewayAgentRunPending,
   runAnnounceAgentCall,
+  resolveMessagingToolDeliveryEvidence,
 } from "./subagent-announce-completion-delivery.js";
 import {
   hasAnnounceSendEvidence,
@@ -498,16 +498,17 @@ export async function sendSubagentAnnounceDirectly(params: {
             disposition: "retryable",
           };
     }
-    const hasFinalMessagingToolDelivery = Boolean(
-      directAnnounceResult &&
-      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
-        requireFinalReply: true,
-      }),
-    );
-    const hasMessagingToolDelivery = Boolean(
-      directAnnounceResult &&
-      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
-    );
+    const { hasFinalMessagingToolDelivery, hasMessagingToolDelivery } = directAnnounceResult
+      ? await resolveMessagingToolDeliveryEvidence({
+          cfg,
+          requesterSessionKey: canonicalRequesterSessionKey,
+          requesterAgentId: params.requesterAgentId,
+          result: directAnnounceResult,
+          deliveryTarget,
+          signal: params.signal,
+          timeoutMs: announceTimeoutMs,
+        })
+      : { hasFinalMessagingToolDelivery: false, hasMessagingToolDelivery: false };
     const requiresAutomaticFinalReceipt =
       shouldDeliverAgentFinal && (params.expectsCompletionMessage || params.requireVisibleReply);
     const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});

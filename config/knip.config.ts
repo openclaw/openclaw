@@ -20,6 +20,9 @@ const repositoryScriptEntries = [
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   "scripts/render-proof-video.mts!",
+  // The PR body invokes these loopback production-path proofs directly.
+  "scripts/proof-announcement-delivery-live.ts!",
+  "scripts/proof-announcement-delivery-settlement.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
   // mobile-release-authority invokes this helper from composite-action YAML.

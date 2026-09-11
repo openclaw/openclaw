@@ -9,6 +9,12 @@ const slackClientMocks = vi.hoisted(() => {
   return {
     conversationsInfo,
     conversationsOpen,
+    createSlackLookupClient: vi.fn(() => ({
+      conversations: {
+        info: conversationsInfo,
+        open: conversationsOpen,
+      },
+    })),
     createSlackReadClient: vi.fn(() => ({
       conversations: {
         info: conversationsInfo,
@@ -26,11 +32,13 @@ const slackClientMocks = vi.hoisted(() => {
 const {
   conversationsInfo: conversationsInfoMock,
   conversationsOpen: conversationsOpenMock,
+  createSlackLookupClient: createSlackLookupClientMock,
   createSlackReadClient: createSlackReadClientMock,
   createSlackWebClient: createSlackWebClientMock,
 } = slackClientMocks;
 
 vi.mock("./client.js", () => ({
+  createSlackLookupClient: slackClientMocks.createSlackLookupClient,
   createSlackReadClient: slackClientMocks.createSlackReadClient,
   createSlackWebClient: slackClientMocks.createSlackWebClient,
 }));
@@ -39,6 +47,7 @@ describe("resolveSlackChannelType", () => {
   beforeEach(() => {
     conversationsInfoMock.mockReset();
     conversationsOpenMock.mockReset();
+    createSlackLookupClientMock.mockClear();
     createSlackReadClientMock.mockClear();
     createSlackWebClientMock.mockClear();
     vi.stubEnv("SLACK_BOT_TOKEN", "");
@@ -117,6 +126,39 @@ describe("resolveSlackChannelType", () => {
     expect(createSlackWebClientMock).not.toHaveBeenCalled();
     expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "DINFOMETADATA1" });
     expect(conversationsOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the abortable lookup client for cancellable conversation resolution", async () => {
+    const controller = new AbortController();
+    conversationsInfoMock.mockResolvedValueOnce({
+      channel: {
+        id: "DCANCELLABLELOOKUP1",
+        is_im: true,
+        user: "U09G2DJ0275",
+      },
+    });
+
+    await expect(
+      resolveSlackConversationInfo({
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "xoxb-test",
+            },
+          },
+        } as never,
+        channelId: "DCANCELLABLELOOKUP1",
+        signal: controller.signal,
+      }),
+    ).resolves.toEqual({
+      type: "dm",
+      user: "U09G2DJ0275",
+    });
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith("xoxb-test", {
+      teamId: undefined,
+      signal: controller.signal,
+    });
+    expect(createSlackReadClientMock).not.toHaveBeenCalled();
   });
 
   it("rejects unscoped Enterprise conversation lookup before creating a client", async () => {

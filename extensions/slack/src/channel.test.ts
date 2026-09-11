@@ -26,6 +26,8 @@ const {
   usersInfoMock,
   authTeamsListMock,
   getSlackWriteClientMock,
+  createSlackLookupClientMock,
+  createSlackReadClientMock,
 } = vi.hoisted(() => ({
   sessionApiCallMock: vi.fn(),
   conversationsInfoMock: vi.fn(),
@@ -33,6 +35,8 @@ const {
   usersInfoMock: vi.fn(),
   authTeamsListMock: vi.fn(),
   getSlackWriteClientMock: vi.fn(),
+  createSlackLookupClientMock: vi.fn(),
+  createSlackReadClientMock: vi.fn(),
 }));
 
 vi.mock("./action-runtime.js", async () => {
@@ -61,8 +65,8 @@ vi.mock("./client.js", async () => {
   });
   return {
     ...actual,
-    createSlackReadClient: vi.fn(createClient),
-    createSlackLookupClient: vi.fn(createClient),
+    createSlackReadClient: createSlackReadClientMock.mockImplementation(createClient),
+    createSlackLookupClient: createSlackLookupClientMock.mockImplementation(createClient),
     getSlackWriteClient: getSlackWriteClientMock.mockImplementation(createClient),
   };
 });
@@ -80,6 +84,19 @@ beforeEach(async () => {
   usersInfoMock.mockReset();
   authTeamsListMock.mockReset();
   getSlackWriteClientMock.mockClear();
+  createSlackLookupClientMock.mockReset();
+  createSlackReadClientMock.mockReset();
+  const createMockClient = () => ({
+    apiCall: sessionApiCallMock,
+    conversations: {
+      info: conversationsInfoMock,
+      open: conversationsOpenMock,
+    },
+    users: { info: usersInfoMock },
+    auth: { teams: { list: authTeamsListMock } },
+  });
+  createSlackLookupClientMock.mockImplementation(createMockClient);
+  createSlackReadClientMock.mockImplementation(createMockClient);
   setSlackRuntime({
     channel: {
       slack: {
@@ -756,6 +773,33 @@ describe("slackPlugin status", () => {
       sessionKey: "agent:main:slack:channel:c1:thread:1712345678.123456",
       baseSessionKey: "agent:main:slack:channel:c1",
       threadId: "1712345678.123456",
+    });
+  });
+
+  it("passes cancellation through G-prefixed conversation routing", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+    conversationsInfoMock.mockResolvedValueOnce({
+      channel: { id: "G123456789", is_im: true, user: "U123456789" },
+    });
+    const controller = new AbortController();
+
+    const route = await resolveRoute({
+      cfg: { channels: { slack: { botToken: "lookup-fixture" } } },
+      agentId: "main",
+      target: "G123456789",
+      signal: controller.signal,
+    });
+
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith("lookup-fixture", {
+      teamId: undefined,
+      signal: controller.signal,
+    });
+    expectRecordFields(route, "G-prefixed Slack DM route", {
+      to: "user:G123456789",
+      recipientSessionExact: true,
     });
   });
 
