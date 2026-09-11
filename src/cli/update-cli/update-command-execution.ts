@@ -1,6 +1,5 @@
 import path from "node:path";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
@@ -12,7 +11,10 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-steps.
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import type { UpdateCandidateRehearsal } from "../../infra/update-candidate-rehearsal.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import type { UpdateDoctorConfigChange } from "../../infra/update-doctor-config.js";
+import {
+  createUpdateDoctorPromotionUnavailableStep,
+  type UpdateDoctorConfigChange,
+} from "../../infra/update-doctor-config.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   canResolveRegistryVersionForPackageTarget,
@@ -58,6 +60,7 @@ import {
 } from "./update-command-managed-context.js";
 import {
   runPackageInstallUpdate,
+  preparePackageDoctorContext,
   type PackageInstallUpdateParams,
 } from "./update-command-package.js";
 import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
@@ -159,25 +162,16 @@ export async function executeMutableUpdate(
   let doctorConfigWrites = false;
   const doctorConfigChanges: UpdateDoctorConfigChange[] = [];
   let validatedConfigSnapshot: { config: OpenClawConfig; hash?: string | null } | undefined;
-  const getDoctorContext: PackageInstallUpdateParams["getDoctorContext"] = () => {
-    assertRequesterCurrent();
-    if (!doctorConfigWrites) {
-      return undefined;
-    }
-    if (!originalRun?.executorFence || validatedConfigSnapshot?.hash === undefined) {
-      throw new Error(
-        "Validated Doctor requires its live update executor and captured config hash.",
-      );
-    }
-    return {
-      runId: originalRun.runId,
-      executorFence: originalRun.executorFence,
+  const getDoctorContext: PackageInstallUpdateParams["getDoctorContext"] = () =>
+    preparePackageDoctorContext({
+      capable: doctorConfigWrites,
+      runId: originalRun?.runId,
+      executorFence: originalRun?.executorFence,
       requester: requesterAuthority?.requester,
-      inputHash: validatedConfigSnapshot.hash ?? hashConfigRaw(null),
+      inputHash: validatedConfigSnapshot?.hash,
       changes: doctorConfigChanges,
       assertCurrent: assertRequesterCurrent,
-    };
-  };
+    });
   const originalRecovery = () =>
     params.installKind === "git"
       ? readCurrentGitUpdateRecovery(params.root)
@@ -446,21 +440,7 @@ export async function executeMutableUpdate(
     }
     if (validation.status === "ok" && !doctorConfigWrites && doctorConfigChanges.length) {
       candidateFailureReason = "doctor-config-promotion-unavailable";
-      const keys = [
-        ...new Set(
-          doctorConfigChanges.flatMap((change) => (change.kind === "key" ? [change.key] : [])),
-        ),
-      ].toSorted();
-      const refusal = {
-        name: "candidate Doctor promotion",
-        command: "verify Doctor write authority",
-        cwd: root,
-        durationMs: 0,
-        exitCode: 1,
-        stdoutTail: `Config keys: ${keys.join(", ")}.`,
-        stderrTail:
-          "This candidate cannot fence Doctor config promotion; select a candidate with guarded Doctor writes.",
-      };
+      const refusal = createUpdateDoctorPromotionUnavailableStep(root, doctorConfigChanges);
       validation.steps.push(refusal);
       params.progress?.onStepComplete?.({ ...refusal, index: 0, total: 0 });
     }

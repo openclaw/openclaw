@@ -118,12 +118,16 @@ describe("update candidate canary", () => {
           const child = new FakeChild(nextPid++);
           children.set(child.pid, child);
           const configPath = options.env.OPENCLAW_CONFIG_PATH;
-          if (!configPath) throw new Error("Missing rehearsal config");
+          if (!configPath) {
+            throw new Error("Missing rehearsal config");
+          }
           void fs
             .readFile(configPath, "utf8")
             .then(async (raw) => {
               const config: unknown = JSON.parse(raw);
-              if (!isRecord(config)) throw new Error("Invalid rehearsal fixture");
+              if (!isRecord(config)) {
+                throw new Error("Invalid rehearsal fixture");
+              }
               config.meta = { lastTouchedVersion: "2026.9.4" };
               config.wizard = { lastRunCommand: "doctor" };
               config.plugins = { entries: { openai: { enabled: true } } };
@@ -159,7 +163,9 @@ describe("update candidate canary", () => {
         const child = new FakeChild(nextPid++);
         children.set(child.pid, child);
         const resultPath = options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
-        if (!resultPath) throw new Error("Missing candidate Doctor receipt");
+        if (!resultPath) {
+          throw new Error("Missing candidate Doctor receipt");
+        }
         void writeUpdatePostInstallDoctorResult({
           resultPath,
           result: createDeferredConfiguredPluginRepairDoctorResult([

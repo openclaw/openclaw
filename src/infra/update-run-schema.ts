@@ -9,10 +9,8 @@ import {
 import {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,
-} from "./update-doctor-config.js";
-
-export const UPDATE_RUN_TEXT_LIMIT = 1024;
-export const UPDATE_RUN_DIAGNOSTIC_LIMIT = 32;
+} from "./update-doctor-config-schema.js";
+import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-record.js";
 const text = z.string().max(UPDATE_RUN_TEXT_LIMIT);
 const timestamp = z.number().int().nonnegative();
 const version = z.object({

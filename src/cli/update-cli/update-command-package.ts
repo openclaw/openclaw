@@ -1,5 +1,6 @@
 import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
@@ -11,6 +12,7 @@ import {
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   formatUpdateDoctorConfigWriteRefusal,
+  getUpdateDoctorConfigFailureReason,
   type UpdateDoctorConfigChange,
 } from "../../infra/update-doctor-config.js";
 import {
@@ -88,6 +90,32 @@ type PackageDoctorOptions = {
       }
     | undefined;
 };
+
+export function preparePackageDoctorContext(params: {
+  capable: boolean;
+  runId?: string;
+  executorFence?: UpdateRecoveryFence;
+  requester?: Readonly<UpdateRequester>;
+  inputHash?: string | null;
+  changes: UpdateDoctorConfigChange[];
+  assertCurrent: () => void;
+}) {
+  params.assertCurrent();
+  if (!params.capable) {
+    return undefined;
+  }
+  if (!params.runId || !params.executorFence || params.inputHash === undefined) {
+    throw new Error("Validated Doctor requires its live update executor and captured config hash.");
+  }
+  return {
+    runId: params.runId,
+    executorFence: params.executorFence,
+    requester: params.requester,
+    inputHash: params.inputHash ?? hashConfigRaw(null),
+    changes: params.changes,
+    assertCurrent: params.assertCurrent,
+  };
+}
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   const context = params.getDoctorContext?.();
@@ -410,11 +438,8 @@ export async function runPackageInstallUpdate(
     mode: installTarget.manager,
     root: packageUpdate.activePackageRoot ?? undefined,
     reason:
-      (packageUpdate.failedStep?.configWriteRefusal
-        ? packageUpdate.failedStep.configWriteRefusal.reason === "requester-revoked"
-          ? "requester-revoked"
-          : "repair-requires-config-change"
-        : packageUpdate.reason) ??
+      getUpdateDoctorConfigFailureReason(packageUpdate.failedStep?.configWriteRefusal) ??
+      packageUpdate.reason ??
       (packageUpdate.failedStep
         ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
         : undefined),

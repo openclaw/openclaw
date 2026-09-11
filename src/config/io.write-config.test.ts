@@ -282,7 +282,9 @@ describe("config io write", () => {
           {
             inputHash: hashConfigRaw(raw),
             assertCurrent: () => {
-              if (revoked) throw new UpdateRequesterRevokedError();
+              if (revoked) {
+                throw new UpdateRequesterRevokedError();
+              }
             },
           },
         );

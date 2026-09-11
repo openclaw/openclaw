@@ -1,10 +1,9 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
+import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config.js";
 import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { runStep } from "./update-runner-command.js";
@@ -16,7 +15,11 @@ import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
-import { runGitDoctorStep, runGitUpstreamStep } from "./update-runner-git-steps.js";
+import {
+  resolveGitDoctorEntry,
+  runGitDoctorStep,
+  runGitUpstreamStep,
+} from "./update-runner-git-steps.js";
 import {
   prepareGitMutation,
   readBranchName,
@@ -626,20 +629,8 @@ export async function updateGitCheckout(params: {
 
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
-      const doctorEntry = path.join(gitRoot, "openclaw.mjs");
-      const doctorEntryExists = await fs.stat(doctorEntry).then(
-        () => true,
-        () => false,
-      );
-      if (!doctorEntryExists) {
-        steps.push({
-          name: "openclaw doctor entry",
-          command: `verify ${doctorEntry}`,
-          cwd: gitRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: `missing ${doctorEntry}`,
-        });
+      const doctorEntry = await resolveGitDoctorEntry(gitRoot, steps);
+      if (!doctorEntry) {
         return await rollbackError("doctor-entry-missing");
       }
       const doctorNodePath = await resolveStableNodePath(process.execPath);
@@ -650,42 +641,26 @@ export async function updateGitCheckout(params: {
       });
       stateMigrationStarted = true;
       recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
-      const doctorStep = opts.runGitDoctor
-        ? await opts.runGitDoctor(gitRoot)
-        : await runGitDoctorStep({
-            root: gitRoot,
-            entryPath: doctorEntry,
-            nodePath: doctorNodePath,
-            fix: doctorPolicy.fix,
-            step,
-            env: buildUpdateDoctorEnv({
-              allowGatewayServiceRepair,
-              allowGatewayActivation,
-              serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
-              deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
-            }),
-          });
-      if (opts.runGitDoctor && doctorStep) {
-        steps.push(doctorStep);
-      }
+      const doctorStep = await runGitDoctorStep({
+        root: gitRoot,
+        runDoctor: opts.runGitDoctor,
+        entryPath: doctorEntry,
+        nodePath: doctorNodePath,
+        fix: doctorPolicy.fix,
+        step,
+        env: buildUpdateDoctorEnv({
+          allowGatewayServiceRepair,
+          allowGatewayActivation,
+          serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
+          deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
+        }),
+      });
       if (!doctorStep) {
-        steps.push({
-          name: "openclaw doctor",
-          command: "run activation doctor",
-          cwd: gitRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: "Required activation Doctor did not produce a result.",
-        });
         return await rollbackError("doctor-entry-missing");
       }
       if (doctorStep.exitCode !== 0 && !doctorStep.advisory) {
         return await rollbackError(
-          doctorStep.configWriteRefusal
-            ? doctorStep.configWriteRefusal.reason === "requester-revoked"
-              ? "requester-revoked"
-              : "repair-requires-config-change"
-            : "doctor-failed",
+          getUpdateDoctorConfigFailureReason(doctorStep.configWriteRefusal) ?? "doctor-failed",
         );
       }
     }

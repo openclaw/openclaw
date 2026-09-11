@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
@@ -51,6 +52,7 @@ describe("direct Git Doctor receipts", () => {
         exitCode: reason ? 1 : 0,
         configChanges: result.configChanges,
       });
+      assert(step);
       expect(step.configWriteRefusal).toEqual(result.configWriteRefusal);
       expect(steps).toEqual([step]);
       expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(

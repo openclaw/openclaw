@@ -99,11 +99,12 @@ describe("update run ledger", () => {
     expect(steps.filter((step) => step.configChange)).toHaveLength(32);
     for (const step of steps) {
       expect(step.detail?.length ?? 0).toBeLessThanOrEqual(1024);
-      if (step.configChange)
+      if (step.configChange) {
         expect(
           (step.configChange.kind === "key" ? step.configChange.key : step.configChange.message)
             .length,
         ).toBeLessThanOrEqual(1024);
+      }
       if (step.configWriteRefusal) {
         expect(step.configWriteRefusal.keys).toHaveLength(32);
         expect(step.configWriteRefusal.message.length).toBeLessThanOrEqual(1024);
@@ -160,7 +161,9 @@ describe("update run ledger", () => {
       );
       const retained = getUpdateRun(run.runId, options);
       expect(retained).toBeDefined();
-      if (!retained) throw new Error("Missing retained update run");
+      if (!retained) {
+        throw new Error("Missing retained update run");
+      }
       const report = renderUpdateRunReport(retained).markdown;
       expect(report).toContain(keys.join(", "));
       if (outcome === "committed") {

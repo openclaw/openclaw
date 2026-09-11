@@ -13,8 +13,10 @@ import {
 import {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,
-  type UpdateDoctorConfigChange,
-  type UpdateDoctorConfigWriteRefusal,
+} from "./update-doctor-config-schema.js";
+import type {
+  UpdateDoctorConfigChange,
+  UpdateDoctorConfigWriteRefusal,
 } from "./update-doctor-config.js";
 
 // IPC contract between package update parents and the post-install doctor child.

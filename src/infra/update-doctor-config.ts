@@ -1,16 +1,11 @@
-import { z } from "zod";
+import type { z } from "zod";
+import type {
+  UpdateDoctorConfigChangeSchema,
+  UpdateDoctorConfigWriteRefusalSchema,
+} from "./update-doctor-config-schema.js";
+import type { UpdateStepResult } from "./update-runner-types.js";
 
-export const UpdateDoctorConfigChangeSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("key"), key: z.string() }),
-  z.object({ kind: z.literal("migration"), message: z.string() }),
-]);
 export type UpdateDoctorConfigChange = z.infer<typeof UpdateDoctorConfigChangeSchema>;
-
-export const UpdateDoctorConfigWriteRefusalSchema = z.object({
-  reason: z.string(),
-  message: z.string(),
-  keys: z.array(z.string()),
-});
 export type UpdateDoctorConfigWriteRefusal = z.infer<typeof UpdateDoctorConfigWriteRefusalSchema>;
 
 export function formatUpdateDoctorConfigWriteRefusal(
@@ -23,4 +18,31 @@ export function formatUpdateDoctorConfigChange(change: UpdateDoctorConfigChange)
   return change.kind === "key"
     ? `Doctor changed config key: ${change.key}.`
     : `Doctor migration: ${change.message}`;
+}
+
+export function getUpdateDoctorConfigFailureReason(refusal?: UpdateDoctorConfigWriteRefusal) {
+  return refusal
+    ? refusal.reason === "requester-revoked"
+      ? "requester-revoked"
+      : "repair-requires-config-change"
+    : undefined;
+}
+
+export function createUpdateDoctorPromotionUnavailableStep(
+  root: string,
+  changes: readonly UpdateDoctorConfigChange[],
+): UpdateStepResult {
+  const keys = [
+    ...new Set(changes.flatMap((change) => (change.kind === "key" ? [change.key] : []))),
+  ].toSorted();
+  return {
+    name: "candidate Doctor promotion",
+    command: "verify Doctor write authority",
+    cwd: root,
+    durationMs: 0,
+    exitCode: 1,
+    stdoutTail: `Config keys: ${keys.join(", ")}.`,
+    stderrTail:
+      "This candidate cannot fence Doctor config promotion; select a candidate with guarded Doctor writes.",
+  };
 }
