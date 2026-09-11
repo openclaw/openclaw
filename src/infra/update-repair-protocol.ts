@@ -52,7 +52,7 @@ export const updateRepairWorkerMessageSchema = z.discriminatedUnion("type", [
     }),
   }),
 ]);
-export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
+const currentParentMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("start"),
     runId: text.optional(),
@@ -88,6 +88,29 @@ export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("validation-error"), id: turn, reason: text }),
   z.object({ type: z.literal("cancel"), reason: text }),
+]);
+// Released updaters launch this worker only after activation and omit both fields.
+// Keep this ingress adapter until supported updater parents send live authority.
+// Never reinterpret a partial modern/rehearsal request as a released-parent start.
+const currentStartSchema = currentParentMessageSchema.options[0];
+const releasedStartSchema = currentStartSchema
+  .extend({
+    authority: z.never().optional(),
+    context: currentStartSchema.shape.context.extend({ phase: z.never().optional() }),
+  })
+  .transform(({ target, context, ...message }) => ({
+    ...message,
+    target,
+    authority: {
+      stateDir: target.stateDir,
+      configPath: target.configPath,
+      workspaceDir: target.workspaceDir,
+    },
+    context: { ...context, phase: "verifying" as const },
+  }));
+export const updateRepairParentMessageSchema = z.union([
+  currentParentMessageSchema,
+  releasedStartSchema,
 ]);
 export type UpdateRepairWorkerMessage = z.infer<typeof updateRepairWorkerMessageSchema>;
 export type UpdateRepairParentMessage = z.infer<typeof updateRepairParentMessageSchema>;
