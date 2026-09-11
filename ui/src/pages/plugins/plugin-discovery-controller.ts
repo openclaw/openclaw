@@ -11,10 +11,13 @@ import type { PluginDiscoveryIntent } from "./catalog-results.ts";
 
 const CATALOG_PAGE_SIZE = 100;
 const CATALOG_SECTION_SIZE = 8;
+const NO_CATALOG_CLIENT: GatewayBrowserClient | null = null;
+const NO_CATALOG_CURSOR: string | null = null;
 
 type CatalogPageLoad = {
   items: PluginDiscoveryEntry[];
   categories?: PluginDiscoveryCategory[];
+  nextCursor?: string;
   remoteError?: string;
 };
 
@@ -32,6 +35,33 @@ function compareOfficialDownloads(left: PluginDiscoveryEntry, right: PluginDisco
   return downloadOrder || left.catalog.name.localeCompare(right.catalog.name);
 }
 
+function rankedOverviewShelf(
+  items: readonly PluginDiscoveryEntry[],
+  membership: "featured" | "trending",
+  rank: "featuredRank" | "trendingRank",
+): PluginDiscoveryEntry[] {
+  return items
+    .filter((item) => item.catalog[membership])
+    .toSorted(
+      (left, right) =>
+        (left.catalog[rank] ?? Number.MAX_SAFE_INTEGER) -
+        (right.catalog[rank] ?? Number.MAX_SAFE_INTEGER),
+    );
+}
+
+function appendUniqueEntries(
+  existing: readonly PluginDiscoveryEntry[],
+  incoming: readonly PluginDiscoveryEntry[],
+): PluginDiscoveryEntry[] {
+  const entries = new Map(existing.map((item) => [item.id, item]));
+  for (const item of incoming) {
+    if (!entries.has(item.id)) {
+      entries.set(item.id, item);
+    }
+  }
+  return [...entries.values()];
+}
+
 export class PluginDiscoveryController {
   result: PluginDiscoveryResult | null = null;
   error: string | null = null;
@@ -42,6 +72,7 @@ export class PluginDiscoveryController {
   featuredError: string | null = null;
   trending: PluginDiscoveryEntry[] = [];
   trendingError: string | null = null;
+  loadMoreError: string | null = null;
   intent: PluginDiscoveryIntent = "all";
   category: string | null = null;
   query = "";
@@ -49,6 +80,7 @@ export class PluginDiscoveryController {
   private committedQuery = "";
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly browseTask: Task;
+  private readonly loadMoreTask: Task;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -69,16 +101,21 @@ export class PluginDiscoveryController {
           ? this.fetchAvailablePage({ client, intent, category, query, signal })
           : initialState, // Lit returns to INITIAL without invoking onComplete.
       onComplete: (page) => {
-        this.result = { items: page.items };
+        this.result = {
+          items: page.items,
+          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+        };
         this.remoteError = page.remoteError ?? null;
         if (this.isGroupedOverview()) {
           this.categories = page.categories ?? [];
-          this.featured = page.items
-            .filter((item) => item.catalog.featured)
-            .slice(0, CATALOG_SECTION_SIZE);
-          this.trending = page.items
-            .filter((item) => item.catalog.trending)
-            .slice(0, CATALOG_SECTION_SIZE);
+          this.featured = rankedOverviewShelf(page.items, "featured", "featuredRank").slice(
+            0,
+            CATALOG_SECTION_SIZE,
+          );
+          this.trending = rankedOverviewShelf(page.items, "trending", "trendingRank").slice(
+            0,
+            CATALOG_SECTION_SIZE,
+          );
           this.categoriesError = page.remoteError ?? null;
           this.featuredError = page.remoteError ?? null;
           this.trendingError = page.remoteError ?? null;
@@ -87,6 +124,39 @@ export class PluginDiscoveryController {
       },
       onError: (error) => {
         this.error = formatUiError(error);
+      },
+    });
+    this.loadMoreTask = new Task(host, {
+      autoRun: false,
+      args: () =>
+        [
+          NO_CATALOG_CLIENT,
+          this.intent,
+          this.category,
+          this.committedQuery,
+          NO_CATALOG_CURSOR,
+        ] as const,
+      task: ([client, intent, category, query, cursor], { signal }) =>
+        client && cursor
+          ? this.fetchAvailablePage({ client, intent, category, query, cursor, signal })
+          : initialState,
+      onComplete: (page) => {
+        if (!this.result || this.result.nextCursor !== page.requestedCursor) {
+          return;
+        }
+        const items = appendUniqueEntries(this.result.items, page.items);
+        this.result = {
+          items:
+            this.intent === "all" && !this.committedQuery
+              ? items.toSorted(compareOfficialDownloads)
+              : items,
+          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+        };
+        this.loadMoreError = page.remoteError ?? null;
+        this.gateway.onEntriesChanged?.();
+      },
+      onError: (error) => {
+        this.loadMoreError = formatUiError(error);
       },
     });
   }
@@ -103,19 +173,25 @@ export class PluginDiscoveryController {
     return this.isGroupedOverview() && this.loading;
   }
 
+  get loadingMore(): boolean {
+    return this.gateway.isConnected() && this.loadMoreTask.status === TaskStatus.PENDING;
+  }
+
   private async fetchAvailablePage(params: {
     client: GatewayBrowserClient;
     intent: PluginDiscoveryIntent;
     category: string | null;
     query: string;
+    cursor?: string;
     signal?: AbortSignal;
-  }): Promise<CatalogPageLoad> {
+  }): Promise<CatalogPageLoad & { requestedCursor?: string }> {
     const page = await params.client.request<PluginDiscoveryResult>(
       "plugins.catalog.browse",
       {
         intent: params.intent,
         ...(params.category ? { category: params.category } : {}),
         ...(params.query ? { query: params.query } : {}),
+        ...(params.cursor ? { cursor: params.cursor } : {}),
         pageSize: CATALOG_PAGE_SIZE,
       },
       params.signal ? { signal: params.signal } : undefined,
@@ -127,7 +203,9 @@ export class PluginDiscoveryController {
     return {
       items,
       ...(page.categories ? { categories: page.categories } : {}),
+      ...(page.nextCursor && !params.query ? { nextCursor: page.nextCursor } : {}),
       ...(page.remoteError ? { remoteError: page.remoteError } : {}),
+      ...(params.cursor ? { requestedCursor: params.cursor } : {}),
     };
   }
 
@@ -155,6 +233,8 @@ export class PluginDiscoveryController {
     this.featuredError = null;
     this.trending = [];
     this.trendingError = null;
+    this.loadMoreError = null;
+    void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
   }
 
   disconnect(): void {
@@ -162,6 +242,7 @@ export class PluginDiscoveryController {
       clearTimeout(this.searchTimer);
       this.searchTimer = null;
     }
+    void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
   }
 
   async refresh(): Promise<void> {
@@ -171,12 +252,30 @@ export class PluginDiscoveryController {
     }
     this.error = null;
     this.remoteError = null;
+    this.loadMoreError = null;
+    void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
     if (this.isGroupedOverview()) {
       this.categoriesError = null;
       this.featuredError = null;
       this.trendingError = null;
     }
     await this.browseTask.run([client, this.intent, this.category, this.committedQuery]);
+  }
+
+  async loadMore(): Promise<void> {
+    const client = this.gateway.getClient();
+    const cursor = this.result?.nextCursor;
+    if (
+      !client ||
+      !this.gateway.isConnected() ||
+      !cursor ||
+      this.committedQuery ||
+      this.isGroupedOverview()
+    ) {
+      return;
+    }
+    this.loadMoreError = null;
+    await this.loadMoreTask.run([client, this.intent, this.category, this.committedQuery, cursor]);
   }
 
   selectIntent(intent: PluginDiscoveryIntent): void {

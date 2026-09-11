@@ -34,6 +34,8 @@ export type PluginCatalogResultsProps = {
   trending: readonly PluginDiscoveryEntry[];
   trendingLoading: boolean;
   trendingError: string | null;
+  loadingMore: boolean;
+  loadMoreError: string | null;
   intent: PluginDiscoveryIntent;
   category: string | null;
   query: string;
@@ -46,6 +48,7 @@ export type PluginCatalogResultsProps = {
   onQueryChange: (query: string) => void;
   onOpenEntry: (id: string) => void;
   onInstall: (id: string) => void;
+  onLoadMore: () => void;
   onRetry: () => void;
   onRetryGrouped: () => void;
   onRetryCategories: () => void;
@@ -290,13 +293,30 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
       ${t("pluginsPage.noDiscoveryResults")}
     </p>`;
   }
-  return html`<div class="plugin-catalog-grid plugin-catalog-grid--results">
-    ${repeat(
-      items,
-      (plugin) => plugin.id,
-      (plugin) => renderCatalogCard(plugin, props),
-    )}
-  </div>`;
+  return html`
+    <div class="plugin-catalog-grid plugin-catalog-grid--results">
+      ${repeat(
+        items,
+        (plugin) => plugin.id,
+        (plugin) => renderCatalogCard(plugin, props),
+      )}
+    </div>
+    ${props.loadMoreError ? renderError(props.loadMoreError, props.onLoadMore) : nothing}
+    ${
+      props.result?.nextCursor
+        ? html`<div class="plugin-catalog-load-more">
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              ?disabled=${props.loadingMore}
+              @click=${props.onLoadMore}
+            >
+              ${props.loadingMore ? t("pluginsPage.loadingMore") : t("pluginsPage.loadMore")}
+            </button>
+          </div>`
+        : nothing
+    }
+  `;
 }
 
 function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult {

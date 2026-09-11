@@ -35,6 +35,8 @@ export type ClawHubPluginCatalogEntry = {
   verificationTier?: string;
   featured?: boolean;
   trending?: boolean;
+  featuredRank?: number;
+  trendingRank?: number;
 };
 
 export type ClawHubPluginDetail = ClawHubPluginCatalogEntry & {
@@ -159,6 +161,18 @@ function readOptionalBoolean(
   return candidate;
 }
 
+function readOptionalRank(
+  value: Record<string, unknown>,
+  field: string,
+  context: string,
+): number | undefined {
+  const candidate = readOptionalNonNegativeNumber(value, field, context);
+  if (candidate !== undefined && !Number.isInteger(candidate)) {
+    throw new Error(`Malformed ClawHub ${context}: expected ${field} to be an integer.`);
+  }
+  return candidate;
+}
+
 function parseCatalogPackage(value: unknown, context: string): ClawHubPluginCatalogEntry {
   if (!isRecord(value)) {
     throw new Error(`Malformed ClawHub ${context}: expected package to be an object.`);
@@ -179,6 +193,8 @@ function parseCatalogPackage(value: unknown, context: string): ClawHubPluginCata
   const verificationTier = readClawHubStringField(value, "verificationTier", context);
   const featured = readOptionalBoolean(value, "featured", context);
   const trending = readOptionalBoolean(value, "trending", context);
+  const featuredRank = readOptionalRank(value, "featuredRank", context);
+  const trendingRank = readOptionalRank(value, "trendingRank", context);
   const downloads = stats
     ? readOptionalNonNegativeNumber(stats, "downloads", `${context} stats`)
     : undefined;
@@ -199,6 +215,8 @@ function parseCatalogPackage(value: unknown, context: string): ClawHubPluginCata
     ...(verificationTier ? { verificationTier } : {}),
     ...(featured !== undefined ? { featured } : {}),
     ...(trending !== undefined ? { trending } : {}),
+    ...(featuredRank !== undefined ? { featuredRank } : {}),
+    ...(trendingRank !== undefined ? { trendingRank } : {}),
     ...(downloads !== undefined ? { downloads } : {}),
     ...(installs !== undefined ? { installs } : {}),
   };

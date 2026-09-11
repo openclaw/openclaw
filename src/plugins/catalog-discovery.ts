@@ -147,6 +147,8 @@ export function joinClawHubPluginCatalog(params: {
         ...(plugin.verificationTier ? { verificationTier: plugin.verificationTier } : {}),
         ...(plugin.featured !== undefined ? { featured: plugin.featured } : {}),
         ...(plugin.trending !== undefined ? { trending: plugin.trending } : {}),
+        ...(plugin.featuredRank !== undefined ? { featuredRank: plugin.featuredRank } : {}),
+        ...(plugin.trendingRank !== undefined ? { trendingRank: plugin.trendingRank } : {}),
         publishedToClawHub: true,
       },
       local: projectLocalFacts(localPlugin, params.local.mutationAllowed),

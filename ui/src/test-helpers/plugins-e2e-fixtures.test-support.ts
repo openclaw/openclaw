@@ -115,8 +115,26 @@ export const finalDiscoveryPageItems = [
 export const discoveryResult = {
   items: [
     localOnlyDiscoveryPlugin,
-    memoryDiscoveryPlugin,
-    matrixDiscoveryPlugin,
+    {
+      ...memoryDiscoveryPlugin,
+      catalog: {
+        ...memoryDiscoveryPlugin.catalog,
+        featured: true,
+        trending: true,
+        featuredRank: 0,
+        trendingRank: 1,
+      },
+    },
+    {
+      ...matrixDiscoveryPlugin,
+      catalog: {
+        ...matrixDiscoveryPlugin.catalog,
+        featured: true,
+        trending: true,
+        featuredRank: 1,
+        trendingRank: 0,
+      },
+    },
     telegramDiscoveryPlugin,
     ...Array.from({ length: 22 }, (_, index) => availableDiscoveryPlugin(index, "First page")),
   ],

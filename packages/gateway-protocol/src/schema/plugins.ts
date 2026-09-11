@@ -365,6 +365,8 @@ export const PluginDiscoveryCatalogFactsSchema = closedObject({
   verificationTier: Type.Optional(NonEmptyString),
   featured: Type.Optional(Type.Boolean()),
   trending: Type.Optional(Type.Boolean()),
+  featuredRank: Type.Optional(Type.Integer({ minimum: 0 })),
+  trendingRank: Type.Optional(Type.Integer({ minimum: 0 })),
   publishedToClawHub: Type.Optional(Type.Boolean()),
 });
 

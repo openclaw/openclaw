@@ -38,7 +38,15 @@ describe("ClawHub plugin catalog client", () => {
             order: 0,
           },
         ],
-        items: [{ ...remotePlugin, featured: true, trending: true }],
+        items: [
+          {
+            ...remotePlugin,
+            featured: true,
+            trending: true,
+            featuredRank: 1,
+            trendingRank: 0,
+          },
+        ],
       });
     });
 
@@ -54,6 +62,8 @@ describe("ClawHub plugin catalog client", () => {
         packageName: "memory-plus",
         featured: true,
         trending: true,
+        featuredRank: 1,
+        trendingRank: 0,
       }),
     ]);
     expect(fetchImpl).toHaveBeenCalledOnce();

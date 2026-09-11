@@ -9774,6 +9774,8 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
     public let verificationtier: String?
     public let featured: Bool?
     public let trending: Bool?
+    public let featuredrank: Int?
+    public let trendingrank: Int?
     public let publishedtoclawhub: Bool?
 
     public init(
@@ -9792,6 +9794,8 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         verificationtier: String? = nil,
         featured: Bool? = nil,
         trending: Bool? = nil,
+        featuredrank: Int? = nil,
+        trendingrank: Int? = nil,
         publishedtoclawhub: Bool? = nil)
     {
         self.name = name
@@ -9809,6 +9813,8 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         self.verificationtier = verificationtier
         self.featured = featured
         self.trending = trending
+        self.featuredrank = featuredrank
+        self.trendingrank = trendingrank
         self.publishedtoclawhub = publishedtoclawhub
     }
 
@@ -9828,6 +9834,8 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         case verificationtier = "verificationTier"
         case featured
         case trending
+        case featuredrank = "featuredRank"
+        case trendingrank = "trendingRank"
         case publishedtoclawhub = "publishedToClawHub"
     }
 }

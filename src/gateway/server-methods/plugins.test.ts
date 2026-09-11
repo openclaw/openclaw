@@ -502,7 +502,19 @@ describe("plugin management Gateway handlers", () => {
           order: 0,
         },
       ],
-      items: [],
+      items: [
+        {
+          packageName: "memory-plus",
+          displayName: "Memory Plus",
+          family: "code-plugin",
+          isOfficial: false,
+          categories: ["memory"],
+          featured: true,
+          featuredRank: 1,
+          trending: true,
+          trendingRank: 0,
+        },
+      ],
     });
     managementMocks.list.mockResolvedValue({
       plugins: [],
@@ -516,7 +528,16 @@ describe("plugin management Gateway handlers", () => {
     expect(catalogMocks.overview).toHaveBeenCalledOnce();
     expect(catalogMocks.browse).not.toHaveBeenCalled();
     expect(result.response).toMatchObject({
-      items: [],
+      items: [
+        {
+          catalog: {
+            featured: true,
+            featuredRank: 1,
+            trending: true,
+            trendingRank: 0,
+          },
+        },
+      ],
       categories: [expect.objectContaining({ slug: "memory" })],
     });
   });

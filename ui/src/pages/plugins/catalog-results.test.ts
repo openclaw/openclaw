@@ -53,6 +53,8 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
     trending: [plugin("trending")],
     trendingLoading: false,
     trendingError: null,
+    loadingMore: false,
+    loadMoreError: null,
     intent: "all",
     category: null,
     query: "",
@@ -65,6 +67,7 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
     onQueryChange: vi.fn(),
     onOpenEntry: vi.fn(),
     onInstall: vi.fn(),
+    onLoadMore: vi.fn(),
     onRetry: vi.fn(),
     onRetryGrouped: vi.fn(),
     onRetryCategories: vi.fn(),
@@ -121,6 +124,22 @@ describe("renderPluginCatalogResults", () => {
       container.querySelectorAll(".plugin-catalog-grid--results .plugin-catalog-card"),
     ).toHaveLength(1);
     expect(container.querySelector(".plugin-catalog-pagination")).toBeNull();
+  });
+
+  it("offers bounded continuation only when the expanded result has another page", () => {
+    const onLoadMore = vi.fn();
+    const container = mount(
+      baseProps({
+        category: "tools",
+        result: { items: [plugin("tool")], nextCursor: "catalog-page-2" },
+        onLoadMore,
+      }),
+    );
+
+    const loadMore = container.querySelector<HTMLButtonElement>(".plugin-catalog-load-more button");
+    expect(loadMore?.textContent?.trim()).toBe("Load more");
+    loadMore?.click();
+    expect(onLoadMore).toHaveBeenCalledOnce();
   });
 
   it("keeps a partial ClawHub failure retryable", () => {
