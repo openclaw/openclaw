@@ -56,17 +56,10 @@ suite.define(() => {
       const textarea = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => textarea.isDisabled()).toBe(false);
       const welcome = page.locator(".agent-chat__welcome--setup");
-      const welcomeAction = welcome.getByRole("button", { name: "Connect an AI provider" });
-      const composerAction = page
-        .locator(".agent-chat__disabled-banner")
-        .getByRole("button", { name: "Connect an AI provider" });
-      await expect.poll(() => welcomeAction.count()).toBe(1);
-      await expect.poll(() => composerAction.count()).toBe(1);
+      const setupAction = page.getByRole("button", { name: "Connect an AI provider", exact: true });
+      await expect.poll(() => setupAction.count()).toBe(1);
       await captureProof(page, "chat-home-desktop.png");
-      await welcomeAction.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
-      await page.goBack();
-      await composerAction.click();
+      await setupAction.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
       await page.goBack();
       const sendButton = page.getByRole("button", { name: "Send message", exact: true });
@@ -76,7 +69,11 @@ suite.define(() => {
       await page.getByText("Available Commands", { exact: true }).waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await expect.poll(() => welcome.count()).toBe(0);
-      await expect.poll(() => composerAction.count()).toBe(1);
+      await expect.poll(() => setupAction.count()).toBe(1);
+      await captureProof(page, "chat-help-desktop.png");
+      await setupAction.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await page.goBack();
       await textarea.fill("Start a conversation.");
       await expect.poll(() => sendButton.isDisabled()).toBe(true);
       expect(await textarea.inputValue()).toBe("Start a conversation.");
