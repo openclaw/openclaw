@@ -52,6 +52,10 @@ export function parseGitHubLinkTarget(href: string): GitHubLinkTarget | null {
   return target ? { ...target, href: url.href } : null;
 }
 
+export function gitHubPreviewKey(target: GitHubLinkTarget): string {
+  return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
+}
+
 export function gitHubProfileUrl(login: string): string {
   return `${GITHUB_URL_PREFIX}${encodeURIComponent(login)}`;
 }
