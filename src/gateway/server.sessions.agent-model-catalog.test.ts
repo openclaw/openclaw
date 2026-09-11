@@ -415,3 +415,133 @@ test.each([
     modelOverrideSource: "user",
   });
 });
+
+// A visible spawn forwards its inherited level as an explicit `thinkingLevel`,
+// and the real creation path rejects an explicit level the prepared catalog does
+// not support. These cases pin that boundary for a catalog-defined off-only
+// model: the unclamped level fails creation outright, the clamped one persists.
+const offOnlyModel = {
+  id: "off-only",
+  name: "Off Only",
+  provider: "off-provider",
+  reasoning: false,
+};
+const offOnlyRef = "off-provider/off-only";
+
+test.each([
+  {
+    label: "rejects an unclamped inherited level for an off-only model",
+    thinkingLevel: "high",
+    created: false,
+  },
+  {
+    label: "accepts the catalog-clamped level for an off-only model",
+    thinkingLevel: "off",
+    created: true,
+  },
+])("sessions.create $label", async (scenario) => {
+  const { workStorePath } = await createSelectedGlobalSessionStore();
+  testState.agentConfig = { model: { primary: "synthetic/base" } };
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  const key = "agent:work:dashboard:off-only-child";
+  const access = { agentId: "work", sessionKey: key, storePath: workStorePath };
+  const loadGatewayModelCatalog = vi.fn(async () => [offOnlyModel]);
+
+  const result = await directSessionReq<{ entry?: SessionEntry }>(
+    "sessions.create",
+    {
+      key,
+      agentId: "work",
+      model: offOnlyRef,
+      thinkingLevel: scenario.thinkingLevel,
+      task: "inspect issue",
+    },
+    { context: { loadGatewayModelCatalog } },
+  );
+
+  expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
+  if (!scenario.created) {
+    expect.soft(result.ok).toBe(false);
+    expect.soft(result.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: `thinkingLevel "high" is not supported for ${offOnlyRef} (use off)`,
+    });
+    expect(loadSessionEntry(access)).toBeUndefined();
+    return;
+  }
+  expect(result.ok, result.error?.message).toBe(true);
+  expect(loadSessionEntry(access)).toMatchObject({
+    providerOverride: "off-provider",
+    modelOverride: "off-only",
+    thinkingLevel: "off",
+  });
+});
+
+// Integrated boundary: the visible spawn tool's own clamp feeds the real
+// `sessions.create` handler, with one shared authoritative catalog for both
+// sides. The unclamped level is the same one the cases above prove creation
+// rejects, so a regression in the clamp fails here as a creation failure.
+test.each([
+  { label: "an off-only child", offOnly: true, expectedLevel: "off" },
+  { label: "a reasoning-capable child", offOnly: false, expectedLevel: "high" },
+])("visible spawn creates %s through the real sessions.create path", async (scenario) => {
+  const { workStorePath } = await createSelectedGlobalSessionStore();
+  testState.agentConfig = { model: { primary: offOnlyRef } };
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  const parentKey = "agent:work:dashboard:visible-spawn-parent";
+  // Real creation validates declared spawn lineage, so the requester must exist.
+  await writeSessionStore({
+    agentId: "work",
+    storePath: workStorePath,
+    entries: { [parentKey]: sessionStoreEntry("visible-spawn-parent") },
+  });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const { maybeSpawnVisibleSession } = await import("../agents/tools/sessions-spawn-visible.js");
+  const loadGatewayModelCatalog = vi.fn(async () => [
+    scenario.offOnly ? offOnlyModel : { ...offOnlyModel, reasoning: true },
+  ]);
+  const registerRun = vi.fn();
+  const gatewayCalls: { method: string; params: Record<string, unknown> }[] = [];
+
+  const result = await maybeSpawnVisibleSession({
+    raw: { visible: true, task: "inspect issue" },
+    task: "inspect issue",
+    label: "Visible child",
+    runtime: "subagent",
+    requestedAgentId: "work",
+    sandbox: "inherit",
+    expectsCompletionMessage: true,
+    options: {
+      config: getRuntimeConfig(),
+      agentSessionKey: parentKey,
+      requesterThinkingLevel: "high",
+      loadModelCatalog: loadGatewayModelCatalog as never,
+      registerRun: registerRun as never,
+      countActiveRuns: () => 0,
+      callGateway: async (method, params) => {
+        gatewayCalls.push({ method, params: params as Record<string, unknown> });
+        const response = await directSessionReq<Record<string, unknown>>(
+          method as "sessions.create",
+          params as Record<string, unknown>,
+          { context: { loadGatewayModelCatalog } },
+        );
+        if (!response.ok) {
+          throw new Error(response.error?.message ?? "sessions.create failed");
+        }
+        return response.payload as never;
+      },
+    },
+  });
+
+  expect(gatewayCalls[0]).toMatchObject({
+    method: "sessions.create",
+    params: { agentId: "work", model: offOnlyRef, thinkingLevel: scenario.expectedLevel },
+  });
+  expect(result).toMatchObject({ status: "accepted" });
+  // The tool mints the child key, so read the persisted row it reports back.
+  const childSessionKey = result?.childSessionKey as string;
+  expect(childSessionKey).toBeTruthy();
+  expect(
+    loadSessionEntry({ agentId: "work", sessionKey: childSessionKey, storePath: workStorePath }),
+  ).toMatchObject({ thinkingLevel: scenario.expectedLevel });
+});
