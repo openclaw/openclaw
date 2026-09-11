@@ -39,7 +39,7 @@ struct DashboardNativeBrowserContractTests {
         ]) == .open(tabId: "mac-background", url: blankURL, sessionKey: "", activate: false))
     }
 
-    @Test func `open requests require a session identity and allow the empty shell scope`() throws {
+    @Test func `open requests preserve valid session identities and reject malformed values`() throws {
         let url = try #require(URL(string: "about:blank"))
         for sessionKey in ["", "agent:main:chat:session-a"] {
             #expect(try DashboardBrowserMessageHandler.decode([
@@ -53,11 +53,16 @@ struct DashboardNativeBrowserContractTests {
                 ])
             }
         }
-        #expect(throws: (any Error).self) {
-            try DashboardBrowserMessageHandler.decode([
-                "type": "open", "tabId": "mac-fixture", "url": "about:blank",
-            ])
-        }
+    }
+
+    @Test func `released UI open requests without session identity retain the window scope`() throws {
+        let url = try #require(URL(string: "about:blank"))
+        #expect(try DashboardBrowserMessageHandler.decode([
+            "type": "open", "tabId": "mac-fixture", "url": "about:blank",
+        ]) == .open(tabId: "mac-fixture", url: url, sessionKey: nil, activate: true))
+        #expect(try DashboardBrowserMessageHandler.decode([
+            "type": "open", "tabId": "mac-background", "url": "about:blank", "activate": false,
+        ]) == .open(tabId: "mac-background", url: url, sessionKey: nil, activate: false))
     }
 
     @Test func `requests preserve tab and presentation identities without coercion`() throws {
@@ -179,6 +184,27 @@ struct DashboardNativeBrowserContractTests {
             ],
         ]
         #expect(actual == expected)
+    }
+
+    @Test func `legacy tab state omits session identity while shell tabs preserve the empty key`() throws {
+        for sessionKey: String? in [nil, ""] {
+            let state = DashboardBrowserState(revision: 1, tabs: [.init(
+                id: "mac-legacy",
+                sessionKey: sessionKey,
+                url: "about:blank",
+                title: "",
+                loading: false,
+                canGoBack: false,
+                canGoForward: false,
+                openedBy: "web",
+                openerTabId: nil)])
+            let encoded = try JSONEncoder().encode(state)
+            let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            let tabs = try #require(actual["tabs"] as? [[String: Any]])
+            let tab = try #require(tabs.first)
+            #expect(tab["sessionKey"] as? String == sessionKey)
+            #expect((tab["sessionKey"] == nil) == (sessionKey == nil))
+        }
     }
 
     @MainActor
@@ -394,6 +420,22 @@ struct DashboardNativeBrowserHostTests {
         #expect(try fixture.host.open(tabId: "mac-reuse-popup", url: requested, sessionKey: "session-a") == popup.id)
         #expect(try fixture.host
             .open(tabId: "mac-reuse-second", url: requested, sessionKey: "session-b") == "mac-second")
+    }
+
+    @Test func `legacy ownership survives reuse and popups without becoming the empty shell scope`() throws {
+        let fixture = self.fixture()
+        defer { fixture.host.dispose() }
+        let url = try #require(URL(string: "http://127.0.0.1:1/page"))
+        #expect(try fixture.host.open(tabId: "mac-legacy", url: url, sessionKey: nil) == "mac-legacy")
+        #expect(try fixture.host.open(tabId: "mac-reuse", url: url, sessionKey: nil) == "mac-legacy")
+        #expect(try fixture.host.open(tabId: "mac-shell", url: url, sessionKey: "") == "mac-shell")
+        #expect(try fixture.host.open(tabId: "mac-session", url: url, sessionKey: "session-a") == "mac-session")
+        let opener = try #require(fixture.host.webView(for: "mac-legacy"))
+        fixture.host.openNewWindow(url, opener: opener)
+        let popup = try #require(fixture.host.state.tabs.last)
+        #expect(popup.openerTabId == "mac-legacy")
+        #expect(popup.sessionKey == nil)
+        #expect(fixture.host.state.tabs.map(\.sessionKey) == [nil, "", "session-a", nil])
     }
 
     @Test func `requested alias survives the initial redirect chain and retires on later navigation`() throws {

@@ -36,7 +36,7 @@ const nativeTab = (
   openedBy: "web",
 });
 
-function fakeNativeBrowser(tabs: NativeBrowserTab[] = []) {
+function fakeNativeBrowser(tabs: NativeBrowserTab[] = [], legacy = false) {
   let state: NativeBrowserState = { revision: 0, tabs };
   const publish = (nextTabs: NativeBrowserTab[]) => {
     state = { revision: state.revision + 1, tabs: nextTabs };
@@ -45,9 +45,14 @@ function fakeNativeBrowser(tabs: NativeBrowserTab[] = []) {
   };
   const postMessage = vi.fn(async (message: NativeBrowserMessage) => {
     switch (message.type) {
-      case "open":
-        publish([...state.tabs, nativeTab(message.tabId, message.url, message.sessionKey)]);
+      case "open": {
+        const tab = nativeTab(message.tabId, message.url, message.sessionKey);
+        if (legacy) {
+          delete tab.sessionKey;
+        }
+        publish([...state.tabs, tab]);
         return { ok: true, tabId: message.tabId };
+      }
       case "close":
         publish(state.tabs.filter((tab) => tab.id !== message.tabId));
         break;
@@ -220,6 +225,30 @@ describe("native Browser panel ownership", () => {
     expect(restored.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
       "https://example.test/first",
     );
+  });
+
+  it("keeps released Mac tabs and popups usable through a Gateway-only update", async () => {
+    const { sessionKey: _sessionKey, ...legacyTab } = nativeTab("mac-legacy");
+    const native = fakeNativeBrowser([legacyTab], true);
+    const first = controllerFixture(false, "agent:main:first");
+    flushFrames();
+    const second = controllerFixture(false, "agent:main:second");
+    flushFrames();
+    expect(first.controller.activeTargetId).toBe(legacyTab.id);
+    expect(second.controller.activeTargetId).toBe(legacyTab.id);
+    native.publish([
+      legacyTab,
+      { ...legacyTab, id: "mac-popup", openedBy: "native", openerTabId: legacyTab.id },
+    ]);
+    expect(first.controller.tabs.map((tab) => tab.id)).toEqual(["mac-legacy", "mac-popup"]);
+    expect(second.controller.tabs.map((tab) => tab.id)).toEqual(["mac-legacy", "mac-popup"]);
+    expect(second.controller.activeTargetId).toBe("mac-popup");
+    expect(first.controller.activeTargetId).toBe(legacyTab.id);
+    await second.controller.native.open("https://example.test/new", true);
+    const opening = native.messages().find((message) => message.type === "open");
+    expect(opening).toMatchObject({ sessionKey: "agent:main:second" });
+    expect(second.controller.native.activeTab).toMatchObject({ url: "https://example.test/new" });
+    expect(second.controller.native.activeTab?.sessionKey).toBeUndefined();
   });
 
   it("does not publish a pending open into a panel rebound to another session", async () => {

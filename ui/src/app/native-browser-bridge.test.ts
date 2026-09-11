@@ -129,6 +129,19 @@ describe("native browser bridge wire contract", () => {
     });
   });
 
+  it("accepts released Mac state without session keys at initial read and on pushes", () => {
+    install();
+    const { sessionKey: _sessionKey, ...legacyTab } = tab;
+    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 1, tabs: [legacyTab] });
+    expect(readNativeBrowserState()).toEqual({ revision: 1, tabs: [legacyTab] });
+    const listener = vi.fn();
+    const unsubscribe = subscribeNativeBrowserState(listener);
+    const next = { revision: 2, tabs: [{ ...legacyTab, title: "Updated page" }] };
+    window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail: next }));
+    expect(listener).toHaveBeenCalledWith(next);
+    unsubscribe();
+  });
+
   it("validates initial state and ignores malformed, duplicate, stale, and unsubscribed pushes", () => {
     install();
     vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 2, tabs: [tab] });
@@ -143,7 +156,7 @@ describe("native browser bridge wire contract", () => {
       { revision: 3, tabs: [tab, tab] },
       { revision: 3, tabs: [{ ...tab, openedBy: "other" }] },
       { revision: 3, tabs: [{ ...tab, loading: 1 }] },
-      { revision: 3, tabs: [{ ...tab, sessionKey: undefined }] },
+      { revision: 3, tabs: [{ ...tab, sessionKey: null }] },
       { revision: 3, tabs: [{ ...tab, sessionKey: " session " }] },
       { revision: 3, tabs: [{ ...tab, url: "file:///example" }] },
       { revision: 3.5, tabs: [] },

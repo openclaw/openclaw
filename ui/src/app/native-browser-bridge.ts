@@ -13,7 +13,9 @@
  * Popups inherit their opener's session. Release-scope never closes tabs. If scopes present the
  * same tab, the most recent presentation wins until it is hidden or released.
  * Push: __OPENCLAW_NATIVE_BROWSER__ plus openclaw:native-browser-state detail,
- * {revision,tabs:[{id,sessionKey,url,title,loading,canGoBack,canGoForward,openedBy,openerTabId?}]}.
+ * {revision,tabs:[{id,sessionKey?,url,title,loading,canGoBack,canGoForward,openedBy,openerTabId?}]}.
+ * Released Mac apps omit sessionKey; these legacy tabs remain window-shared.
+ * Keep this bridge transition until supported app/UI releases all carry session keys.
  * Tabs are in creation order; openedBy is web|native. Snapshot adds dataUrl (PNG),
  * cssWidth,cssHeight; inspect adds node (BrowserInspectedNode|null).
  */
@@ -25,7 +27,7 @@ export { hasNativeBrowserBridge } from "./native-browser-host.ts";
 
 export type NativeBrowserTab = {
   id: string;
-  sessionKey: string;
+  sessionKey?: string;
   url: string;
   title: string;
   loading: boolean;
@@ -165,7 +167,7 @@ function isState(value: unknown): value is NativeBrowserState {
     if (
       !isRecord(tab) ||
       !nonempty(tab.id) ||
-      !sessionKey(tab.sessionKey) ||
+      (tab.sessionKey !== undefined && !sessionKey(tab.sessionKey)) ||
       ids.has(tab.id) ||
       !browserUrl(tab.url) ||
       typeof tab.title !== "string" ||

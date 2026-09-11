@@ -4,7 +4,7 @@ import WebKit
 
 struct DashboardBrowserTabState: Codable, Equatable, Sendable {
     let id: String
-    let sessionKey: String
+    let sessionKey: String?
     let url: String
     let title: String
     let loading: Bool
@@ -19,12 +19,13 @@ struct DashboardBrowserState: Codable, Equatable, Sendable {
     let tabs: [DashboardBrowserTabState]
 }
 
-/// The window retains session-owned tabs. A panel scope owns only its current presentation.
+/// The window retains tabs; a nil sessionKey marks legacy window-owned tabs.
+/// A panel scope owns only its current presentation.
 @MainActor
 final class DashboardNativeBrowserHost {
     private struct Tab {
         let id: String
-        let sessionKey: String
+        let sessionKey: String?
         let browser: DashboardBrowserTab
         let openedBy: String
         let openerTabId: String?
@@ -118,7 +119,7 @@ final class DashboardNativeBrowserHost {
     }
 
     @discardableResult
-    func open(tabId: String, url: URL, sessionKey: String) throws -> String {
+    func open(tabId: String, url: URL, sessionKey: String?) throws -> String {
         let requestedURL = try DashboardBrowserMessageHandler.url(url.absoluteString)
         // Prefer the page currently at this URL over another tab's initial redirect alias.
         // An explicit blank new tab must never collapse onto an existing blank tab.
@@ -137,7 +138,7 @@ final class DashboardNativeBrowserHost {
     }
 
     private func createTab(
-        tabId: String, url: URL, sessionKey: String, openedBy: String, openerTabId: String?) throws
+        tabId: String, url: URL, sessionKey: String?, openedBy: String, openerTabId: String?) throws
     {
         guard self.webView(for: tabId) == nil else { throw DashboardBrowserError.duplicateTab }
         guard let container, let dashboardWebView else { throw DashboardBrowserError.unavailable }

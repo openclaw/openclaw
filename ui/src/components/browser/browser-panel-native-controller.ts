@@ -73,8 +73,12 @@ export class BrowserPanelNativeController {
     this.presentation = new BrowserPanelNativePresentation(controller);
   }
 
+  private includesTab(tab: NativeBrowserTab): boolean {
+    return tab.sessionKey === undefined || tab.sessionKey === this.controller.host.sessionKey;
+  }
+
   private get nativeTabs(): NativeBrowserTab[] {
-    return this.allNativeTabs.filter((tab) => tab.sessionKey === this.controller.host.sessionKey);
+    return this.allNativeTabs.filter((tab) => this.includesTab(tab));
   }
 
   get activeTab(): NativeBrowserTab | undefined {
@@ -147,9 +151,7 @@ export class BrowserPanelNativeController {
         });
       } else if (activatePopups && tab.openedBy === "native" && !previous.has(tab.id)) {
         if (!popupScopes.has(tab.id)) {
-          const eligible = [...presenters].filter(
-            (presenter) => presenter.controller.host.sessionKey === tab.sessionKey,
-          );
+          const eligible = [...presenters].filter((presenter) => presenter.includesTab(tab));
           const owner =
             eligible
               .filter((presenter) => presenter.presentation.presentedTabId === tab.openerTabId)
