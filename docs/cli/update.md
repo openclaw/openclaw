@@ -21,10 +21,11 @@ update, exits successfully, and leaves the Gateway running. For Docker/container
 images, pull or build the new image and recreate the container with the same
 state/config mounts. For a standalone or extracted tarball installation, reinstall
 using the original method; Yarn global installations must be updated with Yarn.
-The CLI and JSON result include this next action; existing profiles also record it
-in update history. A fresh profile does not create a state database for a skipped
-update. These non-outcomes do not run rollback verification or offer an update
-failure report.
+The CLI displays this next action. Existing profiles also record it in update
+history and include it in JSON as `run.origin.nextAction`. With `--json`, a fresh
+profile emits the guidance to stderr and does not create a state database for a
+skipped update. These non-outcomes do not run rollback verification or offer an
+update failure report.
 
 ## Usage
 
