@@ -32,6 +32,7 @@ import {
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import {
+  catalogErrorMessages,
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
   type CatalogBackingSessionDisplay,
@@ -162,24 +163,6 @@ function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
     : nothing;
 }
 
-function catalogErrorMessages(catalog: SessionCatalog): string[] {
-  const messages = new Set<string>();
-  const add = (error: SessionCatalog["error"]) => {
-    if (error) {
-      messages.add(formatUiError(`[${error.code}] ${error.message}`));
-    }
-  };
-  add(catalog.error);
-  for (const host of catalog.hosts) {
-    // A disconnected empty host is normal fleet state, not a provider failure.
-    // Cached rows still expose the host-level offline badge when the host is visible.
-    if (host.error?.code !== "NODE_OFFLINE") {
-      add(host.error);
-    }
-  }
-  return [...messages];
-}
-
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
   // refreshes must not rename them or replace the regular session presentation.
@@ -214,7 +197,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const hasError = errorMessages.length > 0;
     // Keep provider failures distinguishable from successful empty results.
     // Hiding both states would silently mask unavailable session sources.
-    if (rows.length === 0 && !hasMore && !hasError && !canCreateSession) {
+    if (rows.length === 0 && !hasMore && !hasError) {
       return nothing;
     }
     const errorMessage = errorMessages.join("; ");

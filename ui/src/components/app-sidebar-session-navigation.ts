@@ -25,6 +25,7 @@ import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import {
   adoptedCatalogSessionKeys,
+  catalogSectionHasContent,
   visibleSessionCatalogProjection,
 } from "./app-sidebar-session-catalogs.ts";
 import {
@@ -355,7 +356,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       catalogIds:
         this.sessionsStatusFilter === "archived"
           ? []
-          : this.visibleSessionCatalogs().map((catalog) => catalog.id),
+          : this.visibleSessionCatalogs()
+              .filter(catalogSectionHasContent)
+              .map((catalog) => catalog.id),
       collapsedSections: this.collapsedSessionSections,
       hideEmptyGroups: this.sessionsHideEmptyGroups || this.sessionOwnerFilterActive,
       visibleSessionLimits: this.sessionData.visibleSessionLimits,

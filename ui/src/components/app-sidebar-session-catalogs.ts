@@ -6,6 +6,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { repoName } from "../lib/session-display.ts";
 import type {
@@ -116,6 +117,37 @@ export function visibleSessionCatalogProjection(
   archivedFilter: boolean,
 ): SessionCatalog[] {
   return archivedFilter ? [] : catalogs.filter((catalog) => !hiddenCatalogIds.has(catalog.id));
+}
+
+export function catalogErrorMessages(catalog: SessionCatalog): string[] {
+  const messages = new Set<string>();
+  const add = (error: SessionCatalog["error"]) => {
+    if (error) {
+      messages.add(formatUiError(`[${error.code}] ${error.message}`));
+    }
+  };
+  add(catalog.error);
+  for (const host of catalog.hosts) {
+    // A disconnected empty host is normal fleet state, not a provider failure.
+    // Cached rows still expose the host-level offline badge when the host is visible.
+    if (host.error?.code !== "NODE_OFFLINE") {
+      add(host.error);
+    }
+  }
+  return [...messages];
+}
+
+/**
+ * A catalog earns a sidebar section through rows, further pages, or a provider
+ * failure. A successful empty catalog stays out of the sidebar even when it can
+ * start sessions: the new-session page still lists it as a target, and hiding
+ * it here keeps the zone peer list and the rendered sections in agreement.
+ */
+export function catalogSectionHasContent(catalog: SessionCatalog): boolean {
+  return (
+    catalog.hosts.some((host) => host.sessions.length > 0 || Boolean(host.nextCursor)) ||
+    catalogErrorMessages(catalog).length > 0
+  );
 }
 
 export function visibleCatalogHosts(
