@@ -3,9 +3,9 @@ import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { registerConfigCli } from "../../cli/config-cli.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as configLock from "../../config/write-lock.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 
@@ -65,7 +65,7 @@ describe("models.authLogout with a concurrent registered config set", () => {
         },
       });
       const token = "inline-removal-gateway-token";
-      const cfg: OpenClawConfig = {
+      const cfg = {
         agents: { entries: { main: { workspace: state.workspaceDir } } },
         plugins: { enabled: false },
         gateway: { mode: "local", auth: { mode: "token", token }, reload: { mode: reloadMode } },
@@ -101,9 +101,9 @@ describe("models.authLogout with a concurrent registered config set", () => {
           scopes: ["operator.admin"],
           hotReloadRecovery,
         });
-        const acquired = Promise.withResolvers<void>();
-        const save = Promise.withResolvers<void>();
-        const attempted = Promise.withResolvers<void>();
+        const acquired = createDeferredCore<void>();
+        const save = createDeferredCore<void>();
+        const attempted = createDeferredCore<void>();
         let performSave = false;
         let writer: Promise<void> | undefined;
         let logout: Promise<unknown> | undefined;
