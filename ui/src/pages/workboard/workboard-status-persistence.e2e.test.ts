@@ -322,7 +322,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await expect
         .poll(() =>
           page
-            .locator(".workboard-draft")
+            .locator(".workboard-card-draft")
             .getByRole("button", { name: "Session: Execution linked session", exact: true })
             .isVisible(),
         )
@@ -460,13 +460,10 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await page.getByLabel("Title").fill("Persisted renamed card");
       await page.getByLabel("Notes").fill("Edited notes survive reopening.");
       await page
-        .locator(".workboard-draft")
-        .getByRole("button", { name: /^Priority:/u })
-        .click();
-      await page
-        .locator(".workboard-draft")
-        .getByRole("option", { name: "High", exact: true })
-        .click();
+        .locator(".workboard-card-draft")
+        .getByRole("radio", { name: "High", exact: true })
+        .focus();
+      await page.keyboard.press("Space");
       await page.getByRole("button", { name: "Save" }).click();
 
       const updateRequests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
@@ -499,9 +496,9 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await expect
         .poll(() =>
           page
-            .locator(".workboard-draft")
-            .getByRole("button", { name: "Priority: High", exact: true })
-            .isVisible(),
+            .locator(".workboard-card-draft")
+            .getByRole("radio", { name: "High", exact: true })
+            .isChecked(),
         )
         .toBe(true);
       if (captureUiProofEnabled) {

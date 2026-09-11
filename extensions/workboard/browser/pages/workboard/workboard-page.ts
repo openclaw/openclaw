@@ -2,6 +2,7 @@ import { html, nothing, render } from "lit";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
 import { createWorkboardClient } from "../../api/gateway.ts";
 import { renderAgentPicker } from "../../components/host-components.ts";
+import { icons } from "../../components/icons.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -25,7 +26,9 @@ import {
 import { createWorkboardSessionResolver } from "../../lib/workboard/session-resolution.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+import { createBoardDraft, renderBoardModal, type BoardDraft } from "./view-board-modal.ts";
 import { getVisibleDetailCard } from "./view-card-details.ts";
+import { workboardErrorMessage } from "./view-helpers.ts";
 import { renderWorkboard } from "./view.ts";
 
 export function workboardPageTarget(boardId?: string) {
@@ -53,6 +56,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
     const host = initialContext.host;
     let context = initialContext;
     let disposed = false;
+    let boardDraft: BoardDraft | null = null;
     let queued = false;
     let connected = false;
     let refreshActive = false;
@@ -223,6 +227,24 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                       : nothing
                   }
                   <span>${selectedBoard ? workboardBoardName(selectedBoard) : "Workboard"}</span>
+                  ${
+                    selectedBoard && host.connection.canWrite
+                      ? html`
+                          <button
+                            class="btn btn--icon workboard-board-edit"
+                            type="button"
+                            aria-label=${t("workboard.editBoard")}
+                            title=${t("workboard.editBoard")}
+                            @click=${() => {
+                              boardDraft = createBoardDraft(selectedBoard);
+                              requestUpdate();
+                            }}
+                          >
+                            ${icons.penLine}
+                          </button>
+                        `
+                      : nothing
+                  }
                 </div>
               </div>
             `,
@@ -256,6 +278,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                   )
                 : undefined,
             pageError,
+            overlayOpen: Boolean(boardDraft),
             host: workboard,
             client: connected ? client : null,
             connected,
@@ -287,6 +310,35 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
               }),
             onRequestUpdate: requestUpdate,
           })}
+          ${
+            boardDraft
+              ? renderBoardModal({
+                  draft: boardDraft,
+                  toastOwner: state,
+                  pageError: workboardErrorMessage(state, pageError),
+                  client: connected ? client : null,
+                  get canWrite() {
+                    const connection = host.connection;
+                    return connection.connected && connection.canWrite;
+                  },
+                  requestUpdate,
+                  onCancel: () => {
+                    boardDraft = null;
+                    requestUpdate();
+                  },
+                  onSaved: () => {
+                    boardDraft = null;
+                    void refreshWorkboard({
+                      host: workboard,
+                      client,
+                      requestUpdate,
+                      source: "manual",
+                    });
+                    requestUpdate();
+                  },
+                })
+              : nothing
+          }
         `,
         container,
       );

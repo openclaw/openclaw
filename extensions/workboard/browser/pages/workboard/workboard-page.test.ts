@@ -657,9 +657,13 @@ describe("selection reconciliation", () => {
       expect(pendingNotes).toBe("Keep these unsaved notes");
       expect(pendingBusy).toBe("true");
       expect(enabledControls).toHaveLength(0);
-      const alert = expectDefined(form().querySelector('[role="alert"]'), "retry guidance");
-      expect(alert.textContent).toBe("Save unavailable; retry this edit.");
-      expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
+      await vi.waitFor(() =>
+        expect(
+          visibleToast(page.container)?.shadowRoot?.querySelector('[role="alert"]')?.textContent,
+        ).toBe("Save unavailable; retry this edit."),
+      );
+      const toast = expectDefined(visibleToast(page.container), "retry guidance");
+      expect(toast.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(form().querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
         "Submitted task",
       );
@@ -777,3 +781,100 @@ describe("selection reconciliation", () => {
     expect(page.workboard.state.draftTitle).toBe("New operations task");
   });
 });
+
+it("keeps page failures visible in the board editor and prioritizes its save failure", async () => {
+  const page = mountPage({ boardId: "planning" });
+  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+  page.request.mockImplementation(async (method, params) => {
+    if (method === "agents.list") {
+      throw new Error("Agent metadata temporarily unavailable");
+    }
+    if (method === "workboard.cards.list") {
+      return {
+        cards: [],
+        boards: [{ id: "planning", total: 0, active: 0, archived: 0, byStatus: {} }],
+      };
+    }
+    if (method === "workboard.boards.upsert") {
+      throw new Error("Board update denied");
+    }
+    return request(method, params);
+  });
+  page.fixture.connection.connected = true;
+  page.fixture.notify();
+  const form = await openBoardEditor(page);
+  await vi.waitFor(() => {
+    expect(
+      visibleToast(page.container)?.shadowRoot?.querySelector('[role="alert"]')?.textContent,
+    ).toBe("Agent metadata temporarily unavailable");
+  });
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await vi.waitFor(() => {
+    expect(
+      visibleToast(page.container)?.shadowRoot?.querySelector('[role="alert"]')?.textContent,
+    ).toBe("Board update denied");
+  });
+});
+
+it.each(["canWrite", "connected"] as const)(
+  "preserves a board draft without saving when %s is revoked",
+  async (capability) => {
+    const page = mountPage({ boardId: "planning" });
+    const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+    page.request.mockImplementation(async (method, params) =>
+      method === "workboard.cards.list"
+        ? {
+            cards: [],
+            boards: [
+              { id: "planning", name: "Planning", total: 0, active: 0, archived: 0, byStatus: {} },
+            ],
+          }
+        : request(method, params),
+    );
+    page.fixture.connection.connected = true;
+    page.fixture.notify();
+    const form = await openBoardEditor(page);
+    const name = expectDefined(form.querySelector<HTMLInputElement>("input"), "board name");
+    name.value = "Release planning";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    page.fixture.connection[capability] = false;
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(
+      page.request.mock.calls.filter(([method]) => method === "workboard.boards.upsert"),
+    ).toHaveLength(0);
+    page.fixture.notify();
+    await vi.waitFor(() =>
+      expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true),
+    );
+    expect(name.value).toBe("Release planning");
+    page.fixture.connection[capability] = true;
+    page.fixture.notify();
+    await vi.waitFor(() =>
+      expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false),
+    );
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() =>
+      expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
+        id: "planning",
+        name: "Release planning",
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(page.container.querySelector(".workboard-board-draft")).toBeNull(),
+    );
+  },
+);
+
+async function openBoardEditor(page: ReturnType<typeof mountPage>) {
+  await vi.waitFor(() => expect(page.workboard.state.loaded).toBe(true));
+  expectDefined(
+    page.container.querySelector<HTMLButtonElement>('button[aria-label="Edit board"]'),
+    "edit board",
+  ).click();
+  return vi.waitFor(() =>
+    expectDefined(
+      page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
+      "board editor",
+    ),
+  );
+}

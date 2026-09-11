@@ -964,6 +964,39 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("preserves omitted board appearance and persists explicit null resets", async () => {
+    const dir = tempDirs.make("openclaw-workboard-appearance-");
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const store = new WorkboardStore(stores.cards, { boards: stores.boards });
+      await store.upsertBoard({ id: "planning", name: "Planning", icon: "rocket", color: "blue" });
+      expect(await store.upsertBoard({ id: "planning", name: "Renamed" })).toMatchObject({
+        name: "Renamed",
+        icon: "rocket",
+        color: "blue",
+      });
+      const withoutIcon = await store.upsertBoard({ id: "planning", icon: null });
+      expect(withoutIcon.icon).toBeUndefined();
+      expect(withoutIcon.color).toBe("blue");
+      const withoutColor = await store.upsertBoard({ id: "planning", color: null });
+      expect(withoutColor.icon).toBeUndefined();
+      expect(withoutColor.color).toBeUndefined();
+    } finally {
+      stores.close();
+    }
+    const reopened = createWorkboardSqliteStores({ dbPath });
+    try {
+      const store = new WorkboardStore(reopened.cards, { boards: reopened.boards });
+      const board = (await store.listBoards()).boards.find((item) => item.id === "planning");
+      expect(board).toMatchObject({ name: "Renamed" });
+      expect(board?.icon).toBeUndefined();
+      expect(board?.color).toBeUndefined();
+    } finally {
+      reopened.close();
+    }
+  });
+
   it.each([
     ["", "non-empty string"],
     ["x".repeat(129), "128 characters or fewer"],

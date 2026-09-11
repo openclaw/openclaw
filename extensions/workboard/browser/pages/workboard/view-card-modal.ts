@@ -1,9 +1,18 @@
 import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
-import { renderAgentPicker, renderDialog } from "../../components/host-components.ts";
+import {
+  renderAgentPicker,
+  renderDialog,
+  renderSelectPicker,
+} from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
+import { renderWorkboardToast } from "../../components/toast.ts";
 import { t } from "../../i18n/index.ts";
-import { workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
+import {
+  changedDraftPayload,
+  draftPayload,
+  workboardCardSessionKey,
+} from "../../lib/workboard/card-state.ts";
 import {
   addWorkboardCardComment,
   getWorkboardState,
@@ -16,21 +25,27 @@ import {
   type WorkboardTemplateId,
   type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
-import { buildAssignableAgentOptions } from "./agent-filter.ts";
+import { buildAssignableAgentPickerOptions } from "./agent-filter.ts";
 import {
   canMutate,
   formatPriorityLabel,
+  workboardErrorMessage,
+  renderPriorityIcon,
   formatStatusLabel,
   isWorkboardSessionChoice,
-  renderWorkboardError,
-  workboardErrorMessage,
   type WorkboardProps,
 } from "./view-helpers.ts";
-import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
+import type { WorkboardSelectOption } from "./workboard-select.ts";
 
 const workboardCardModalTitleId = "workboard-card-modal-title";
 const workboardCardModalDescriptionId = "workboard-card-modal-description";
 export const workboardCardModalId = "workboard-card-modal";
+const initialDrafts = new WeakMap<WorkboardUiState, string>();
+
+function draftFingerprint(state: WorkboardUiState): string {
+  const payload = draftPayload(state);
+  return JSON.stringify({ ...payload, title: payload.title.trim(), notes: payload.notes.trim() });
+}
 
 // Keep keystroke state local to the form. A parent render can restore stale
 // controlled values before the next field is edited or the draft is submitted.
@@ -82,8 +97,10 @@ const workboardTemplates = [
 export function openCreateModal(
   state: WorkboardUiState,
   props: Pick<WorkboardProps, "agentsList" | "defaultAgentId" | "scopeAgentId">,
+  status: WorkboardStatus = "todo",
 ) {
   resetDraftState(state);
+  state.draftStatus = status;
   const scopedAgentId = props.scopeAgentId?.trim();
   const defaultAgentId = props.agentsList?.defaultId?.trim() ?? props.defaultAgentId?.trim();
   const selectedAgentId = scopedAgentId
@@ -96,17 +113,19 @@ export function openCreateModal(
   if (
     selectedAgentId &&
     (props.agentsList
-      ? buildAssignableAgentOptions(props.agentsList, "").some(
-          (agent) => agent.id === selectedAgentId,
+      ? buildAssignableAgentPickerOptions(props.agentsList, "").some(
+          (agent) => agent.value === selectedAgentId,
         )
       : Boolean(scopedAgentId))
   ) {
     state.draftAgentId = selectedAgentId;
   }
+  initialDrafts.set(state, draftFingerprint(state));
   state.draftOpen = true;
 }
 
 export function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
+  state.draftDiscardOpen = false;
   state.draftOpen = true;
   state.editingCardId = card.id;
   state.editingCardBase = card;
@@ -133,9 +152,54 @@ function applyTemplate(state: WorkboardUiState, templateId: WorkboardTemplateId)
   state.draftPriority = template.priority;
 }
 
+function renderDraftChoices<Value extends string>(params: {
+  name: "status" | "priority";
+  label: string;
+  value: Value;
+  options: readonly WorkboardSelectOption<Value>[];
+  renderIcon?: (value: Value) => unknown;
+  disabled: boolean;
+  onChange: (value: Value) => void;
+}) {
+  return html`
+    <fieldset
+      class="workboard-choice-field ${params.name === "status" ? "workboard-field--wide" : ""}"
+      ?disabled=${params.disabled}
+    >
+      <legend>${params.label}</legend>
+      <div class="workboard-segments workboard-segments--${params.name}">
+        ${params.options.map(
+          (option) => html`
+            <label
+              class="workboard-segment ${
+                params.name === "status" ? `workboard-segment--${option.value}` : ""
+              }"
+            >
+              <input
+                type="radio"
+                name=${params.name}
+                value=${option.value}
+                .checked=${params.value === option.value}
+                @change=${() => params.onChange(option.value)}
+              />
+              <span
+                >${
+                  params.renderIcon
+                    ? html`<i aria-hidden="true">${params.renderIcon(option.value)}</i>`
+                    : nothing
+                }${option.label}</span
+              >
+            </label>
+          `,
+        )}
+      </div>
+    </fieldset>
+  `;
+}
+
 export function renderCardModal(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
-  const agentOptions = buildAssignableAgentOptions(props.agentsList, state.draftAgentId);
+  const visibleError = workboardErrorMessage(state, props.pageError);
   const sessions = props.sessions.filter(isWorkboardSessionChoice);
   const statusOptions: WorkboardSelectOption<WorkboardStatus>[] = state.statuses.map((status) => ({
     value: status,
@@ -144,19 +208,18 @@ export function renderCardModal(props: WorkboardProps) {
   const priorityOptions: WorkboardSelectOption<WorkboardPriority>[] = WORKBOARD_PRIORITIES.map(
     (priority) => ({ value: priority, label: formatPriorityLabel(priority) }),
   );
-  const assignableAgentOptions = agentOptions.map((option) => ({
-    value: option.id,
-    label: option.label,
-    agent: option.id
-      ? (props.agentsList?.agents.find((agent) => agent.id === option.id) ?? { id: option.id })
-      : undefined,
-    icon: option.id ? undefined : ("bot" as const),
-  }));
-  const sessionOptions: WorkboardSelectOption[] = [
+  const defaultAgentId = props.agentsList?.defaultId ?? props.defaultAgentId ?? "";
+  const assignableAgentOptions = buildAssignableAgentPickerOptions(
+    props.agentsList,
+    state.draftAgentId,
+    defaultAgentId,
+  );
+  const sessionOptions = [
     { value: "", label: t("workboard.noLinkedSession") },
     ...sessions.map((session) => ({
       value: session.key,
       label: session.displayName ?? session.label ?? session.key,
+      description: session.displayName || session.label ? session.key : undefined,
     })),
   ];
   if (
@@ -175,7 +238,11 @@ export function renderCardModal(props: WorkboardProps) {
   const comments = editingCard?.metadata?.comments ?? [];
   const draftCommentBusy = editing && state.busyCardIds.has(state.editingCardId ?? "");
   const draftActionsBusy =
-    !canMutate(props) || state.loading || state.dispatching || draftCommentBusy;
+    !canMutate(props) ||
+    state.loading ||
+    state.dispatching ||
+    state.draftSaving ||
+    draftCommentBusy;
   // Save completion resets this shared draft. Lock every edit and dismissal path
   // only for that write so stale drafts can still use Cancel to recover readiness.
   const draftDismissalBusy = state.draftSaving;
@@ -183,15 +250,25 @@ export function renderCardModal(props: WorkboardProps) {
     if (draftDismissalBusy) {
       return false;
     }
+    const changed =
+      state.draftCommentBody.trim() ||
+      (editing
+        ? Object.keys(changedDraftPayload(state)).length > 0
+        : draftFingerprint(state) !== initialDrafts.get(state));
+    if (changed) {
+      state.draftDiscardOpen = true;
+      props.onRequestUpdate?.();
+      return false;
+    }
     resetDraftState(state);
     return true;
   };
-  return renderDialog(
+  const draftDialog = renderDialog(
     {
       label: editing ? t("workboard.editCard") : t("workboard.newCard"),
       description: editing ? t("workboard.editCardHelp") : t("workboard.newCardHelp"),
       style:
-        "--openclaw-modal-width: min(1120px, calc(100vw - 56px)); --openclaw-modal-max-height: calc(100dvh - 56px);",
+        "--openclaw-modal-width: 700px; --openclaw-modal-max-height: calc(100dvh - 40px); --openclaw-modal-backdrop-filter: blur(1px); --wa-color-overlay-modal: rgba(0, 0, 0, 0.32);",
       onCancel: () => {
         if (!dismissDraft()) {
           return false;
@@ -203,7 +280,7 @@ export function renderCardModal(props: WorkboardProps) {
     html`
       <form
         id=${workboardCardModalId}
-        class="workboard-draft"
+        class="workboard-draft workboard-card-draft"
         aria-busy=${draftActionsBusy ? "true" : "false"}
         @input=${(event: InputEvent) => {
           const input = event.target;
@@ -233,14 +310,13 @@ export function renderCardModal(props: WorkboardProps) {
             <h2 id=${workboardCardModalTitleId}>
               ${editing ? t("workboard.editCard") : t("workboard.newCard")}
             </h2>
-            <p id=${workboardCardModalDescriptionId}>
+            <p id=${workboardCardModalDescriptionId} class="workboard-draft__accessible-label">
               ${editing ? t("workboard.editCardHelp") : t("workboard.newCardHelp")}
             </p>
-            ${renderWorkboardError(workboardErrorMessage(state, props.pageError))}
           </div>
           <span title=${t("common.cancel")}>
             <button
-              class="btn btn--icon workboard-card__icon"
+              class="btn btn--icon workboard-modal__close"
               type="button"
               aria-label=${t("common.cancel")}
               ?disabled=${draftDismissalBusy}
@@ -255,48 +331,51 @@ export function renderCardModal(props: WorkboardProps) {
           </span>
         </div>
         <div class="workboard-draft__body">
-          ${
-            !editing
-              ? html`
-                  <div class="workboard-template-strip" aria-label=${t("workboard.templatesLabel")}>
-                    ${workboardTemplates.map(
-                      (template) => html`
-                        <button
-                          class="btn btn--xs ${
-                            state.draftTemplateId === template.id
-                              ? "workboard-template-strip__button--active"
-                              : ""
-                          }"
-                          type="button"
-                          ?disabled=${draftActionsBusy}
-                          @click=${() => {
-                            applyTemplate(state, template.id);
-                            props.onRequestUpdate?.();
-                          }}
-                        >
-                          ${t(`workboard.template.${template.id}`)}
-                        </button>
-                      `,
-                    )}
-                  </div>
-                `
-              : nothing
-          }
           <div class="workboard-draft__main">
             <label class="workboard-field">
-              <span>${t("workboard.fieldTitle")}</span>
+              <span class="workboard-draft__accessible-label">${t("workboard.fieldTitle")}</span>
               <input
-                class="input workboard-draft__title"
+                class="settings-input workboard-draft__title"
                 autofocus
                 placeholder=${t("workboard.titlePlaceholder")}
                 ?disabled=${draftActionsBusy}
                 .value=${live(state.draftTitle)}
               />
             </label>
+            ${
+              !editing
+                ? html`
+                    <div
+                      class="workboard-template-strip"
+                      aria-label=${t("workboard.templatesLabel")}
+                    >
+                      <span class="workboard-template-strip__label"
+                        >${t("workboard.suggestionsLabel")}</span
+                      >
+                      ${workboardTemplates.map(
+                        (template) => html`
+                          <button
+                            class="workboard-template-strip__suggestion"
+                            type="button"
+                            ?disabled=${draftActionsBusy}
+                            @click=${() => {
+                              applyTemplate(state, template.id);
+                              props.onRequestUpdate?.();
+                            }}
+                          >
+                            ${icons.plus} ${t(`workboard.template.${template.id}`)}
+                          </button>
+                        `,
+                      )}
+                    </div>
+                  `
+                : nothing
+            }
             <label class="workboard-field">
-              <span>${t("workboard.fieldNotes")}</span>
+              <span class="workboard-draft__accessible-label">${t("workboard.fieldNotes")}</span>
               <textarea
-                class="input workboard-draft__notes"
+                class="settings-input workboard-draft__notes"
+                rows="3"
                 placeholder=${t("workboard.notesPlaceholder")}
                 ?disabled=${draftActionsBusy}
                 .value=${live(state.draftNotes)}
@@ -304,24 +383,15 @@ export function renderCardModal(props: WorkboardProps) {
             </label>
           </div>
           <div class="workboard-draft__meta">
-            ${renderWorkboardSelect({
+            ${renderDraftChoices({
+              name: "status",
               value: state.draftStatus,
               options: statusOptions,
               label: t("workboard.fieldStatus"),
               onChange: (value) => {
                 state.draftStatus = value;
+                props.onRequestUpdate?.();
               },
-              requestUpdate: props.onRequestUpdate,
-              disabled: draftActionsBusy,
-            })}
-            ${renderWorkboardSelect({
-              value: state.draftPriority,
-              options: priorityOptions,
-              label: t("workboard.fieldPriority"),
-              onChange: (value) => {
-                state.draftPriority = value;
-              },
-              requestUpdate: props.onRequestUpdate,
               disabled: draftActionsBusy,
             })}
             <div class="workboard-field">
@@ -340,20 +410,40 @@ export function renderCardModal(props: WorkboardProps) {
                 "workboard-agent-select",
               )}
             </div>
-            ${renderWorkboardSelect({
-              value: state.draftSessionKey,
-              options: sessionOptions,
-              label: t("workboard.fieldSession"),
+            <div class="workboard-field">
+              <span>${t("workboard.fieldSession")}</span>
+              ${renderSelectPicker(
+                {
+                  value: state.draftSessionKey,
+                  options: sessionOptions,
+                  accessibleLabel: t("workboard.fieldSession"),
+                  searchable: true,
+                  onSelect: (value) => {
+                    state.draftSessionKey = value;
+                    props.onRequestUpdate?.();
+                  },
+                  disabled: draftActionsBusy,
+                },
+                "workboard-session-select",
+              )}
+            </div>
+            ${renderDraftChoices({
+              name: "priority",
+              value: state.draftPriority,
+              options: priorityOptions,
+              renderIcon: renderPriorityIcon,
+              label: t("workboard.fieldPriority"),
               onChange: (value) => {
-                state.draftSessionKey = value;
+                state.draftPriority = value;
+                props.onRequestUpdate?.();
               },
-              requestUpdate: props.onRequestUpdate,
               disabled: draftActionsBusy,
             })}
-            <label class="workboard-field workboard-field--wide">
+            <label class="workboard-field">
               <span>${t("workboard.fieldLabels")}</span>
               <input
-                class="input workboard-draft__labels"
+                class="settings-input workboard-draft__labels"
+                spellcheck="false"
                 placeholder=${t("workboard.labelsPlaceholder")}
                 ?disabled=${draftActionsBusy}
                 .value=${live(state.draftLabels)}
@@ -380,7 +470,7 @@ export function renderCardModal(props: WorkboardProps) {
                         : nothing
                     }
                     <textarea
-                      class="input workboard-comments__input"
+                      class="settings-input workboard-comments__input"
                       aria-labelledby="workboard-card-comments-title"
                       maxlength="2000"
                       ?disabled=${draftActionsBusy}
@@ -409,12 +499,6 @@ export function renderCardModal(props: WorkboardProps) {
         </div>
         <div class="workboard-modal__actions">
           <button
-            class="btn primary workboard-draft__submit"
-            ?disabled=${draftActionsBusy || !state.draftTitle.trim()}
-          >
-            ${editing ? t("common.save") : t("common.create")}
-          </button>
-          <button
             class="btn"
             type="button"
             ?disabled=${draftDismissalBusy}
@@ -426,8 +510,77 @@ export function renderCardModal(props: WorkboardProps) {
           >
             ${t("common.cancel")}
           </button>
+          <button
+            class="btn primary workboard-draft__submit"
+            ?disabled=${draftActionsBusy || !state.draftTitle.trim()}
+          >
+            ${editing ? t("common.save") : t("common.create")}
+          </button>
         </div>
       </form>
+      ${renderWorkboardToast({
+        owner: state,
+        message: visibleError ?? "",
+        key: visibleError,
+        tone: "error",
+        hidden: state.draftDiscardOpen,
+      })}
     `,
   );
+  const keepEditing = () => {
+    state.draftDiscardOpen = false;
+    props.onRequestUpdate?.();
+  };
+  const discardTitle = editing
+    ? t("workboard.discardChangesTitle")
+    : t("workboard.discardCardTitle");
+  return html`
+    ${draftDialog}
+    ${
+      state.draftDiscardOpen
+        ? renderDialog(
+            {
+              label: discardTitle,
+              description: t("workboard.discardDraftHelp"),
+              style:
+                "--openclaw-modal-width: 400px; --openclaw-modal-backdrop-filter: none; --wa-color-overlay-modal: rgba(0, 0, 0, 0.24);",
+              onCancel: () => {
+                keepEditing();
+                return true;
+              },
+            },
+            html`
+              <section class="workboard-discard">
+                <h2>${discardTitle}</h2>
+                <p>${t("workboard.discardDraftHelp")}</p>
+                <div class="workboard-discard__actions">
+                  <button class="btn" type="button" autofocus @click=${keepEditing}>
+                    ${t("workboard.keepEditing")}
+                  </button>
+                  <button
+                    class="btn danger"
+                    type="button"
+                    @click=${() => {
+                      if (state.draftSaving) {
+                        return;
+                      }
+                      resetDraftState(state);
+                      props.onRequestUpdate?.();
+                    }}
+                  >
+                    ${t("workboard.discardDraft")}
+                  </button>
+                </div>
+              </section>
+              ${renderWorkboardToast({
+                owner: state,
+                message: visibleError ?? "",
+                key: visibleError,
+                tone: "error",
+              })}
+            `,
+          )
+        : nothing
+    }
+  `;
 }

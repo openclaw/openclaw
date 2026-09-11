@@ -335,6 +335,7 @@ function createDefaultState(): WorkboardUiState {
     lifecycleConfirmedTaskIds: new Set(),
     lifecycleTaskConfirmationStartedAt: null,
     draftOpen: false,
+    draftDiscardOpen: false,
     draftSaving: false,
     editingCardId: null,
     editingCardBase: null,

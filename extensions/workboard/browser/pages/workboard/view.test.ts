@@ -2,8 +2,11 @@ import "../../test/dom.setup.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 // Control UI tests cover workboard behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { render as litRender } from "lit";
-import type { ControlUiComponents } from "openclaw/plugin-sdk/control-ui";
+import { render as litRender, type LitElement } from "lit";
+import type {
+  ControlUiAgentPickerProps,
+  ControlUiComponents,
+} from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -1376,6 +1379,12 @@ describe("renderWorkboard", () => {
     state.draftSaving = false;
     renderInto(container, props);
     dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    expect(state.draftDiscardOpen).toBe(true);
+    expect(state.draftOpen).toBe(true);
+    expectDefined(
+      buttonByText(container.querySelector(".workboard-discard")!, "Discard"),
+      "discard draft",
+    ).click();
     expect(state.draftOpen).toBe(false);
     expect(container.querySelector(".workboard-draft")).toBeNull();
     await waitForFast(() =>
@@ -2076,6 +2085,10 @@ describe("renderWorkboard", () => {
       expect(state.draftOpen).toBe(true);
       expect(state.draftStatus).toBe("ready");
       expect(state.draftAgentId).toBe(scopeAgentId === "main" ? "" : scopeAgentId);
+      expectDefined(buttonByLabel(container, "Cancel"), "cancel unedited column draft").click();
+      renderView();
+      expect(state.draftOpen).toBe(false);
+      expect(state.draftDiscardOpen).toBe(false);
     },
   );
 
@@ -2519,15 +2532,25 @@ describe("renderWorkboard", () => {
     renderView();
 
     const draft = container.querySelector<HTMLElement>(".workboard-draft");
-    const agentSelect = draft?.querySelector<HTMLElement & { options: Array<{ label: string }> }>(
-      ".workboard-agent-select [data-test-agent-picker]",
+    const agentSelect = expectDefined(
+      draft?.querySelector<HTMLElement & ControlUiAgentPickerProps>(
+        ".workboard-agent-select [data-test-agent-picker]",
+      ),
+      "assignment picker",
     );
     expect(agentSelect?.options.map((option) => option.label)).toEqual([
-      "Unassigned (uses Main)",
-      "Main (default)",
+      "Main",
+      "Main",
       "Ops",
       "workboard-dispatcher (not configured)",
     ]);
+    expect(agentSelect?.options.find((option) => option.label === "Main")?.badge).toBe("Default");
+    expect(agentSelect?.options.find((option) => option.label === "Ops")?.badge).toBeUndefined();
+    expect(agentSelect.options.find((option) => option.value === "main")?.badge).toBeUndefined();
+    agentSelect.onSelect("");
+    renderView();
+    expect(state.draftAgentId).toBe("");
+    expect(agentSelect.value).toBe("");
   });
 
   it("renders the card modal with a single scrollable body and stable footer actions", () => {
@@ -2838,11 +2861,11 @@ describe("renderWorkboard", () => {
     };
     const container = document.createElement("div");
 
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
     container
       .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
 
     expect(container.querySelector("[data-test-dialog]")?.textContent).toContain("Edit card");
     expect(container.querySelector("[data-test-dialog]")?.textContent).toContain(
@@ -2855,7 +2878,7 @@ describe("renderWorkboard", () => {
     const commentInput = container.querySelector<HTMLTextAreaElement>(".workboard-comments__input");
     commentInput!.value = "Ship after CI";
     commentInput!.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
     [...container.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.includes("Create"))
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -2867,13 +2890,19 @@ describe("renderWorkboard", () => {
       body: "Ship after CI",
     });
     expect(state.cards[0]?.metadata?.comments?.at(-1)?.body).toBe("Ship after CI");
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
 
     expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
       "Renamed",
     );
     expect(state.editingCardBase?.updatedAt).toBe(2);
-    draftPicker(container, "Priority").onSelect("high");
+    const priority = expectDefined(
+      container.querySelector<HTMLInputElement>(
+        '.workboard-draft input[name="priority"][value="high"]',
+      ),
+      "high priority choice",
+    );
+    priority.click();
     container
       .querySelector<HTMLFormElement>(".workboard-draft")
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -2890,17 +2919,19 @@ describe("renderWorkboard", () => {
     ).toHaveLength(1);
     expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 3 });
 
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
     expect(container.querySelector("[data-test-dialog]")).toBeNull();
     container
       .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
 
     expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
       "Renamed",
     );
-    expect(draftPicker(container, "Priority").value).toBe("high");
+    expect(container.querySelector<HTMLInputElement>('input[name="priority"]:checked')?.value).toBe(
+      "high",
+    );
   });
 
   it.each(["create", "update", "comment", "conflict"] as const)(
@@ -2972,13 +3003,17 @@ describe("renderWorkboard", () => {
       renderView();
 
       expect(client.request).toHaveBeenCalledWith(method, expect.anything());
+      const errorToast = toast(container.querySelector("[data-test-dialog]")!);
+      await waitForFast(() =>
+        expect(errorToast.shadowRoot?.querySelector('[role="alert"]')).not.toBeNull(),
+      );
       const alert = expectDefined(
-        container.querySelector('.workboard-draft [role="alert"]'),
+        errorToast.shadowRoot?.querySelector('[role="alert"]'),
         "failure in the active editor",
       );
       expect(alert.textContent).toContain(message);
       expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
-      expect(container.querySelectorAll(".callout.danger")).toHaveLength(1);
+      expect(errorToast.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
         "Unsaved title",
       );
@@ -2987,7 +3022,9 @@ describe("renderWorkboard", () => {
       );
       if (operation === "conflict") {
         expect(alert.textContent).toContain("Your unsaved edits remain in the form.");
-        expect(draftPicker(container, "Priority").value).toBe("high");
+        expect(
+          container.querySelector<HTMLInputElement>('input[name="priority"]:checked')?.value,
+        ).toBe("high");
       }
       if (operation === "comment") {
         expect(
@@ -3002,7 +3039,7 @@ describe("renderWorkboard", () => {
       });
       renderView();
       expect(client.request).toHaveBeenCalledTimes(2);
-      expect(container.querySelector('[role="alert"]')).toBeNull();
+      expect(state.error).toBeNull();
       expect(state.draftOpen).toBe(operation === "comment");
     },
   );
@@ -3247,3 +3284,60 @@ describe("renderWorkboard", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it.each(["edit", "discard"] as const)(
+  "preserves error visibility and dismissal through %s dialogs",
+  async (dialog) => {
+    const { state, container, renderView } = createWorkboardView();
+    const card = createWorkboardCard();
+    state.cards = [card];
+    {
+      state.draftOpen = true;
+      state.editingCardId = card.id;
+      state.draftDiscardOpen = dialog === "discard";
+    }
+    const pageError = "Metadata unavailable. Linked session unavailable.";
+    const expectError = async (message: string) => {
+      await waitForFast(() => {
+        const visible = container.querySelectorAll("openclaw-workboard-toast:not([hidden])");
+        expect(visible).toHaveLength(1);
+        expect(visible[0]?.shadowRoot?.querySelector('[role="alert"]')?.textContent).toBe(message);
+      });
+    };
+    renderView({ pageError });
+    await expectError(pageError);
+    state.error = "Save denied";
+    renderView({ pageError });
+    await expectError("Save denied");
+    state.error = null;
+    renderView({ pageError });
+    await expectError(pageError);
+    const dialogToast = expectDefined(
+      container.querySelector("openclaw-workboard-toast:not([hidden])"),
+      "active dialog toast",
+    );
+    expectDefined(
+      dialogToast.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Close"]'),
+      "dismiss error",
+    ).click();
+    await waitForFast(() => {
+      expect(dialogToast.shadowRoot?.querySelector('[role="alert"]')).toBeNull();
+    });
+    state.detailCardId = null;
+    state.draftOpen = dialog === "discard";
+    state.draftDiscardOpen = false;
+    renderView({ pageError });
+    const active = expectDefined(
+      container.querySelector<LitElement>("openclaw-workboard-toast:not([hidden])"),
+      "restored surface toast",
+    );
+    await active.updateComplete;
+    expect(active.shadowRoot?.querySelector('[role="alert"]')).toBeNull();
+    // Recovery makes a subsequent identical failure a new visible outcome.
+    renderView({ pageError: undefined });
+    await active.updateComplete;
+    expect(active.shadowRoot?.querySelector('[role="alert"]')).toBeNull();
+    renderView({ pageError });
+    await expectError(pageError);
+  },
+);

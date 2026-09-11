@@ -20,7 +20,7 @@ type ToastOutcome = {
 
 const outcomes = new WeakMap<object, Partial<Record<ToastOutcome["tone"], ToastOutcome>>>();
 
-function updateWorkboardToastOutcome(owner: object, props: WorkboardToastProps) {
+export function updateWorkboardToastOutcome(owner: object, props: WorkboardToastProps) {
   const { message, key, tone = "info" } = props;
   const ownerOutcomes = outcomes.get(owner) ?? {};
   // Recovery starts a new error lifetime without resurrecting an older result.
