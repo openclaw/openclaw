@@ -157,8 +157,9 @@ async function answerSetupStep(step: WizardStep, prompter: WizardPrompter): Prom
         initialValue: typeof step.initialValue === "boolean" ? step.initialValue : undefined,
       });
     case "progress":
-      return undefined;
+      break;
   }
+  return undefined;
 }
 
 function activationTimeoutMs(kind: ActivateSetupInferenceParams["kind"]): number {
@@ -285,14 +286,17 @@ export async function runRemoteGatewayInferenceOnboarding(
         const step = result.step;
         let answer: { stepId: string; value: unknown } | undefined;
         if (step) {
-          prompter ??= await (deps.createPrompter?.() ??
-            import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
-              createClackPrompter(),
-            ));
+          const stepPrompter =
+            prompter ??
+            (await (deps.createPrompter?.() ??
+              import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
+                createClackPrompter(),
+              )));
+          prompter = stepPrompter;
           if (result.error) {
-            await prompter.note(result.error);
+            await stepPrompter.note(result.error);
           }
-          const value = await answerSetupStep(step, prompter);
+          const value = await answerSetupStep(step, stepPrompter);
           if (step.type !== "progress" && step.executor !== "gateway") {
             answer = { stepId: step.id, value };
           }
