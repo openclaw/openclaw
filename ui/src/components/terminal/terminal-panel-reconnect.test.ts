@@ -537,12 +537,19 @@ describe("OpenClawTerminalPanel reconnect", () => {
   });
 
   it("shows reload guidance when a fenced action cannot make progress", async () => {
+    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
-      request: async <T>() => ({}) as T,
+      request: async <T>() =>
+        ({ ...terminalOpenResult("stalled-terminal"), buffer: "ready", seq: 5 }) as T,
       addEventListener: () => () => {},
     };
-    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(new Promise<boolean>(() => {}));
+    let releaseRefresh: ((replacementActivated: boolean) => void) | undefined;
+    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        releaseRefresh = resolve;
+      }),
+    );
     const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.catalogReadyTimeoutMs = 10;
     panel.client = client;
@@ -572,6 +579,12 @@ describe("OpenClawTerminalPanel reconnect", () => {
         'openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]',
       ),
     ).toBeNull();
+
+    releaseRefresh?.(false);
+    await waitForFast(() => {
+      expect(panel.renderRoot.querySelector(".is-live")).not.toBeNull();
+      expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+    });
   });
 
   it("carries an explicit terminal action through an activated-worker reload", async () => {

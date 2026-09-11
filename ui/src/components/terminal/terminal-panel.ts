@@ -75,7 +75,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ type: Boolean }) page = false;
   @property({ attribute: false }) routeTarget: TerminalRouteTarget = null;
 
-  @state() terminalPanelErrorText: string | null = null;
   @state() private sessionPickerOpen = false;
   @state() private pickerSessions: TerminalSessionInfo[] = [];
 
@@ -102,7 +101,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     isCurrent: (tab) =>
       this.terminalSessions.tabs.includes(tab as TerminalPanelSessionTab) && tab.status === "live",
     fileInput: () => this.renderRoot.querySelector<HTMLInputElement>(".tp-file-input"),
-    setError: (message) => (this.terminalPanelErrorText = message),
+    setError: (message) => this.terminalSessions.setError(message),
     requestUpdate: () => this.requestUpdate(),
   });
   createTerminalController = createIsolatedGhosttyTerminal;
@@ -235,7 +234,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       }
       this.dockLayout.setOpen(true);
       void (detail.terminalSessionId
-        ? this.terminalSessions.openRequestedSession(detail.terminalSessionId)
+        ? this.terminalSessions.attachSessionById(detail.terminalSessionId, true)
         : this.terminalSessions.restoreSessions());
       return;
     }
@@ -371,11 +370,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     return this.renderRoot.querySelector(".tp-viewport");
   }
 
-  private retryTerminalOpen(): void {
-    this.terminalPanelErrorText = null;
-    this.terminalSessions.openRetry.run();
-  }
-
   override render() {
     if (!this.terminalPanelOpen) {
       return nothing;
@@ -394,11 +388,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.terminalSessions.waitingForRefresh ||
       (this.terminalSessions.booting && this.terminalSessions.tabs.length === 0) ||
       activeTab?.status === "connecting";
-    const terminalError = this.terminalPanelErrorText
+    const terminalError = this.terminalSessions.error
       ? {
-          text: this.terminalPanelErrorText,
-          retry: this.terminalSessions.openRetry.available
-            ? () => this.retryTerminalOpen()
+          text: this.terminalSessions.error.text,
+          retry: this.terminalSessions.error.retryAction
+            ? () => this.terminalSessions.retryOpen()
             : undefined,
         }
       : null;
