@@ -37,6 +37,10 @@ type CanaryResult = {
   logTail: string[];
   steps: UpdateStepResult[];
   candidateSchemaVersions?: OpenClawSchemaVersions;
+  listenerIsolation?: {
+    gateway: { host: "127.0.0.1"; port: number };
+    mcpAppSandbox: "disabled";
+  };
 } & (
   | { status: "ok" }
   | {
@@ -128,6 +132,7 @@ export async function validateUpdateCandidateCanary(params: {
   const logTail: string[] = [];
   const steps: UpdateStepResult[] = [];
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
+  let listenerIsolation: CanaryResult["listenerIsolation"];
   let phase: CanaryPhase = "snapshot";
   let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const capture = (chunk: Buffer | string) => {
@@ -280,6 +285,10 @@ export async function validateUpdateCandidateCanary(params: {
     workDeadline += snapshotDuration;
     env = { ...rehearsal.env };
     const { port } = rehearsal;
+    listenerIsolation = {
+      gateway: { host: "127.0.0.1", port },
+      mcpAppSandbox: "disabled",
+    };
     const commands: Array<{ phase: CanaryPhase; name: string; args: string[]; entry?: string }> = [
       {
         phase: "doctor",
@@ -440,6 +449,7 @@ export async function validateUpdateCandidateCanary(params: {
       durationMs: Date.now() - started,
       logTail,
       candidateSchemaVersions,
+      listenerIsolation,
       steps,
     };
   } catch (error) {
@@ -470,6 +480,7 @@ export async function validateUpdateCandidateCanary(params: {
       durationMs: Date.now() - started,
       logTail,
       candidateSchemaVersions,
+      listenerIsolation,
       steps,
     };
   } finally {

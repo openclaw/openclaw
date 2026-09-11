@@ -110,6 +110,9 @@ function isolatedConfig(
   copied.hooks = { enabled: false, internal: { enabled: false } };
   copied.transcripts = { enabled: false, autoStart: [] };
   copied.discovery = { mdns: { mode: "off" } };
+  if (copied.mcp?.apps) {
+    copied.mcp.apps.enabled = false;
+  }
   return copied;
 }
 
