@@ -197,21 +197,21 @@ const sessionTaskDefaults = {
 } as const;
 
 function createParams(): SubscriptionParams {
+  const chatRunState = createChatRunState();
   return {
     log: mockLog,
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
     nodeSendToSession: vi.fn(),
     agentRunSeq: new Map(),
-    ...(() => {
-      const chatRunState = createChatRunState();
-      return { chatRunState, toolEventRecipients: chatRunState.toolEventRecipients };
-    })(),
+    chatRunState,
+    toolEventRecipients: chatRunState.toolEventRecipients,
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     chatAbortControllers: new Map(),
     restartRecoveryCandidates: new Map(),
     terminalSessions: { closeTaskSessions: vi.fn() },
+    refreshConnectedUserProfiles: vi.fn(),
   };
 }
 

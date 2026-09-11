@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createChatRunState } from "../server-chat-state.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { recordClientPresenceActivity } from "../server/client-presence.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { handleChatSend } from "./chat-send-handler.js";
@@ -21,17 +21,11 @@ vi.mock("./chat-send-agent-dispatch.js", () => ({
 function createMockContext() {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
-  const chatAbortControllers = new Map();
-  const agentRunSeq = new Map<string, number>();
-  const dedupe = new Map();
 
   return {
+    ...createDirectChatContext(),
     broadcast,
     nodeSendToSession,
-    chatAbortControllers,
-    chatRunState: createChatRunState(),
-    agentRunSeq,
-    dedupe,
     getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
     logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     addChatRun: vi.fn(),

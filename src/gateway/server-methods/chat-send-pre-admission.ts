@@ -97,6 +97,7 @@ type ChatSendPreAdmissionParams = {
 };
 
 type ChatSendRetryParams = {
+  assertCurrent?: () => void;
   request: Pick<
     NormalizedChatSendRequest,
     "goalOperation" | "requestIdentity" | "rawMessage" | "mentions"
@@ -217,6 +218,7 @@ export function resolveChatSendRequestConflict({
 
 /** Recheck at each admission yield before accepting a cached or concurrent request. */
 export function respondChatSendRetry(params: ChatSendRetryParams): boolean {
+  params.assertCurrent?.();
   const { session, context, respond } = params;
   const { clientRunId, pendingChatSendKey } = session;
   const conflict = resolveChatSendRequestConflict(params);
@@ -267,7 +269,9 @@ export function inspectGoalChatSendRetry({
   respond,
   context,
   durableClaimAccepted,
+  assertCurrent,
 }: ChatSendPreAdmissionParams & { durableClaimAccepted?: boolean }) {
+  assertCurrent?.();
   const { sessionKey, storePath, entry, clientRunId, pendingChatSendKey } = session;
   if (!request.goalOperation) {
     return { kind: "new" } as const;
@@ -334,6 +338,7 @@ export function inspectGoalChatSendRetry({
 export async function runChatSendPreAdmission(
   params: ChatSendPreAdmissionParams,
 ): Promise<boolean> {
+  params.assertCurrent?.();
   const { request, session, respond, context, client } = params;
   const { stopCommand } = request;
   const {
@@ -385,6 +390,7 @@ export async function runChatSendPreAdmission(
         recoveryRuntime: context.recoveryRuntime,
         warn: (message) => context.logGateway.warn(message),
       });
+      params.assertCurrent?.();
       if (claim.kind === "pending" || claim.kind === "rejected") {
         respond(
           false,
@@ -458,6 +464,7 @@ export async function runChatSendPreAdmission(
     warn: (message) =>
       context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
   });
+  params.assertCurrent?.();
   const retrySession = {
     ...session,
     entry:

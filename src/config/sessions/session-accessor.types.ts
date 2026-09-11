@@ -320,6 +320,8 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   parentId?: string | null;
   /** Optional finalizer that runs after duplicate detection but before persistence. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+  /** Synchronous assertion after replay, custody, preparation, and redaction, before insertion. */
+  beforeFreshMessageCommit?: () => void;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
 };

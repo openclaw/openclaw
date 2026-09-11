@@ -1,10 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
+import {
+  loadSessionEntry,
+  readSessionSubmittedInput,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  ensureProfileForEmail,
+  linkEmail,
+  resolveUserProfileId,
+} from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
@@ -41,6 +53,53 @@ function retryFixture(runId: string) {
     restartSafeRequest: undefined,
   };
   return { request, session, context: createDirectChatContext(), respond: vi.fn() };
+}
+
+function preAdmissionFixture(runId: string) {
+  const fixture = retryFixture(runId);
+  const { session } = fixture;
+  const params: Parameters<typeof runChatSendPreAdmission>[0] = {
+    ...fixture,
+    client: null,
+    request: {
+      ...fixture.request,
+      p: {
+        sessionKey: session.sessionKey,
+        idempotencyKey: session.clientRunId,
+        message: fixture.request.rawMessage,
+      },
+      chatSendReceivedAtMs: 100,
+      supportsTaskSuggestions: false,
+      inboundMessage: fixture.request.rawMessage,
+      suppressCommandInterpretation: false,
+      stopCommand: false,
+      turnKind: "main",
+      normalizedAttachments: [],
+      reconnectResumeRequested: false,
+    },
+    session: {
+      ...session,
+      cfg: {},
+      rawSessionKey: session.sessionKey,
+      sessionLoadKey: session.sessionKey,
+      sessionLoadOptions: { agentId: "main" },
+      sessionLoadMs: 0,
+      legacyKey: undefined,
+      sessionRoutingChanged: () => false,
+      expectedLeafEntryId: undefined,
+      agentIdOverride: undefined,
+      requestedAgentId: "main",
+      selectedAgent: { ok: true, agentId: "main" },
+      requestedSessionId: undefined,
+      backingSessionId: "mention-session",
+      activeRunScopeKey: session.sessionKey,
+      resolvedSessionModel: { provider: "openai", model: "gpt-4.1" },
+      resolvedSessionAuthProvider: "openai",
+      timeoutMs: 1000,
+      now: 100,
+    },
+  };
+  return { fixture, params };
 }
 
 function expectConflict(respond: RetryParams["respond"]) {
@@ -295,51 +354,10 @@ describe("chat send retry identity", () => {
   });
 
   it("rechecks a competing request admitted while durable recovery yields", async () => {
-    const fixture = retryFixture("recovery-race");
+    const { fixture, params } = preAdmissionFixture("recovery-race");
     const { session } = fixture;
     const deferred = createDeferred<Awaited<ReturnType<typeof resolveDurableChatClaim>>>();
     vi.mocked(resolveDurableChatClaim).mockReturnValue(deferred.promise);
-    const params: Parameters<typeof runChatSendPreAdmission>[0] = {
-      ...fixture,
-      client: null,
-      request: {
-        ...fixture.request,
-        p: {
-          sessionKey: session.sessionKey,
-          idempotencyKey: session.clientRunId,
-          message: fixture.request.rawMessage,
-        },
-        chatSendReceivedAtMs: 100,
-        supportsTaskSuggestions: false,
-        inboundMessage: fixture.request.rawMessage,
-        suppressCommandInterpretation: false,
-        stopCommand: false,
-        turnKind: "main",
-        normalizedAttachments: [],
-        reconnectResumeRequested: false,
-      },
-      session: {
-        ...session,
-        cfg: {},
-        rawSessionKey: session.sessionKey,
-        sessionLoadKey: session.sessionKey,
-        sessionLoadOptions: { agentId: "main" },
-        sessionLoadMs: 0,
-        legacyKey: undefined,
-        sessionRoutingChanged: () => false,
-        expectedLeafEntryId: undefined,
-        agentIdOverride: undefined,
-        requestedAgentId: "main",
-        selectedAgent: { ok: true, agentId: "main" },
-        requestedSessionId: undefined,
-        backingSessionId: "mention-session",
-        activeRunScopeKey: session.sessionKey,
-        resolvedSessionModel: { provider: "openai", model: "gpt-5.6-sol" },
-        resolvedSessionAuthProvider: "openai",
-        timeoutMs: 1000,
-        now: 100,
-      },
-    };
     const pending = runChatSendPreAdmission(params);
     expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
     fixture.context.dedupe.set(`chat:${session.clientRunId}`, {
@@ -352,4 +370,106 @@ describe("chat send retry identity", () => {
     expect(await pending).toBe(false);
     expectConflict(fixture.respond);
   });
+
+  it.each(["unchanged", "cached-success", "cached-error", "new-admission"] as const)(
+    "rechecks the canonical profile after real recovery without changing %s outcomes",
+    async (outcome) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const { fixture, params } = preAdmissionFixture(`profile-recovery-${outcome}`);
+        const sourceEmail = "recovery-source@example.test";
+        const source = ensureProfileForEmail(sourceEmail);
+        const target = ensureProfileForEmail("recovery-target@example.test");
+        const scope = { agentId: params.session.agentId, sessionKey: params.session.sessionKey };
+        await upsertSessionEntryCore(scope, { sessionId: "mention-session", updatedAt: 100 });
+        const originalEntry = loadSessionEntry(scope);
+        expect(originalEntry).toBeDefined();
+        params.session.entry = originalEntry;
+        params.session.storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+        const client: NonNullable<Parameters<typeof runChatSendPreAdmission>[0]["client"]> = {
+          connId: "profile-recovery",
+          authenticatedUserProfile: {
+            profileId: source.id,
+            displayName: null,
+            hasAvatar: false,
+            updatedAt: source.updatedAt,
+          },
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            role: "operator",
+            scopes: ["operator.admin"],
+            client: { id: "test", version: "1", platform: "test", mode: "test" },
+          },
+        };
+        params.client = client;
+        const mismatch = new SessionMutationAuthorizationChangedError({
+          code: "INVALID_REQUEST",
+          message: "Selected account changed; select the account again.",
+          details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
+        });
+        // Keep the selected ID exact: resolving both sides would silently follow a merge.
+        params.assertCurrent = () => {
+          if (resolveUserProfileId(client.authenticatedUserProfile!.profileId) !== source.id) {
+            throw mismatch;
+          }
+        };
+        params.assertCurrent();
+        const actualRecovery = await vi.importActual<typeof import("./chat-restart-recovery.js")>(
+          "./chat-restart-recovery.js",
+        );
+        const entered = createDeferred();
+        const release = createDeferred();
+        let recoveryCompleted = false;
+        vi.mocked(resolveDurableChatClaim).mockImplementationOnce(async (request) => {
+          entered.resolve();
+          await release.promise;
+          const result = await actualRecovery.resolveDurableChatClaim(request);
+          recoveryCompleted = true;
+          return result;
+        });
+        const pending = runChatSendPreAdmission(params);
+        try {
+          await Promise.race([entered.promise, pending]);
+          expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
+          if (outcome !== "unchanged") {
+            linkEmail(sourceEmail, target.id);
+            expect(resolveUserProfileId(source.id)).toBe(target.id);
+            expect(client.authenticatedUserProfile?.profileId).toBe(source.id);
+          }
+          if (outcome === "cached-success" || outcome === "cached-error") {
+            fixture.context.dedupe.set(`chat:${params.session.clientRunId}`, {
+              ts: 200,
+              ok: outcome === "cached-success",
+              requestIdentity: params.request.requestIdentity,
+              ...(outcome === "cached-success"
+                ? { payload: { runId: params.session.clientRunId, status: "ok" } }
+                : { error: { code: "UNAVAILABLE", message: "Recorded run failure." } }),
+            });
+          }
+          const originalReceipts = structuredClone([...fixture.context.dedupe]);
+          release.resolve();
+          const settled = await pending.then(
+            (value) => ({ value, error: undefined }),
+            (error: unknown) => ({ value: undefined, error }),
+          );
+
+          expect(recoveryCompleted).toBe(true);
+          expect(loadSessionEntry(scope)).toEqual(originalEntry);
+          expect([...fixture.context.dedupe]).toEqual(originalReceipts);
+          expect(fixture.context.chatAbortControllers.size).toBe(0);
+          expect(fixture.context.chatQueuedTurns?.size ?? 0).toBe(0);
+          expect(client).not.toHaveProperty("invalidated", true);
+          if (outcome === "unchanged") {
+            expect(settled).toEqual({ value: true, error: undefined });
+          } else {
+            expect(settled).toEqual({ value: undefined, error: mismatch });
+          }
+          expect(fixture.respond).not.toHaveBeenCalled();
+        } finally {
+          release.resolve();
+          await pending.catch(() => undefined);
+        }
+      });
+    },
+  );
 });

@@ -114,6 +114,8 @@ export type FileEntry = SessionHeader | SessionEntry;
 
 export type AppendPersistenceOptions = {
   appendIntent?: "active-branch";
+  /** Synchronous fresh SQLite message assertion; never serialized into an entry. */
+  beforeFreshMessageCommit?: () => void;
   config?: OpenClawConfig;
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
   invalidateSerializedPrefixCache?: boolean;

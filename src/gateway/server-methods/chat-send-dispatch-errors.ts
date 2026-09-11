@@ -2,6 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -42,6 +43,15 @@ export async function handleChatSendSetupError(params: {
 }): Promise<void> {
   const { cleanupAdmittedRun, lifecycleGeneration, restartSafeAdmission } = params.admission;
   const { agentId, clientRunId, sessionKey } = params.session;
+  if (params.error instanceof ExpectedProfileMismatchError) {
+    // Selection failure belongs to this request, not the run's recorded outcome.
+    // Release only this admission; never poison a receipt or replay cache.
+    cleanupAdmittedRun();
+    clearAgentRunContext(clientRunId, lifecycleGeneration);
+    params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
+    params.respond(false, undefined, params.error.error);
+    return;
+  }
   const errorMessage = String(params.error);
   const failureDisposition = classifyAcceptedChatSendFailure({
     error: params.error,

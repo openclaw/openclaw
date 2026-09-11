@@ -21,6 +21,7 @@ import {
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 
 export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";
 export type SessionPendingInput = {
@@ -108,7 +109,9 @@ function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
     owners.live.get(owner.inputId) !== owner ||
     !isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)
   ) {
-    throw new Error("Pending input ownership ended; submit a new turn to continue");
+    throw new SessionPendingInputCustodyError(
+      "Pending input ownership ended; submit a new turn to continue",
+    );
   }
   owner.assertCurrent();
 }
@@ -294,7 +297,9 @@ export function resolveSessionPendingInputAppend(
         row.state !== "queued" ||
         row.lifecycle_generation !== owner.lifecycleGeneration))
   ) {
-    throw new Error("Pending input cannot be appended outside its admitted turn");
+    throw new SessionPendingInputCustodyError(
+      "Pending input cannot be appended outside its admitted turn",
+    );
   }
   const relocation = owners.relocation.getStore();
   const transactionRelocations = owners.transactionRelocations.get(database.db);
@@ -364,14 +369,18 @@ export function resolveSessionPendingInputAppend(
         accepted.lifecycle_generation !== source.lifecycleGeneration ||
         accepted.message_json !== source.messageJson
       ) {
-        throw new Error("Collected input custody changed before transcript promotion");
+        throw new SessionPendingInputCustodyError(
+          "Collected input custody changed before transcript promotion",
+        );
       }
       return accepted;
     });
     const alreadyPromoted = sources.every((source) => source.consumed_event_id === owner.inputId);
     if (!alreadyPromoted) {
       if (sources.some((source) => source.consumed_event_id != null || source.state !== "queued")) {
-        throw new Error("Collected input custody ended before transcript promotion");
+        throw new SessionPendingInputCustodyError(
+          "Collected input custody ended before transcript promotion",
+        );
       }
       assertPendingInputOwnerCurrent(owner);
     }
@@ -412,7 +421,9 @@ export function consumeSessionPendingInput(
           .where("consumed_event_id", "is", null),
       );
       if (updated.numAffectedRows !== BigInt(pending.sourceInputIds.length)) {
-        throw new Error("Collected input custody changed during transcript promotion");
+        throw new SessionPendingInputCustodyError(
+          "Collected input custody changed during transcript promotion",
+        );
       }
       return;
     }

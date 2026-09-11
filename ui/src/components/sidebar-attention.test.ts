@@ -220,6 +220,7 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
     );
+    await vi.dynamicImportSettled();
     const trigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
     return { element, provider, store, trigger };
   }

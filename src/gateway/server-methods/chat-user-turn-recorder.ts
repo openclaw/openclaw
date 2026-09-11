@@ -46,6 +46,7 @@ export function createGatewayChatUserTurnController(params: {
   warn: (message: string) => void;
   mentionInbox?: MentionInbox;
   assertGoalCurrent?: () => void;
+  assertOriginalInputCommit?: () => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
   const sender =
@@ -93,7 +94,7 @@ export function createGatewayChatUserTurnController(params: {
           : {}),
       }))
     : Promise.resolve(baseInput);
-  const recorder = createUserTurnTranscriptRecorder({
+  const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     ...(sender?.id && !request.goalOperation
       ? {
           // Attribution and submitted bytes survive reconnect; display names, leaf
@@ -154,7 +155,17 @@ export function createGatewayChatUserTurnController(params: {
         })
       : {}),
     errorContext: "gateway chat user turn transcript",
-    beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+    assertOriginalInputCommit: params.assertOriginalInputCommit,
+    beforeMessageWrite: (event) => {
+      const originalInput = event.message.idempotencyKey === sourceId;
+      const next = runAgentHarnessBeforeMessageWriteHook(event);
+      // This hook runs inside the synchronous writer after durable replay lookup.
+      // Fence only fresh original input, never accepted custody or terminal notices.
+      if (originalInput && next?.role === "user") {
+        recorder.assertOriginalInputCommit?.();
+      }
+      return next;
+    },
     onPersistenceError: (error) =>
       params.warn(`gateway user transcript persistence failed: ${formatForLog(error)}`),
     ...(selectedMentions && senderProfileId && mentionInbox

@@ -51,6 +51,7 @@ import {
 } from "./tool-call-id.js";
 import {
   copyCodeModeSourceAppend,
+  copyCodeModeSourceAppendOptions,
   prepareCodeModeSourceAppend,
   withCodeModeSourceAppend,
   type CodeModeSourceAppend,
@@ -721,14 +722,20 @@ export function installSessionToolResultGuard(
       anchor,
       appended,
       message: persistedMessage,
-    } = withRuntimeUserTurnTranscriptRecorder(runOwnedMessage, () =>
-      originalAppendWithTranscriptAnchor(
+    } = withRuntimeUserTurnTranscriptRecorder(runOwnedMessage, (beforeFreshMessageCommit) => {
+      const appendOptions = beforeFreshMessageCommit
+        ? copyCodeModeSourceAppendOptions(options, {
+            ...options,
+            beforeFreshMessageCommit,
+          })
+        : options;
+      return originalAppendWithTranscriptAnchor(
         runOwnedMessage as never,
         sourceAppend
-          ? prepareCodeModeSourceAppend(options ?? {}, runOwnedMessage, sourceAppend)
-          : options,
-      ),
-    );
+          ? prepareCodeModeSourceAppend(appendOptions ?? {}, runOwnedMessage, sourceAppend)
+          : appendOptions,
+      );
+    });
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     const persistedId =

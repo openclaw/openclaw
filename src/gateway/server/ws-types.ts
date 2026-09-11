@@ -48,6 +48,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
+  /** Lifecycle-prepared canonical recipient; never a scope or authorization grant. */
+  preparedRecipientProfileId?: string;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;

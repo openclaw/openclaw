@@ -1,5 +1,6 @@
 // Real child Gateway and real WebSocket authentication; no handler/client authority injection.
 import { randomUUID } from "node:crypto";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { WebSocket } from "ws";
 import type { HelloOk, ResponseFrame } from "../../../../packages/gateway-protocol/src/index.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
@@ -44,7 +45,7 @@ export class SkillLibraryWireClient {
 
   private constructor(private readonly socket: WebSocket) {
     socket.on("message", (data) => {
-      const frame = JSON.parse(data.toString()) as ResponseFrame;
+      const frame = JSON.parse(rawDataToString(data)) as ResponseFrame;
       if (frame.type !== "res") {
         return;
       }
@@ -144,7 +145,12 @@ export class SkillLibraryWireClient {
     }
   }
 
-  async request<T>(method: string, params: unknown, timeoutMs = 30_000): Promise<T> {
+  async request<T>(
+    method: string,
+    params: unknown,
+    timeoutMs = 30_000,
+    options?: { expectedProfileId?: string },
+  ): Promise<T> {
     const id = randomUUID();
     return await new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -152,7 +158,15 @@ export class SkillLibraryWireClient {
         reject(new Error(`${method} timed out`));
       }, timeoutMs);
       this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer });
-      this.socket.send(JSON.stringify({ type: "req", id, method, params }));
+      this.socket.send(
+        JSON.stringify({
+          type: "req",
+          id,
+          method,
+          params,
+          expectedProfileId: options?.expectedProfileId,
+        }),
+      );
     });
   }
 

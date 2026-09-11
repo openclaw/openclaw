@@ -4,7 +4,7 @@ import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { PresenceEntrySchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -214,6 +214,21 @@ describe("gateway presence audience", () => {
           lastActivityAt: expect.any(Number),
           timeZone: "Europe/Vienna",
         });
+        const idleBefore = structuredClone(idlePerson);
+        const now = vi.spyOn(Date, "now").mockReturnValue(idleBefore.ts + 1000);
+        try {
+          for (const email of ["creator@example.com", "presence-unrelated@example.test"]) {
+            // No await: committed profile notifications settle synchronously,
+            // without a heartbeat interleaving with this unchanged-row check.
+            ensureProfileForEmail(email);
+            expect(
+              listSystemPresence().find((entry) => entry.instanceId === "presence-idle"),
+              `${email} must preserve unrelated presence`,
+            ).toEqual(idleBefore);
+          }
+        } finally {
+          now.mockRestore();
+        }
         const declared = await rpcReq(watcher.ws, "sessions.viewers.set", {
           sessionKeys: watchedKeys,
         });

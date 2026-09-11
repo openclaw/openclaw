@@ -2,6 +2,7 @@ import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { USER_PROFILE_ID_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
@@ -9,7 +10,13 @@ import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 type TextPayload = { sessionKey: string; text: string; delta?: string };
-type Frame = { type: "event"; event: string; seq: number; payload: TextPayload };
+type Frame = {
+  type: "event";
+  event: string;
+  seq: number;
+  payload: TextPayload;
+  recipientProfileId?: string;
+};
 type PeerSocket = {
   readyState: number;
   bufferedAmount: number;
@@ -382,6 +389,8 @@ describe("connection live-text delivery", () => {
         (total, payload) =>
           total +
           10 +
+          Buffer.byteLength(',"recipientProfileId":""') +
+          USER_PROFILE_ID_MAX_LENGTH * 6 +
           Buffer.byteLength(
             JSON.stringify({
               type: "event",
@@ -422,6 +431,45 @@ describe("connection live-text delivery", () => {
       expect(peer.socket.terminate).not.toHaveBeenCalled();
     },
   );
+
+  it("stamps current recipients only after draining and budgets queued identity growth", () => {
+    const peer = createBufferedPeer("profile-growth", 0);
+    const other = createPeer("other-profile", true);
+    peer.client.preparedRecipientProfileId = "a";
+    other.client.preparedRecipientProfileId = "other";
+    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client, other.client]),
+    });
+    const group = new AbortController().signal;
+    broadcast("tick", {});
+    broadcast("chat", text("queued"), {
+      liveText: { group, coalesce: { key: "text", merge: replaceText } },
+    });
+    const reserved = getBufferedAmount(peer.client.connId)! - peer.socket.bufferedAmount;
+    peer.client.preparedRecipientProfileId = "\u0001".repeat(USER_PROFILE_ID_MAX_LENGTH);
+    peer.socket.bufferedAmount = 0;
+    const originalSend = peer.socket.send;
+    peer.socket.send = (wire, callback) => {
+      originalSend(wire, callback);
+      if ((JSON.parse(wire) as Frame).payload?.text === "queued") {
+        // The barrier must stamp after the pending send's synchronous publication.
+        peer.client.preparedRecipientProfileId = "after-drain";
+      }
+    };
+    broadcast("chat", text("barrier"), { liveText: { group } });
+    expect(peer.frames.map(({ seq, recipientProfileId }) => ({ seq, recipientProfileId }))).toEqual(
+      [
+        { seq: 1, recipientProfileId: "a" },
+        { seq: 2, recipientProfileId: "\u0001".repeat(USER_PROFILE_ID_MAX_LENGTH) },
+        { seq: 3, recipientProfileId: "after-drain" },
+      ],
+    );
+    expect(Buffer.byteLength(JSON.stringify(peer.frames[1])) + 10).toBeLessThanOrEqual(reserved);
+    expect(other.frames.every((frame) => frame.recipientProfileId === "other")).toBe(true);
+    peer.client.preparedRecipientProfileId = undefined;
+    broadcast("chat", text("unavailable"));
+    expect(peer.frames.at(-1)).not.toHaveProperty("recipientProfileId");
+  });
 
   it.each([false, true])(
     "applies slow-consumer policy to sibling pending bytes after an ordinary write (droppable=%s)",

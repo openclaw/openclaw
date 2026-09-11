@@ -8,7 +8,14 @@ import { assertValidParams } from "./validation.js";
 
 /** Broadcasts Talk mode changes independently of speech and realtime provider loading. */
 export const talkModeHandlers: GatewayRequestHandlers = {
-  "talk.mode": async ({ params, respond, context, client, isWebchatConnect }) => {
+  "talk.mode": async ({
+    params,
+    respond,
+    context,
+    client,
+    isWebchatConnect,
+    sessionMutationCommitGuard,
+  }) => {
     if (client && isWebchatConnect(client.connect) && !(await context.hasConnectedTalkNode())) {
       respond(
         false,
@@ -25,6 +32,7 @@ export const talkModeHandlers: GatewayRequestHandlers = {
       phase: params.phase ?? null,
       ts: Date.now(),
     };
+    sessionMutationCommitGuard?.();
     context.broadcast("talk.mode", payload, { dropIfSlow: true });
     respond(true, payload, undefined);
   },

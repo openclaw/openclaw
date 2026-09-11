@@ -51,9 +51,9 @@ that supervise the Gateway as a child process, see
 
 Frame shapes:
 
-- Request: `{type:"req", id, method, params, traceparent?}`
+- Request: `{type:"req", id, method, params, traceparent?, expectedProfileId?}`
 - Response: `{type:"res", id, ok, payload|error}`
-- Event: `{type:"event", event, payload, seq?, stateVersion?}`
+- Event: `{type:"event", event, payload, seq?, stateVersion?, recipientProfileId?}`
 
 After authentication, a client may include a W3C `traceparent` string on each
 request frame. The Gateway continues a valid value as a child trace context for
@@ -97,6 +97,50 @@ HTTP scope failures mirror the `MISSING_SCOPE` object under `error.details` and
 use HTTP status `403`.
 
 Side-effecting methods require idempotency keys (see schema).
+
+### Profile binding
+
+Use profile binding only when `hello-ok.features.capabilities` includes
+`profile-binding-v1`. A client that requires this contract must report it as
+unavailable when the capability is absent, rather than silently sending an
+unbound action. Requests that omit `expectedProfileId` retain existing behavior.
+
+`expectedProfileId` is an optional opaque string of 1 to 128 characters on an
+authenticated request frame. The Gateway compares it exactly with the current
+canonical profile ID of the authenticated principal. It does not trim, fold
+case, or follow merge aliases on the expected value. Obtain the ID from
+`users.self`; a Gateway URL, account label, agent ID, or session key is not a
+profile ID. A missing authenticated profile cannot satisfy the precondition.
+
+A server advertising the capability checks the precondition at RPC entry and
+before returning a response payload. Commit-time revalidation is method-specific;
+the capability does not promise atomicity inside arbitrary methods or plugins.
+An entry check followed by asynchronous work is not itself a commit guarantee.
+
+The structured error sets `error.details.reason` to `EXPECTED_PROFILE_MISMATCH`
+and carries a per-attempt classification in `error.details.execution`:
+
+- `not_started`: no execution was started by this attempt.
+- `may_have_executed`: the method may have run before the mismatch was detected;
+  the error is not evidence of rollback.
+
+Neither classification clears uncertainty from an earlier attempt or overrides
+a known acknowledgment (ACK). Preserve the original idempotency key and reconcile
+the earlier outcome before retrying uncertain work. Ordinary socket disconnects
+do not cancel already-accepted work.
+
+On authenticated operator broadcasts, optional `recipientProfileId` identifies
+the recipient's canonical profile at publication. It is a per-recipient frame
+fact, not the event's origin, a run-owner identity, or an authorization grant.
+Existing event permissions and subscriptions still govern delivery. Bind the
+consumer to both its physical Gateway connection and selected profile; if the
+recipient field is missing or differs, stop applying the event to that bound
+view or action and surface the binding failure.
+
+This contract does not cover pre-authentication events, node event delivery,
+APNs notifications, or in-process publications. It does not revoke provider-direct
+media or already-issued WebRTC credentials, and it does not promise immediate
+revocation of retained sessions.
 
 ## Gateway-controlled WebRTC Talk
 

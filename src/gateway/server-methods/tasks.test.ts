@@ -1,6 +1,7 @@
 /**
  * Tests for task gateway methods and persisted task lifecycle responses.
  */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,12 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.js
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  type HeartbeatWakeRequest,
+  requestHeartbeat,
+  setHeartbeatWakeHandler,
+} from "../../infra/heartbeat-wake.js";
+import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -50,6 +57,8 @@ const mainSessionTaskScope = {
 } as const;
 
 let stateDir: string;
+let heartbeatWakeRequests: HeartbeatWakeRequest[] = [];
+let disposeHeartbeatWakeHandler: (() => void) | undefined;
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -63,6 +72,11 @@ beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tasks-"));
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   resetTaskRegistryForTests();
+  heartbeatWakeRequests = [];
+  disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(async (request) => {
+    heartbeatWakeRequests.push(request);
+    return { status: "ran", durationMs: 0 };
+  });
   cancelSessionMock.mockReset();
   setTaskRegistryControlRuntimeForTests({
     cancelActiveCronTaskRun: () => false,
@@ -76,12 +90,24 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  resetTaskRegistryControlRuntimeForTests();
-  resetTaskRegistryForTests();
-  stateDirEnvSnapshot.restore();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  await fs.rm(stateDir, { recursive: true, force: true });
+  try {
+    // Drain older targeted wakes through a global barrier before their fixture state retires.
+    const reason = `gateway-tasks-test-flush-${randomUUID()}`;
+    requestHeartbeat({ source: "other", intent: "immediate", reason, coalesceMs: 0 });
+    await vi.waitFor(() => {
+      expect(heartbeatWakeRequests.some((request) => request.reason === reason)).toBe(true);
+    });
+  } finally {
+    disposeHeartbeatWakeHandler?.();
+    disposeHeartbeatWakeHandler = undefined;
+    resetSystemEventsForTest();
+    resetTaskRegistryControlRuntimeForTests();
+    resetTaskRegistryForTests();
+    stateDirEnvSnapshot.restore();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
 });
 
 async function getTaskPayload(taskId: string) {

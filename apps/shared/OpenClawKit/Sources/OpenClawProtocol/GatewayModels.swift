@@ -6730,19 +6730,22 @@ public struct EventFrame: Codable, Sendable {
     public let payload: AnyCodable?
     public let seq: Int?
     public let stateversion: StateVersion?
+    public let recipientprofileid: String?
 
     public init(
         type: String,
         event: String,
         payload: AnyCodable? = nil,
         seq: Int? = nil,
-        stateversion: StateVersion? = nil)
+        stateversion: StateVersion? = nil,
+        recipientprofileid: String? = nil)
     {
         self.type = type
         self.event = event
         self.payload = payload
         self.seq = seq
         self.stateversion = stateversion
+        self.recipientprofileid = recipientprofileid
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6751,6 +6754,7 @@ public struct EventFrame: Codable, Sendable {
         case payload
         case seq
         case stateversion = "stateVersion"
+        case recipientprofileid = "recipientProfileId"
     }
 }
 
@@ -11889,19 +11893,31 @@ public struct RequestFrame: Codable, Sendable {
     public let method: String
     public let params: AnyCodable?
     public let traceparent: String?
+    public let expectedprofileid: String?
 
     public init(
         type: String,
         id: String,
         method: String,
         params: AnyCodable? = nil,
-        traceparent: String? = nil)
+        traceparent: String? = nil,
+        expectedprofileid: String? = nil)
     {
         self.type = type
         self.id = id
         self.method = method
         self.params = params
         self.traceparent = traceparent
+        self.expectedprofileid = expectedprofileid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case id
+        case method
+        case params
+        case traceparent
+        case expectedprofileid = "expectedProfileId"
     }
 }
 

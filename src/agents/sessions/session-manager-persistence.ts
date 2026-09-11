@@ -545,6 +545,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const appendOptions = copyCodeModeSourceAppendOptions(options, {
       cwd: this.cwd,
       eventId: entry.id,
+      ...(options?.beforeFreshMessageCommit
+        ? { beforeFreshMessageCommit: options.beforeFreshMessageCommit }
+        : {}),
       ...(options?.config ? { config: options.config } : {}),
       ...(options?.idempotencyLookup ? { idempotencyLookup: options.idempotencyLookup } : {}),
       ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),

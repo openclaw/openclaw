@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as deviceTokens from "../../../infra/device-pairing-tokens.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { ensureProfileForEmail, linkEmail } from "../../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { deviceHandlers } from "../../server-methods/devices.js";
 import { createSecretsHandlers } from "../../server-methods/secrets.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
@@ -35,6 +37,89 @@ describe("policy writer response ownership", () => {
   beforeEach(() => {
     runtime.handler.mockReset();
   });
+
+  it.each(["success", "error", "throw"] as const)(
+    "redacts a held %s response after a real profile merge despite the policy-close exception",
+    async (outcome) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const source = ensureProfileForEmail("policy-source@example.test");
+        const target = ensureProfileForEmail("policy-target@example.test");
+        const fixture = createFixture();
+        fixture.client.authenticatedUserProfile = {
+          profileId: source.id,
+          displayName: null,
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: source.updatedAt,
+        };
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const receipt = { committed: true, accountData: "original-account-result" };
+        const { handleGatewayRequest } =
+          await vi.importActual<typeof import("../../server-methods.js")>(
+            "../../server-methods.js",
+          );
+        runtime.handler.mockImplementation((options: GatewayRequestOptions) =>
+          handleGatewayRequest({
+            ...options,
+            context: {
+              ...options.context,
+              getRuntimeConfig: () => ({}),
+              logGateway: {
+                ...createSubsystemLogger("gateway-test"),
+                ...fixture.harness.logGateway,
+              },
+            },
+            extraHandlers: {
+              "config.patch": async ({ respond }) => {
+                holdGatewayPolicyResponse(respond);
+                entered.resolve();
+                await release.promise;
+                if (outcome === "throw") {
+                  throw new Error("original-account-error");
+                }
+                respond(outcome === "success", receipt, {
+                  code: "UNAVAILABLE",
+                  message: "original-account-error",
+                });
+              },
+            },
+          }),
+        );
+        const request = fixture.harness.dispatcher.dispatch(
+          {
+            type: "req",
+            id: "bound-writer",
+            method: "config.patch",
+            params: {},
+            expectedProfileId: source.id,
+          },
+          fixture.client,
+        );
+        try {
+          await Promise.race([entered.promise, request]);
+          linkEmail("policy-source@example.test", target.id);
+          // The accepted policy writer may bypass transport invalidation, never profile binding.
+          disconnectAllSharedGatewayAuthClients([fixture.client]);
+          release.resolve();
+          await request;
+          expect(await fixture.harness.awaitResponseFrame("bound-writer")).toEqual({
+            type: "res",
+            id: "bound-writer",
+            ok: false,
+            payload: undefined,
+            error: expect.objectContaining({
+              details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
+            }),
+          });
+          expect(fixture.socketClose).toHaveBeenCalledOnce();
+        } finally {
+          release.resolve();
+          await request;
+        }
+      });
+    },
+  );
 
   it.each([false, true])(
     "delivers a secrets activation result before closing (failed=%s)",

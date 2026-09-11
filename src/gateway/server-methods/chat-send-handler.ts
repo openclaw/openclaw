@@ -4,6 +4,7 @@ import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import {
   lookupSessionGoalOperation,
   type SessionGoalOperation,
@@ -74,6 +75,7 @@ const mediaDocumentContextLoader = createLazyImportLoader(
 
 async function handleChatSendWithOptions(
   {
+    req,
     params,
     respond,
     context,
@@ -181,6 +183,11 @@ async function handleChatSendWithOptions(
     });
   let pendingStageAttempted = false;
   try {
+    const assertInputAdmissionCurrent = () => {
+      admitted.value.assertWorkAdmissionCurrent();
+      sessionMutationCommitGuard?.();
+    };
+    assertInputAdmissionCurrent();
     const userTurn = createGatewayChatUserTurnController({
       admission: admitted.value,
       client,
@@ -190,6 +197,8 @@ async function handleChatSendWithOptions(
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
       mentionInbox: context.mentionInbox,
+      assertOriginalInputCommit:
+        req.expectedProfileId === undefined ? undefined : assertInputAdmissionCurrent,
       assertGoalCurrent: () => {
         sessionMutationCommitGuard?.();
         sessionMutationAuthorization?.assertCurrent();
@@ -273,16 +282,31 @@ async function handleChatSendWithOptions(
       // ACK transfers browser custody. Persist approved source bytes before
       // either a direct runtime or the in-memory collector can accept them.
       pendingStageAttempted = true;
+      const assertCustodyCurrent = () => {
+        admitted.value.assertWorkAdmissionCurrent();
+        if (sessionMutationAuthorization?.assertAdmittedInputCurrent) {
+          sessionMutationAuthorization.assertAdmittedInputCurrent();
+        } else {
+          sessionMutationCommitGuard?.();
+          sessionMutationAuthorization?.assertCurrent();
+        }
+        if (sessionRoutingChanged(context.getRuntimeConfig())) {
+          throw new Error("Session routing changed before input admission; refresh and retry.");
+        }
+      };
       const staged = await userTurnRecorder.stageApproved?.({
         runId: clientRunId,
         assertCurrent: () => {
-          admitted.value.assertWorkAdmissionCurrent();
           sessionMutationCommitGuard?.();
-          sessionMutationAuthorization?.assertCurrent();
-          if (sessionRoutingChanged(context.getRuntimeConfig())) {
-            throw new Error("Session routing changed before input admission; refresh and retry.");
-          }
+          assertCustodyCurrent();
         },
+        assertAdmittedCurrent:
+          req.expectedProfileId === undefined
+            ? assertCustodyCurrent
+            : createMessageInjectionAuthority(() => {
+                assertCustodyCurrent();
+                return true;
+              }),
       });
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admitted.value.cleanupAdmittedRun();
@@ -434,6 +458,7 @@ async function handleChatSendWithOptions(
       documentContext: steerDocumentContext,
       userTurnTranscriptRecorder: userTurnRecorder,
       logGateway: context.logGateway,
+      assertCurrent: req.expectedProfileId === undefined ? undefined : assertInputAdmissionCurrent,
     });
     const preAckReplyContextPromise =
       messageInjectionTarget && !isInternalTextSlashCommandTurn
@@ -448,6 +473,7 @@ async function handleChatSendWithOptions(
         return admitted.value.rejectSessionRoutingChanged();
       }
     }
+    assertInputAdmissionCurrent();
     let messageInjectionAttempt =
       !p.replyToId || preAckReplyContextPromise ? beginCapturedMessageInjection() : undefined;
     const preAckInjection = await settleChatSendPreAckMessageInjection({

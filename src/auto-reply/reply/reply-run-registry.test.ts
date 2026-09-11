@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { QuestionAnswerUnconfirmedError } from "../../agents/harness/gateway-question-dispatch.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
+import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
@@ -25,6 +26,7 @@ import {
   beginReplyMessageInjectionTarget,
   createReplyOperation,
   expireStaleReplyOperation,
+  finalizeReplyMessageInjectionAttempt,
   forceClearReplyOperation,
   forceClearReplyRunBySessionId,
   hasCommittedReplyOperationOutcome,
@@ -2431,6 +2433,89 @@ describe("reply run registry", () => {
     delivery.resolve();
     await expect(attempt.outcome).resolves.toEqual({ status: "accepted" });
   });
+
+  it.each(
+    (["direct", "wrapped", "unconfirmed"] as const).flatMap((failure) =>
+      [false, true].map((bound) => ({ failure, bound })),
+    ),
+  )(
+    "preserves accepted custody failure semantics ($failure, bound: $bound)",
+    async ({ failure, bound }) => {
+      const custodyError = new SessionPendingInputCustodyError(
+        "Pending input ownership ended; submit a new turn to continue",
+      );
+      expect(custodyError.name).toBe("Error");
+      expect(String(custodyError)).toBe(
+        "Error: Pending input ownership ended; submit a new turn to continue",
+      );
+      const error =
+        failure === "wrapped"
+          ? new Error("Runtime persistence failed", { cause: custodyError })
+          : failure === "unconfirmed"
+            ? new QuestionAnswerUnconfirmedError(custodyError)
+            : custodyError;
+      const delivery = createDeferred();
+      let sourceCurrent = true;
+      const sourceAuthority = vi.fn(() => {
+        if (!sourceCurrent) {
+          throw new Error("Source authority closed after acceptance");
+        }
+      });
+      const cancel = vi.fn();
+      const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "run-a",
+        cancel,
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: (_text, options, assertCurrent) => {
+            assertCurrent();
+            options?.onQueueAccepted?.(true);
+            return delivery.promise;
+          },
+        },
+      });
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+      const onQueueAccepted = vi.fn();
+      const attempt = beginReplyMessageInjectionTarget(target, "accepted input", {
+        ...(bound ? { assertCurrent: sourceAuthority } : {}),
+        onQueueAccepted,
+      });
+      await expect(attempt.acceptance).resolves.toBe(true);
+      expect(sourceAuthority).toHaveBeenCalledTimes(bound ? 1 : 0);
+      sourceCurrent = false;
+      delivery.reject(error);
+
+      if (failure === "unconfirmed") {
+        await expect(attempt.outcome).resolves.toEqual({
+          status: "indeterminate",
+          errorMessage: error.message,
+        });
+      } else if (bound) {
+        await expect(attempt.outcome).resolves.toEqual({
+          status: "failed",
+          error: custodyError,
+        });
+        await expect(finalizeReplyMessageInjectionAttempt({ attempt, target })).rejects.toBe(
+          custodyError,
+        );
+      } else {
+        await expect(attempt.outcome).resolves.toEqual({
+          status: "rejected",
+          reason: "runtime_rejected",
+          errorMessage: String(error),
+        });
+      }
+      await expect(attempt.acceptance).resolves.toBe(true);
+      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(sourceAuthority).toHaveBeenCalledTimes(bound ? 1 : 0);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(operation.result).toBeNull();
+    },
+  );
 
   it("falls back to queue settlement when the backend ignores acceptance callbacks", async () => {
     const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });

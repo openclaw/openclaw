@@ -52,6 +52,7 @@ export function createChatSendMessageInjectionStarter(params: {
     ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
   >;
   logGateway: GatewayRequestContext["logGateway"];
+  assertCurrent?: () => void;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
   const { cfg, entry, sessionKey, storePath, clientRunId } = params.session;
@@ -60,6 +61,7 @@ export function createChatSendMessageInjectionStarter(params: {
     if (!params.target || isInternalTextSlashCommandTurn) {
       return undefined;
     }
+    params.assertCurrent?.();
     // Preparation can outlive terminal delivery. Recheck before the backend
     // takes this input; an unreadable receipt cannot authorize steering.
     let fenceEntry = entry;
@@ -143,6 +145,7 @@ export function createChatSendMessageInjectionStarter(params: {
         ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
         : text,
       {
+        assertCurrent: params.assertCurrent,
         steeringMode: "all",
         isInboundUserMessage: true,
         toolAuthorityOverlay: resolveInboundReplyToolAuthorityOverlay({
@@ -182,6 +185,10 @@ export async function settleChatSendPreAckMessageInjection(params: {
 }): Promise<PreAckMessageInjectionResult> {
   if (!params.attempt || (await params.attempt.acceptance)) {
     return { status: "continue", attempt: params.attempt };
+  }
+  const outcome = await params.attempt.outcome;
+  if (outcome.status === "failed") {
+    throw outcome.error;
   }
   if (params.isAborted()) {
     params.onAborted();

@@ -252,6 +252,8 @@ export async function startGatewayCoreRuntime(input: {
         chatAbortControllers,
         restartRecoveryCandidates,
         terminalSessions,
+        refreshConnectedUserProfiles: () =>
+          resolvePluginGatewayContext()?.refreshConnectedUserProfile?.(),
       }),
     );
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);

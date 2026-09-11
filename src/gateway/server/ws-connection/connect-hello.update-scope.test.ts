@@ -457,6 +457,7 @@ describe("sendGatewayHello update detail scope", () => {
     );
     expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
     expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-model-catalog");
+    expect(helloPayload(context)?.features.capabilities).toContain("profile-binding-v1");
   });
 
   it("reports Gateway build identity separately from configured UI source", async () => {

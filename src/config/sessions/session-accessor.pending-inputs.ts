@@ -163,6 +163,8 @@ export async function stageSessionPendingInput(
     ) => PersistedUserTurnMessage | undefined;
     config?: OpenClawConfig;
     assertCurrent: () => void;
+    /** Retained only after the full admission checks and custody transaction commit. */
+    assertAdmittedCurrent?: () => void;
   },
 ): Promise<SessionPendingInputReceipt | undefined> {
   const resolved = resolveSqliteTranscriptScope(scope);
@@ -314,7 +316,7 @@ export async function stageSessionPendingInput(
         lifecycleGeneration,
         messageJson,
         config: options.config,
-        assertCurrent: options.assertCurrent,
+        assertCurrent: options.assertAdmittedCurrent ?? options.assertCurrent,
         ...(existing ? { restartRecovered: true as const } : {}),
         finish: (disposition) => {
           if (finished) {

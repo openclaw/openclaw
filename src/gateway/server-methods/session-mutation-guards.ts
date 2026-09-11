@@ -4,18 +4,27 @@ import type { SessionMutationAuthorization } from "./types.js";
 export function withSessionMutationCommitGuard(
   authorization: SessionMutationAuthorization | undefined,
   assertCommitAllowed: (() => void) | undefined,
+  assertExpectedProfile: (() => void) | undefined,
 ): SessionMutationAuthorization | undefined {
-  if (!assertCommitAllowed) {
+  if (!assertCommitAllowed && !assertExpectedProfile) {
     return authorization;
   }
+  // Committed input keeps its original host and session authority. A later
+  // account selection change cannot revoke custody already transferred to it.
+  const assertAdmittedInputCurrent = () => {
+    assertCommitAllowed?.();
+    authorization?.assertCurrent();
+  };
   return {
     ...authorization,
+    assertAdmittedInputCurrent,
     assertCurrent: () => {
-      assertCommitAllowed();
-      authorization?.assertCurrent();
+      assertExpectedProfile?.();
+      assertAdmittedInputCurrent();
     },
     assertTargetCurrent: (target) => {
-      assertCommitAllowed();
+      assertExpectedProfile?.();
+      assertCommitAllowed?.();
       authorization?.assertTargetCurrent(target);
     },
   };

@@ -8,6 +8,7 @@ export const GATEWAY_SERVER_CAPS = {
   NODE_WORKER_ENVIRONMENT_SESSION: "node-worker-environment-session-v1",
   NODE_WORKER_PORTAL_STREAM: "node-worker-portal-stream-v1",
   PUBLISHED_MODEL_CATALOG: "published-model-catalog",
+  PROFILE_BINDING: "profile-binding-v1",
   PROGRESS_CARD_AGENT_SCOPE: "progress-card-agent-scope-v1",
   SESSION_SCOPED_CHAT_METADATA: "session-scoped-chat-metadata",
   SESSION_SCOPED_MODEL_CATALOG: "session-scoped-model-catalog",

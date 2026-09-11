@@ -96,6 +96,7 @@ export async function prepareAndAdmitChatSend(
     context,
     client,
     onAdmissionOwned,
+    assertCurrent: sessionMutationAuthorization?.assertCurrent,
   });
   if (!admitted.ok) {
     return undefined;

@@ -246,18 +246,38 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     expect(params.logGateway.warn).toHaveBeenCalled();
   });
 
-  it("rejects before queueing when the captured entry itself fail-closes terminal delivery", () => {
-    // No reload needed: the entry captured during prepareChatSendSession
-    // already records the terminal receipt.
-    const params = makeStarterParams({ entry: makeFailClosedEntry() });
-    const begin = createChatSendMessageInjectionStarter(params);
+  it.each(["unbound", "current", "refused"] as const)(
+    "composes captured terminal admission with %s authority",
+    (authority) => {
+      // A captured terminal receipt rejects steering, but must not swallow
+      // an independent authority refusal into the follow-up return value.
+      const params = makeStarterParams({ entry: makeFailClosedEntry() });
+      const refusal = new Error("injection authority refused");
+      const assertCurrent = () => {
+        if (authority === "refused") {
+          throw refusal;
+        }
+      };
+      if (authority !== "unbound") {
+        params.assertCurrent = assertCurrent;
+      }
+      const begin = createChatSendMessageInjectionStarter(params);
 
-    const attempt = begin();
-
-    expect(attempt).toBeUndefined();
-    expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
-    expect(params.logGateway.warn).toHaveBeenCalled();
-  });
+      if (authority === "refused") {
+        let thrown: unknown;
+        try {
+          begin();
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBe(refusal);
+      } else {
+        expect(begin()).toBeUndefined();
+        expect(params.logGateway.warn).toHaveBeenCalled();
+      }
+      expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
+    },
+  );
 
   it("follows the latest persisted entry over the stale captured snapshot", () => {
     // The captured snapshot fail-closed after dispatch, but the latest

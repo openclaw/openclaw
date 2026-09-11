@@ -5,8 +5,9 @@ import {
   setDiscordTranscriptsVoiceManager,
 } from "../extensions/discord/test-api.js";
 import { createTranscriptsTool } from "../src/agents/tools/transcripts-tool.js";
+import { createPluginMetadataSnapshotFixture } from "../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../src/plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../src/plugins/runtime/generation-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { TranscriptsStore } from "../src/transcripts/store.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
@@ -56,6 +57,9 @@ defineDiscordVoiceTests(
           source: "discord/transcripts-source-api.ts",
           provider: discordVoiceTranscriptsSourceProvider,
         });
+        const metadataSnapshot = createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "discord", contracts: { transcriptSourceProviders: ["discord-voice"] } }],
+        });
         const tool = createTranscriptsTool({
           config,
           stateDir,
@@ -63,7 +67,9 @@ defineDiscordVoiceTests(
           caller: { kind: "operator", source: "local" },
         });
         const execute = (params: Record<string, unknown>) =>
-          withPluginRuntimeRegistryScope(registry, () => tool.execute("transcripts", params));
+          withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry: registry }, () =>
+            tool.execute("transcripts", params),
+          );
         const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
           env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         });
@@ -114,12 +120,12 @@ defineDiscordVoiceTests(
             .toEqual(["second"]);
           expect.soft(first.stoppedAt).toEqual(expect.any(String));
 
+          await execute({ action: "stop", sessionId: "first" });
           await expect(execute({ action: "summarize", sessionId: "first" })).resolves.toMatchObject(
             {
               details: { summary: { sessionId: "first", utteranceCount: 1 } },
             },
           );
-          await execute({ action: "stop", sessionId: "first" });
           expect.soft(providerStop).not.toHaveBeenCalled();
           expectConnectedStatus(manager, "1001");
           await expect(execute({ action: "status" })).resolves.toMatchObject({

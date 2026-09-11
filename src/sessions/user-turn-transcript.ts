@@ -531,6 +531,13 @@ export function createUserTurnTranscriptRecorder(
       return message;
     },
     resolveMessage: resolveMessageForPersistence,
+    assertOriginalInputCommit: params.assertOriginalInputCommit
+      ? () => {
+          if (!blocked && !persisted && !runtimePersisted && !pendingInput) {
+            params.assertOriginalInputCommit!();
+          }
+        }
+      : undefined,
     stageApproved: (options) => {
       staging ??= (async () => {
         const candidate = await resolveMessageForPersistence();

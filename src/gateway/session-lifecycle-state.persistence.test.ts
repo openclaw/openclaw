@@ -293,6 +293,7 @@ it.each(["success", "failed-write"])(
         chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates,
         terminalSessions: { closeTaskSessions: vi.fn() },
+        refreshConnectedUserProfiles: vi.fn(),
       });
       const persistLifecycleEvent = lifecycleState.persistGatewaySessionLifecycleEvent;
       persistenceSpy = vi
@@ -494,6 +495,7 @@ it.each([
         chatAbortControllers: new Map(),
         restartRecoveryCandidates: new Map(),
         terminalSessions: { closeTaskSessions: vi.fn() },
+        refreshConnectedUserProfiles: vi.fn(),
       });
 
       emitAgentEventForOwner(

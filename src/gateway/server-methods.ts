@@ -31,6 +31,7 @@ import {
   CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
   CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
 } from "./control-plane-rate-limit.js";
+import { createExpectedProfileBinding, type ExpectedProfileBinding } from "./expected-profile.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
@@ -196,12 +197,14 @@ async function authorizeAuthenticatedProfileForMethod(params: {
   requestParams: unknown;
   methodRegistry: GatewayMethodRegistry;
   context: GatewayRequestContext;
+  expectedProfileBinding?: ExpectedProfileBinding;
 }): Promise<ErrorShape | null> {
   const sync = params.client?.authenticatedGitHubIdentitySync;
   if (!sync || params.client?.authenticatedUserProfile?.profileId.trim()) {
     return null;
   }
   const requiresProfile =
+    params.expectedProfileBinding !== undefined ||
     params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
     resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
     (sessionMutationTargetFields(params.method).length > 0 &&
@@ -262,6 +265,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   client: GatewayRequestOptions["client"];
   context: GatewayRequestContext;
   methodRegistry: GatewayMethodRegistry;
+  expectedProfileBinding?: ExpectedProfileBinding;
 }): Promise<{
   error: ErrorShape | null;
   sessionMutationAuthorization?: SessionMutationAuthorization;
@@ -280,6 +284,14 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   const profileError = await authorizeAuthenticatedProfileForMethod(params);
   if (profileError) {
     return { error: profileError };
+  }
+  try {
+    params.expectedProfileBinding?.assertCurrent();
+  } catch (error) {
+    if (error instanceof SessionMutationAuthorizationChangedError) {
+      return { error: error.error };
+    }
+    throw error;
   }
   // Startup gating precedes session authorization: session stores are not loaded yet,
   // so an authorization read here would deny with a misleading non-retryable error.
@@ -492,8 +504,20 @@ export async function handleGatewayRequest(
   },
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
-  const { req, respond, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } =
-    opts;
+  const { req, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } = opts;
+  const profileBinding =
+    opts.expectedProfileBinding ?? createExpectedProfileBinding(req.expectedProfileId, client);
+  // WS publication already owns the shared guard, including policy-close responses.
+  const respond =
+    profileBinding && !opts.expectedProfileBinding
+      ? profileBinding.guardResponse(opts.respond)
+      : opts.respond;
+  const sessionMutationCommitGuard = profileBinding
+    ? () => {
+        profileBinding.assertCurrent();
+        opts.sessionMutationCommitGuard?.();
+      }
+    : opts.sessionMutationCommitGuard;
   const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
   try {
     entry?.assertOpen();
@@ -511,6 +535,7 @@ export async function handleGatewayRequest(
       client,
       context,
       methodRegistry,
+      expectedProfileBinding: profileBinding,
     });
     entry?.assertOpen();
     if (authorization.error) {
@@ -528,6 +553,7 @@ export async function handleGatewayRequest(
     const sessionMutationAuthorization = withSessionMutationCommitGuard(
       authorization.sessionMutationAuthorization,
       opts.sessionMutationCommitGuard,
+      profileBinding?.assertCurrent,
     );
     const invokeHandler = async () => {
       const preparedHandler = await prepareGatewayRequestHandler(handler, entry);
@@ -540,10 +566,10 @@ export async function handleGatewayRequest(
         context,
         signal,
         ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
-        sessionMutationCommitGuard: opts.sessionMutationCommitGuard,
+        sessionMutationCommitGuard,
         sessionMutationAuthorization,
       };
-      opts.sessionMutationCommitGuard?.();
+      sessionMutationCommitGuard?.();
       entry?.assertOpen();
       if (signal?.aborted) {
         return;
@@ -551,6 +577,7 @@ export async function handleGatewayRequest(
       // No await between the final fence, ownership handoff, and actual invocation.
       // Long polls and shutdown initiators must never remain preparation leases.
       entry?.release();
+      profileBinding?.markInvoked();
       return diagnostics
         ? diagnostics.runHandler(() => preparedHandler(handlerOptions))
         : preparedHandler(handlerOptions);

@@ -13,7 +13,7 @@ import {
 } from "./agents-models-skills.js";
 import { closedObject } from "./closed-object.js";
 import { ModelAuthProfileIdSchema } from "./model-account-selection.js";
-import { NonEmptyString } from "./primitives.js";
+import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
 import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
 
 export {
@@ -41,7 +41,6 @@ export {
   type UiAppearancePreferenceKey,
 } from "./ui-appearance-preferences.js";
 
-const UserProfileIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 const UserProfileDisplayNameSchema = Type.String({ maxLength: 256 });
 const UserProfileRoleSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
 const UserPreferenceKeySchema = Type.String({ pattern: "^.{1,256}$" });

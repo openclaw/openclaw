@@ -17,10 +17,15 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-phase.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { loadSessionEntry } from "./session-utils.js";
-import { installGatewayTestHooks, prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
+import {
+  agentCommandMock,
+  installGatewayTestHooks,
+  prepareGatewayReplyRuntimeForTest,
+} from "./test-helpers.js";
 
 describe("spawn input ownership transfer", () => {
   let harness: GatewayServerHarness;
@@ -238,6 +243,169 @@ describe("spawn input ownership transfer", () => {
       admission.close();
       stageSpy.mockRestore();
       executionSpy.mockRestore();
+      signal.removeEventListener("abort", release);
+    }
+  });
+});
+
+describe("accepted input Gateway instance retirement", () => {
+  let harness: GatewayServerHarness;
+  let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
+  installGatewayTestHooks({
+    scope: "suite",
+    setup: async () => {
+      const module = await import("./server-kernel.js");
+      const create = module.createGatewayKernel;
+      const capture = vi
+        .spyOn(module, "createGatewayKernel")
+        .mockImplementation(async (...args) => {
+          kernel = await create(...args);
+          return kernel;
+        });
+      try {
+        harness = await startGatewayServerHarness();
+      } finally {
+        capture.mockRestore();
+      }
+    },
+    cleanup: async () => {
+      await harness?.close();
+    },
+  });
+
+  it("rejects retained host dispatch after acceptance", async ({ signal }) => {
+    await prepareGatewayReplyRuntimeForTest();
+    const context = kernel.gatewayRequestContext;
+    const runId = randomUUID();
+    const parentKey = `agent:main:parent:${runId}`;
+    const childKey = `agent:main:subagent:${runId}`;
+    const sessionId = `child-${runId}`;
+    const message = "synthetic input held across Gateway instance retirement";
+    await sessionAccessor.upsertSessionEntryCore(
+      { agentId: "main", sessionKey: childKey },
+      { sessionId, updatedAt: Date.now() },
+    );
+    const scope = {
+      agentId: "main",
+      sessionKey: childKey,
+      sessionId,
+      storePath: loadSessionEntry(childKey, { agentId: "main" }).storePath,
+    };
+    const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
+    const admission = prepareAgentRunAdmission({
+      cfg: context.getRuntimeConfig(),
+      operationalRunInstance: createOperationalRunInstanceRef(`parent-${runId}`),
+      facts: {
+        runId: `parent-${runId}`,
+        agentId: "main",
+        ingress: { kind: "system", boundary: "spawn-input-proof", state: "present" },
+      },
+    });
+    const releaseExecution = createDeferred();
+    const executionEntered = createDeferred<PreparedAgentRunDispatch>();
+    const release = () => releaseExecution.resolve();
+    signal.addEventListener("abort", release, { once: true });
+    let dispatch: Promise<unknown> | undefined;
+    let execution: Promise<void> | undefined;
+    let restoreExecution: (() => void) | undefined;
+    let restoreRuntimeRelease: (() => void) | undefined;
+    try {
+      const admitted = await admission.admit("embedded");
+      const guard = await withGatewayToolCallerIdentity(
+        createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: admitted,
+          agentId: "main",
+          sessionKey: parentKey,
+        }),
+        () => captureAgentToolSourceExecutionGuard(),
+      );
+      const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
+      const execute = executionModule.startAgentRunExecution;
+      const executionSpy = vi
+        .spyOn(executionModule, "startAgentRunExecution")
+        .mockImplementationOnce((params) => {
+          executionEntered.resolve(params.prepared);
+          execution = releaseExecution.promise.then(() => execute(params));
+          return execution;
+        });
+      restoreExecution = () => executionSpy.mockRestore();
+      dispatch = dispatchGatewayMethodInProcess(
+        "agent",
+        { message, sessionKey: childKey, idempotencyKey: runId },
+        {
+          forceSyntheticClient: true,
+          resolveGatewayContext: context.resolveGatewayContext,
+          sessionMutationCommitGuard: guard,
+        },
+      );
+      const accepted = await dispatch;
+      expect(accepted).toMatchObject({ runId, sessionKey: childKey, status: "accepted" });
+      const originalAck = structuredClone(accepted);
+      const prepared = await executionEntered.promise;
+      const pending = listSessionPendingInputs(scope);
+      expect(pending).toMatchObject({
+        total: 1,
+        items: [
+          {
+            runId,
+            state: "queued",
+            message: { idempotencyKey: `${runId}:user`, content: message },
+          },
+        ],
+      });
+      expect(prepared.userTurn.recorder?.getPendingInputMessage?.()).toEqual(
+        pending.items[0]?.message,
+      );
+      expect(prepared.activeGatewayWorkAdmission.isActive()).toBe(true);
+      expect(context.chatAbortControllers.get(runId)).toBe(prepared.activeRunAbort.entry);
+      expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
+      expect(() => guard()).not.toThrow();
+      const runtimeRelease = vi.spyOn(prepared.preparedModelRuntimeLease, "release");
+      restoreRuntimeRelease = () => runtimeRelease.mockRestore();
+
+      // Retire only the instance owner: parent authority and the child controller
+      // remain live, so neither full shutdown nor cancellation can explain refusal.
+      expect(kernel.gatewayInstanceRuntime.isAvailable()).toBe(true);
+      kernel.gatewayInstanceRuntime.close();
+      expect(kernel.gatewayInstanceRuntime.isAvailable()).toBe(false);
+      expect(() => guard()).not.toThrow();
+      expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
+      release();
+      await execution;
+
+      expect(accepted).toEqual(originalAck);
+      expect(context.dedupe.get(`agent:${runId}`)).toMatchObject({
+        ok: false,
+        payload: {
+          runId,
+          status: "error",
+          summary: "Gateway instance dispatch unavailable for agent turn",
+        },
+        error: {
+          code: "UNAVAILABLE",
+          message: "Gateway instance dispatch unavailable for agent turn",
+        },
+      });
+      expect(listSessionPendingInputs(scope)).toEqual({
+        total: 1,
+        items: [{ ...pending.items[0], state: "interrupted" }],
+      });
+      expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(transcript);
+      expect(prepared.userTurn.recorder?.getAdmissionReceipt()).toBeUndefined();
+      expect(agentCommandMock).not.toHaveBeenCalled();
+      expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
+      expect(context.chatAbortControllers.size).toBe(0);
+      expect(context.chatQueuedTurns.size).toBe(0);
+      expect(prepared.activeGatewayWorkAdmission.isActive()).toBe(false);
+      await prepared.activeGatewayWorkAdmission.released;
+      expect(runtimeRelease).toHaveBeenCalledOnce();
+      expect(() => guard()).not.toThrow();
+    } finally {
+      release();
+      await Promise.allSettled([dispatch, execution]);
+      restoreRuntimeRelease?.();
+      restoreExecution?.();
+      admission.close();
       signal.removeEventListener("abort", release);
     }
   });

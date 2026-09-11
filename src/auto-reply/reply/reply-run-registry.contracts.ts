@@ -55,6 +55,8 @@ export type ReplyBackendQueueMessageOptions = {
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
   /** Consumed by reply ownership and never forwarded to the active backend. */
   toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+  /** Composed into V2's final admission assertion after asynchronous preparation. */
+  assertCurrent?: () => void;
 };
 
 export type ReplyToolAuthorityRoute = Readonly<{
@@ -194,6 +196,8 @@ type ReplyMessageInjectionRejectionReason =
 export type ReplyMessageInjectionOutcome =
   | { status: "indeterminate"; errorMessage: string }
   | { status: "accepted"; result?: ReplyBackendQueueMessageResult }
+  /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
+  | { status: "failed"; error: Error }
   | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
 
 export type ReplyMessageInjectionAttempt = {
