@@ -11,6 +11,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 
 type HardlinkedDatabase = {
@@ -113,6 +114,29 @@ async function expectBackupRefused(state: OpenClawTestState, message: RegExp): P
 }
 
 describe.skipIf(process.platform === "win32")("backup generic SQLite hardlinks", () => {
+  it.runIf(process.platform === "linux").each(["singleton", "hardlink pair"] as const)(
+    "preserves a live writer's main-file POSIX lock when backing up a generic %s",
+    async (layout) => {
+      await withHardlinkedDatabase("alpha.sqlite", async ({ state, ownerPath, aliasPath }) => {
+        if (layout === "singleton") {
+          await fs.unlink(aliasPath);
+        }
+        const locksBefore = readMainDatabasePosixLocks(ownerPath);
+        expect(locksBefore).toEqual([
+          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+        ]);
+
+        const archive = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: false,
+        });
+
+        expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
+        expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
+      });
+    },
+  );
+
   it.each(["alpha.sqlite", "zeta.sqlite"] as const)(
     "preserves WAL-only schema and rows in both regular entries when %s owns the WAL",
     async (ownerName) => {

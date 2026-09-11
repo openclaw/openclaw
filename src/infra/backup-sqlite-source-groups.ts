@@ -1,4 +1,4 @@
-import { constants, type Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import { hasErrnoCode } from "./errno.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
@@ -137,21 +137,9 @@ export async function captureBackupSqliteSourceGroup(
   group: BackupSqliteSourceGroup,
   capture: () => Promise<unknown>,
 ): Promise<void> {
-  const handle = await fs.open(
-    group.sourcePath,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || !sameFileIdentity(group.sources[0].identity, opened)) {
-      throw new Error(`SQLite backup source identity changed: ${group.sourcePath}`);
-    }
-    await assertGroupBinding(group);
-    // SQLite owns the committed read view. WAL appends are allowed; changing
-    // pathname ownership is not. The descriptor pins the shared main inode.
-    await capture();
-    await assertGroupBinding(group);
-  } finally {
-    await handle.close();
-  }
+  await assertGroupBinding(group);
+  // SQLite owns source descriptors: closing a raw fs descriptor can release
+  // another connection's POSIX locks in this process. WAL appends remain valid.
+  await capture();
+  await assertGroupBinding(group);
 }
