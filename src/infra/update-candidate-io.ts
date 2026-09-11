@@ -3,10 +3,7 @@ import path from "node:path";
 import { sleep } from "../utils/sleep.js";
 import { formatDiskSpaceBytes } from "./disk-space.js";
 import { hasNodeErrorCode } from "./path-guards.js";
-import {
-  SQLITE_INSPECTION_BYTES_PER_SECOND,
-  SQLITE_INSPECTION_TIMEOUT_MS,
-} from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 
 export async function measureUpdateStateFiles(
   files: Iterable<string>,
@@ -68,12 +65,15 @@ export async function withUpdateCandidateIoBudget<T>(
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   params.signal?.throwIfAborted();
-  // Allow cold startup on slow hardware and repeated copy/compare/integrity passes.
+  // Each period without observable progress receives the shared SQLite IO allowance.
   const budgetFor = (bytes: number) =>
     Math.max(
       params.timeoutMs ?? 0,
-      SQLITE_INSPECTION_TIMEOUT_MS * 10 +
-        Math.ceil((12 * bytes) / SQLITE_INSPECTION_BYTES_PER_SECOND) * 1000,
+      resolveSqliteInspectionBudget(
+        `update state ${params.operation ?? "inspection"}`,
+        params.directory,
+        bytes,
+      ).timeoutMs,
     );
   let knownBytes = params.bytes;
   let budget = budgetFor(knownBytes);
