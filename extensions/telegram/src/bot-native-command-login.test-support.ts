@@ -214,7 +214,7 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
         await first.handler(
           createPrivateCommandContext({ match: "ux-catalog-fixture", userId: 200 }),
         );
-        const methods = deliveredButtons(vi.mocked(first.bot.api.sendMessage).mock.calls);
+        const methods = deliveredButtons(vi.mocked(first.bot.api).sendMessage.mock.calls);
         expect(methods).toHaveLength(2);
         expect(methods).toEqual(
           expect.arrayContaining([
@@ -236,7 +236,7 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
         );
         await vi.waitFor(() => expect(deliverReplies).toHaveBeenCalledOnce());
         await expect(deliverReplies.mock.results[0]?.value).resolves.toEqual({ delivered: true });
-        const buttons = deliveredButtons(vi.mocked(first.bot.api.sendMessage).mock.calls);
+        const buttons = deliveredButtons(vi.mocked(first.bot.api).sendMessage.mock.calls);
         expect(buttons.map((button) => button.text)).toEqual([
           "Show all Fixture models",
           "Keep current restrictions",
@@ -307,8 +307,8 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
         );
         expect(deliverReplies.mock.calls).toHaveLength(deliveriesBeforeRecovery + 1);
         const recoveryMessages = vi
-          .mocked(fresh.bot.api.sendMessage)
-          .mock.calls.slice(sendsBeforeRecovery);
+          .mocked(fresh.bot.api)
+          .sendMessage.mock.calls.slice(sendsBeforeRecovery);
         expect(recoveryMessages.map(([, text]) => text).join("\n")).toContain(
           "Choose model access using your current restrictions. You do not need to sign in again.",
         );
