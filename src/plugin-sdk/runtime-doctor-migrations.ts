@@ -430,6 +430,13 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   return {
     id: params.id,
     label: params.label,
+    collectBackupResources({ stateDir }) {
+      const filePath = params.resolvePath(stateDir);
+      return [
+        { path: filePath, kind: "file" },
+        { path: `${filePath}.migrated`, kind: "file" },
+      ];
+    },
     async detectLegacyState({ stateDir }) {
       const filePath = params.resolvePath(stateDir);
       const source = await readSource(filePath);

@@ -6,6 +6,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   archiveLegacyStateSource,
+  type PluginDoctorMigrationBackupResource,
   type PluginDoctorStateMigration,
   type PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
@@ -86,10 +87,6 @@ function decodeSessionKey(fileStem: string): string | null {
   }
 }
 
-function resolveLearningSessionKey(fileStem: string): string | null {
-  return decodeSessionKey(fileStem);
-}
-
 function legacySanitizeSessionKey(sessionKey: string): string {
   return sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
@@ -147,7 +144,21 @@ function listAgentIds(config: OpenClawConfig): string[] {
 function listCandidateStorePaths(params: {
   config: Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0]["config"];
   env: NodeJS.ProcessEnv;
+  requireLocalResources?: boolean;
 }): string[] {
+  const store = params.config.session?.store;
+  const configured =
+    typeof store === "string" ? [store] : isRecord(store) ? Object.values(store) : [];
+  if (
+    params.requireLocalResources &&
+    configured.some(
+      (value) => typeof value === "string" && /^[a-z][a-z0-9+.-]*:\/\//iu.test(value.trim()),
+    )
+  ) {
+    throw new Error(
+      "Microsoft Teams cannot inventory a remote session store for an isolated rehearsal.",
+    );
+  }
   const paths = new Set<string>();
   for (const agentId of listAgentIds(params.config)) {
     paths.add(resolveStorePath(params.config.session?.store, { agentId, env: params.env }));
@@ -155,8 +166,15 @@ function listCandidateStorePaths(params: {
   return [...paths];
 }
 
-function resolveStateFilePath(stateDir: string, filename: string): string {
-  return path.join(stateDir, filename);
+function stateFileBackupResources(
+  stateDir: string,
+  filename: string,
+): PluginDoctorMigrationBackupResource[] {
+  const filePath = path.join(stateDir, filename);
+  return [
+    { path: filePath, kind: "file" },
+    { path: `${filePath}.migrated`, kind: "file" },
+  ];
 }
 
 async function readLegacyJsonFile<T>(
@@ -260,8 +278,7 @@ async function listLegacyLearningFiles(
     }
     const fileStem = entry.name.slice(0, -suffix.length);
     const sessionKey =
-      resolveLearningSessionKey(fileStem) ??
-      resolveLegacySanitizedSessionKey(fileStem, knownSessionKeys);
+      decodeSessionKey(fileStem) ?? resolveLegacySanitizedSessionKey(fileStem, knownSessionKeys);
     const filePath = path.join(storePath, entry.name);
     try {
       const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
@@ -333,8 +350,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "msteams-conversations-json-to-plugin-state",
     label: "Microsoft Teams conversations",
+    collectBackupResources: ({ stateDir }) =>
+      stateFileBackupResources(stateDir, MSTEAMS_CONVERSATIONS_LEGACY_FILENAME),
     async detectLegacyState(params) {
-      const filePath = resolveStateFilePath(params.stateDir, MSTEAMS_CONVERSATIONS_LEGACY_FILENAME);
+      const filePath = path.join(params.stateDir, MSTEAMS_CONVERSATIONS_LEGACY_FILENAME);
       const state = await readLegacyJsonFile(filePath, parseLegacyConversationStore);
       if (!state || Object.keys(state.conversations).length === 0) {
         return null;
@@ -346,7 +365,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       };
     },
     async migrateLegacyState(params) {
-      const filePath = resolveStateFilePath(params.stateDir, MSTEAMS_CONVERSATIONS_LEGACY_FILENAME);
+      const filePath = path.join(params.stateDir, MSTEAMS_CONVERSATIONS_LEGACY_FILENAME);
       const state = await readLegacyJsonFile(filePath, parseLegacyConversationStore);
       if (!state) {
         return { changes: [], warnings: [] };
@@ -386,8 +405,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "msteams-polls-json-to-plugin-state",
     label: "Microsoft Teams polls",
+    collectBackupResources: ({ stateDir }) =>
+      stateFileBackupResources(stateDir, MSTEAMS_POLLS_LEGACY_FILENAME),
     async detectLegacyState(params) {
-      const filePath = resolveStateFilePath(params.stateDir, MSTEAMS_POLLS_LEGACY_FILENAME);
+      const filePath = path.join(params.stateDir, MSTEAMS_POLLS_LEGACY_FILENAME);
       const state = await readLegacyJsonFile(filePath, parseLegacyPollStore);
       if (!state || Object.keys(state.polls).length === 0) {
         return null;
@@ -399,7 +420,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       };
     },
     async migrateLegacyState(params) {
-      const filePath = resolveStateFilePath(params.stateDir, MSTEAMS_POLLS_LEGACY_FILENAME);
+      const filePath = path.join(params.stateDir, MSTEAMS_POLLS_LEGACY_FILENAME);
       const state = await readLegacyJsonFile(filePath, parseLegacyPollStore);
       if (!state) {
         return { changes: [], warnings: [] };
@@ -461,8 +482,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "msteams-sso-tokens-json-to-plugin-state",
     label: "Microsoft Teams SSO tokens",
+    collectBackupResources: ({ stateDir }) =>
+      stateFileBackupResources(stateDir, MSTEAMS_SSO_TOKENS_LEGACY_FILENAME),
     async detectLegacyState(params) {
-      const filePath = resolveStateFilePath(params.stateDir, MSTEAMS_SSO_TOKENS_LEGACY_FILENAME);
+      const filePath = path.join(params.stateDir, MSTEAMS_SSO_TOKENS_LEGACY_FILENAME);
       const state = await readLegacyJsonFile(filePath, (value) =>
         isMSTeamsSsoStoreData(value) ? value : null,
       );
@@ -477,7 +500,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
     async migrateLegacyState(params) {
       const warnings: string[] = [];
-      const filePath = resolveStateFilePath(params.stateDir, MSTEAMS_SSO_TOKENS_LEGACY_FILENAME);
+      const filePath = path.join(params.stateDir, MSTEAMS_SSO_TOKENS_LEGACY_FILENAME);
       const state = await readLegacyJsonFile(filePath, (value) =>
         isMSTeamsSsoStoreData(value) ? value : null,
       );
@@ -521,11 +544,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "msteams-delegated-token-json-to-plugin-state",
     label: "Microsoft Teams delegated OAuth token",
+    collectBackupResources: ({ stateDir }) =>
+      stateFileBackupResources(stateDir, MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME),
     async detectLegacyState(params) {
-      const filePath = resolveStateFilePath(
-        params.stateDir,
-        MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME,
-      );
+      const filePath = path.join(params.stateDir, MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME);
       try {
         const stat = await fs.stat(filePath);
         return stat.isFile()
@@ -542,10 +564,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      const filePath = resolveStateFilePath(
-        params.stateDir,
-        MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME,
-      );
+      const filePath = path.join(params.stateDir, MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME);
       let token: MSTeamsDelegatedTokens | null;
       try {
         token = normalizeMSTeamsDelegatedTokens(
@@ -610,6 +629,21 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "msteams-feedback-learnings-json-to-plugin-state",
     label: "Microsoft Teams feedback learnings",
+    async collectBackupResources(params) {
+      return await Promise.all(
+        listCandidateStorePaths(params).map(
+          async (storePath): Promise<PluginDoctorMigrationBackupResource> => {
+            const stat = await fs.stat(storePath).catch((error: unknown) => {
+              if (isRecord(error) && error.code === "ENOENT") {
+                return undefined;
+              }
+              throw error;
+            });
+            return { path: storePath, kind: stat?.isFile() ? "file" : "directory" };
+          },
+        ),
+      );
+    },
     async detectLegacyState(params) {
       const files = (
         await Promise.all(

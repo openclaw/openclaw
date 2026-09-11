@@ -453,6 +453,12 @@ export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-qmd-workspace-retired",
   label: "Memory Core retired QMD workspaces",
   doctorOnly: true,
+  async collectBackupResources(params) {
+    return (await collectRetiredQmdWorkspaceHomes(params.stateDir)).map((home) => ({
+      path: home,
+      kind: "directory" as const,
+    }));
+  },
   async detectLegacyState(params) {
     const homes = await collectRetiredQmdWorkspaceHomes(params.stateDir);
     if (homes.length === 0) {
@@ -489,6 +495,12 @@ export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
 export const qmdLocksStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-qmd-file-locks-to-sqlite-leases",
   label: "Memory Core retired QMD file locks",
+  async collectBackupResources(params) {
+    return (await collectRetiredQmdFileLocks(params.stateDir)).map((lockPath) => ({
+      path: lockPath,
+      kind: "file" as const,
+    }));
+  },
   async detectLegacyState(params) {
     const lockPaths = await collectRetiredQmdFileLocks(params.stateDir);
     if (lockPaths.length === 0) {

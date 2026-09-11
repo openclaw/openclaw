@@ -180,6 +180,13 @@ an incomplete recovery set. OpenClaw validates and deduplicates the returned
 inventory before capturing it. The hook is optional for existing plugins whose
 migration resources are already inside the captured roots.
 
+Admission of a copied-state rehearsal requires the hook on every selected
+migration. In that case the collector receives `requireLocalResources: true`:
+throw if any migration data is remote or cannot be listed. An empty list means
+there is no migration data to change, not that its location is unknown. The
+rehearsal checks that every declared data path remains within its private copy.
+This stricter inventory does not change ordinary backup behavior.
+
 Memory Core declares legacy external SQLite indexes and their archive targets.
 Voice Call declares its configured local store, including plugin-local SQLite
 and legacy call logs. Memory LanceDB declares local database directories; URI-backed

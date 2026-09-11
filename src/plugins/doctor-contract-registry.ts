@@ -1,7 +1,7 @@
 // Loads plugin doctor contracts from manifest-owned metadata.
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { shouldIncludeChannelSetupFeatureForConfig } from "../channels/plugins/bundled-setup-policy.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
@@ -415,46 +415,13 @@ export async function collectPluginDoctorMigrationBackupResources(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
   workspaceDir?: string;
+  requireDeclaredResources?: boolean;
 }): Promise<PluginDoctorMigrationBackupResource[]> {
   const entries = loadPluginDoctorStateMigrationEntries(
     resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
   );
-  const resources = new Map<string, PluginDoctorMigrationBackupResource>();
-  for (const { pluginId, migration } of entries) {
-    if (migration.collectBackupResources === undefined) {
-      continue;
-    }
-    const resolved: unknown = await migration.collectBackupResources({
-      config: params.config,
-      env: params.env,
-      stateDir: params.stateDir,
-    });
-    if (!Array.isArray(resolved)) {
-      throw new Error(`Invalid migration backup inventory from ${pluginId}/${migration.id}`);
-    }
-    const candidates: readonly unknown[] = resolved;
-    for (const resource of candidates) {
-      if (!isMigrationBackupResource(resource)) {
-        throw new Error(`Invalid migration backup resource from ${pluginId}/${migration.id}`);
-      }
-      const resourcePath = path.normalize(resource.path);
-      const previous = resources.get(resourcePath);
-      if (previous && previous.kind !== resource.kind) {
-        throw new Error(`Conflicting migration backup resource kinds for ${resourcePath}`);
-      }
-      resources.set(resourcePath, { path: resourcePath, kind: resource.kind });
-    }
-  }
-  return [...resources.values()].toSorted((left, right) => left.path.localeCompare(right.path));
-}
-
-function isMigrationBackupResource(value: unknown): value is PluginDoctorMigrationBackupResource {
-  return (
-    isRecord(value) &&
-    typeof value.path === "string" &&
-    path.isAbsolute(value.path) &&
-    (value.kind === "sqlite" || value.kind === "file" || value.kind === "directory")
-  );
+  const { collectPluginDoctorMigrationResources } = await import("./doctor-migration-resources.js");
+  return await collectPluginDoctorMigrationResources(entries, params);
 }
 
 function loadPluginDoctorStateMigrationEntries(

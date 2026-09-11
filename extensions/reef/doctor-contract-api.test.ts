@@ -134,6 +134,54 @@ function legacyConfig(): OpenClawConfig {
 }
 
 describe("Reef doctor contract", () => {
+  it("declares legacy files under the configured Reef state root", async () => {
+    const stateDir = path.resolve("/tmp/openclaw-capture-state");
+    const reefDir = path.join(stateDir, "selected-reef");
+    const resources = new Map(
+      await Promise.all(
+        stateMigrations.map(
+          async (migration) =>
+            [
+              migration.id,
+              await migration.collectBackupResources?.({
+                config: { channels: { reef: { stateDir: reefDir } } },
+                env: { OPENCLAW_STATE_DIR: stateDir },
+                stateDir,
+              }),
+            ] as const,
+        ),
+      ),
+    );
+    expect(resources).toEqual(
+      new Map([
+        [
+          "reef-keys-json-to-plugin-state",
+          [{ path: path.join(reefDir, "keys.json"), kind: "file" }],
+        ],
+        [
+          "reef-registration-json-to-plugin-state",
+          [
+            { path: path.join(reefDir, "identity.json"), kind: "file" },
+            { path: path.join(reefDir, "setup-session.json"), kind: "file" },
+          ],
+        ],
+        [
+          "reef-audit-jsonl-to-plugin-state",
+          [{ path: path.join(reefDir, "audit.jsonl"), kind: "file" }],
+        ],
+        [
+          "reef-runtime-files-to-plugin-state",
+          [
+            { path: path.join(reefDir, "replay.jsonl"), kind: "file" },
+            { path: path.join(reefDir, "reviews.json"), kind: "file" },
+            { path: path.join(reefDir, "delivered.json"), kind: "file" },
+          ],
+        ],
+        ["reef-config-trust-to-plugin-state", []],
+      ]),
+    );
+  });
+
   let stateDir = "";
   let env: NodeJS.ProcessEnv;
 

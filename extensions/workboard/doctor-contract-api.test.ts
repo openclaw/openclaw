@@ -27,6 +27,19 @@ function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigration
 }
 
 describe("workboard doctor contract", () => {
+  it("declares its destination database before migration", async () => {
+    const stateDir = path.resolve("/tmp/openclaw-workboard-capture");
+    expect(
+      await stateMigrations[0]?.collectBackupResources?.({
+        config: {},
+        env: { OPENCLAW_STATE_DIR: path.join(stateDir, "unselected") },
+        stateDir,
+      }),
+    ).toEqual([
+      { path: path.join(stateDir, "plugins/workboard/workboard.sqlite"), kind: "sqlite" },
+    ]);
+  });
+
   it("migrates shipped .28 plugin-state workboard data into sqlite", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-doctor-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

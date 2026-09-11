@@ -22,6 +22,7 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { pinDirectory, requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { copyFileHandle, sameFileMutationFingerprint } from "./file-descriptor.js";
 import { root as safeRoot } from "./fs-safe.js";
+import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
@@ -49,20 +50,6 @@ function within(candidate: string, root: string): boolean {
     relative === "" ||
     (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
   );
-}
-
-async function isSqlite(pathname: string): Promise<boolean> {
-  if (pathname.endsWith(".sqlite")) {
-    return true;
-  }
-  const handle = await fs.open(pathname, "r");
-  try {
-    const header = Buffer.alloc(16);
-    const result = await handle.read(header, 0, 16, 0);
-    return result.bytesRead === 16 && header.toString() === "SQLite format 3\0";
-  } finally {
-    await handle.close();
-  }
 }
 
 function included(
@@ -391,7 +378,7 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
       const sqliteOwner =
         declaredKinds.get(databasePath) === "sqlite" ||
         databasePath.endsWith(".sqlite") ||
-        (database?.isFile() && (await isSqlite(databasePath)));
+        (database?.isFile() && (await isSqliteSnapshotFile(databasePath)));
       if (sqliteOwner) {
         if (!database) {
           throw new Error(`SQLite database has an orphaned sidecar: ${pathname}`);
@@ -400,7 +387,8 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
       }
     }
     const sqlite =
-      declaredKind === "sqlite" || (declaredKind !== "file" && (await isSqlite(pathname)));
+      declaredKind === "sqlite" ||
+      (declaredKind !== "file" && (await isSqliteSnapshotFile(pathname)));
     if (
       !sqlite &&
       !rawFiles.has(pathname) &&

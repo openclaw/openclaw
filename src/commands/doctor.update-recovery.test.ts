@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -31,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   activeRuns: vi.fn(),
   gateway: vi.fn(),
   current: vi.fn(),
+  enterMaintenance: vi.fn(),
 }));
 
 vi.mock("../infra/update-run-driver.js", async (importOriginal) => ({
@@ -60,11 +62,14 @@ vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   resolveOpenClawPackageRoot: async () => path.join(process.env.OPENCLAW_STATE_DIR!, "install"),
 }));
 vi.mock("./doctor-maintenance.js", () => ({
-  beginDoctorMaintenance: async () => ({
-    assertCurrent: mocks.current,
-    closeStores: mocks.closeStores,
-    release: mocks.release,
-  }),
+  beginDoctorMaintenance: async () => {
+    await mocks.enterMaintenance();
+    return {
+      assertCurrent: mocks.current,
+      closeStores: mocks.closeStores,
+      release: mocks.release,
+    };
+  },
 }));
 vi.mock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: mocks.flow }));
 
@@ -142,6 +147,223 @@ describe("update Doctor state recovery", () => {
       resultPath = undefined;
     }
     await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  async function legacyRehearsal(version: string) {
+    const parent = readUpdateRunDriver(process.ppid);
+    assert(parent, "The tagged rehearsal fixture requires an observable parent");
+    const run = updateRunLedger.recordUpdateRunPhase(runId, "validating", {
+      before: { version },
+      origin: { driver: parent },
+    });
+    updateRunLedger.recordUpdateRunStep(runId, {
+      step: "openclaw doctor",
+      status: "completed",
+    });
+    closeOpenClawStateDatabaseForTest();
+    const copyPath = path.join(directory, "openclaw-update-canary-ABC123");
+    await fs.mkdir(copyPath, { mode: 0o700 });
+    const root = await fs.realpath(copyPath);
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace, { mode: 0o700 });
+    await fs.cp(path.join(directory, "state"), path.join(root, "state"), { recursive: true });
+    configPath = path.join(root, "openclaw.json");
+    const config = {
+      agents: {
+        defaults: { workspace, cwd: workspace, heartbeat: { every: "0m" } },
+        entries: {
+          main: {
+            workspace: path.join(workspace, "main"),
+            cwd: path.join(workspace, "main"),
+            agentDir: path.join(root, "agents", "main", "agent"),
+            heartbeat: { every: "0m" },
+          },
+        },
+      },
+      logging: { file: path.join(root, "canary.log") },
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        port: 19876,
+        auth: { mode: "token", token: "00000000-0000-4000-8000-000000000001" },
+        tls: { enabled: false },
+        tailscale: { mode: "off" },
+        controlUi: { enabled: false },
+      },
+      cron: { enabled: false, triggers: { enabled: false } },
+      hooks: { enabled: false, internal: { enabled: false } },
+      transcripts: { enabled: false, autoStart: [] },
+      discovery: { mdns: { mode: "off" } },
+    };
+    await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+    const env = {
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: root,
+      TMPDIR: root,
+      TMP: root,
+      TEMP: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_WORKSPACE_DIR: workspace,
+      XDG_CONFIG_HOME: path.join(root, "config"),
+      XDG_CACHE_HOME: path.join(root, "cache"),
+      XDG_DATA_HOME: path.join(root, "data"),
+      XDG_STATE_HOME: path.join(root, "state"),
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+      OPENCLAW_NO_AUTO_UPDATE: "1",
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+      OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART: "1",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+    };
+    for (const [key, value] of Object.entries(env)) {
+      vi.stubEnv(key, value);
+    }
+    for (const key of [
+      ...SUPERVISOR_HINT_ENV_VARS,
+      "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META",
+      "OPENCLAW_UPDATE_RUN_HANDOFF",
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      "OPENCLAW_GATEWAY_SERVICE_PID",
+      "OPENCLAW_GATEWAY_PORT",
+      "OPENCLAW_COMPATIBILITY_HOST_VERSION",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_PROFILE",
+      "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH",
+      "OPENCLAW_TEST_MINIMAL_GATEWAY",
+      "OPENCLAW_AGENT_DIR",
+      "PI_CODING_AGENT_DIR",
+      "OPENCLAW_OAUTH_DIR",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
+    mocks.activeRuns.mockResolvedValue([
+      {
+        ...run,
+        steps: run.steps.filter((step) => step.step !== "openclaw doctor"),
+      },
+    ]);
+    mocks.driver.mockReturnValue("alive");
+    return { root, config };
+  }
+
+  it.each(["2026.9.3", "2026.9.4"])(
+    "admits the shipped %s rehearsal copy and reports its typed admission",
+    async (version) => {
+      const { root } = await legacyRehearsal(version);
+      const liveConfig = await fs.readFile(path.join(directory, "openclaw.json"));
+      await doctorCommand(runtime, { repair: true, nonInteractive: true });
+      expect(mocks.flow).toHaveBeenCalledOnce();
+      expect(runtime.log).toHaveBeenCalledWith(
+        JSON.stringify({
+          kind: "legacy-driver-rehearsal",
+          driverStyle: "2026.9.3",
+          message:
+            "legacy driver rehearsal admitted: 2026.9.3-style invocation, disposable copy verified",
+          stateDir: root,
+        }),
+      );
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Warning: legacy driver rehearsal admitted"),
+      );
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(mocks.restore).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(directory, "openclaw.json"))).toEqual(liveConfig);
+    },
+  );
+
+  it("keeps an identity-bearing rehearsal invocation on strict driver admission", async () => {
+    await legacyRehearsal("2026.9.3");
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", runId);
+    await expect(doctorCommand(runtime, { repair: true })).rejects.toThrow(
+      "Doctor cannot identify one admitted update run with an active Doctor step",
+    );
+    expect(mocks.flow).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("refuses the legacy marker against live state without rehearsal facts", async () => {
+    mocks.activeRuns.mockResolvedValue([]);
+    await expect(doctorCommand(runtime, { repair: true })).rejects.toThrow(
+      "Doctor cannot identify one admitted update run with an active Doctor step",
+    );
+    expect(mocks.flow).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(await fs.readFile(configPath, "utf8")).toBe("original config");
+  });
+
+  it.each(["config symlink", "database hardlink", "live home", "foreign parent"] as const)(
+    "refuses a rehearsal with %s before running Doctor",
+    async (fault) => {
+      const { root } = await legacyRehearsal("2026.9.3");
+      if (fault === "config symlink") {
+        const outside = path.join(directory, "outside-config.json");
+        await fs.rename(configPath, outside);
+        await fs.symlink(outside, configPath);
+      } else if (fault === "database hardlink") {
+        await fs.link(
+          path.join(root, "state", "openclaw.sqlite"),
+          path.join(directory, "live.sqlite"),
+        );
+      } else if (fault === "live home") {
+        vi.stubEnv("HOME", directory);
+      } else {
+        mocks.activeRuns.mockResolvedValue([]);
+      }
+      const liveConfig = await fs.readFile(path.join(directory, "openclaw.json"));
+      await expect(doctorCommand(runtime, { repair: true })).rejects.toThrow(
+        "Legacy update rehearsal was refused",
+      );
+      expect(mocks.flow).not.toHaveBeenCalled();
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(mocks.restore).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(directory, "openclaw.json"))).toEqual(liveConfig);
+    },
+  );
+
+  it.each(["-wal", "-shm", "-journal"])(
+    "refuses a linked SQLite companion substituted during admission: %s",
+    async (suffix) => {
+      const { root } = await legacyRehearsal("2026.9.3");
+      const outside = path.join(directory, "live-companion");
+      await fs.writeFile(outside, "live data");
+      mocks.enterMaintenance.mockImplementation(async () => {
+        closeOpenClawStateDatabaseForTest();
+        const companion = `${path.join(root, "state", "openclaw.sqlite")}${suffix}`;
+        await fs.rm(companion, { force: true });
+        await fs.symlink(outside, companion);
+      });
+      await expect(doctorCommand(runtime, { repair: true })).rejects.toThrow(
+        "copied data has unsafe ownership or links",
+      );
+      expect(mocks.flow).not.toHaveBeenCalled();
+      expect(await fs.readFile(outside, "utf8")).toBe("live data");
+    },
+  );
+
+  it("refuses an OAuth directory outside the rehearsal copy", async () => {
+    await legacyRehearsal("2026.9.3");
+    const outside = path.join(directory, "live-oauth");
+    await fs.mkdir(outside);
+    vi.stubEnv("OPENCLAW_OAUTH_DIR", outside);
+    await expect(doctorCommand(runtime, { repair: true })).rejects.toThrow(
+      "migration data escapes the copied state",
+    );
+    expect(mocks.flow).not.toHaveBeenCalled();
   });
 
   it.each(["declared", "undeclared", "wrong parent"] as const)(

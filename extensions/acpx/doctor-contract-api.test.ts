@@ -123,6 +123,44 @@ describe("acpx doctor state migration", () => {
     };
   }
 
+  it("inventories legacy runtime sources and session rekey data without opening stores", async () => {
+    const workspace = path.join(stateDir, "workspace");
+    const sessionRoot = path.join(stateDir, "custom-acpx");
+    const params = {
+      ...migrationParams(),
+      serviceWorkspaceDir: workspace,
+      requireLocalResources: true,
+      config: { plugins: { entries: { acpx: { config: { stateDir: sessionRoot } } } } },
+    };
+    const before = await fs.readdir(stateDir, { recursive: true });
+    const runtime = expectDefined(stateMigrations[0], "ACPX runtime migration");
+    const resources = expectDefined(
+      await runtime.collectBackupResources?.(params),
+      "ACPX runtime inventory",
+    );
+    for (const source of [
+      path.join(stateDir, ACPX_LEGACY_GATEWAY_INSTANCE_FILE),
+      path.join(stateDir, "acpx", ACPX_LEGACY_PROCESS_LEASE_FILE),
+    ]) {
+      expect(
+        resources.some(
+          (resource) =>
+            resource.path === source ||
+            (resource.kind === "directory" && source.startsWith(`${resource.path}${path.sep}`)),
+        ),
+      ).toBe(true);
+    }
+    const sessions = expectDefined(
+      stateMigrations.find((entry) => entry.id === "acpx-session-owner-resources"),
+      "ACPX session owner migration",
+    );
+    expect(await sessions.collectBackupResources?.(params)).toContainEqual({
+      path: path.join(sessionRoot, "sessions"),
+      kind: "directory",
+    });
+    expect(await fs.readdir(stateDir, { recursive: true })).toEqual(before);
+  });
+
   it.each(["missing", "empty"])(
     "does not load runtime helpers or inspect claims when the legacy directory is %s",
     async (directoryState) => {

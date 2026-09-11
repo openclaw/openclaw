@@ -127,7 +127,13 @@ export type PluginDoctorStateMigration = {
   phase?: "after-session-repair";
   /** Read-only recovery inventory. Never open or migrate a writable store here. */
   collectBackupResources?: (
-    params: Pick<PluginDoctorStateMigrationInput, "config" | "env" | "stateDir">,
+    params: Pick<
+      PluginDoctorStateMigrationInput,
+      "config" | "env" | "stateDir" | "serviceWorkspaceDir"
+    > & {
+      /** Rehearsal admission must reject remote or otherwise unlisted migration data. */
+      requireLocalResources?: boolean;
+    },
   ) =>
     | readonly PluginDoctorMigrationBackupResource[]
     | Promise<readonly PluginDoctorMigrationBackupResource[]>;

@@ -180,6 +180,9 @@ export function createMemoryLanceDbStateMigrations(
     PluginDoctorStateMigration["collectBackupResources"]
   > = (params) => {
     const dbPath = resolveConfiguredDbPath(params.config, params.env, pluginRoot);
+    if (params.requireLocalResources && dbPath.includes("://")) {
+      throw new Error("Remote Memory LanceDB storage cannot be isolated in a rehearsal copy");
+    }
     return dbPath.includes("://") ? [] : [{ path: dbPath, kind: "directory" }];
   };
   return [

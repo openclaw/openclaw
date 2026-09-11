@@ -103,6 +103,16 @@ async function seedLegacyRow(stateDir: string, accountId: string, webhookEventId
 }
 
 describe("LINE doctor state migration", () => {
+  it("declares that spool migration only mutates host-owned database state", async () => {
+    expect(
+      await migration.collectBackupResources?.({
+        config: {},
+        env: {},
+        stateDir: path.resolve("/tmp/openclaw-line-capture"),
+      }),
+    ).toEqual([]);
+  });
+
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
   });

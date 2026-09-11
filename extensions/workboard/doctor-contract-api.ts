@@ -174,6 +174,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "workboard-28-kv-to-sqlite",
     label: "Workboard .28 plugin-state KV",
+    async collectBackupResources(params) {
+      const { resolveWorkboardSqlitePath } = await import("./src/sqlite-store.js");
+      return [{ path: resolveWorkboardSqlitePath(migrationEnv(params)), kind: "sqlite" }];
+    },
     async detectLegacyState(params) {
       const env = migrationEnv(params);
       const cards = await openLegacyStore<PersistedWorkboardCard>({

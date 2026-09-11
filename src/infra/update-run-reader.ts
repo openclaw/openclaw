@@ -56,6 +56,16 @@ export async function getUpdateRunAsync(
 
 type ListInput = { limit?: number; active?: boolean; reason?: string };
 
+/** A capped active-owner listing cannot establish complete recovery ownership. */
+export function requireCompleteActiveUpdateRuns(runs: UpdateRunRecord[]): UpdateRunRecord[] {
+  if (runs.length >= 100) {
+    throw new Error(
+      "Doctor cannot verify every active update owner; resolve update history first.",
+    );
+  }
+  return runs;
+}
+
 function readRuns(db: DatabaseSync, input: ListInput): UpdateRunRecord[] {
   if (!tableExists(db, "update_runs")) {
     return [];

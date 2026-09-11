@@ -515,6 +515,31 @@ describe("memory-core doctor dreaming migration", () => {
     };
   }
 
+  it.each([
+    { name: "host events", migration: hostEventsMigration, filename: "events.jsonl" },
+    { name: "dreaming", migration: dreamingStateMigration, filename: "daily-ingestion.json" },
+  ])(
+    "declares $name source and archive ownership without mutation",
+    async ({ migration, filename }) => {
+      workspaceDir = await fs.realpath(workspaceDir);
+      const directory = path.join(workspaceDir, "memory", ".dreams");
+      const source = path.join(directory, filename);
+      const archive = `${source}.migrated`;
+      await fs.writeFile(source, "{}\n");
+      await fs.writeFile(archive, "retained historical bytes\n");
+      const before = await fs.readdir(directory);
+      expect(await migration().collectBackupResources?.(migrationParams())).toEqual([
+        { path: directory, kind: "directory" },
+      ]);
+      expect(await fs.readdir(directory)).toEqual(before);
+      expect(await fs.readFile(source, "utf8")).toBe("{}\n");
+      expect(await fs.readFile(archive, "utf8")).toBe("retained historical bytes\n");
+      await fs.rm(source);
+      await fs.rm(archive);
+      expect(await migration().collectBackupResources?.(migrationParams())).toEqual([]);
+    },
+  );
+
   it("treats a missing legacy host event directory as no state", async () => {
     await fs.rm(path.join(workspaceDir, "memory"), { recursive: true });
     const migration = hostEventsMigration();
@@ -2854,6 +2879,9 @@ describe("memory-core doctor dreaming migration", () => {
 
     const migration = qmdWorkspaceMigration();
     expect(migration.doctorOnly).toBe(true);
+    expect(await migration.collectBackupResources?.(migrationParams())).toEqual([
+      { path: qmdHome, kind: "directory" },
+    ]);
     await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
       preview: [
         `- Retired Memory Core QMD workspace: ${qmdHome} -> remove derived index, config, cache, and session-export artifacts`,
@@ -2900,6 +2928,10 @@ describe("memory-core doctor dreaming migration", () => {
     }
 
     const migration = qmdFileLockMigration();
+    expect(await migration.collectBackupResources?.(migrationParams())).toEqual([
+      { path: globalLockPath, kind: "file" },
+      { path: agentLockPath, kind: "file" },
+    ]);
     await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
       preview: [
         `- Retired Memory Core QMD file lock: ${globalLockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,

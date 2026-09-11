@@ -25,10 +25,14 @@ export function resolveLegacyCanvasDocumentsDir(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
+  requireLocalResources?: boolean;
 }): string | null {
   const configuredRoot = readString(readLegacyCanvasRoot(params.config))?.trim();
   if (!configuredRoot) {
     return null;
+  }
+  if (params.requireLocalResources && /^[a-z][a-z0-9+.-]*:\/\//iu.test(configuredRoot)) {
+    throw new Error("Canvas cannot inventory a remote document root for an isolated rehearsal.");
   }
   const legacyDir = path.join(
     path.resolve(resolveUserPath(configuredRoot, params.env)),

@@ -44,6 +44,15 @@ describe("nostr doctor state migration", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("declares the legacy state directory before migration", async () => {
+    for (const migration of stateMigrations) {
+      expect(await migration.collectBackupResources?.({ config: {}, env, stateDir })).toEqual([
+        { path: path.join(stateDir, "nostr"), kind: "directory" },
+      ]);
+    }
+    await expect(fs.stat(path.join(stateDir, "nostr"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("imports legacy bus and profile state into plugin state", async () => {
     const nostrDir = path.join(stateDir, "nostr");
     const busPath = path.join(nostrDir, "bus-state-main.json");

@@ -159,6 +159,12 @@ async function migrateSource(source: LegacySource): Promise<number> {
 export const dreamingStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-dreams-json-to-sqlite",
   label: "Memory Core dreaming state",
+  async collectBackupResources({ config, env }) {
+    const sources = await collectLegacySources(config, env);
+    return [...new Set(sources.map(({ filePath }) => path.dirname(filePath)))]
+      .toSorted()
+      .map((directory) => ({ path: directory, kind: "directory" as const }));
+  },
   async detectLegacyState(params) {
     configureMemoryCoreDreamingState(params.context.openPluginStateKeyedStore);
     const sources = await collectLegacySources(params.config, params.env);

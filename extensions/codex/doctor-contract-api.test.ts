@@ -141,6 +141,31 @@ afterEach(() => {
 });
 
 describe("codex doctor contract", () => {
+  it("declares binding sidecars before migration without changing them", async () => {
+    const fixture = await createBindingMigrationFixture({
+      name: "capture-binding",
+      threadId: "thread-capture",
+      storeRoot: "fixed",
+    });
+    try {
+      const before = await fs.readFile(fixture.sidecarPath);
+      const params = {
+        ...fixture.params,
+        config: { session: { store: fixture.storePath } },
+      };
+      expect(await fixture.migration.collectBackupResources?.(params)).toEqual([
+        { path: await fs.realpath(fixture.sidecarPath), kind: "file" },
+      ]);
+      const orphaned = stateMigrations.find(
+        (migration) => migration.id === "codex-app-server-orphaned-session-bindings",
+      );
+      expect(await orphaned?.collectBackupResources?.(params)).toEqual([]);
+      expect(await fs.readFile(fixture.sidecarPath)).toEqual(before);
+    } finally {
+      await removeCodexDoctorFixture(fixture.stateDir);
+    }
+  });
+
   it("reports the retired dynamic tools profile config key", () => {
     expect(
       legacyConfigRules[0]?.match({

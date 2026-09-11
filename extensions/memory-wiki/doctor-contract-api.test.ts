@@ -74,6 +74,26 @@ function migrationParams(params: { stateDir: string; vaultRoot: string; agentIds
 }
 
 describe("memory-wiki doctor source sync migration", () => {
+  it("declares migration files in the configured vault without creating them", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-capture-");
+    const vaultRoot = path.join(stateDir, "selected-vault");
+    const params = migrationParams({ stateDir, vaultRoot });
+    const resources = await Promise.all(
+      stateMigrations.map((migration) =>
+        Promise.resolve(migration.collectBackupResources?.(params)),
+      ),
+    );
+    expect(resources).toEqual([
+      [
+        { path: path.join(vaultRoot, ".openclaw-wiki/cache/agent-digest.json"), kind: "file" },
+        { path: path.join(vaultRoot, ".openclaw-wiki/cache/claims.jsonl"), kind: "file" },
+      ],
+      [{ path: path.join(vaultRoot, ".openclaw-wiki/source-sync.json"), kind: "file" }],
+      [{ path: path.join(vaultRoot, ".openclaw-wiki/import-runs"), kind: "directory" }],
+    ]);
+    await expect(fs.stat(vaultRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   beforeEach(() => {
     resetPluginStateStoreForTests();
   });

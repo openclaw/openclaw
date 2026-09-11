@@ -26,6 +26,15 @@ export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];
 
+export function hasActiveUpdateDoctorStep(
+  run: UpdateRunRecord | undefined,
+): run is UpdateRunRecord {
+  return (
+    run?.status === "running" &&
+    run.steps.some((step) => step.step === "openclaw doctor" && step.status === "in_progress")
+  );
+}
+
 export type FinishUpdateRunResult = {
   status: Exclude<UpdateRunRecord["status"], "running">;
   reason?: string;

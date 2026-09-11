@@ -24,7 +24,7 @@ import {
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "../infra/update-run-driver.js";
-import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { hasActiveUpdateDoctorStep, type UpdateRunRecord } from "../infra/update-run-record.js";
 import type { UpdateRecoveryFence } from "../infra/update-run-recovery.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import type { beginDoctorMaintenance } from "./doctor-maintenance.js";
@@ -34,6 +34,7 @@ type DoctorRecoveryScope = {
   runtime: RuntimeEnv;
   prepared: boolean;
   protected: boolean;
+  rehearsal?: boolean;
   storesClosed?: boolean;
   backup?: UpdateRecoveryBackupRef;
   backupRunId?: string;
@@ -320,21 +321,9 @@ async function recordRestoredDoctorConfig(): Promise<void> {
 }
 
 async function activeUpdateRuns() {
-  const { listUpdateRunsAsync } = await import("../infra/update-run-reader.js");
-  const runs = await listUpdateRunsAsync({ active: true, limit: 100 });
-  if (runs.length === 100) {
-    throw new Error(
-      "Doctor cannot verify every active update owner; resolve update history first.",
-    );
-  }
-  return runs;
-}
-
-function hasActiveDoctorStep(run: UpdateRunRecord | undefined): run is UpdateRunRecord {
-  return (
-    run?.status === "running" &&
-    run.steps.some((step) => step.step === "openclaw doctor" && step.status === "in_progress")
-  );
+  const { listUpdateRunsAsync, requireCompleteActiveUpdateRuns } =
+    await import("../infra/update-run-reader.js");
+  return requireCompleteActiveUpdateRuns(await listUpdateRunsAsync({ active: true, limit: 100 }));
 }
 
 function assertRecoveryDriversExited(drivers: readonly UpdateRunDriver[]): void {
@@ -408,6 +397,16 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
       );
     }
     return;
+  }
+  if (updating && !marked && process.env[UPDATE_RUN_ID_ENV] === undefined) {
+    const { prepareLegacyDoctorRehearsal } = await import("./doctor-update-rehearsal.js");
+    const rehearsal = await prepareLegacyDoctorRehearsal(scope.runtime);
+    if (rehearsal) {
+      scope.maintenance = rehearsal.maintenance;
+      scope.assertRecoveryClaim = rehearsal.assertCurrent;
+      scope.rehearsal = true;
+      return;
+    }
   }
   if (updating) {
     // A backup cannot supply publication metadata required by the old driver's live reader.
@@ -519,7 +518,7 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
     const inheritedRunId = process.env[UPDATE_RUN_ID_ENV]?.trim();
     // Shipped 9.2 records this step before spawning Doctor but has no driver identities.
     const matchesDoctor = (run: UpdateRunRecord) =>
-      hasActiveDoctorStep(run) && (!inheritedRunId || run.runId === inheritedRunId);
+      hasActiveUpdateDoctorStep(run) && (!inheritedRunId || run.runId === inheritedRunId);
     const candidates = (await activeUpdateRuns()).filter(matchesDoctor);
     const run = candidates[0];
     if (!run || candidates.length !== 1) {
@@ -576,13 +575,13 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
   scope.protected = true;
 }
 
-export function hasVerifiedDoctorUpdateRecovery(): boolean {
+export function getDoctorUpdateRecoveryMode(): "capture" | "legacy-rehearsal" | undefined {
   const scope = doctorRecovery.getStore();
-  if (!scope?.protected) {
-    return false;
+  if (!scope || (!scope.protected && !scope.rehearsal)) {
+    return undefined;
   }
   assertDoctorRecoveryCurrent(scope);
-  return true;
+  return scope.rehearsal ? "legacy-rehearsal" : "capture";
 }
 
 /** Process exit must unwind the recovery owner before terminating the Doctor child. */

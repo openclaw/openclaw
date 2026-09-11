@@ -22,6 +22,23 @@ describe("memory-lancedb doctor migration", () => {
     prefix: "openclaw-memory-doctor-",
   });
 
+  test("refuses remote migration data when rehearsal requires a local inventory", async () => {
+    const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
+    const params = {
+      config: {
+        plugins: {
+          entries: { "memory-lancedb": { config: { dbPath: "s3://synthetic-memory-fixture" } } },
+        },
+      },
+      env: {},
+      stateDir: getTmpDir(),
+    };
+    expect(migration.collectBackupResources?.(params)).toEqual([]);
+    expect(() =>
+      migration.collectBackupResources?.({ ...params, requireLocalResources: true }),
+    ).toThrow("Remote Memory LanceDB storage cannot be isolated in a rehearsal copy");
+  });
+
   test("assigns legacy shared rows to the configured default agent once", async () => {
     const connection = await lancedb.connect(getDbPath());
     const table = await connection.createTable("memories", [

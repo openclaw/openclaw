@@ -35,7 +35,7 @@ function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-doctor-contract-state-migrations", tempDirs);
 }
 
-function installMigrationBackupResources(resources: unknown): void {
+function installMigrationBackupResources(resources: unknown, declared = true): void {
   const pluginRoot = makeTempDir();
   fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n");
   mocks.createJiti.mockImplementation(() => () => ({
@@ -43,7 +43,7 @@ function installMigrationBackupResources(resources: unknown): void {
       {
         id: "legacy-index",
         label: "Legacy index",
-        collectBackupResources: () => resources,
+        ...(declared ? { collectBackupResources: () => resources } : {}),
         detectLegacyState: () => {
           throw new Error("backup inventory must not detect or migrate state");
         },
@@ -118,6 +118,30 @@ describe("doctor-contract-registry state migrations", () => {
         stateDir: "/state",
       }),
     ).toEqual([{ path: path.normalize("/external/index.db"), kind: "sqlite" }]);
+  });
+
+  it("requires a declaration before admitting a migration into disposable state", async () => {
+    installMigrationBackupResources([], false);
+    await expect(
+      collectPluginDoctorMigrationBackupResources({
+        config: {},
+        env: {},
+        stateDir: "/state",
+        requireDeclaredResources: true,
+      }),
+    ).rejects.toThrow("does not declare its migration data resources");
+  });
+
+  it("accepts a declared empty inventory for a migration with no local data", async () => {
+    installMigrationBackupResources([]);
+    await expect(
+      collectPluginDoctorMigrationBackupResources({
+        config: {},
+        env: {},
+        stateDir: "/state",
+        requireDeclaredResources: true,
+      }),
+    ).resolves.toEqual([]);
   });
 
   it.each([

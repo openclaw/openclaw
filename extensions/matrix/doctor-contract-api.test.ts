@@ -97,6 +97,59 @@ describe("matrix doctor contract state migrations", () => {
     resetPluginStateStoreForTests();
   });
 
+  it("inventories every migration's local sources and account database without opening stores", async () => {
+    const stateDir = tempDirs.make("openclaw-matrix-inventory-");
+    const storageRoot = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
+      "main",
+      "example__user",
+      "0123456789abcdef",
+    );
+    const credentialRoot = path.join(stateDir, "credentials", "matrix");
+    await fsPromises.mkdir(path.join(storageRoot, "state"), { recursive: true });
+    await fsPromises.mkdir(credentialRoot, { recursive: true });
+    for (const filename of [
+      "storage-meta.json",
+      "bot-storage.json",
+      "recovery-key.json",
+      "legacy-crypto-migration.json",
+      "crypto-idb-snapshot.json",
+      "inbound-dedupe.json",
+    ]) {
+      await fsPromises.writeFile(path.join(storageRoot, filename), "retained");
+    }
+    await fsPromises.writeFile(
+      path.join(storageRoot, "state", "openclaw.sqlite"),
+      "unopened database",
+    );
+    await fsPromises.writeFile(path.join(credentialRoot, "credentials.json"), "retained");
+    const before = await fsPromises.readdir(stateDir, { recursive: true });
+    for (const entry of stateMigrations) {
+      const resources = await entry.collectBackupResources?.({
+        ...createMigrationParams(stateDir),
+        requireLocalResources: true,
+      });
+      expect(resources, entry.id).toBeDefined();
+      const root =
+        entry.id === "matrix-credentials-json-to-plugin-state" ? credentialRoot : storageRoot;
+      expect(
+        resources?.some(
+          (resource) =>
+            resource.path === root ||
+            (resource.kind === "directory" && root.startsWith(`${resource.path}${path.sep}`)) ||
+            resource.path.startsWith(`${root}${path.sep}`),
+        ),
+        entry.id,
+      ).toBe(true);
+    }
+    expect(await fsPromises.readdir(stateDir, { recursive: true })).toEqual(before);
+    expect(
+      await fsPromises.readFile(path.join(storageRoot, "state", "openclaw.sqlite"), "utf8"),
+    ).toBe("unopened database");
+  });
+
   it("migrates legacy sync cache JSON to SQLite plugin state", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const storageRootDir = path.join(

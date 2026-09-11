@@ -89,6 +89,38 @@ function migrationParams(params: {
 }
 
 describe("Canvas doctor state migration", () => {
+  it("inventories custom document sources and destinations without moving them", async () => {
+    await using stateWorkspace = await createCanvasDoctorWorkspace("state");
+    await using customWorkspace = await createCanvasDoctorWorkspace("custom");
+    const params = migrationParams({
+      stateDir: stateWorkspace.dir,
+      customRoot: customWorkspace.dir,
+    });
+    const source = path.join(customWorkspace.dir, "documents", "cv_retained");
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "index.html"), "retained");
+    expect(
+      await migration?.collectBackupResources?.({ ...params, requireLocalResources: true }),
+    ).toEqual([
+      { path: path.dirname(source), kind: "directory" },
+      { path: path.join(stateWorkspace.dir, "canvas", "documents"), kind: "directory" },
+    ]);
+    expect(await fs.readFile(path.join(source, "index.html"), "utf8")).toBe("retained");
+    expect(await fs.readdir(stateWorkspace.dir)).toEqual([]);
+  });
+
+  it("refuses a remote document root during local-only recovery inventory", async () => {
+    await using stateWorkspace = await createCanvasDoctorWorkspace("state");
+    const params = migrationParams({
+      stateDir: stateWorkspace.dir,
+      customRoot: "https://example.invalid/canvas",
+    });
+    await expect(async () =>
+      migration?.collectBackupResources?.({ ...params, requireLocalResources: true }),
+    ).rejects.toThrow("remote");
+    expect(await fs.readdir(stateWorkspace.dir)).toEqual([]);
+  });
+
   it("ignores the default core document root", async () => {
     await using stateWorkspace = await createCanvasDoctorWorkspace("state");
     const stateDir = stateWorkspace.dir;
