@@ -64,3 +64,71 @@ extension DashboardManager {
     }
 }
 #endif
+
+extension DashboardManager {
+    nonisolated static let failureURL = URL(string: "about:blank")!
+
+    struct WindowConfiguration {
+        let url: URL
+        let auth: DashboardWindowAuth
+        let tlsParams: GatewayTLSParams?
+        let mode: AppState.ConnectionMode
+        let displayName: String
+        var browserSession: GatewayBrowserSession?
+        var signedOut: DashboardFailurePage.SignedOut?
+        var autoStartSignIn = false
+    }
+
+    nonisolated static let browserSessionRenewalLeadTime: TimeInterval = 15 * 60
+
+    nonisolated static func requiresBrowserSignIn(
+        error: Error?, expiresAt: Date?, userGesture: Bool, now: Date = Date()) -> Bool
+    {
+        if let error { return error as? GatewayBrowserSessionError == .expired }
+        guard userGesture, let expiresAt else { return false }
+        return expiresAt <= now.addingTimeInterval(Self.browserSessionRenewalLeadTime)
+    }
+
+    func loadWindow(
+        _ controller: DashboardWindowController, configuration: WindowConfiguration, present: Bool)
+    {
+        if let page = configuration.signedOut {
+            controller.showSignedOut(page, present: present, autoStart: configuration.autoStartSignIn)
+        } else if present {
+            controller.show(url: configuration.url, auth: configuration.auth)
+        } else {
+            controller.loadInBackground(url: configuration.url, auth: configuration.auth)
+        }
+    }
+}
+
+extension DashboardManager.WindowConfiguration {
+    init?(signedOut profile: MacGatewayCatalogProfile, userGesture: Bool) throws {
+        guard let expiry = profile.browserSessionExpiresAt else { return nil }
+        try self.init(
+            url: GatewayEndpointStore.dashboardURL(for: (profile.profile.url, nil, nil), mode: .remote),
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            tlsParams: nil,
+            mode: .remote,
+            displayName: profile.profile.name,
+            signedOut: DashboardFailurePage.SignedOut(
+                target: .profile(profile.profile.id),
+                name: profile.profile.name,
+                host: profile.profile.url.host ?? profile.profile.url.absoluteString,
+                expiresAt: expiry),
+            autoStartSignIn: userGesture)
+    }
+}
+
+extension DashboardManager {
+    struct SupersededDashboardPresentation: Error {}
+
+    func autosaveName(for target: DashboardGatewayTarget) -> String {
+        switch target {
+        case .primary:
+            self.mainWindowAutosaveName
+        case let .profile(profileID):
+            "\(self.mainWindowAutosaveName)-\(profileID)"
+        }
+    }
+}

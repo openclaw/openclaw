@@ -3,6 +3,41 @@ import Testing
 @testable import OpenClaw
 
 struct DashboardFailurePageTests {
+    @Test(arguments: [false, true])
+    func `signed out page escapes profile metadata and offers renewal`(signingIn: Bool) {
+        let now = Date(timeIntervalSince1970: 10000)
+        let page = DashboardFailurePage.SignedOut(
+            target: .profile("test\"'&<>"), name: "Research <&>\"'", host: "gateway.example",
+            expiresAt: now.addingTimeInterval(-120))
+        let html = DashboardFailurePage.html(
+            signedOut: page, signingIn: signingIn, error: "Failed <script>&\"'", now: now)
+        #expect(html.contains("Signed out of Research &lt;&amp;&gt;&quot;&#39;"))
+        #expect(html.contains("Your browser sign-in to gateway.example expired 2m ago. Sign in again to continue."))
+        #expect(html.contains("Connection Settings…"))
+        #expect(html.contains("data-id=\"profile:test&quot;&#39;&amp;&lt;&gt;\""))
+        #expect(!html.contains("<script>"))
+        if signingIn {
+            #expect(html.contains("Complete sign-in in your browser…"))
+            #expect(html.contains(">Cancel</button>"))
+            #expect(html.contains("type:'reconnect-cancel',id:this.dataset.id"))
+            #expect(!html.contains("Failed"))
+        } else {
+            #expect(html.contains(">Sign in again</button>"))
+            #expect(html.contains("type:'reconnect',id:this.dataset.id"))
+            #expect(html.contains("Failed &lt;script&gt;&amp;&quot;&#39;"))
+        }
+    }
+
+    @Test func `renewal page does not claim a future expiry already happened`() {
+        let now = Date(timeIntervalSince1970: 10000)
+        let page = DashboardFailurePage.SignedOut(
+            target: .profile("test"), name: "Research", host: "gateway.example",
+            expiresAt: now.addingTimeInterval(900))
+        let html = DashboardFailurePage.html(signedOut: page, now: now)
+        #expect(html.contains("Your browser sign-in to gateway.example expires soon. Sign in again to continue."))
+        #expect(html.contains(">Sign in again</button>"))
+    }
+
     @Test(arguments: [false, true], [false, true])
     func `dashboard diagnostics omit authentication while retaining the endpoint`(
         fragmentAuth: Bool,
@@ -44,5 +79,36 @@ struct DashboardFailurePageTests {
         let address = "\(scheme)://127.0.0.1:18789/control/"
         let url = try #require(URL(string: address))
         #expect(GatewayEndpointStore.diagnosticURLString(for: url) == address)
+    }
+}
+
+struct DashboardBrowserSignInPolicyTests {
+    @Test func `only expiry errors bypass normal error presentation`() {
+        let now = Date(timeIntervalSince1970: 10000)
+        let errors: [Error] = [
+            GatewayBrowserSessionError.expired, GatewayBrowserSessionError.invalidSession,
+            GatewayBrowserSessionError.wrongOrigin, GatewayBrowserSessionError.superseded,
+            GatewayBrowserSessionError.credentialRetirementFailed, MacGatewayProfileError.profileNotFound,
+            CancellationError(),
+        ]
+        for error in errors {
+            for gesture in [false, true] {
+                #expect(DashboardManager.requiresBrowserSignIn(
+                    error: error, expiresAt: now, userGesture: gesture, now: now) ==
+                    (error as? GatewayBrowserSessionError == .expired))
+            }
+        }
+    }
+
+    @Test func `gesture renews sessions through the fifteen minute boundary`() {
+        let now = Date(timeIntervalSince1970: 10000)
+        for remaining in [-1.0, 0, 1, 899, 900, 901] {
+            for gesture in [false, true] {
+                #expect(DashboardManager.requiresBrowserSignIn(
+                    error: nil, expiresAt: now.addingTimeInterval(remaining), userGesture: gesture, now: now) ==
+                    (gesture && remaining <= 900))
+            }
+        }
+        #expect(!DashboardManager.requiresBrowserSignIn(error: nil, expiresAt: nil, userGesture: true, now: now))
     }
 }

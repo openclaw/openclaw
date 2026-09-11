@@ -138,19 +138,6 @@ struct DashboardGatewayCatalogTests {
 
 @MainActor
 struct DashboardGatewaysBridgeTests {
-    @Test func `parses gateway bridge requests with role based ids`() {
-        #expect(DashboardWindowController.gatewaysRequest(
-            from: ["type": "select", "id": "primary"]) == .select(.primary))
-        #expect(DashboardWindowController.gatewaysRequest(
-            from: ["type": "open-window", "id": "profile:studio"]) == .openWindow(.profile("studio")))
-        #expect(DashboardWindowController.gatewaysRequest(
-            from: ["type": "set-primary", "id": "profile:studio"]) == .setPrimary(.profile("studio")))
-        #expect(DashboardWindowController.gatewaysRequest(
-            from: ["type": "open-settings"]) == .openSettings)
-        #expect(DashboardWindowController.gatewaysRequest(
-            from: ["type": "select", "id": "https://secret.example"]) == nil)
-    }
-
     @Test func `gateway script contains metadata and no credentials`() {
         let snapshot = DashboardGatewaySnapshot(
             gateways: [.init(
@@ -1588,5 +1575,29 @@ private enum DashboardGatewayTestTLS {
                 allowTOFU: fingerprint == nil,
                 storeKey: nil),
             allowsTrustedPinReplacement: true)
+    }
+}
+
+@MainActor
+struct DashboardGatewaysRequestTests {
+    @Test func `parses gateway bridge requests with role based ids`() {
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "select", "id": "primary"]) == .select(.primary))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "open-window", "id": "profile:studio"]) == .openWindow(.profile("studio")))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "set-primary", "id": "profile:studio"]) == .setPrimary(.profile("studio")))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect", "id": "profile:studio"]) == .reconnect(.profile("studio")))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect-cancel", "id": "profile:studio"]) == .reconnectCancel(.profile("studio")))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect"]) == nil)
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect", "id": "https://secret.example"]) == nil)
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "open-settings"]) == .openSettings)
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "select", "id": "https://secret.example"]) == nil)
     }
 }
