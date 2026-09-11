@@ -4,7 +4,7 @@ import path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
@@ -302,7 +302,11 @@ function collectClosureEntries(): ClosureEntry[] {
   };
   for (const record of loadBundledPluginManifestRegistry({ env }).plugins) {
     const pluginRoot = path.resolve(record.rootDir);
-    const doctorContractPath = resolvePluginDoctorContractArtifactPath(pluginRoot);
+    const doctorContractPath = resolvePluginDoctorContractArtifact({
+      ...record,
+      rootDir: pluginRoot,
+      sourcePreferred: true,
+    })?.modulePath;
     // A declaration listing no surface gates the artifact off every enumeration
     // path, exactly as `resolvePluginDoctorContracts` does, so its closure cost
     // is never paid. Absent declarations still load eagerly and are enforced.

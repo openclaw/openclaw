@@ -1,6 +1,7 @@
 /** Selects built plugin artifacts without importing active runtime state. */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isPathInside } from "../infra/path-guards.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import {
   isTypeScriptPackageEntry,
@@ -140,9 +141,20 @@ export function resolvePluginRuntimeExecutionArtifact(
 ): PluginRuntimeArtifact {
   // This is the loader's existing final pass, not recursive normalization:
   // nested staging paths can make another pass select a different file.
+  const source = resolveCanonicalDistRuntimeSource(selected.source);
+  const rootDir = resolveCanonicalDistRuntimeSource(selected.rootDir);
   return {
-    source: resolveCanonicalDistRuntimeSource(selected.source),
-    rootDir: resolveCanonicalDistRuntimeSource(selected.rootDir),
+    source,
+    // A partial build can have the canonical directory without this entry;
+    // a staging symlink can also have already resolved into the canonical tree.
+    rootDir:
+      rootDir !== selected.rootDir &&
+      !isPathInside(
+        pluginCacheRealpathSync(rootDir) ?? rootDir,
+        pluginCacheRealpathSync(source) ?? source,
+      )
+        ? selected.rootDir
+        : rootDir,
   };
 }
 
@@ -150,9 +162,10 @@ export function resolvePluginRuntimeExecutionArtifact(
 export function resolvePluginRuntimeArtifactSelection(
   params: PluginRuntimeArtifactSelectionParams,
 ): PluginRuntimeArtifact {
-  const rootDir = resolveCanonicalDistRuntimeSource(
-    pluginCacheRealpathSync(params.rootDir) ?? path.resolve(params.rootDir),
-  );
+  const { source, rootDir } = resolvePluginRuntimeExecutionArtifact({
+    source: pluginCacheRealpathSync(params.source) ?? path.resolve(params.source),
+    rootDir: pluginCacheRealpathSync(params.rootDir) ?? path.resolve(params.rootDir),
+  });
   const artifacts = getPluginCacheRoot(rootDir).runtimeArtifacts;
   const key = JSON.stringify([
     params.source,
@@ -164,14 +177,9 @@ export function resolvePluginRuntimeArtifactSelection(
   ]);
   let resolved = artifacts.get(key);
   if (!resolved) {
-    const source = resolveCanonicalDistRuntimeSource(
-      pluginCacheRealpathSync(params.source) ?? path.resolve(params.source),
+    resolved = resolvePluginRuntimeExecutionArtifact(
+      resolvePreferredBuiltRuntimeArtifact({ ...params, source, rootDir }),
     );
-    const preferred = resolvePreferredBuiltRuntimeArtifact({ ...params, source, rootDir });
-    resolved = {
-      source: resolveCanonicalDistRuntimeSource(preferred.source),
-      rootDir: resolveCanonicalDistRuntimeSource(preferred.rootDir),
-    };
     artifacts.set(key, resolved);
   }
   return resolved;

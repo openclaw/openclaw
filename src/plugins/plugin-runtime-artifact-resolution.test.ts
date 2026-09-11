@@ -9,6 +9,7 @@ import {
   clearPluginRuntimeArtifactResolutionMemo,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
+import { resolvePluginRuntimeExecutionArtifact } from "./plugin-runtime-artifact-selection.js";
 import { getActivePluginChannelRegistry } from "./runtime.js";
 
 const tempDirs: string[] = [];
@@ -78,6 +79,53 @@ afterEach(() => {
 });
 
 describe("resolvePluginRuntimeArtifact", () => {
+  it.each(["missing", "present", "staging-symlink", "canonical-directory-symlink"])(
+    "keeps the execution entry and boundary together for a %s canonical entry",
+    (layout) => {
+      const fixture = createBundledPluginFixture();
+      const packageRoot = path.dirname(path.dirname(fixture.rootDir));
+      const stagingRoot = path.join(packageRoot, "dist-runtime", "extensions", "fixture");
+      const stagingSource = path.join(stagingRoot, "setup-entry.js");
+      const builtRoot = path.dirname(fixture.builtSource);
+      const builtSource = path.join(builtRoot, "setup-entry.js");
+      if (layout === "canonical-directory-symlink") {
+        const outputRoot = path.join(packageRoot, "outputs");
+        fs.renameSync(builtRoot, outputRoot);
+        fs.symlinkSync(outputRoot, builtRoot, "junction");
+      }
+      fs.mkdirSync(stagingRoot, { recursive: true });
+      const canonicalEntryExists = layout !== "missing";
+      if (canonicalEntryExists) {
+        fs.writeFileSync(builtSource, "module.exports = {};\n");
+      }
+      if (layout === "staging-symlink" || layout === "canonical-directory-symlink") {
+        fs.symlinkSync(builtSource, stagingSource);
+      } else {
+        fs.writeFileSync(stagingSource, "module.exports = {};\n");
+      }
+      const selected = { source: stagingSource, rootDir: stagingRoot };
+      const expected = canonicalEntryExists
+        ? { source: fs.realpathSync(builtSource), rootDir: builtRoot }
+        : selected;
+
+      expect(
+        resolvePluginRuntimeExecutionArtifact({
+          ...selected,
+          source: fs.realpathSync(stagingSource),
+        }),
+      ).toEqual(expected);
+      expect(
+        resolvePluginRuntimeArtifact({
+          ...selected,
+          pluginId: "fixture",
+          entryKind: "setup",
+          origin: "bundled",
+          preferBuiltPluginArtifacts: false,
+        }),
+      ).toEqual(expected);
+    },
+  );
+
   it.each([".cjs", ".js"])(
     "uses the emitted %s entry rather than a stale format neighbor",
     (extension) => {
