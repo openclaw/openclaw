@@ -6,6 +6,7 @@ import { createJiti } from "jiti";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-module-loader-cache.js";
 
@@ -548,13 +549,25 @@ describe("native plugin generation interop", () => {
     },
   );
 
-  it.each([true, false])("loads shared module links (standalone: %s)", (standalone) => {
+  it.each(
+    [true, false].flatMap((standalone) =>
+      ["directory", "file"].map((link) => ({ standalone, link })),
+    ),
+  )("loads shared module links ($link, standalone: $standalone)", ({ standalone, link }) => {
+    const linkedPath = link === "directory" ? "shared/value.mjs" : "value.mjs";
     const root = fixture({
-      "plugin/entry.mjs": 'export { value } from "./shared/value.mjs";',
+      "plugin/entry.mjs": `export { value } from "./${linkedPath}";`,
       "shared/value.mjs": "export const value = 42;",
     });
     const plugin = path.join(root, "plugin");
-    fs.symlinkSync(path.join(root, "shared"), path.join(plugin, "shared"), "junction");
+    fs.symlinkSync(
+      path.join(root, link === "directory" ? "shared" : "shared/value.mjs"),
+      path.join(plugin, link === "directory" ? "shared" : "value.mjs"),
+      link === "directory" ? "junction" : "file",
+    );
+    expect(() => capturePluginGenerationArtifact(plugin)).toThrow(
+      "Plugin source link leaves its package",
+    );
     expect(host(plugin, standalone).load("entry.mjs")).toMatchObject({ value: 42 });
   });
 

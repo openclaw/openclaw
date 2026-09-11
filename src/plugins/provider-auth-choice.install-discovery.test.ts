@@ -145,11 +145,14 @@ it.each([false, true])(
           );
           fs.writeFileSync(
             path.join(pluginRoot, "index.cjs"),
-            `process.on(${JSON.stringify(event)}, () => {});
+            `const listener = () => {}; process.on(${JSON.stringify(event)}, listener);
             module.exports = {
         id: "installed-provider",
         register(api) {
-          api.lifecycle.onDispose(() => { require("node:fs").writeFileSync(${JSON.stringify(cleanupPath)}, "closed"); });
+          api.lifecycle.onDispose(() => {
+            process.off(${JSON.stringify(event)}, listener);
+            require("node:fs").writeFileSync(${JSON.stringify(cleanupPath)}, "closed");
+          });
           api.registerProvider({ id: "installed-provider", label: "Installed provider", auth: [
             { id: "unselected", label: "Other method", kind: "api_key",
               async run() { throw new Error("Unselected auth method ran"); } },

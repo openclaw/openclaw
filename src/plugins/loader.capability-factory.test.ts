@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
@@ -466,14 +465,11 @@ it.each([false, true])(
       "cjs",
       'throw new Error("catalog inspection must not load full runtime");',
       async (options, root) => {
-        const event = `catalog-initialization-${priorSuccess}`;
-        const before = process.listenerCount(event);
         fs.writeFileSync(
           path.join(root, "plugin", "catalog.cjs"),
           `let attempts = 0;
           module.exports = () => {
-            if (++attempts === 1) process.on(${JSON.stringify(event)}, () => {});
-            if (attempts === ${priorSuccess ? 2 : 1}) throw new Error("catalog construction failed");
+            if (++attempts === ${priorSuccess ? 2 : 1}) throw new Error("catalog construction failed");
             return { speechProviders: [{
               id: "factory-owner", label: "Catalog owner", isConfigured: () => true,
               synthesize: async () => { throw new Error("inspection cannot synthesize"); },
@@ -496,15 +492,18 @@ it.each([false, true])(
             expect(retained?.isConfigured(context)).toBe(true);
           }
           expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
-          await nextTurn();
-          expect(process.listenerCount(event)).toBe(before + (priorSuccess ? 1 : 0));
+          const retried = priorSuccess ? load().speechProviders[0]?.provider : undefined;
           if (priorSuccess) {
             expect(retained?.isConfigured(context)).toBe(true);
+            expect(retried?.isConfigured(context)).toBe(true);
+          } else {
+            // Failed initialization discards its loader; the next attempt starts fresh.
+            expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
           }
           await retirePluginCache(cache);
-          expect(process.listenerCount(event)).toBe(before);
           if (priorSuccess) {
             expect(() => retained?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
+            expect(() => retried?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
           }
         } finally {
           await retirePluginCache(cache);

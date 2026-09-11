@@ -269,6 +269,7 @@ export function bindPluginInstanceModuleLoader(params: {
   origin: PluginOrigin;
   source: string;
   rootDir: string;
+  devSourceRoot?: string | null;
   standalone?: boolean;
   inputBoundaryRoot?: string;
 }): void {
@@ -278,10 +279,12 @@ export function bindPluginInstanceModuleLoader(params: {
     installOpenClawPluginSdkNativeResolver({
       moduleUrl: import.meta.url,
       pluginModulePath: params.source,
+      devSourceRoot: params.devSourceRoot,
     });
     const loader = getCachedPluginModuleLoader({
       modulePath: params.source,
       importerUrl: import.meta.url,
+      devSourceRoot: params.devSourceRoot,
     });
     const modules = createPluginModuleRequireCacheOwner(params.rootDir);
     const boundaryRoot = (params.standalone && params.inputBoundaryRoot) || params.rootDir;
@@ -334,6 +337,7 @@ export function bindPluginInstanceModuleLoader(params: {
   installOpenClawPluginSdkNativeResolver({
     moduleUrl: import.meta.url,
     pluginModulePath: params.source,
+    devSourceRoot: params.devSourceRoot,
     allowedParentRoots: [artifact.boundaryRoot],
   });
   const nativeRequire = createRequire(params.source);

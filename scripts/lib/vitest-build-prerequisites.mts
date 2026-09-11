@@ -97,6 +97,7 @@ const runtimeConsumers = [
   ...[
     "src/agents/simple-completion-runtime.plugin-scope.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
+    "src/agents/runtime-plugins.context-engine.integration.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.agents-core.config.ts", "test/vitest/vitest.agents.config.ts"],

@@ -15,7 +15,7 @@ import {
   createPluginDependencyResolver,
   packageName,
   importTargetNames,
-  isExternalPluginSourceLink,
+  createPluginSourceLinkCapture,
   resolvePluginModulePackageRoot,
 } from "./plugin-package-metadata-capture.js";
 import {
@@ -121,6 +121,7 @@ export function capturePluginGenerationArtifact(
     };
     packages.set(root, owner);
     const ancestors = new Set<string>();
+    const sourceLinks = createPluginSourceLinkCapture();
     const copy = (source: string, target: string) => {
       // Metadata can precede its package body; promotion never replaces those captured bytes.
       if (capturedPaths.get(path.resolve(source)) === target) {
@@ -154,7 +155,7 @@ export function capturePluginGenerationArtifact(
           if (
             name !== "node_modules" &&
             name !== ".git" &&
-            !(execute && isExternalPluginSourceLink(path.join(source, name), boundary))
+            !(execute && sourceLinks.defer(path.join(source, name), boundary))
           ) {
             copy(path.join(source, name), path.join(target, name));
           }
@@ -415,10 +416,9 @@ export function capturePluginGenerationArtifact(
         ) {
           return undefined;
         }
-        // Whole-package captures own local resolution even before a module's first load;
-        // the original TypeScript peer may already be edited or removed.
-        const moduleRequest =
-          owner.state === "body" ? path.join(destination, path.relative(root, local)) : local;
+        // Captured local peers survive edits; deferred links enter only on executable demand.
+        const fromCopy = owner.state === "body" && !sourceLinks.contains(local);
+        const moduleRequest = fromCopy ? path.join(destination, path.relative(root, local)) : local;
         const resolved = module ? resolve(moduleRequest) : undefined;
         if (module && !resolved) {
           return undefined;

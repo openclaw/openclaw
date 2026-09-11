@@ -92,6 +92,11 @@ describe("test runtime prerequisites", () => {
     ],
     ["infra config", ["test/vitest/vitest.infra.config.ts"], "runtime"],
     ["native SDK generation", ["src/plugins/plugin-module-generation.sdk.test.ts"], "runtime"],
+    [
+      "context engine sandbox SDK",
+      ["src/agents/runtime-plugins.context-engine.integration.test.ts"],
+      "runtime",
+    ],
     ["native direct loader SDK", ["src/plugins/loader.test.ts"], "runtime"],
     ["native setup registry SDK", ["src/plugins/setup-registry.migrations.test.ts"], "runtime"],
     ["native source checkout SDK", ["src/plugins/source-checkout-runtime.test.ts"], "runtime"],
@@ -246,6 +251,7 @@ describe("test runtime prerequisites", () => {
       [
         "simple-completion-runtime.plugin-scope.test.ts",
         "prepared-model-catalog-worker.integration.test.ts",
+        "runtime-plugins.context-engine.integration.test.ts",
       ],
       undefined,
     ],
@@ -254,6 +260,7 @@ describe("test runtime prerequisites", () => {
       [
         "simple-completion-runtime.plugin-scope.test.ts",
         "prepared-model-catalog-worker.integration.test.ts",
+        "runtime-plugins.context-engine.integration.test.ts",
       ],
       undefined,
     ],

@@ -5,8 +5,21 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
 
-export function isExternalPluginSourceLink(filename: string, root: string): boolean {
-  return fs.lstatSync(filename).isSymbolicLink() && !isPathInside(root, fs.realpathSync(filename));
+export function createPluginSourceLinkCapture() {
+  const links = new Set<string>();
+  return {
+    defer(filename: string, root: string): boolean {
+      if (
+        !fs.lstatSync(filename).isSymbolicLink() ||
+        isPathInside(root, fs.realpathSync(filename))
+      ) {
+        return false;
+      }
+      links.add(filename);
+      return true;
+    },
+    contains: (filename: string) => [...links].some((link) => isPathInside(link, filename)),
+  };
 }
 
 export function createPluginDependencyResolver() {

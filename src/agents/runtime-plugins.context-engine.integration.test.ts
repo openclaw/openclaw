@@ -136,6 +136,10 @@ it("selects a full-mode-only context engine on caller-owned handles without full
   const rootSandboxFactory = getSandboxBackendFactory(SANDBOX_PROBE_ID);
 
   expect(getActivePluginRegistry()).toBe(root);
+  expect(root.plugins, JSON.stringify(root.diagnostics)).toEqual([
+    expect.objectContaining({ id: "ce-probe", status: "loaded" }),
+    expect.objectContaining({ id: "sandbox-probe", status: "loaded" }),
+  ]);
   expect(root.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
   expect(rootSandboxFactory).not.toBeNull();
   expect(rootSandboxFactory).not.toBe(previousSandboxFactory);

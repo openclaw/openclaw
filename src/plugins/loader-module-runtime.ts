@@ -155,6 +155,7 @@ export function createPluginModuleLoader(options: {
             source: modulePath,
             rootDir: owner.rootDir,
             standalone: owner.standalone,
+            devSourceRoot: captured.devSourceRoot,
           });
         }
       }
