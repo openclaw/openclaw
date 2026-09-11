@@ -412,20 +412,21 @@ export function createVideoGenerateTool(options?: {
               providers: [],
             })
           : null;
-      const readRequest = () => {
+      const readRequest = async () => {
         const prompt = readToolStringParam(args, "prompt", { required: true });
         return {
           prompt,
-          duplicate: createVideoGenerateDuplicateGuardResult(options?.agentSessionKey, {
+          duplicate: await createVideoGenerateDuplicateGuardResult(options?.agentSessionKey, {
             prompt,
             agentId: options?.requesterAgentId,
           }),
         };
       };
-      const configuredRequest = configuredModel ? readRequest() : undefined;
+      const configuredRequest = configuredModel ? await readRequest() : undefined;
       if (configuredRequest?.duplicate) {
         return configuredRequest.duplicate;
       }
+      signal?.throwIfAborted();
       const acquired = options?.preparedModelRuntime?.acquireMediaCapabilityProviders
         ? await acquireVideoGenerationToolProviders({
             cfg: configuredModel
@@ -454,10 +455,12 @@ export function createVideoGenerateTool(options?: {
         const effectiveCfg =
           applyAgentDefaultModelConfig(cfg, "video", videoGenerationModelConfig) ?? cfg;
         const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
-        const { prompt, duplicate } = configuredRequest ?? readRequest();
+        const { prompt, duplicate } = configuredRequest ?? (await readRequest());
         if (duplicate) {
           return { kind: "result" as const, result: duplicate };
         }
+        signal?.throwIfAborted();
+        acquired?.assertOpen();
 
         const filename = readToolStringParam(args, "filename");
         const size = readToolStringParam(args, "size");
@@ -560,13 +563,15 @@ export function createVideoGenerateTool(options?: {
           audioInputs,
           audioRoles,
         });
-        const duplicateGuardResult = createVideoGenerateDuplicateGuardResult(
+        const duplicateGuardResult = await createVideoGenerateDuplicateGuardResult(
           options?.agentSessionKey,
           { prompt, requestKey, agentId: options?.requesterAgentId },
         );
         if (duplicateGuardResult) {
           return { kind: "result" as const, result: duplicateGuardResult };
         }
+        signal?.throwIfAborted();
+        acquired?.assertOpen();
         const loadedReferenceImages = await loadReferenceAssets({
           inputs: imageInputs,
           expectedKind: "image",

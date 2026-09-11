@@ -42,6 +42,10 @@ const activeStoreWriters = resolveGlobalSingleton(
 );
 
 function isActiveStoreWriter(queues: StoreWriterQueues, storePath: string): boolean {
+  // A new lane cannot be reentrant; bulk acquisition must not scan every held lock.
+  if (!queues.has(storePath)) {
+    return false;
+  }
   let active = activeStoreWriters.getStore();
   while (active) {
     if (active.active && active.queues === queues && active.storePath === storePath) {

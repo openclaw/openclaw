@@ -554,8 +554,9 @@ export function restoreCliBackendLiveEnv(snapshot: CliBackendLiveEnvSnapshot): v
 
 export async function ensurePairedTestGatewayClientIdentity(params?: {
   displayName?: string;
+  identityKey?: string;
 }): Promise<DeviceIdentity> {
-  const identity = loadOrCreateDeviceIdentity();
+  const identity = loadOrCreateDeviceIdentity({ identityKey: params?.identityKey });
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const requiredScopes = ["operator.admin"];
   const paired = await getPairedDevice(identity.deviceId);

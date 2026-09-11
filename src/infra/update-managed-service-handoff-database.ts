@@ -64,6 +64,37 @@ function assertPath(stat: Stats, kind: "directory" | "file") {
   }
 }
 
+/**
+ * Earlier writers created the file under the caller's umask and chmodded it
+ * after schema creation. Excess read bits on a path we own can therefore be
+ * that interrupted work. Restore the
+ * invariant instead of refusing, which would otherwise lock the product out of its
+ * own state for every install root until an operator deleted the file by hand.
+ *
+ * Excess bits here are defense in depth rather than a live exposure: assertPath
+ * enforces a 0700 owned directory on every read and every write, and a single
+ * link, so no other user could traverse to this inode or hold a descriptor on it
+ * whatever the file's own mode said. Write bits are still refused rather than
+ * repaired, because chmod cannot revoke a descriptor and integrity is the one
+ * thing the directory guarantee would not restore. Ownership, type and link count
+ * are likewise not ours to repair; all of those still refuse in assertPath.
+ */
+function repairPrivateFileMode(databasePath: string, stat: Stats): Stats {
+  if (
+    process.platform === "win32" ||
+    (stat.mode & 0o077) === 0 ||
+    (stat.mode & 0o022) !== 0 ||
+    stat.isSymbolicLink() ||
+    !stat.isFile() ||
+    stat.nlink !== 1 ||
+    (typeof process.getuid === "function" && stat.uid !== process.getuid())
+  ) {
+    return stat;
+  }
+  fs.chmodSync(databasePath, 0o600);
+  return fs.lstatSync(databasePath);
+}
+
 function assertSamePath(stat: Stats, expected: Stats, kind: "directory" | "file"): void {
   assertPath(stat, kind);
   if (
@@ -101,7 +132,9 @@ function createMissingDatabaseFile(databasePath: string, parentReceipt: Director
       fs.fsyncSync(descriptor);
     }
     const identity =
-      descriptor === undefined ? fs.lstatSync(databasePath) : fs.fstatSync(descriptor);
+      descriptor === undefined
+        ? repairPrivateFileMode(databasePath, fs.lstatSync(databasePath))
+        : fs.fstatSync(descriptor);
     assertSamePath(fs.lstatSync(databasePath), identity, "file");
     assertSamePath(fs.lstatSync(parentReceipt.path), parentReceipt.identity, "directory");
     requireDirectorySync(syncDirectorySync(parentReceipt), "Managed handoff lease directory");
@@ -197,7 +230,7 @@ export function createManagedHandoffLeaseDatabase(
         identity: directoryIdentity,
       });
     }
-    const databaseIdentity = fs.lstatSync(databasePath);
+    const databaseIdentity = repairPrivateFileMode(databasePath, fs.lstatSync(databasePath));
     assertPath(databaseIdentity, "file");
     const db = openNodeSqliteDatabase(
       write ? resolveExistingSqliteFileUri(databasePath) : databasePath,

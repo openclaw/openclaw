@@ -137,6 +137,27 @@ describe("managed handoff database publication", () => {
     expect(readOwners()).toEqual(["recovered"]);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "repairs an interrupted legacy initializer that wins exclusive creation",
+    () => {
+      const open = fs.openSync;
+      let winnerInode: number | undefined;
+      vi.spyOn(fs, "openSync").mockImplementationOnce((pathname, flags, mode) => {
+        fs.writeFileSync(databasePath, "", { mode: 0o600 });
+        fs.chmodSync(databasePath, 0o644);
+        winnerInode = fs.statSync(databasePath).ino;
+        return open(pathname, flags, mode);
+      });
+
+      createManagedHandoffLeaseDatabase(databasePath)(true, (db) => insertRow(db, root, "winner"));
+
+      expect(fs.statSync(databasePath).ino).toBe(winnerInode);
+      expect(fs.statSync(databasePath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(databasePath).nlink).toBe(1);
+      expect(readOwners()).toEqual(["winner"]);
+    },
+  );
+
   it("preserves an existing malformed database", () => {
     const malformed = Buffer.from("not a sqlite database");
     fs.writeFileSync(databasePath, malformed, { mode: 0o600 });

@@ -377,9 +377,17 @@ export function createCodexAppServerAgentHarness(
           fallbackModel: plan.model,
         });
       }
-      // A Daybreak target the workspace cannot use leaves the original refusal
-      // as the honest outcome for this turn.
-      return outcome.unavailable ? result : escalated;
+      // Preserve the fallback's result identity for effects, tool progress, or
+      // interruption; its receipts and continuation ownership must reach the runner.
+      if (
+        outcome.unavailable &&
+        outcome.replaySafe &&
+        escalated.terminal.kind === "failed" &&
+        escalated.toolMetas.length === 0
+      ) {
+        return result;
+      }
+      return escalated;
     },
     runIsolatedCompletionV2: async (params) => {
       if (params.authorization.owner === "host") {

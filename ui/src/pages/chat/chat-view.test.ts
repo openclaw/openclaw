@@ -7948,14 +7948,21 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
   });
 
-  it("groups models and filters them with keyboard selection", () => {
+  it("groups models and preserves ranked keyboard selection through catalog replacement", async () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
         { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-        { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google" },
+        { id: "gemini-2.5-pro", name: "Anth model", provider: "google" },
+        {
+          id: "unavailable",
+          name: "Anth unavailable",
+          provider: "google",
+          available: false,
+          unavailableReason: "cooldown",
+        },
       ],
     });
     const onModelSelect = vi.fn(async () => true);
@@ -8003,10 +8010,13 @@ describe("chat model controls", () => {
     ).filter((option) => !option.hidden);
     expect(visibleOptions.map((option) => option.dataset.chatModelOption)).toEqual([
       "anthropic/claude-sonnet-4-6",
+      "google/gemini-2.5-pro",
+      "google/unavailable",
     ]);
-    expect(visibleOptions[0]?.hasAttribute("data-chat-model-highlighted")).toBe(true);
+    expect(visibleOptions[1]?.hasAttribute("data-chat-model-highlighted")).toBe(true);
+    expect(visibleOptions[2]?.disabled).toBe(true);
     expect(
-      visibleOptions[0]
+      visibleOptions[1]
         ?.querySelector("[data-chat-model-shortcut]")
         ?.getAttribute("data-chat-model-shortcut-number"),
     ).toBe("1");
@@ -8016,7 +8026,19 @@ describe("chat model controls", () => {
 
     search!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     const highlighted = container.querySelector<HTMLButtonElement>("[data-chat-model-highlighted]");
+    expect(highlighted).toBe(visibleOptions[0]);
     expect(highlighted?.id).not.toBe("");
+    expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
+
+    state.chatModelCatalog = [
+      ...state.chatModelCatalog,
+      { id: "new-match", name: "Anth new", provider: "openai" },
+    ];
+    renderModelControls(state, { onModelSelect, onModelSetup, modelPickerOpen: true }, container);
+    await Promise.resolve();
+    expect(container.querySelector("[data-chat-model-search]")).toBe(search);
+    expect(search?.value).toBe("anth");
+    expect(container.querySelector("[data-chat-model-highlighted]")).toBe(highlighted);
     expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
 
     search!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
