@@ -289,6 +289,10 @@ public final class RealtimeTalkRelaySession {
     private var outputAudioChunkCount = 0
     private var outputAudioByteCount = 0
 
+    public var isReady: Bool {
+        self.hasReceivedReady && !self.hasReceivedFailure && self.startupIssue == nil && !self.isClosed
+    }
+
     public init(
         transport: RealtimeTalkRelayTransport,
         options: Options,

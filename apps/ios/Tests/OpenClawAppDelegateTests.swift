@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import Testing
 import UIKit
@@ -193,6 +194,202 @@ import UIKit
             #expect(!model.talkMode.isEnabled)
             #expect(model.liveVoiceStartError == "Demo mode only")
             #expect(model.consumeOpenChatRequest(model.openChatRequestID))
+        }
+    }
+
+    @Test(arguments: [
+        (["operator.read", "operator.write", "operator.talk.secrets"], true, true),
+        (["operator.admin"], true, true),
+        (["operator.read", "operator.talk"], true, true),
+        (["operator.read", "operator.talk.secrets"], true, false),
+        (["operator.read", "operator.write", "operator.talk.secrets"], false, true),
+    ]) @MainActor
+    func `native live voice prepares the bound owner using admitted method scopes`(
+        scopes: [String],
+        globalPermissionReady: Bool,
+        shouldPrepare: Bool) async throws
+    {
+        try await withUserDefaults(["talk.enabled": false, "talk.background.enabled": false]) {
+            let session = OpenClawNativeSessionRef(
+                owner: OpenClawNativeOwnerRef(gatewayID: "native-voice-gateway", profileID: "profile-a"),
+                agentID: "main",
+                sessionKey: "agent:main:native-voice")
+            var configRequests: [Bool] = []
+            let fixture = try await NativeGatewayWebSocketFixture.start(
+                issuedDeviceTokens: [],
+                hello: .init(
+                    role: "operator",
+                    scopes: scopes,
+                    capabilities: [GatewayServerCapability.profileBinding.rawValue]),
+                rpcHandler: { frame in
+                    Self.nativeVoiceRPCResponse(
+                        for: frame,
+                        session: session,
+                        scopes: scopes,
+                        configRequests: &configRequests)
+                })
+            defer { fixture.stop() }
+            let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+            let gateway = model.operatorSession
+            let controller = GatewayConnectionController(appModel: model, startDiscovery: false)
+            let router = NativeActionRouter(appModel: model, gatewayController: controller)
+            var chat: OpenClawChatViewModel?
+            var presentationID: UUID?
+            var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+            options.allowStoredDeviceAuth = false
+            options.deviceAuthGatewayID = session.owner.gatewayID
+            let url = fixture.url()
+            do {
+                defer {
+                    model.setOperatorConnected(false)
+                    model.setTalkEnabled(false)
+                    model.talkMode.updateGatewayConnected(false)
+                    if let presentationID { router.unregisterPresentation(presentationID) }
+                    chat?.detachTransport()
+                    model.activeGatewayConnectConfig = nil
+                }
+                try await gateway.connect(
+                    url: url,
+                    credentials: .init(),
+                    connectOptions: options,
+                    sessionBox: nil,
+                    onConnected: {},
+                    onDisconnected: { _ in },
+                    onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+                model.activeGatewayConnectConfig = GatewayConnectConfig(
+                    url: url,
+                    stableID: session.owner.gatewayID,
+                    tls: nil,
+                    token: nil,
+                    bootstrapToken: nil,
+                    password: nil,
+                    nodeOptions: options)
+                model.setOperatorConnected(true)
+                model.talkMode.updateGatewayConnected(true)
+                model.focusChatSession(session.sessionKey)
+                var presented: [OpenClawNativeOpenRequest] = []
+                presentationID = router.registerPresentation { request, binding in
+                    presented.append(request)
+                    #expect(binding.session == session)
+                    #expect(binding.gateway === gateway)
+                    model.focusChatSession(request.session.sessionKey)
+                    let transport = try #require(
+                        model.makeChatTransport(nativeBinding: binding) as? IOSGatewayChatTransport)
+                    let viewModel = OpenClawChatViewModel(
+                        sessionKey: session.sessionKey,
+                        transport: transport,
+                        activeAgentId: session.agentID,
+                        sessionRoutingContract: binding.sessionRoutingContract,
+                        transcriptCache: nil,
+                        outbox: nil)
+                    chat = viewModel
+                    router.registerChat(
+                        viewModel,
+                        ownerID: model.chatViewModelOwnerID,
+                        agentID: session.agentID,
+                        transport: transport,
+                        presentationID: presentationID)
+                    viewModel.load()
+                }
+                model.talkMode
+                    .gatewayTalkPermissionState = globalPermissionReady ? .ready :
+                    .missingScope("operator.talk.secrets")
+
+                let outcome = await router.open(.liveVoice(session))
+
+                #expect(presented == [.liveVoice(session)])
+                let chat = try #require(chat)
+                #expect(chat.healthOK)
+                #expect(!chat.isLoading)
+                #expect(chat.errorText == nil)
+                #expect(model.chatSessionKey == session.sessionKey)
+                #expect(!model.talkMode.isEnabled)
+                #expect(!model.talkMode.isListening)
+                #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
+                if shouldPrepare {
+                    let canReadSecrets = scopes.contains("operator.admin") || scopes.contains("operator.talk.secrets")
+                    #expect(configRequests == (canReadSecrets ? [true] : [true, false]))
+                    if case let .unavailable(reason) = outcome {
+                        #expect(!reason.isEmpty)
+                    } else {
+                        Issue.record("Closed microphone admission must not acknowledge native voice as opened")
+                    }
+                } else {
+                    #expect(configRequests.isEmpty)
+                    #expect(outcome == .unavailable(
+                        reason: "Open voice in the selected chat and finish its permission setup first."))
+                }
+            } catch {
+                await gateway.disconnect()
+                throw error
+            }
+            await gateway.disconnect()
+        }
+    }
+
+    @MainActor
+    private static func nativeVoiceRPCResponse(
+        for frame: [String: Any],
+        session: OpenClawNativeSessionRef,
+        scopes: [String],
+        configRequests: inout [Bool]) -> NativeGatewayWebSocketFixture.RPCResponse
+    {
+        guard let method = frame["method"] as? String else {
+            Issue.record("Native voice fixture request is missing its method")
+            return .failure(code: "INVALID_REQUEST", message: "Missing method")
+        }
+        #expect(frame["expectedProfileId"] as? String == session.owner.profileID)
+        let params = frame["params"] as? [String: Any] ?? [:]
+        switch method {
+        case "users.self":
+            return .success(["profile": ["id": session.owner.profileID]])
+        case "agents.list":
+            return .success([
+                "defaultId": "main",
+                "mainKey": "main",
+                "scope": "per-sender",
+                "agents": [["id": "main"]],
+            ])
+        case "chat.history":
+            #expect(params["sessionKey"] as? String == session.sessionKey)
+            #expect(params["agentId"] as? String == session.agentID)
+            return .success([
+                "sessionKey": session.sessionKey, "messages": [],
+                "sessionInfo": ["key": session.sessionKey, "agentId": session.agentID],
+            ])
+        case "sessions.list":
+            return .success(["ts": 0, "count": 0, "sessions": []])
+        case "models.list":
+            return .success(["models": []])
+        case "health":
+            return .success(["ok": true])
+        case "sessions.messages.subscribe":
+            return .success(["subscribed": true, "key": session.sessionKey])
+        case "chat.metadata":
+            return .success(["swarmEnabled": false])
+        case "tasks.list":
+            return .success(["tasks": []])
+        case "talk.config":
+            let includeSecrets = params["includeSecrets"] as? Bool == true
+            configRequests.append(includeSecrets)
+            if includeSecrets,
+               !scopes.contains("operator.admin"), !scopes.contains("operator.talk.secrets")
+            {
+                return .failure(
+                    code: "FORBIDDEN",
+                    message: "missing scope: operator.talk.secrets",
+                    details: [
+                        "code": "MISSING_SCOPE",
+                        "missingScope": "operator.talk.secrets",
+                        "requiredScopes": ["operator.read", "operator.talk.secrets"],
+                    ])
+            }
+            return .success(["config": ["talk": ["resolved": [
+                "provider": "google", "config": [String: Any](),
+            ]]]])
+        default:
+            Issue.record("Unexpected native voice fixture request: \(method)")
+            return .failure(code: "INVALID_REQUEST", message: "Unexpected fixture method: \(method)")
         }
     }
 

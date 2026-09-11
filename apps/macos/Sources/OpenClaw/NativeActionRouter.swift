@@ -111,6 +111,9 @@ final class NativeActionRouter: OpenClawNativeActionHost {
         -> (WebChatManager.NativeGateway, WebChatSwiftUIWindowController, OpenClawNativeRunInspection?)
     {
         try self.requireAvailable()
+        if case .liveVoice = request {
+            throw OpenClawNativeActionError("Start Talk Mode from the primary Gateway chat on this Mac.")
+        }
         guard !self.presenting else {
             throw OpenClawNativeActionError("Another native action is opening a chat. Try again when it finishes.")
         }

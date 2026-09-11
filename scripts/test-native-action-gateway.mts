@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -12,6 +13,16 @@ import {
   TINY_PNG_BASE64,
   type MockOpenAiRequestSnapshot,
 } from "../extensions/qa-lab/api.js";
+import { readSessionEntryInstanceId } from "../src/config/sessions/session-accessor.sqlite-entry-identity.js";
+import { readTranscriptEventRows } from "../src/config/sessions/session-accessor.sqlite-read.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../src/infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../src/infra/sqlite-transaction.js";
+import type { DB as AgentDatabase } from "../src/state/openclaw-agent-db.generated.js";
+import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
+import {
+  parseStoredVoiceSessionRecord,
+  type ClientVoiceSessionRecord,
+} from "../src/talk/client-voice-session-store.js";
 import {
   MODEL_REF,
   PROOF_TIMEOUT_MS,
@@ -113,6 +124,19 @@ type ApprovalFixture = {
   gatewayURL: string;
   requests: Record<ApprovalCaseID, { id: string; sessionKey: string; command: string }>;
 };
+const VOICE_CASES = ["acl", "controlACL", "profile", "controlProfile"] as const;
+type VoiceCaseID = (typeof VOICE_CASES)[number];
+type VoiceSpec = {
+  message: string;
+  transcript: string;
+  deniedMessage: string;
+  deniedTranscript: string;
+};
+const VOICE_METHODS = [
+  "talk.client.toolCall",
+  "talk.client.transcript",
+  "talk.client.close",
+] as const;
 const CONTROL_ACTIONS = [
   "pair",
   "revoke-acl",
@@ -133,6 +157,11 @@ const CONTROL_ACTIONS = [
   "approval-allowed",
   "approval-retired",
   "approval-complete",
+  "voice-start",
+  "voice-opened",
+  "voice-baseline",
+  "voice-complete",
+  "voice-lifecycle-complete",
 ] as const;
 type ControlProgress = {
   action: (typeof CONTROL_ACTIONS)[number] | "unknown";
@@ -147,8 +176,39 @@ type ControlProgress = {
     | "signin-order"
     | "signin-provider"
     | "signin-wire"
-    | "signin-connection";
+    | "signin-connection"
+    | "voice-case"
+    | "voice-completion-attempt"
+    | "voice-session-id"
+    | "voice-outcome"
+    | "voice-wire-count"
+    | "voice-wire-result"
+    | "voice-attempt"
+    | "voice-provider-read"
+    | "voice-sentinel-read"
+    | "voice-sentinel-count"
+    | "voice-denied-sentinel-read"
+    | "voice-denied-sentinel-empty"
+    | "voice-provider-count"
+    | "voice-provider-denied"
+    | "voice-store-open"
+    | "voice-store-read"
+    | "voice-store-count"
+    | "voice-store-parse"
+    | "voice-store-record"
+    | "voice-record-found"
+    | "voice-consult-runs"
+    | "voice-transcript-failures"
+    | "voice-history-read"
+    | "voice-transcript-count"
+    | "voice-transcript-denied"
+    | "voice-owner-equality"
+    | "voice-history-equality"
+    | "voice-closed";
+  voiceCase?: VoiceCaseID;
   signInCheckpoint?: SignInCheckpoint;
+  method?: (typeof VOICE_METHODS)[number];
+  kind?: "rpc-request" | "rpc-response";
 };
 export type NativeActionFixtureDescriptor = {
   version: 1;
@@ -165,7 +225,14 @@ export type NativeActionFixtureDescriptor = {
     sessions: Record<MediaSession, WireMedia>;
   };
   approvals?: ApprovalFixture;
+  voice?: Record<VoiceCaseID, VoiceSpec>;
 };
+
+function setControlPhase(progress: ControlProgress | undefined, phase: ControlProgress["phase"]) {
+  if (progress) {
+    progress.phase = phase;
+  }
+}
 
 async function readBody(request: AsyncIterable<Buffer | string>) {
   let text = "";
@@ -322,6 +389,8 @@ export async function withNativeActionGateway(
   let completedMedia: MediaCaseID[] = [];
   let completedWidgets: IOSWidgetCaseID[] = [];
   let completedApprovals = false;
+  let completedVoice: VoiceCaseID[] = [];
+  let voiceLifecycleVerified = false;
   let signInSnapshot: (() => { entered: number; settled: number }) | undefined;
   let signInVerified = false;
   await runProfileWireProof(
@@ -335,7 +404,12 @@ export async function withNativeActionGateway(
         repoRoot: process.cwd(),
         token: controlToken,
         recordPath: undefined,
-        observedMethods: ["artifacts.download", "plugin.surface.refresh"],
+        observedMethods: [
+          "artifacts.download",
+          "plugin.surface.refresh",
+          ...VOICE_METHODS,
+          "talk.mode",
+        ],
         mediaPaths,
         upstreamHeaders: {
           "x-forwarded-user": SKILL_LIBRARY_ALICE,
@@ -395,6 +469,32 @@ export async function withNativeActionGateway(
         }
         assert.fail("native approval response observation timed out");
       };
+      const voice = {} as Record<VoiceCaseID, VoiceSpec>;
+      const voiceEffects = new Map<
+        VoiceCaseID,
+        {
+          marker: string;
+          sentinel: string;
+          command: string;
+          deniedMarker: string;
+          deniedSentinel: string;
+        }
+      >();
+      const voiceAttempts = new Map<
+        VoiceCaseID,
+        {
+          startIndex: number;
+          runId?: string;
+          voiceSessionId?: string;
+          baseline?: {
+            eventIndex: number;
+            record: ClientVoiceSessionRecord;
+            transcript: ReturnType<typeof voiceTranscriptSnapshot>;
+          };
+        }
+      >();
+      const voiceCompleted = new Set<VoiceCaseID>();
+      let voiceLifecycleComplete = false;
       const pairedDevices = new Set<string>();
       const pending = new Set<Promise<void>>();
       let firstControlFailure: Error | undefined;
@@ -420,6 +520,132 @@ export async function withNativeActionGateway(
             { sessionKey, limit: 100 },
           )
         ).messages;
+      const voiceTranscriptSnapshot = (sessionKey: string) => {
+        const agentId = "qa";
+        const db = new DatabaseSync(
+          resolveOpenClawAgentSqlitePath({ agentId, env: instance.env }),
+          { readOnly: true },
+        );
+        try {
+          // Profile merges refresh display metadata without rewriting transcript
+          // events. Compare the complete stored identity and bytes in one snapshot.
+          return runSqliteDeferredTransactionSync(db, () => {
+            const sessionId = readSessionEntryInstanceId({ db }, sessionKey);
+            assert(sessionId, "native voice transcript session was missing");
+            const rows = readTranscriptEventRows({ db }, sessionId);
+            assert(rows.length > 0, "native voice transcript was empty");
+            return { agentId, sessionKey, sessionId, rows };
+          });
+        } finally {
+          db.close();
+        }
+      };
+      const voiceRecords = (progress?: ControlProgress) => {
+        // Inspect the authoritative fixture-owned store without opening a runtime
+        // writer, creating an id, or triggering schema/migration work.
+        setControlPhase(progress, "voice-store-open");
+        const db = new DatabaseSync(
+          resolveOpenClawAgentSqlitePath({ agentId: "qa", env: instance.env }),
+          {
+            readOnly: true,
+          },
+        );
+        try {
+          setControlPhase(progress, "voice-store-read");
+          const rows = executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<Pick<AgentDatabase, "cache_entries">>(db)
+              .selectFrom("cache_entries")
+              .select("value_json")
+              .where("scope", "=", "talk-client-voice-sessions")
+              .limit(16),
+          ).rows;
+          setControlPhase(progress, "voice-store-count");
+          assert(rows.length < 16, "unexpected native voice record count");
+          return rows.map((row) => {
+            setControlPhase(progress, "voice-store-parse");
+            const record = parseStoredVoiceSessionRecord(row.value_json);
+            setControlPhase(progress, "voice-store-record");
+            assert(record, "invalid native voice owner record");
+            return record;
+          });
+        } finally {
+          db.close();
+        }
+      };
+      const verifyVoiceEffects = async (id: VoiceCaseID, progress?: ControlProgress) => {
+        const effects = voiceEffects.get(id)!;
+        setControlPhase(progress, "voice-provider-read");
+        const requests = await journal();
+        setControlPhase(progress, "voice-sentinel-read");
+        const sentinel = await fs.readFile(effects.sentinel, "utf8");
+        setControlPhase(progress, "voice-sentinel-count");
+        assert.equal(sentinel, effects.marker);
+        setControlPhase(progress, "voice-denied-sentinel-read");
+        const deniedSentinel = await fs.readFile(effects.deniedSentinel, "utf8");
+        setControlPhase(progress, "voice-denied-sentinel-empty");
+        assert.equal(deniedSentinel, "");
+        setControlPhase(progress, "voice-provider-count");
+        assert.equal(
+          requests.filter(
+            (request) =>
+              request.requestKind === "agent-initial" &&
+              request.plannedToolName === "exec" &&
+              request.plannedToolArgs?.command === effects.command,
+          ).length,
+          1,
+        );
+        setControlPhase(progress, "voice-provider-denied");
+        assert(!requests.some((request) => request.raw.includes(effects.deniedMarker)));
+      };
+      const verifyVoice = async (id: VoiceCaseID, progress?: ControlProgress) => {
+        const attempt = voiceAttempts.get(id);
+        setControlPhase(progress, "voice-attempt");
+        assert(attempt?.baseline && attempt.runId && attempt.voiceSessionId);
+        await verifyVoiceEffects(id, progress);
+        const record = voiceRecords(progress).find(
+          (row) => row.voiceSessionId === attempt.voiceSessionId,
+        );
+        setControlPhase(progress, "voice-record-found");
+        assert(record);
+        setControlPhase(progress, "voice-consult-runs");
+        assert.deepEqual(record.consultRunIds, [attempt.runId]);
+        setControlPhase(progress, "voice-transcript-failures");
+        assert.deepEqual(record.transcriptFailureKeys, []);
+        setControlPhase(progress, "voice-history-read");
+        const messages = await history(cases[id].sessionKey);
+        setControlPhase(progress, "voice-transcript-count");
+        assert.equal(
+          messages.filter(
+            (message) =>
+              message.role === "user" && wireMessageText(message) === voice[id].transcript,
+          ).length,
+          1,
+        );
+        setControlPhase(progress, "voice-transcript-denied");
+        assert(
+          !messages.some((message) =>
+            wireMessageText(message).includes(voice[id].deniedTranscript),
+          ),
+        );
+        if (id === "acl" || id === "profile") {
+          setControlPhase(progress, "voice-owner-equality");
+          assert.deepEqual(
+            record,
+            attempt.baseline.record,
+            "denied voice request changed its owner",
+          );
+          setControlPhase(progress, "voice-history-equality");
+          assert.deepEqual(
+            voiceTranscriptSnapshot(cases[id].sessionKey),
+            attempt.baseline.transcript,
+            "denied voice request changed its transcript",
+          );
+        } else {
+          setControlPhase(progress, "voice-closed");
+          assert.equal(record.status, "closed");
+        }
+      };
       const verify = async (id: CaseID, runId?: string) => {
         const spec = cases[id];
         const effects = commands.get(id)!;
@@ -752,6 +978,126 @@ export async function withNativeActionGateway(
             approvalPhase = "complete";
             return { completed: "approvals" };
           }
+          case "voice-start": {
+            assert(platform === "ios" && VOICE_CASES.includes(input.case as VoiceCaseID));
+            const id = input.case as VoiceCaseID;
+            assert(!voiceAttempts.has(id));
+            voiceAttempts.set(id, { startIndex: proxy.snapshot().events.length });
+            return { started: id };
+          }
+          case "voice-opened": {
+            assert(VOICE_CASES.includes(input.case as VoiceCaseID));
+            const id = input.case as VoiceCaseID;
+            const attempt = voiceAttempts.get(id);
+            assert(attempt && !attempt.runId && typeof input.runId === "string");
+            const runId = input.runId;
+            const terminal = await admin.request<{ status: string }>(
+              "agent.wait",
+              { runId, timeoutMs: PROOF_TIMEOUT_MS },
+              PROOF_TIMEOUT_MS + 5000,
+            );
+            assert.equal(terminal.status, "ok");
+            await verifyVoiceEffects(id);
+            const matches = voiceRecords().filter(
+              (record) =>
+                record.agentId === "qa" &&
+                record.sessionKey === cases[id].sessionKey &&
+                record.consultRunIds.includes(runId),
+            );
+            assert.equal(matches.length, 1);
+            const record = matches[0]!;
+            assert.equal(record.status, "open");
+            assert.equal(record.origin, "client");
+            attempt.runId = runId;
+            attempt.voiceSessionId = record.voiceSessionId;
+            return { voiceSessionId: record.voiceSessionId };
+          }
+          case "voice-baseline": {
+            assert(VOICE_CASES.includes(input.case as VoiceCaseID));
+            const id = input.case as VoiceCaseID;
+            const attempt = voiceAttempts.get(id);
+            assert(attempt?.voiceSessionId && !attempt.baseline);
+            assert.equal(input.voiceSessionId, attempt.voiceSessionId);
+            const record = voiceRecords().find(
+              (row) => row.voiceSessionId === attempt.voiceSessionId,
+            );
+            assert(record?.hasUserTranscript && record.status === "open");
+            const events = proxy.snapshot().events;
+            for (const method of ["talk.client.toolCall", "talk.client.transcript"]) {
+              assert.deepEqual(
+                events
+                  .slice(attempt.startIndex)
+                  .filter(
+                    (event: { kind: string; method?: string }) =>
+                      event.kind === "rpc-response" && event.method === method,
+                  )
+                  .map((event) => event.ok),
+                [true],
+              );
+            }
+            attempt.baseline = {
+              eventIndex: events.length,
+              record,
+              transcript: voiceTranscriptSnapshot(cases[id].sessionKey),
+            };
+            return { completed: "voice-baseline" };
+          }
+          case "voice-lifecycle-complete": {
+            const attempt = voiceAttempts.get("controlProfile");
+            assert(attempt?.baseline && !voiceLifecycleComplete);
+            const events = proxy.snapshot().events.slice(attempt.baseline.eventIndex);
+            assert(!events.some((event: { method?: string }) => event.method === "talk.mode"));
+            for (const kind of ["response-held", "response-released"]) {
+              const matching = events.filter(
+                (event: { kind: string; method?: string }) =>
+                  event.kind === kind && event.method === "talk.client.close",
+              );
+              assert.equal(matching.length, 1);
+              assert.equal(matching[0].ok, true);
+              if (kind === "response-released") {
+                assert.equal(matching[0].delivered, true);
+              }
+            }
+            voiceLifecycleComplete = true;
+            return { completed: "voice-lifecycle" };
+          }
+          case "voice-complete": {
+            progress.voiceCase = VOICE_CASES.find((id) => id === input.case);
+            progress.phase = "voice-case";
+            assert(VOICE_CASES.includes(input.case as VoiceCaseID));
+            const id = input.case as VoiceCaseID;
+            const attempt = voiceAttempts.get(id);
+            progress.phase = "voice-completion-attempt";
+            assert(attempt?.baseline && !voiceCompleted.has(id));
+            progress.phase = "voice-session-id";
+            assert.equal(input.voiceSessionId, attempt.voiceSessionId);
+            const allowed = id === "controlACL" || id === "controlProfile";
+            progress.phase = "voice-outcome";
+            assert.equal(input.outcome, allowed ? "allowed" : "rejected");
+            const events = proxy.snapshot().events.slice(attempt.baseline.eventIndex);
+            for (const method of VOICE_METHODS) {
+              const expected = !allowed || method === "talk.client.close" ? 1 : 0;
+              for (const kind of ["rpc-request", "rpc-response"] as const) {
+                progress.method = method;
+                progress.kind = kind;
+                progress.phase = "voice-wire-count";
+                const matching = events.filter(
+                  (event: { kind: string; method?: string }) =>
+                    event.kind === kind && event.method === method,
+                );
+                assert.equal(matching.length, expected);
+                if (kind === "rpc-response") {
+                  progress.phase = "voice-wire-result";
+                  assert(matching.every((event: { ok: boolean }) => event.ok === allowed));
+                }
+              }
+            }
+            delete progress.method;
+            delete progress.kind;
+            await verifyVoice(id, progress);
+            voiceCompleted.add(id);
+            return { completed: id };
+          }
           case "pair":
           case "pair-approval":
           case "pair-signin": {
@@ -854,7 +1200,10 @@ export async function withNativeActionGateway(
                 : "";
             const message =
               `native fixture controls failed: action=${progress.action}; phase=${progress.phase}; reason=request-failed; category=${category}` +
+              (progress.voiceCase ? `; voiceCase=${progress.voiceCase}` : "") +
               (progress.signInCheckpoint ? `; signInCheckpoint=${progress.signInCheckpoint}` : "") +
+              (progress.method ? `; method=${progress.method}` : "") +
+              (progress.kind ? `; kind=${progress.kind}` : "") +
               connectionTrace;
             // Raw assertions and stacks can contain fixture credentials and private paths.
             firstControlFailure = new Error(message);
@@ -987,6 +1336,31 @@ export async function withNativeActionGateway(
               },
             });
           }
+          if (platform === "ios") {
+            for (const id of VOICE_CASES) {
+              const marker = `VOICE-${id.toUpperCase()}`;
+              const deniedMarker = `${marker}-DENIED`;
+              const sentinel = path.join(instance.state.workspaceDir, `${marker}.txt`);
+              const deniedSentinel = path.join(instance.state.workspaceDir, `${deniedMarker}.txt`);
+              const command = `printf '%s' ${JSON.stringify(marker)} >> ${JSON.stringify(`./${marker}.txt`)}`;
+              const deniedCommand = `printf '%s' ${JSON.stringify(deniedMarker)} >> ${JSON.stringify(`./${deniedMarker}.txt`)}`;
+              await fs.writeFile(sentinel, "");
+              await fs.writeFile(deniedSentinel, "");
+              const message = (execCommand: string, answer: string) =>
+                [
+                  "Tool progress QA check.",
+                  `Call the exec tool exactly once with this exact command before answering: \`${execCommand}\`.`,
+                  `Reply exactly \`${answer}\`.`,
+                ].join(" ");
+              voice[id] = {
+                message: message(command, marker),
+                transcript: `${marker}-TRANSCRIPT`,
+                deniedMessage: message(deniedCommand, deniedMarker),
+                deniedTranscript: `${deniedMarker}-TRANSCRIPT`,
+              };
+              voiceEffects.set(id, { marker, sentinel, command, deniedMarker, deniedSentinel });
+            }
+          }
           await new Promise<void>((resolve, reject) => {
             control.once("error", reject);
             control.listen(0, "127.0.0.1", resolve);
@@ -1005,6 +1379,7 @@ export async function withNativeActionGateway(
               cases,
               media,
               approvals,
+              ...(platform === "ios" ? { voice } : {}),
             });
           } catch (error) {
             console.error(
@@ -1157,6 +1532,13 @@ export async function withNativeActionGateway(
             }
             completedApprovals = true;
           }
+          if (platform === "ios") {
+            assert.deepEqual([...voiceCompleted].toSorted(), [...VOICE_CASES].toSorted());
+            assert(voiceLifecycleComplete, "missing native close/successor proof");
+            for (const id of VOICE_CASES) {
+              await verifyVoice(id);
+            }
+          }
           assert(pairedDevices.size > 0, "no real native device pairing was approved");
           for (const request of proxy
             .snapshot()
@@ -1205,6 +1587,8 @@ export async function withNativeActionGateway(
       completedCases = [...completed];
       completedMedia = [...mediaCompleted];
       completedWidgets = [...widgetsCompleted.keys()];
+      completedVoice = [...voiceCompleted];
+      voiceLifecycleVerified = voiceLifecycleComplete;
     },
     async ({ instance, provider, config }) => {
       await provider.signIn?.prepare(instance, config);
@@ -1221,6 +1605,8 @@ export async function withNativeActionGateway(
       mediaCases: completedMedia,
       widgetCases: completedWidgets,
       approvalsVerified: completedApprovals,
+      voiceCases: completedVoice,
+      voiceLifecycleVerified,
       ...(platform === "ios"
         ? { signInCases: ["admittedCleanup", "retiredProfile", "retiredRoute"] }
         : {}),

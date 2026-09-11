@@ -1034,6 +1034,9 @@ final class NodeAppModel {
         self.talkMode.setPushToTalkAudioOwnershipEndHandler { [weak self] captureId in
             self?.releasePttVoiceWakeLease(for: captureId)
         }
+        self.talkMode.setNativeCallFailureHandler { [weak self] callID, reason in
+            self?.settleNativeTalkFailure(callID: callID, reason: reason)
+        }
         self.voiceNoteRecorder.setCaptureAdmissionHandler { [weak self] in
             self?.isBackgrounded == false &&
                 self?.isTalkCaptureActive == false &&
@@ -1357,18 +1360,130 @@ final class NodeAppModel {
         }
     }
 
+    private enum TalkModePublicationIntent {
+        case globalCommand
+        case nativeLifecycle
+    }
+
     func setTalkEnabled(_ enabled: Bool) {
+        self.applyTalkEnabled(enabled, nativeBinding: nil, publication: .globalCommand)
+    }
+
+    func startNativeTalk(
+        nativeBinding: IOSNativeActionBinding,
+        presentationIsCurrent: @MainActor @Sendable () -> Bool) async throws
+    {
+        guard !self.isAppleReviewDemoModeEnabled else {
+            throw OpenClawNativeActionError("Demo mode only")
+        }
+        guard self.auxiliaryAudioCapture == nil else {
+            throw OpenClawNativeActionError("Finish the active audio capture first")
+        }
+        let nativeGateway = OpenClawChatNativeActionGateway(
+            gatewayID: nativeBinding.session.owner.gatewayID,
+            gatewayName: nativeBinding.session.owner.gatewayID,
+            supportsProfileBinding: {
+                await nativeBinding.gateway.supportsServerCapability(
+                    .profileBinding, ifCurrentRoute: nativeBinding.route) == true
+            },
+            request: { request, expectedProfileId in
+                try await nativeBinding.gateway.request(
+                    request,
+                    ifCurrentRoute: nativeBinding.route,
+                    distinguishPreDispatchRouteChange: true,
+                    expectedProfileId: expectedProfileId)
+            },
+            isCurrent: { await nativeBinding.isCurrent() })
+        @MainActor func requirePresentation() throws {
+            guard presentationIsCurrent() else {
+                throw OpenClawNativeActionError("The selected chat changed. Open it again.")
+            }
+        }
+        try requirePresentation()
+        _ = try await nativeGateway.owner(expected: nativeBinding.session.owner)
+        try Task.checkCancellation()
+        try requirePresentation()
+        try await self.talkMode.prepareNativeStart(using: nativeBinding)
+        try Task.checkCancellation()
+        try requirePresentation()
+        guard let startup = self.applyTalkEnabled(
+            true, nativeBinding: nativeBinding, publication: .nativeLifecycle)
+        else {
+            throw OpenClawNativeActionError(self.talkMode.statusText)
+        }
+        self.talkMode.registerNativeStartWaiter(startup)
+        var failureReason: String?
+        defer {
+            if self.talkMode.releaseNativeStartWaiter(startup) {
+                self.settleNativeTalkFailure(callID: startup.callID, reason: failureReason)
+            }
+        }
+        do {
+            let outcome = await startup.result.value
+            try self.talkMode.requireCurrentNativeStart(startup)
+            try Task.checkCancellation()
+            switch outcome {
+            case .started:
+                break
+            case .cancelled:
+                throw CancellationError()
+            case let .unavailable(reason):
+                throw OpenClawNativeActionError(reason)
+            }
+            _ = try await nativeGateway.owner(expected: nativeBinding.session.owner)
+            try self.talkMode.requireCurrentNativeStart(startup)
+            try Task.checkCancellation()
+            try requirePresentation()
+            try self.talkMode.commitNativeStart(startup)
+        } catch {
+            let failure: Error = if let reason = startup.failureReason {
+                OpenClawNativeActionError(reason)
+            } else {
+                error
+            }
+            failureReason = failure is CancellationError ? nil : failure.localizedDescription
+            throw failure
+        }
+    }
+
+    private func settleNativeTalkFailure(callID: UUID, reason: String?) {
+        guard self.talkMode.ownsNativeCall(callID),
+              let binding = self.talkMode.activeNativeBinding
+        else { return }
+        self.applyTalkEnabled(false, nativeBinding: binding, publication: .nativeLifecycle)
+        if let reason {
+            self.talkMode.statusText = reason
+        }
+    }
+
+    @discardableResult
+    private func applyTalkEnabled(
+        _ enabled: Bool,
+        nativeBinding: IOSNativeActionBinding?,
+        publication: TalkModePublicationIntent) -> TalkModeManager.StartAttempt?
+    {
+        let activeBinding = self.talkMode.activeNativeBinding
+        let callBinding = enabled ? (nativeBinding ?? activeBinding) : (activeBinding ?? nativeBinding)
         if self.isAppleReviewDemoModeEnabled {
+            if enabled, nativeBinding != nil { return nil }
             UserDefaults.standard.set(false, forKey: "talk.enabled")
-            self.talkMode.setEnabled(false)
+            self.talkMode.setEnabled(false, nativeBinding: activeBinding)
             self.talkMode.statusText = "Demo mode only"
-            return
+            return nil
         }
         if enabled, self.auxiliaryAudioCapture != nil {
+            if nativeBinding != nil { return nil }
             UserDefaults.standard.set(false, forKey: "talk.enabled")
-            self.talkMode.setEnabled(false)
+            self.talkMode.setEnabled(false, nativeBinding: activeBinding)
             self.talkMode.statusText = "Finish the active audio capture first"
-            return
+            return nil
+        }
+        let reservedStart: TalkModeManager.StartAttempt?
+        if enabled, nativeBinding != nil {
+            guard let attempt = self.talkMode.setEnabled(true, nativeBinding: callBinding) else { return nil }
+            reservedStart = attempt
+        } else {
+            reservedStart = nil
         }
         UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
@@ -1383,8 +1498,8 @@ final class NodeAppModel {
             self.cancelTalkPermissionUpgrade(
                 resumeOperatorGateway: self.forceOperatorTalkPermissionUpgradeRequest)
         }
-        self.talkMode.setEnabled(enabled)
-        if enabled {
+        let startup = reservedStart ?? self.talkMode.setEnabled(enabled, nativeBinding: callBinding)
+        if enabled, callBinding == nil {
             // Preserve a known missing scope before an offline config reload can
             // overwrite it; the operator reconnect owns the approval handshake.
             self.requestTalkPermissionUpgradeIfNeeded()
@@ -1398,11 +1513,14 @@ final class NodeAppModel {
                 self.requestTalkPermissionUpgradeIfNeeded()
             }
         }
-        Task { [weak self] in
-            await self?.pushTalkModeToGateway(
-                enabled: enabled,
-                phase: enabled ? "enabled" : "disabled")
+        if publication == .globalCommand {
+            Task { [weak self] in
+                await self?.pushTalkModeToGateway(
+                    enabled: enabled,
+                    phase: enabled ? "enabled" : "disabled")
+            }
         }
+        return startup
     }
 
     private func requestTalkPermissionUpgrade() {
@@ -3531,7 +3649,7 @@ extension NodeAppModel {
     /// active owner. Otherwise a waiter can wake and retarget to the new chat.
     func synchronizeTalkSessionKey(_ sessionKey: String? = nil) {
         let effectiveSessionKey = sessionKey ?? self.chatSessionKey
-        guard !self.talkMode.isUsingMainSessionKey(effectiveSessionKey) else { return }
+        guard !self.talkMode.isUsingForegroundSessionKey(effectiveSessionKey) else { return }
         self.talkPttCommandEpoch &+= 1
         self.voiceWake.invalidatePendingCommand()
         self.talkMode.updateMainSessionKey(effectiveSessionKey)

@@ -102,11 +102,86 @@ struct IOSNativeActionBinding: Sendable {
             chat.canPreserveIdleTextDraft && !captureIsActive
     }
 
+    static func isProfileMismatch(_ error: Error) -> Bool {
+        (error as? GatewayResponseError)?.detailsReason == "EXPECTED_PROFILE_MISMATCH"
+    }
+
     func request(method: String, paramsJSON: String?, timeoutSeconds: Int) async throws -> Data {
         let params = try paramsJSON.map {
             try JSONDecoder().decode([String: OpenClawProtocol.AnyCodable].self, from: Data($0.utf8))
         } ?? [:]
         return try await self.request(.init(
             method: method, params: params, timeoutMs: Double(timeoutSeconds) * 1000))
+    }
+
+    func resolveHTTPURL(_ raw: String) throws -> URL {
+        guard let httpContext else { throw OpenClawNativeActionError(Self.unavailableReason) }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let absolute = URL(string: trimmed)
+        let resolved = absolute?.scheme == nil
+            ? GatewayPluginSurfaceURL.canonicalize(raw: trimmed, against: httpContext.gatewayURL)
+            .flatMap(URL.init(string:))
+            : absolute
+        guard let resolved, ["http", "https"].contains(resolved.scheme?.lowercased() ?? "") else {
+            throw OpenClawNativeActionError("The selected Gateway returned an invalid voice URL.")
+        }
+        return resolved
+    }
+
+    func exchangeVoiceOffer(_ original: URLRequest) async throws -> (Data, URLResponse) {
+        try await self.requireAvailable()
+        guard let httpContext, let url = original.url else {
+            throw OpenClawNativeActionError(Self.unavailableReason)
+        }
+        let isGateway = url.host?.lowercased() == httpContext.gatewayURL.host?.lowercased() &&
+            (url.port ?? (url.scheme == "https" ? 443 : 80)) ==
+            (httpContext.gatewayURL.port ?? (httpContext.gatewayURL.scheme == "wss" ? 443 : 80)) &&
+            (url.scheme == "https") == (httpContext.gatewayURL.scheme == "wss")
+        let session = GatewayTLSPinningSession(
+            params: GatewayTLSParams(
+                required: true,
+                expectedFingerprint: isGateway ? httpContext.tlsFingerprintSHA256 : nil,
+                allowTOFU: false,
+                storeKey: nil),
+            allowsRedirects: false,
+            allowsStoredCredentials: false)
+        defer { session.finishTasksAndInvalidate() }
+        var request = original
+        request.timeoutInterval = 12
+        if isGateway, url.scheme == "https" {
+            // Offer credentials and content headers own collisions with proxy headers.
+            for (name, value) in httpContext.customHeaders where request.value(forHTTPHeaderField: name) == nil {
+                request.setValue(value, forHTTPHeaderField: name)
+            }
+        }
+        let result = try await session.data(for: request, maximumBytes: 1024 * 1024)
+        guard await self.isCurrent() else { throw CancellationError() }
+        return result
+    }
+
+    func subscribeServerEvents(
+        bufferingNewest: Int,
+        onUnavailable: @escaping @MainActor @Sendable () -> Void) async -> AsyncStream<EventFrame>
+    {
+        let subscription = await self.gateway.makeServerEventSubscription(bufferingNewest: bufferingNewest)
+        let (stream, continuation) = AsyncStream<EventFrame>.makeStream(
+            bufferingPolicy: .bufferingNewest(bufferingNewest))
+        let task = Task {
+            defer {
+                subscription.cancel()
+                continuation.finish()
+            }
+            for await event in subscription.events {
+                guard !Task.isCancelled else { return }
+                guard await self.accepts(event) else {
+                    await onUnavailable()
+                    return
+                }
+                continuation.yield(event)
+            }
+            if !Task.isCancelled { await onUnavailable() }
+        }
+        continuation.onTermination = { _ in task.cancel() }
+        return stream
     }
 }

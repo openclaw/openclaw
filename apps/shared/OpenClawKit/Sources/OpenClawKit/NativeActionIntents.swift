@@ -131,12 +131,23 @@ public struct OpenClawRunQuery: EntityStringQuery {
 public enum OpenClawNativeSessionOperation: String, AppEnum {
     case open
     case compose
+    #if os(iOS)
+    case liveVoice
+    #endif
 
     public static let typeDisplayRepresentation: TypeDisplayRepresentation = "Session Operation"
+    #if os(iOS)
+    public static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
+        .open: "Open",
+        .compose: "Compose",
+        .liveVoice: "Live Voice",
+    ]
+    #else
     public static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
         .open: "Open",
         .compose: "Compose",
     ]
+    #endif
 }
 
 /// App Intents metadata permits one OpenIntent per entity; session variants
@@ -170,6 +181,9 @@ public struct OpenSessionIntent: OpenIntent {
         let request: OpenClawNativeOpenRequest = switch self.operation ?? .open {
         case .open: .session(self.target.session)
         case .compose: .compose(self.target.session, draft: self.draft)
+        #if os(iOS)
+        case .liveVoice: .liveVoice(self.target.session)
+        #endif
         }
         try await OpenClawNativeActionServices.open(request)
         return .result()
@@ -218,6 +232,33 @@ struct OpenRunIntent: OpenIntent {
         return .result()
     }
 }
+
+#if os(iOS)
+public struct OpenLiveVoiceIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Open Session Voice"
+    public static let openAppWhenRun = true
+    @available(iOS 26.0, *)
+    public static var supportedModes: IntentModes {
+        .foreground(.immediate)
+    }
+
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    @Parameter(title: "Session") public var target: OpenClawSessionEntity
+    public static var parameterSummary: some ParameterSummary {
+        Summary("Start voice in \(\.$target)")
+    }
+
+    public init() {}
+    public init(target: OpenClawSessionEntity) {
+        self.target = target
+    }
+
+    @MainActor
+    public func perform() async throws -> some IntentResult {
+        try await OpenSessionIntent(target: self.target, operation: .liveVoice).perform()
+    }
+}
+#endif
 
 public struct SendMessageIntent: AppIntent {
     public static let title: LocalizedStringResource = "Send Message"

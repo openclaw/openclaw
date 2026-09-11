@@ -1,5 +1,6 @@
 import AVFAudio
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 
 private func makeRealtimeAudioTapBlock(
@@ -66,12 +67,34 @@ final class IOSRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
 }
 
 extension RealtimeTalkRelayTransport {
-    static func ios(gateway: GatewayNodeSession, route: GatewayNodeSessionRoute) -> Self {
+    static func ios(
+        gateway: GatewayNodeSession,
+        route: GatewayNodeSessionRoute,
+        nativeBinding: IOSNativeActionBinding? = nil,
+        onBindingUnavailable: @escaping @MainActor @Sendable () -> Void = {}) -> Self
+    {
         Self(
             subscribeServerEvents: { bufferingNewest in
-                await gateway.subscribeServerEvents(bufferingNewest: bufferingNewest)
+                if let nativeBinding {
+                    return await nativeBinding.subscribeServerEvents(
+                        bufferingNewest: bufferingNewest,
+                        onUnavailable: onBindingUnavailable)
+                }
+                return await gateway.subscribeServerEvents(bufferingNewest: bufferingNewest)
             },
             request: { method, params, timeoutMs in
+                if let nativeBinding {
+                    do {
+                        return try await nativeBinding.request(.init(
+                            method: method, params: params ?? [:], timeoutMs: timeoutMs))
+                    } catch {
+                        let routeCurrent = await nativeBinding.isCurrent()
+                        if IOSNativeActionBinding.isProfileMismatch(error) || !routeCurrent {
+                            await onBindingUnavailable()
+                        }
+                        throw error
+                    }
+                }
                 let response = try await gateway.request(
                     method: method,
                     params: params,

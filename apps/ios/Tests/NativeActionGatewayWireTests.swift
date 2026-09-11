@@ -27,6 +27,13 @@ struct NativeActionGatewayWireTests {
             let sessions: [String: Session]
         }
 
+        struct Voice: Decodable {
+            let message: String
+            let transcript: String
+            let deniedMessage: String
+            let deniedTranscript: String
+        }
+
         let version: Int
         let gatewayURL: URL
         let controlURL: URL
@@ -36,6 +43,7 @@ struct NativeActionGatewayWireTests {
         let bobProfileID: String
         let cases: [String: Case]
         let media: Media
+        let voice: [String: Voice]
 
         func control(_ action: String, fields: [String: String] = [:]) async throws -> ControlResponse {
             var request = URLRequest(url: self.controlURL)
@@ -70,6 +78,7 @@ struct NativeActionGatewayWireTests {
 
         let heldResponse: HeldResponse?
         let canvasOrigin: URL?
+        let voiceSessionId: String?
         let signInGatewayURL: URL?
         let signInAuthChoice: String?
     }
@@ -269,6 +278,8 @@ struct NativeActionGatewayWireTests {
             try await fixture.verify("controlACL", runID: aclControl.runID)
             try await Self.verifyMedia(presentation, id: "controlACL", session: "controlACL", allowed: true)
             try await Self.retireMediaResult(presentation)
+            let aclVoice = try await Self.beginVoice(presentation, id: "controlACL")
+            try await Self.closeVoice(presentation, id: "controlACL", voice: aclVoice)
 
             try await Self.retireAcceptedSubmission(presentation)
             let widget = try await Self.verifyWidgetRetirement(presentation)
@@ -294,6 +305,8 @@ struct NativeActionGatewayWireTests {
                 id: "controlProfile",
                 transport: #require(presentation.transport),
                 allowed: true)
+            let profileVoice = try await Self.beginVoice(presentation, id: "controlProfile")
+            try await Self.retireVoiceCleanup(presentation, voice: profileVoice)
         } catch {
             await signIn.close()
             await presentation.close()
@@ -546,6 +559,7 @@ struct NativeActionGatewayWireTests {
         let retainedTransport = try #require(presentation.transport)
         try await Self.verifyMedia(
             presentation, id: "\(second)Allowed", session: second, allowed: true, transport: retainedTransport)
+        let voice = try await Self.beginVoice(presentation, id: second)
         _ = try await fixture.control("hold-response", fields: ["method": "users.self"])
         let submission = Task { @MainActor in try await suspended.submit() }
         do {
@@ -560,12 +574,217 @@ struct NativeActionGatewayWireTests {
             try await fixture.verify(second)
             try await Self.verifyMedia(
                 presentation, id: second, session: second, allowed: false, transport: retainedTransport)
+            try await Self.rejectVoice(presentation, id: second, voice: voice)
         } catch {
             await presentation.disconnect()
             submission.cancel()
             _ = await submission.result
             throw error
         }
+    }
+
+    private struct VoiceAttempt {
+        let transport: RealtimeTalkRelayTransport
+        let binding: IOSNativeActionBinding
+        let voiceSessionID: String
+
+        var target: [String: OpenClawProtocol.AnyCodable] {
+            [
+                "sessionKey": .init(self.binding.session.sessionKey),
+                "voiceSessionId": .init(self.voiceSessionID),
+            ]
+        }
+    }
+
+    @MainActor
+    private static func beginVoice(_ presentation: Presentation, id: String) async throws -> VoiceAttempt {
+        let fixture = presentation.fixture
+        let spec = try #require(fixture.voice[id])
+        let binding = try #require(presentation.binding)
+        let transport = RealtimeTalkRelayTransport.ios(
+            gateway: binding.gateway, route: binding.route, nativeBinding: binding)
+        _ = try await fixture.control("voice-start", fields: ["case": id])
+        let data = try await transport.request(
+            "talk.client.toolCall",
+            [
+                "sessionKey": .init(binding.session.sessionKey),
+                "name": .init("openclaw_agent_consult"),
+                "callId": .init(UUID().uuidString),
+                "args": .init(["question": spec.message]),
+            ],
+            15000)
+        struct Receipt: Decodable { let runId: String }
+        let receipt = try JSONDecoder().decode(Receipt.self, from: data)
+        try #require(!receipt.runId.isEmpty)
+        // The fixture reads the owner record after terminal consult effects.
+        // No test-created id or provider session substitutes for that record.
+        let opened = try await fixture.control("voice-opened", fields: ["case": id, "runId": receipt.runId])
+        let voiceID = try #require(opened.voiceSessionId)
+        try #require(!voiceID.isEmpty)
+        let voice = VoiceAttempt(transport: transport, binding: binding, voiceSessionID: voiceID)
+        _ = try await transport.request(
+            "talk.client.transcript",
+            voice.target.merging([
+                "entryId": .init(UUID().uuidString), "role": .init("user"), "text": .init(spec.transcript),
+            ]) { _, next in next },
+            15000)
+        _ = try await fixture.control(
+            "voice-baseline", fields: ["case": id, "voiceSessionId": voiceID])
+        return voice
+    }
+
+    @MainActor
+    private static func rejectVoice(
+        _ presentation: Presentation,
+        id: String,
+        voice: VoiceAttempt) async throws
+    {
+        let fixture = presentation.fixture
+        let spec = try #require(fixture.voice[id])
+        let requests: [(String, [String: OpenClawProtocol.AnyCodable])] = [
+            ("talk.client.toolCall", [
+                "name": .init("openclaw_agent_consult"), "callId": .init(UUID().uuidString),
+                "args": .init(["question": spec.deniedMessage]),
+            ]),
+            ("talk.client.transcript", [
+                "entryId": .init(UUID().uuidString), "role": .init("user"), "text": .init(spec.deniedTranscript),
+            ]),
+            ("talk.client.close", [:]),
+        ]
+        for (method, fields) in requests {
+            let rejection: Error?
+            do {
+                _ = try await voice.transport.request(
+                    method, voice.target.merging(fields) { _, next in next }, 15000)
+                rejection = nil
+            } catch {
+                rejection = error
+            }
+            let error = try #require(rejection, "Retired native voice authority was accepted.")
+            try #require(error is GatewayResponseError)
+            try #require(!error.localizedDescription.isEmpty)
+        }
+        _ = try await fixture.control(
+            "voice-complete", fields: ["case": id, "outcome": "rejected", "voiceSessionId": voice.voiceSessionID])
+    }
+
+    @MainActor
+    private static func closeVoice(
+        _ presentation: Presentation,
+        id: String,
+        voice: VoiceAttempt) async throws
+    {
+        _ = try await voice.transport.request("talk.client.close", voice.target, 15000)
+        _ = try await presentation.fixture.control(
+            "voice-complete", fields: ["case": id, "outcome": "allowed", "voiceSessionId": voice.voiceSessionID])
+    }
+
+    @MainActor
+    private final class VoiceStartBarrier {
+        private var entered = false
+        private var released = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func suspend() async {
+            guard !self.entered else { return }
+            self.entered = true
+            guard !self.released else { return }
+            await withCheckedContinuation { self.continuation = $0 }
+        }
+
+        func waitUntilEntered() async throws {
+            let deadline = ContinuousClock.now + .seconds(10)
+            while !self.entered, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try #require(self.entered, "Native voice did not reach the pre-permission barrier.")
+        }
+
+        func release() {
+            self.released = true
+            self.continuation?.resume()
+            self.continuation = nil
+        }
+    }
+
+    @MainActor
+    private static func retireVoiceCleanup(_ presentation: Presentation, voice: VoiceAttempt) async throws {
+        let fixture = presentation.fixture
+        let model = presentation.model
+        let talk = model.talkMode
+        let firstGate = VoiceStartBarrier()
+        let successorGate = VoiceStartBarrier()
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "talk.enabled")
+        var starts: [Task<Void, Error>] = []
+        var cleanup: Task<Void, Never>?
+        var holding = false
+        let outcome: Result<Void, Error>
+        do {
+            talk.attachGateway(model.operatorSession)
+            talk.updateGatewayConnected(true)
+            talk._test_setStartEntryHandler { await firstGate.suspend() }
+            talk.resumeAfterBackground()
+            let first = Task { @MainActor in
+                try await model.startNativeTalk(nativeBinding: voice.binding, presentationIsCurrent: { true })
+            }
+            starts.append(first)
+            try await firstGate.waitUntilEntered()
+            try #require(!talk.isListening && !talk._test_audioSessionIsActive())
+            _ = try await fixture.control("hold-response", fields: ["method": "talk.client.close"])
+            talk._test_preparePrefetchedRealtimeVoiceSession(voice.voiceSessionID)
+            // Await the existing logical-close owner while preserving its real
+            // Gateway request. Both startups stay before microphone permission.
+            cleanup = Task { @MainActor in await talk._test_invalidatePrefetchedRealtimeSession() }
+            let held = try #require(try await fixture.control("wait-held").heldResponse)
+            holding = true
+            try #require(held.method == "talk.client.close" && held.ok)
+            talk.suspendForBackground()
+            firstGate.release()
+            do {
+                try await first.value
+                throw OpenClawNativeActionError("The retired voice startup completed.")
+            } catch is CancellationError {}
+            try #require(!talk.isEnabled && talk.activeNativeBinding == nil)
+            talk._test_setStartEntryHandler { await successorGate.suspend() }
+            talk.resumeAfterBackground()
+            let successorStart = Task { @MainActor in
+                try await model.startNativeTalk(nativeBinding: voice.binding, presentationIsCurrent: { true })
+            }
+            starts.append(successorStart)
+            try await successorGate.waitUntilEntered()
+            let successor = try #require(talk.setEnabled(true, nativeBinding: voice.binding))
+            _ = try await fixture.control("release-response")
+            holding = false
+            await cleanup?.value
+            try #require(talk.ownsNativeCall(successor.callID) && talk.isEnabled)
+            try #require(!talk.isListening && !talk._test_audioSessionIsActive())
+            _ = try await fixture.control("voice-lifecycle-complete")
+            _ = try await fixture.control("voice-complete", fields: [
+                "case": "controlProfile", "outcome": "allowed", "voiceSessionId": voice.voiceSessionID,
+            ])
+            outcome = .success(())
+        } catch {
+            outcome = .failure(error)
+        }
+        talk.suspendForBackground()
+        for start in starts {
+            start.cancel()
+        }
+        firstGate.release()
+        successorGate.release()
+        if holding { _ = try? await fixture.control("release-response") }
+        await cleanup?.value
+        for start in starts {
+            _ = await start.result
+        }
+        talk._test_setStartEntryHandler(nil)
+        if let previous {
+            defaults.set(previous, forKey: "talk.enabled")
+        } else {
+            defaults.removeObject(forKey: "talk.enabled")
+        }
+        try outcome.get()
     }
 
     @MainActor

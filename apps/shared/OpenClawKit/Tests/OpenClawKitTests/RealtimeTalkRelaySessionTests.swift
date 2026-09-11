@@ -136,6 +136,7 @@ struct RealtimeTalkRelaySessionTests {
         #expect(!createParams.keys.contains("model"))
         #expect(recorded.last?.params?["sessionId"]?.stringValue == "relay-1")
         #expect(!audioCapture.isStarted)
+        #expect(!session.isReady)
     }
 
     @Test(arguments: [true, false])
@@ -316,6 +317,7 @@ struct RealtimeTalkRelaySessionTests {
             onTermination: { terminations.append($0) },
             onSpeakingChanged: { _ in })
         session._test_setRelaySessionId("relay-1")
+        #expect(!session.isReady)
 
         await session._test_handleGatewayEvent(EventFrame(
             type: "event",
@@ -326,6 +328,7 @@ struct RealtimeTalkRelaySessionTests {
             ]),
             seq: nil,
             stateversion: nil))
+        #expect(session.isReady)
         let closeEvent = EventFrame(
             type: "event",
             event: "talk.event",
@@ -342,6 +345,29 @@ struct RealtimeTalkRelaySessionTests {
         #expect(statuses == ["Listening (Realtime)", "Ready"])
         #expect(terminations == [.remoteClose(reason: "completed")])
         #expect(audioCapture.stopCount == 1)
+        #expect(!session.isReady)
+    }
+
+    @Test func `pre-ready close is not erased by a late ready event`() async {
+        let session = RealtimeTalkRelaySession(
+            transport: unusedRealtimeRelayTransport(),
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        session._test_setRelaySessionId("relay-1")
+        defer { session.stop() }
+
+        for type in ["close", "ready"] {
+            await session._test_handleGatewayEvent(EventFrame(
+                type: "event",
+                event: "talk.event",
+                payload: AnyCodable(["relaySessionId": "relay-1", "type": type]),
+                seq: nil,
+                stateversion: nil))
+            #expect(!session.isReady)
+        }
     }
 
     @Test func `ready then event stream end publishes typed termination`() async {
@@ -385,6 +411,7 @@ struct RealtimeTalkRelaySessionTests {
         session.stop()
 
         #expect(await session._test_waitForStartupCancelled(timeoutSeconds: 1))
+        #expect(!session.isReady)
     }
 
     @Test func `stop during event subscription prevents relay creation`() async throws {
