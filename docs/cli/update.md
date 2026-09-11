@@ -23,7 +23,7 @@ state/config mounts. For a standalone or extracted tarball installation, reinsta
 using the original method; Yarn global installations must be updated with Yarn.
 The CLI, JSON run record, and update history include this next action. These
 non-outcomes do not run rollback verification or offer an update failure report.
-Custom npm prefixes, including symlinked prefixes, are recognized when their
+Custom POSIX npm prefixes, including symlinked prefixes, are recognized when their
 installed `bin/openclaw` launcher points to the package being updated.
 
 ## Usage

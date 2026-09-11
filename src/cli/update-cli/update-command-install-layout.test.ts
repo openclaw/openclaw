@@ -75,8 +75,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([false, true])(
-  "takes the package path for a custom npm prefix (symlinked=%s)",
+it.skipIf(process.platform === "win32").each([false, true])(
+  "takes the package path for a custom POSIX npm prefix (symlinked=%s)",
   async (symlinked) => {
     const base = path.dirname(root);
     const physicalPrefix = path.join(base, "custom-prefix");
