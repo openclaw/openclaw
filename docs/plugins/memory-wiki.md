@@ -361,6 +361,7 @@ Put config under `plugins.entries.memory-wiki.config`:
             indexDailyNotes: true,
             indexMemoryRoot: true,
             followMemoryEvents: true,
+            ownership: "sandboxed-only",
           },
           unsafeLocal: {
             allowPrivateMemoryCoreAccess: false,
@@ -392,22 +393,23 @@ Put config under `plugins.entries.memory-wiki.config`:
 
 Key toggles:
 
-| Key                                        | Values / default                               | Notes                                                                                      |
-| ------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local` | chooses input and integration behavior                                                     |
-| `vault.scope`                              | `global` (default), `agent`                    | one shared vault or one child vault per agent                                              |
-| `vault.path`                               | global default `<state-dir>/wiki/main`         | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`                    |
-| `vault.renderMode`                         | `native` (default), `obsidian`                 | `obsidian` writes Obsidian-friendly pages instead of native output                         |
-| `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                               |
-| `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                                          |
-| `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                                                     |
-| `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode                                      |
-| `ingest.autoCompile`                       | default `true`                                 | rebuild compiled output after imported sources change                                      |
-| `search.backend`                           | `shared` (default), `local`                    | `shared` uses the shared memory search flow when available; `local` searches the wiki only |
-| `search.corpus`                            | `wiki` (default), `memory`, `all`              | which corpus wiki search covers                                                            |
-| `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections              |
-| `render.createBacklinks`                   | default `true`                                 | generate deterministic related blocks                                                      |
-| `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                                                   |
+| Key                                        | Values / default                                  | Notes                                                                                      |
+| ------------------------------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local`    | chooses input and integration behavior                                                     |
+| `vault.scope`                              | `global` (default), `agent`                       | one shared vault or one child vault per agent                                              |
+| `vault.path`                               | global default `<state-dir>/wiki/main`            | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`                    |
+| `vault.renderMode`                         | `native` (default), `obsidian`                    | `obsidian` writes Obsidian-friendly pages instead of native output                         |
+| `bridge.readMemoryArtifacts`               | default `true`                                    | import active memory plugin public artifacts                                               |
+| `bridge.followMemoryEvents`                | default `true`                                    | include event logs in bridge mode                                                          |
+| `bridge.ownership`                         | `sandboxed-only` (default), `owner`, `delegation` | who may read an imported bridge page in a shared vault                                     |
+| `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                   | required to run `unsafe-local` imports                                                     |
+| `unsafeLocal.paths`                        | default `[]`                                      | explicit local paths to import in `unsafe-local` mode                                      |
+| `ingest.autoCompile`                       | default `true`                                    | rebuild compiled output after imported sources change                                      |
+| `search.backend`                           | `shared` (default), `local`                       | `shared` uses the shared memory search flow when available; `local` searches the wiki only |
+| `search.corpus`                            | `wiki` (default), `memory`, `all`                 | which corpus wiki search covers                                                            |
+| `context.includeCompiledDigestPrompt`      | default `false`                                   | append the selected agent's compact digest snapshot to memory prompt sections              |
+| `render.createBacklinks`                   | default `true`                                    | generate deterministic related blocks                                                      |
+| `render.createDashboards`                  | default `true`                                    | generate dashboard pages                                                                   |
 
 The state directory is `~/.openclaw` by default. When `OPENCLAW_STATE_DIR` is
 set, default wiki vaults use that directory instead. Explicit `vault.path`
@@ -465,6 +467,42 @@ In bridge mode, agent-scoped imports accept a public memory artifact only when
 its `agentIds` includes the selected agent. Artifacts owned by another agent,
 without ownership metadata, or with an unknown owner are skipped. Global scope
 keeps the existing shared-artifact behavior.
+
+### Bridge page ownership in a shared vault
+
+`vault.scope: "agent"` separates vaults. `bridge.ownership` instead decides who
+may read an imported bridge page when several agents share one global vault:
+
+- `sandboxed-only` (default): only sandboxed callers are scoped, to the pages
+  they own. Every other caller reads the whole vault, exactly as before this
+  option existed. Leaving it unset changes nothing.
+- `owner`: a caller reads bridge pages it owns. Non-bridge pages you authored in
+  the vault, and bridge pages that carry no owner metadata, stay visible to
+  everyone.
+- `delegation`: as `owner`, plus the bridge pages of the agents the caller may
+  already target with `sessions_spawn`. The scope is resolved with the same
+  policy `sessions_spawn` enforces, so per-agent `subagents.allowAgents`,
+  inherited `agents.defaults.subagents.allowAgents`, `"*"`, and intersection
+  with the configured agent registry all behave identically. It is not
+  transitive: an `A -> B -> C` chain cannot be spawned, so it does not grant
+  reads either.
+
+An unidentified caller is not filtered. Returning an empty vault to a caller
+whose identity could not be resolved is indistinguishable from an empty
+knowledge base, and reports as no error at all.
+
+<Warning>
+`bridge.ownership` is read-time visibility filtering for wiki tools, not
+filesystem access control. Every mode reads one vault directory on disk: pages
+are still written to the same place, and any plugin, unsandboxed tool, shell
+command, or operator with host filesystem access can read them regardless of
+this setting. `openclaw wiki search` and `openclaw wiki get` also run as the
+default agent unless you pass `--agent <agentId>`, so operator CLI reads are
+scoped to that agent under `owner` and `delegation`. Use
+[sandboxing](/gateway/sandboxing) or
+[separate Gateway profiles](/gateway/multiple-gateways) when agents must not be
+able to reach each other's data.
+</Warning>
 
 <Warning>
 Changing `vault.scope` does not copy or split an existing vault. In agent scope,

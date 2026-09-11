@@ -19,6 +19,13 @@ export {
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 
+// Delegation is already a configured relation between agents; plugins that want
+// to derive a read or listing scope from it must answer it with the same policy
+// sessions_spawn enforces, or the two drift apart as the policy gains cases.
+// `src/agents/tools/agents-list-tool.ts` is the in-core precedent for a
+// non-spawn consumer. Pure function over its arguments: no host state, no I/O.
+export { resolveSubagentAllowedTargetIds } from "../agents/subagents/spawn/subagent-target-policy.js";
+
 export { resolveSessionAgentIdStrict, resolveSessionAgentIdsStrict };
 
 type SessionAgentResolutionParams = Parameters<typeof resolveSessionAgentIdsStrict>[0];

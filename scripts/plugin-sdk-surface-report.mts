@@ -366,7 +366,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical runtime-context classifier for native history projection.
       // +1: prepared model-specific runtime choices for channel consumers.
       // +3: public provider-owned asynchronous embedding batch contract.
-      4451,
+      // +1: canonical subagent target policy so plugin-owned delegation scopes cannot
+      //     drift from the policy sessions_spawn enforces.
+      4452,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -499,7 +501,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved bounded TAR inspection through the archive admission owner.
       // +1: canonical runtime-context classifier for native history projection.
       // +1: prepared model-specific runtime choice reader.
-      2630,
+      // +1: canonical subagent target policy shared with plugin-owned delegation scopes.
+      2631,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

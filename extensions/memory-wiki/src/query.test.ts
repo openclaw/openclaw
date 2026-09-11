@@ -34,7 +34,11 @@ vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
 
 vi.mock("@openclaw/memory-core/api.js", { spy: true });
 
-vi.mock("openclaw/plugin-sdk/agent-scope-runtime", () => ({
+// Only session-agent resolution is stubbed. The roster and subagent-target
+// helpers stay real so the bridge-ownership tests below exercise the same policy
+// sessions_spawn enforces instead of a re-implementation of it.
+vi.mock("openclaw/plugin-sdk/agent-scope-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-scope-runtime")>()),
   resolveSessionAgentIdStrict: resolveSessionAgentIdMock,
 }));
 
@@ -2181,10 +2185,19 @@ describe("wiki corpus bridge page agent scoping", () => {
     );
   }
 
-  async function createBridgeVisibilityVault() {
+  async function createBridgeVisibilityVault(params?: {
+    ownership?: MemoryWikiPluginConfig["bridge"] extends infer B
+      ? B extends { ownership?: infer O }
+        ? O
+        : never
+      : never;
+  }) {
     const vault = await createQueryVault({
       initialize: true,
-      config: { vault: { scope: "global" } },
+      config: {
+        vault: { scope: "global" },
+        ...(params?.ownership ? { bridge: { ownership: params.ownership } } : {}),
+      },
     });
     await writeBridgePage({
       rootDir: vault.rootDir,
@@ -2324,6 +2337,305 @@ describe("wiki corpus bridge page agent scoping", () => {
       "sources/shared-note.md",
       "sources/unowned-daily-note.md",
     ]);
+  });
+
+  type AgentsFixture = NonNullable<OpenClawConfig["agents"]>;
+
+  // Config validation materializes `agents.list` from `agents.entries` as a
+  // non-enumerable projection (src/config/agent-list-projection.ts), so a runtime
+  // config carries both shapes. Fixtures reproduce that rather than writing
+  // `entries` alone: a delegation assertion that only passes because the previous
+  // implementation could not see a roster at all would prove the fixture's shape,
+  // not the policy under test.
+  function attachListProjection(agents: AgentsFixture): AgentsFixture {
+    const projected: { id: string }[] = [];
+    for (const [id, entry] of Object.entries(agents.entries ?? {})) {
+      projected.push({ ...entry, id });
+    }
+    Object.defineProperty(agents, "list", {
+      configurable: true,
+      enumerable: false,
+      value: projected,
+      writable: false,
+    });
+    return agents;
+  }
+
+  function createDelegationAppConfig(agents?: AgentsFixture): OpenClawConfig {
+    return {
+      agents: attachListProjection(
+        agents ?? {
+          entries: {
+            main: { subagents: { allowAgents: ["secondary"] } },
+            secondary: { subagents: { allowAgents: ["tertiary"] } },
+            tertiary: {},
+          },
+        },
+      ),
+      tools: { sessions: { visibility: "agent" } },
+    } as OpenClawConfig;
+  }
+
+  it("leaves non-sandboxed reads untouched under the default ownership mode", async () => {
+    const { config } = await createBridgeVisibilityVault();
+    const caller = {
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "main",
+    };
+
+    // The default is "sandboxed-only": this is the pre-change contract and the
+    // reason the option can ship without a migration.
+    expect(config.bridge.ownership).toBe("sandboxed-only");
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "secondary-daily-note" }))?.content,
+    ).toContain("wikiscope marker secondary");
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "unowned-daily-note" }))?.content,
+    ).toContain("wikiscope marker unowned");
+  });
+
+  it("scopes non-sandboxed reads to the caller when ownership is owner", async () => {
+    const { config } = await createBridgeVisibilityVault({ ownership: "owner" });
+    const caller = {
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "main",
+    };
+
+    expect((await getMemoryWikiPage({ ...caller, lookup: "main-daily-note" }))?.content).toContain(
+      "wikiscope marker main",
+    );
+    expect(await getMemoryWikiPage({ ...caller, lookup: "secondary-daily-note" })).toBeNull();
+    // Non-bridge pages are never in scope for this filter.
+    expect((await getMemoryWikiPage({ ...caller, lookup: "shared-note" }))?.content).toContain(
+      "wikiscope marker shared",
+    );
+    // An unowned bridge page widens rather than disappearing.
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "unowned-daily-note" }))?.content,
+    ).toContain("wikiscope marker unowned");
+  });
+
+  it("extends reads to delegates, without transitivity, when ownership is delegation", async () => {
+    const { config, rootDir } = await createBridgeVisibilityVault({ ownership: "delegation" });
+    await writeBridgePage({
+      rootDir,
+      slug: "tertiary-daily-note",
+      title: "Tertiary Daily Note",
+      agentIds: ["tertiary"],
+      marker: "wikiscope marker tertiary",
+    });
+    const caller = {
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "main",
+    };
+
+    // main -> secondary is a configured delegation, so secondary's pages are readable.
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "secondary-daily-note" }))?.content,
+    ).toContain("wikiscope marker secondary");
+    // main -> secondary -> tertiary is not: that chain cannot be spawned either.
+    expect(await getMemoryWikiPage({ ...caller, lookup: "tertiary-daily-note" })).toBeNull();
+  });
+
+  it("fails open for configured filtering when the caller cannot be identified", async () => {
+    const { config } = await createBridgeVisibilityVault({ ownership: "owner" });
+
+    // An operator or internal caller with no resolvable agent id must not be
+    // handed an empty vault: that is indistinguishable from an empty knowledge
+    // base and therefore surfaces as no error at all.
+    const appConfig = createDelegationAppConfig();
+    const control = await getMemoryWikiPage({ config, appConfig, lookup: "shared-note" });
+    const page = await getMemoryWikiPage({ config, appConfig, lookup: "secondary-daily-note" });
+
+    // Control: a non-bridge page proves the lookup itself works without an
+    // agent id, so a null bridge page below would be the filter's doing.
+    expect(control?.content).toContain("wikiscope marker shared");
+    expect(page?.content).toContain("wikiscope marker secondary");
+  });
+
+  it("keeps sandboxed isolation strict regardless of the configured mode", async () => {
+    const { config } = await createBridgeVisibilityVault({ ownership: "delegation" });
+    const caller = {
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "main",
+      sandboxed: true,
+    };
+
+    // Sandboxed callers keep the historical contract: own pages only, an unowned
+    // bridge page stays hidden, and "delegation" does not reach delegates —
+    // widening reads for ordinary agents must not loosen the sandbox boundary.
+    expect((await getMemoryWikiPage({ ...caller, lookup: "main-daily-note" }))?.content).toContain(
+      "wikiscope marker main",
+    );
+    expect(await getMemoryWikiPage({ ...caller, lookup: "unowned-daily-note" })).toBeNull();
+    expect(await getMemoryWikiPage({ ...caller, lookup: "secondary-daily-note" })).toBeNull();
+  });
+
+  it("preserves the legacy sandboxed contract when the caller supplies no identity", async () => {
+    // This is the claim the default mode rests on: with `ownership` unset, a
+    // sandboxed caller that supplies neither an agent id nor a session key still
+    // reads through the host's substituted default identity, exactly as before
+    // this option existed. Regressing it would ship a visibility change to
+    // deployments that enabled nothing.
+    const { config } = await createBridgeVisibilityVault();
+    const page = await getMemoryWikiPage({
+      config,
+      appConfig: createDelegationAppConfig(),
+      sandboxed: true,
+      lookup: "main-daily-note",
+    });
+
+    expect(config.bridge.ownership).toBe("sandboxed-only");
+    expect(page?.content).toContain("wikiscope marker main");
+  });
+
+  it("inherits agents.defaults.subagents.allowAgents for delegation reads", async () => {
+    // An operator who grants delegation once through defaults has granted it to
+    // every agent that does not override it. Reading only the per-agent entry
+    // hides those pages and reports nothing at all, which is the silent-narrowing
+    // direction this filter must never take.
+    const { config } = await createBridgeVisibilityVault({ ownership: "delegation" });
+    const page = await getMemoryWikiPage({
+      config,
+      appConfig: createDelegationAppConfig({
+        defaults: { subagents: { allowAgents: ["secondary"] } },
+        entries: { main: {}, secondary: {} },
+      }),
+      agentId: "main",
+      lookup: "secondary-daily-note",
+    });
+
+    expect(page?.content).toContain("wikiscope marker secondary");
+  });
+
+  it("expands a wildcard allowlist instead of reading it as an agent id", async () => {
+    // `allowAgents: ["*"]` means every configured agent to sessions_spawn. Read
+    // as a literal id it matches no page at all, so the broadest delegation an
+    // operator can write would silently produce the narrowest read scope.
+    const { config, rootDir } = await createBridgeVisibilityVault({ ownership: "delegation" });
+    await writeBridgePage({
+      rootDir,
+      slug: "tertiary-daily-note",
+      title: "Tertiary Daily Note",
+      agentIds: ["tertiary"],
+      marker: "wikiscope marker tertiary",
+    });
+    const caller = {
+      config,
+      appConfig: createDelegationAppConfig({
+        entries: { main: { subagents: { allowAgents: ["*"] } }, secondary: {}, tertiary: {} },
+      }),
+      agentId: "main",
+    };
+
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "secondary-daily-note" }))?.content,
+    ).toContain("wikiscope marker secondary");
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "tertiary-daily-note" }))?.content,
+    ).toContain("wikiscope marker tertiary");
+  });
+
+  it("does not extend reads to an allowlisted agent that is not configured", async () => {
+    // sessions_spawn intersects the allowlist with the configured registry, so a
+    // stale entry grants nothing. Read scope that skips the intersection would
+    // hand out pages for a delegation the operator can no longer perform.
+    const { config, rootDir } = await createBridgeVisibilityVault({ ownership: "delegation" });
+    await writeBridgePage({
+      rootDir,
+      slug: "retired-daily-note",
+      title: "Retired Daily Note",
+      agentIds: ["retired"],
+      marker: "wikiscope marker retired",
+    });
+    const page = await getMemoryWikiPage({
+      config,
+      appConfig: createDelegationAppConfig({
+        entries: { main: { subagents: { allowAgents: ["retired"] } }, secondary: {} },
+      }),
+      agentId: "main",
+      lookup: "retired-daily-note",
+    });
+
+    expect(page).toBeNull();
+  });
+
+  it("measures allowlist entries and page owners with one agent-id normalizer", async () => {
+    // The roster key, the allowlist value, and the owner a provider recorded on
+    // the page are three independently authored spellings of one agent. Scoping
+    // them with different normalizers hides pages whenever the spellings differ.
+    const { config, rootDir } = await createBridgeVisibilityVault({ ownership: "delegation" });
+    await writeBridgePage({
+      rootDir,
+      slug: "canonical-owner-note",
+      title: "Canonical Owner Note",
+      agentIds: ["secondary-one"],
+      marker: "wikiscope marker canonical",
+    });
+    await writeBridgePage({
+      rootDir,
+      slug: "raw-owner-note",
+      title: "Raw Owner Note",
+      agentIds: ["secondary.one"],
+      marker: "wikiscope marker raw",
+    });
+    const caller = {
+      config,
+      appConfig: createDelegationAppConfig({
+        entries: {
+          main: { subagents: { allowAgents: ["secondary.one"] } },
+          "secondary-one": {},
+        },
+      }),
+      agentId: "main",
+    };
+
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "canonical-owner-note" }))?.content,
+    ).toContain("wikiscope marker canonical");
+    expect((await getMemoryWikiPage({ ...caller, lookup: "raw-owner-note" }))?.content).toContain(
+      "wikiscope marker raw",
+    );
+  });
+
+  it("scopes delegation to the viewer alone when there is no roster to read", async () => {
+    // sessions_spawn answers "no roster" and "requester is not configured" with
+    // the requester alone, never with every agent. Delegation reads mirror that
+    // policy, so neither input can turn the configured mode back into no filter.
+    const { config } = await createBridgeVisibilityVault({ ownership: "delegation" });
+
+    const noRoster = {
+      own: await getMemoryWikiPage({ config, agentId: "main", lookup: "main-daily-note" }),
+      foreign: await getMemoryWikiPage({ config, agentId: "main", lookup: "secondary-daily-note" }),
+    };
+    const unknownViewer = await getMemoryWikiPage({
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "not-in-the-roster",
+      lookup: "secondary-daily-note",
+    });
+
+    expect(noRoster.own?.content).toContain("wikiscope marker main");
+    expect(noRoster.foreign).toBeNull();
+    expect(unknownViewer).toBeNull();
+  });
+
+  it("applies the same scoping to search results, not only page reads", async () => {
+    const { config } = await createBridgeVisibilityVault({ ownership: "owner" });
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "main",
+      query: "wikiscope",
+    });
+    const paths = results.map((result) => result.path);
+
+    expect(paths).toContain("sources/main-daily-note.md");
+    expect(paths).not.toContain("sources/secondary-daily-note.md");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

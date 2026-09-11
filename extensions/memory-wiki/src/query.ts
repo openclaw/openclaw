@@ -1,11 +1,17 @@
 import path from "node:path";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
-import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  listAgentIds,
+  resolveAgentConfig,
+  resolveSessionAgentIdStrict,
+  resolveSubagentAllowedTargetIds,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeAgentIdStrict } from "openclaw/plugin-sdk/routing";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -20,7 +26,12 @@ import {
   type MemoryWikiCompiledClaim,
   type MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
-import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
+import type {
+  ResolvedMemoryWikiConfig,
+  WikiBridgeOwnership,
+  WikiSearchBackend,
+  WikiSearchCorpus,
+} from "./config.js";
 import {
   parseWikiMarkdown,
   toWikiPageSummary,
@@ -842,28 +853,129 @@ function isBridgeCompiledPage(page: QueryableWikiPage): boolean {
   );
 }
 
+// Page ownership metadata is whatever agent ids the memory provider recorded, so
+// it is normalized with the strict variant: a value that cannot be represented
+// as an agent id is dropped instead of folding onto the default agent id, which
+// the lenient `normalizeAgentId` would do and which would hand every malformed
+// page to whichever agent happens to be called that.
+function canonicalAgentIdOrNull(value: string): string | null {
+  const normalized = normalizeAgentIdStrict(value);
+  return normalized.ok ? normalized.value : null;
+}
+
+// Owners whose bridge pages a viewer may read. "owner" is the viewer alone;
+// "delegation" additionally trusts the agents the viewer may already target with
+// sessions_spawn, so read access describes a delegation the operator has already
+// granted. Delegation is deliberately not transitive: an A -> B -> C chain
+// cannot be spawned either, so granting reads across it would describe a
+// delegation that cannot happen.
+//
+// The spawn policy is reused rather than re-derived from the roster here. It is
+// the only place that resolves per-agent overrides, inherited
+// `agents.defaults.subagents.allowAgents`, `"*"` expansion, and intersection
+// with the configured registry, and a second copy of those rules would drift as
+// the policy gains cases. Reusing it also means there is no separate
+// "graph unreadable" answer to invent: a config with no roster resolves exactly
+// as sessions_spawn resolves it, to the requester alone.
+function resolveBridgeOwnershipViewers(
+  viewerId: string,
+  appConfig: OpenClawConfig | undefined,
+  mode: WikiBridgeOwnership,
+): Set<string> {
+  if (mode !== "delegation" || !appConfig) {
+    // Without an app config there is no roster to read, and the spawn policy
+    // answers that input with the requester alone rather than with everyone.
+    return new Set<string>([viewerId]);
+  }
+  const allowAgents =
+    resolveAgentConfig(appConfig, viewerId)?.subagents?.allowAgents ??
+    appConfig.agents?.defaults?.subagents?.allowAgents;
+  const allowed = resolveSubagentAllowedTargetIds({
+    requesterAgentId: viewerId,
+    allowAgents,
+    configuredAgentIds: listAgentIds(appConfig),
+  });
+  // A viewer always reads its own pages, even when an allowlist that excludes it
+  // narrows its spawn targets; sessions_spawn grants the same self-target.
+  return new Set<string>([viewerId, ...allowed.allowedIds]);
+}
+
 function createWikiPageVisibilityFilter(params: {
+  config?: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
+  /** Identity as the caller supplied it; absent when the caller supplied none. */
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  /**
+   * Identity after the host's own default-agent substitution. Used only by the
+   * legacy `sandboxed-only` path, so that mode stays exactly as it was.
+   */
+  resolvedAgentId?: string;
 }): (page: QueryableWikiPage) => boolean {
-  if (params.sandboxed !== true) {
+  const ownership = params.config?.bridge.ownership ?? "sandboxed-only";
+  const sandboxed = params.sandboxed === true;
+  const legacy = ownership === "sandboxed-only";
+  // "sandboxed-only" keeps the historical contract exactly: filter sandboxed
+  // callers, leave everyone else untouched.
+  if (!sandboxed && legacy) {
     return () => true;
   }
   const sessionKey = params.agentSessionKey?.trim();
-  const scopedAgentId = normalizeLowercaseStringOrEmpty(
+  const suppliedAgentId = normalizeLowercaseStringOrEmpty(
     params.agentId?.trim() ||
       (params.appConfig && sessionKey
         ? resolveSessionAgentIdStrict({ sessionKey, config: params.appConfig })
         : undefined),
   );
+  // The legacy path keeps consuming the host's substituted identity, so enabling
+  // nothing changes nothing. Configured modes deliberately refuse it: scoping a
+  // caller to whichever agent happens to be the default silently hands it a
+  // foreign view of the vault, and returns fewer results with no error.
+  const scopedAgentId = legacy
+    ? normalizeLowercaseStringOrEmpty(params.resolvedAgentId?.trim()) || suppliedAgentId
+    : suppliedAgentId;
+  // Identity comparison follows the same split: legacy stays on plain lowercase
+  // strings, while configured modes measure viewer and page with the agent-id
+  // normalizer the spawn policy uses, so an `allowAgents` entry `"agent.b"`, the
+  // roster key `agent-b`, and a page that recorded `agent.b` denote one agent
+  // instead of three.
+  const viewerId = legacy ? scopedAgentId : canonicalAgentIdOrNull(scopedAgentId);
+  if (!viewerId) {
+    // A sandboxed caller we cannot identify is precisely who this filter exists
+    // to stop, so it stays closed for them. Configured filtering instead fails
+    // open: an unidentified caller would otherwise receive an empty vault, which
+    // is indistinguishable from "the knowledge base is empty" and therefore
+    // reports as no error at all.
+    return sandboxed ? (page) => !isBridgeCompiledPage(page) : () => true;
+  }
+  // Sandboxed callers always get "owner" semantics. A sandbox exists to
+  // constrain, and an operator widening reads for ordinary agents is not asking
+  // to loosen the sandbox boundary too, so `ownership` governs non-sandboxed
+  // callers only.
+  const viewers = resolveBridgeOwnershipViewers(
+    viewerId,
+    params.appConfig,
+    sandboxed ? "owner" : ownership,
+  );
+  const ownsPage = legacy
+    ? (bridgeAgentId: string) => viewers.has(normalizeLowercaseStringOrEmpty(bridgeAgentId))
+    : (bridgeAgentId: string) => {
+        const owner = canonicalAgentIdOrNull(bridgeAgentId);
+        return owner !== null && viewers.has(owner);
+      };
   return (page) =>
     !isBridgeCompiledPage(page) ||
-    (scopedAgentId.length > 0 &&
-      page.bridgeAgentIds.some(
-        (agentId) => normalizeLowercaseStringOrEmpty(agentId) === scopedAgentId,
-      ));
+    // A bridge page that records no owner is shared, not orphaned-and-hidden.
+    // Sandboxed callers keep the stricter historical contract (an unowned page
+    // stays hidden from them); configured filtering widens instead, so a page
+    // that loses or never gained its owner metadata degrades to "visible to
+    // everyone" rather than silently vanishing from every reader at once.
+    // NOTE: providers that omit `agentIds` produce empty `bridgeAgentIds` on
+    // every page (see memory-state coercion), so for those deployments the
+    // configured modes are a no-op rather than a partial filter.
+    (!sandboxed && page.bridgeAgentIds.length === 0) ||
+    page.bridgeAgentIds.some(ownsPage);
 }
 
 function shouldSearchSharedMemoryCorpus(config: ResolvedMemoryWikiConfig): boolean {
@@ -1189,7 +1301,15 @@ export async function searchMemoryWiki(input: {
         query: params.query,
         maxResults,
         mode,
-        canReadPage: createWikiPageVisibilityFilter(params),
+        // Identity comes from `input`, not `params`: `params` has already had a
+        // default agent id substituted for callers that supplied none, and
+        // scoping a caller to the default agent's view is exactly the silent
+        // narrowing this filter must never do.
+        canReadPage: createWikiPageVisibilityFilter({
+          ...input,
+          config: effectiveConfig,
+          ...(params.agentId ? { resolvedAgentId: params.agentId } : {}),
+        }),
       })
     : [];
 
@@ -1265,7 +1385,12 @@ export async function getMemoryWikiPage(input: {
   const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
-    const canReadPage = createWikiPageVisibilityFilter(params);
+    // See the note in searchMemoryWiki: identity must come from `input`.
+    const canReadPage = createWikiPageVisibilityFilter({
+      ...input,
+      config: effectiveConfig,
+      ...(params.agentId ? { resolvedAgentId: params.agentId } : {}),
+    });
     const digest = await readQueryDigestBundle(effectiveConfig);
     const digestClaimPagePath = digest ? resolveDigestClaimLookup(digest, params.lookup) : null;
     const digestLookupPage = digestClaimPagePath

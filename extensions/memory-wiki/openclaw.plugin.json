@@ -55,6 +55,10 @@
       "label": "Read Memory Artifacts",
       "help": "Enable bridge reads from the active memory plugin's public artifact export."
     },
+    "bridge.ownership": {
+      "label": "Bridge Page Ownership",
+      "help": "Who the bridge-ownership visibility filter applies to. sandboxed-only (default) filters sandboxed callers only; owner scopes every caller to pages it owns; delegation also allows the agents a caller may already target with sessions_spawn. Read-time visibility for wiki tools only, not filesystem access control."
+    },
     "unsafeLocal.allowPrivateMemoryCoreAccess": {
       "label": "Allow Private Memory Access",
       "help": "Experimental same-repo escape hatch for reading memory-core private paths."
@@ -171,6 +175,10 @@
           },
           "followMemoryEvents": {
             "type": "boolean"
+          },
+          "ownership": {
+            "type": "string",
+            "enum": ["sandboxed-only", "owner", "delegation"]
           }
         }
       },
