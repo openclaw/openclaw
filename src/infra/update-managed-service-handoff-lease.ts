@@ -627,8 +627,18 @@ export function createManagedHandoffLeaseStore(
       }
       throw error;
     }
-    return withDatabase(false, (db) =>
-      executeSqliteQuerySync(
+    return withDatabase(false, (db) => {
+      // Only ordinary inspection may accept an uninitialized store. Check all
+      // schema objects with SQLite's name matching so wrong shapes still refuse.
+      if (
+        !options.existingIdentity &&
+        !db
+          .prepare("SELECT 1 FROM sqlite_schema WHERE name = ? COLLATE NOCASE")
+          .get("managed_update_handoffs")
+      ) {
+        return [];
+      }
+      return executeSqliteQuerySync(
         db,
         leaseQueries(db)
           .selectFrom("managed_update_handoffs")
@@ -640,9 +650,10 @@ export function createManagedHandoffLeaseStore(
         isRetiredManagedHandoffLeasePayload(entry.payload_json)
           ? []
           : [handle(entry.install_root, entry)],
-      ),
-    );
+      );
+    });
   }
+
   function assertSourceUnborrowed(resource: string) {
     assertNoRetainedSourceBorrower(resource, readRetainedSources());
   }
