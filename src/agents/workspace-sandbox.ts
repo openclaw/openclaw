@@ -3,6 +3,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { resolveSandboxContext } from "./sandbox.js";
+import { removeCreatedSandboxRuntime } from "./sandbox/created-runtime.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 
 export type WorkspaceSandboxParams = Pick<
@@ -44,41 +45,57 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
     skillsSnapshot: params.skillsSnapshot,
     workspaceDir: resolvedWorkspace,
   });
-  const effectiveWorkspace =
-    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
-  if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
-    throw new Error("sandbox workspace is not read-write; collection review skipped");
-  }
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
-  // the agent's canonical workspace as their permission boundary.
-  const sessionPermissionRoot = params.sessionRoot ?? (await fs.realpath(resolvedWorkspace));
-  const sessionPermissionPolicy = params.permissionMode
-    ? {
-        root: sessionPermissionRoot,
-        mode: params.permissionMode,
+  // Every failure below returns an error while the runtime resolved above keeps
+  // running, so own it here: release only a runtime this call created, then
+  // rethrow the original error untouched.
+  try {
+    const effectiveWorkspace =
+      sandbox?.enabled && sandbox.workspaceAccess !== "rw"
+        ? sandbox.workspaceDir
+        : resolvedWorkspace;
+    if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
+      throw new Error("sandbox workspace is not read-write; collection review skipped");
+    }
+    const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+    // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
+    // the agent's canonical workspace as their permission boundary.
+    const sessionPermissionRoot = params.sessionRoot ?? (await fs.realpath(resolvedWorkspace));
+    const sessionPermissionPolicy = params.permissionMode
+      ? {
+          root: sessionPermissionRoot,
+          mode: params.permissionMode,
+        }
+      : undefined;
+    if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+      throw new Error(
+        "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
+      );
+    }
+    await fs.mkdir(effectiveWorkspace, { recursive: true });
+    return {
+      effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
+      effectiveFsWorkspaceOnly:
+        params.requireWorkspaceOnly === true ||
+        resolveEffectiveToolFsWorkspaceOnly({
+          cfg: params.config,
+          agentId: sessionAgentId,
+        }),
+      effectiveWorkspace,
+      resolvedWorkspace,
+      sessionPermissionRoot,
+      sessionPermissionPolicy,
+      sandbox,
+      sandboxSessionKey,
+      sessionAgentId,
+    };
+  } catch (error) {
+    if (sandbox?.createdRuntime) {
+      try {
+        await removeCreatedSandboxRuntime(sandbox.containerName);
+      } catch {
+        // Teardown failure must not replace the original setup error.
       }
-    : undefined;
-  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-    throw new Error(
-      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
-    );
+    }
+    throw error;
   }
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
-  return {
-    effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
-    effectiveFsWorkspaceOnly:
-      params.requireWorkspaceOnly === true ||
-      resolveEffectiveToolFsWorkspaceOnly({
-        cfg: params.config,
-        agentId: sessionAgentId,
-      }),
-    effectiveWorkspace,
-    resolvedWorkspace,
-    sessionPermissionRoot,
-    sessionPermissionPolicy,
-    sandbox,
-    sandboxSessionKey,
-    sessionAgentId,
-  };
 }

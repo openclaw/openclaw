@@ -13,6 +13,7 @@ import {
 import { resolveAgentDir } from "../../agent-scope.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
+import { removeCreatedSandboxRuntime } from "../../sandbox/created-runtime.js";
 import {
   clearToolSearchCatalog,
   type ToolSearchCatalogRef,
@@ -88,6 +89,10 @@ export async function runEmbeddedAttempt(
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
+  // This attempt owns a runtime it created until dispatch takes over. Ownership
+  // is released at the dispatch boundary so successful runs and post-dispatch
+  // failures keep their session-scoped sandbox available for reuse.
+  let sandboxRuntimeOwned = sandbox?.createdRuntime === true;
   let runCleanups: Array<(reason: string) => Promise<void>> = [];
   const resources: EmbeddedAttemptSessionResources = {
     trajectoryRecorder: null,
@@ -119,6 +124,17 @@ export async function runEmbeddedAttempt(
       recordAgentCleanupFailure();
     } finally {
       bundleLspRuntime = undefined;
+    }
+    if (sandboxRuntimeOwned && sandbox) {
+      sandboxRuntimeOwned = false;
+      try {
+        await removeCreatedSandboxRuntime(sandbox.containerName);
+      } catch (error) {
+        recordAgentCleanupFailure();
+        log.warn(
+          `failed to remove sandbox runtime created for this attempt: runId=${params.runId} ${String(error)}`,
+        );
+      }
     }
   };
   const externalAbortController = createEmbeddedAttemptExternalAbortController({
@@ -429,6 +445,9 @@ export async function runEmbeddedAttempt(
       bundleMcpRuntime = undefined;
       bundleLspRuntime = undefined;
       toolSearchCatalogApplied = false;
+      // Dispatch owns the sandbox from here on; a session-scoped runtime must
+      // survive both success and post-dispatch failure for reuse.
+      sandboxRuntimeOwned = false;
       await cleanupStep("embedded-session", () =>
         cleanupEmbeddedAttemptSessionPhase({
           attempt: params,

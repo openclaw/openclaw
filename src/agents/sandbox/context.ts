@@ -252,9 +252,13 @@ function assertSandboxSessionSecretOwnerAvailable(
   });
 }
 
+/** Tracks a runtime this resolution created so a failure releases only that runtime. */
+type SandboxRuntimeOwnership = { createdRuntimeId?: string };
+
 async function resolveProvisionedSandboxContext(
   params: ResolveSandboxContextParams,
   resolved: ResolvedSandboxSession,
+  ownership: SandboxRuntimeOwnership = {},
 ): Promise<SandboxContext> {
   const { rawSessionKey, cfg, runtime } = resolved;
 
@@ -304,6 +308,15 @@ async function resolveProvisionedSandboxContext(
       ? { requireCurrentConfig: params.requireCurrentConfig }
       : {}),
   });
+  // The factory can only reuse a runtime whose ID was already registered for
+  // this scope, so an ID absent from that list was created by this call. Taking
+  // ownership here keeps it inside the provisioning lifecycle instead of
+  // inferring it later from registry timestamps, which cannot tell a runtime
+  // this attempt created from one another attempt is still using.
+  const createdRuntime = !registeredRuntimeIds.includes(backend.runtimeId);
+  if (createdRuntime) {
+    ownership.createdRuntimeId = backend.runtimeId;
+  }
   await updateRegistry({
     containerName: backend.runtimeId,
     backendId: backend.id,
@@ -369,6 +382,7 @@ async function resolveProvisionedSandboxContext(
     runtimeId: backend.runtimeId,
     runtimeLabel: backend.runtimeLabel,
     containerName: backend.runtimeId,
+    ...(createdRuntime ? { createdRuntime: true as const } : {}),
     containerWorkdir: backend.workdir,
     docker: resolvedCfg.docker,
     tools: resolvedCfg.tools,
@@ -400,10 +414,21 @@ export async function resolveSandboxContext(params: {
   // Once a sandbox session is selected, every remaining step is local
   // provisioning. Preserve that owner boundary across backend, browser,
   // registry, and filesystem-bridge setup so model fallback never retries it.
+  const ownership: SandboxRuntimeOwnership = {};
   try {
     assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
-    return await resolveProvisionedSandboxContext(params, resolved);
+    return await resolveProvisionedSandboxContext(params, resolved, ownership);
   } catch (error) {
+    // Browser and fs-bridge setup run after the runtime exists, so a failure
+    // here would otherwise leave a container running with no handle to it.
+    if (ownership.createdRuntimeId) {
+      try {
+        const { removeCreatedSandboxRuntime } = await import("./created-runtime.js");
+        await removeCreatedSandboxRuntime(ownership.createdRuntimeId);
+      } catch {
+        // Teardown failure must not replace the provisioning error.
+      }
+    }
     throw toSandboxProvisioningError(error, resolved.cfg.backend);
   }
 }
