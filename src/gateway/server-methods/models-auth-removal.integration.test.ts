@@ -101,9 +101,9 @@ describe("models.authLogout with a concurrent registered config set", () => {
           scopes: ["operator.admin"],
           hotReloadRecovery,
         });
-        const acquired = createDeferredCore<void>();
-        const save = createDeferredCore<void>();
-        const attempted = createDeferredCore<void>();
+        const acquired = createDeferredCore();
+        const save = createDeferredCore();
+        const attempted = createDeferredCore();
         let performSave = false;
         let writer: Promise<void> | undefined;
         let logout: Promise<unknown> | undefined;
