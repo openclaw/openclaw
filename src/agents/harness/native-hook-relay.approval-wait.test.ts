@@ -17,10 +17,10 @@ beforeEach(() => {
   approvalMocks.loadExecApprovalsReadOnly.mockReset().mockReturnValue({ version: 1, agents: {} });
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   mockCallGatewayTool.mockReset();
-  testing.clearNativeHookRelaysForTests();
+  await testing.clearNativeHookRelaysForTests();
 });
 
 describe("native hook relay approval wait handling", () => {

@@ -860,7 +860,11 @@ export function pluginStateRegisterSequencedJournalEntry(params: {
   cursorMaxEntries: number;
   journalNamespace: string;
   journalMaxEntries: number;
-  initialSequence: number;
+  journalKeyRange: {
+    keyStartInclusive: string;
+    keyEndExclusive: string;
+    valueKind?: string;
+  };
   readCursorSequence: (valueJson: string) => number | undefined;
   prepareEntry: (sequence: number) => {
     cursorValueJson: string;
@@ -889,12 +893,52 @@ export function pluginStateRegisterSequencedJournalEntry(params: {
           now,
         });
         const cursorSequence = cursor ? params.readCursorSequence(cursor.value_json) : undefined;
-        const lastSequence = Math.max(params.initialSequence, cursorSequence ?? 0);
+        // Cursor eviction must not let an admitted append reuse a retained sequence.
+        const tail = selectPluginStateEntriesInKeyRange(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.journalNamespace,
+          ...params.journalKeyRange,
+          limit: 1,
+          order: "desc",
+          now,
+        })[0];
+        let retainedSequence = 0;
+        if (tail) {
+          const value = parseStoredJson(tail.value_json, "entries", store.path);
+          if (value === null) {
+            throw new TypeError("Plugin state journal tail must not be null.");
+          }
+          if (
+            typeof value === "object" &&
+            (params.journalKeyRange.valueKind === undefined ||
+              ("kind" in value && value.kind === params.journalKeyRange.valueKind))
+          ) {
+            retainedSequence = Math.max(0, Number("sequence" in value ? (value.sequence ?? 0) : 0));
+            if (!Number.isSafeInteger(retainedSequence)) {
+              throw createPluginStateError({
+                code: "PLUGIN_STATE_INVALID_INPUT",
+                operation: "register",
+                message: "Plugin state journal sequence must be a safe non-negative integer.",
+              });
+            }
+          }
+        }
+        const lastSequence = Math.max(retainedSequence, cursorSequence ?? 0);
         const sequence = lastSequence + 1;
         if (!Number.isSafeInteger(sequence)) {
           throw new RangeError("Plugin state journal sequence exhausted safe integer range");
         }
         const prepared = params.prepareEntry(sequence);
+        if (
+          prepared.journalKey < params.journalKeyRange.keyStartInclusive ||
+          prepared.journalKey >= params.journalKeyRange.keyEndExclusive
+        ) {
+          throw createPluginStateError({
+            code: "PLUGIN_STATE_INVALID_INPUT",
+            operation: "register",
+            message: "Plugin state journal key must be inside its retained key range.",
+          });
+        }
         const existingJournalEntry = selectPluginStateEntry(store.db, {
           pluginId: params.pluginId,
           namespace: params.journalNamespace,

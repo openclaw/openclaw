@@ -581,8 +581,13 @@ suite.define(() => {
         await openWorkboard(page, suite.server.baseUrl);
 
         const toggle = page.locator("wa-switch").filter({ hasText: "Enable or disable Workboard" });
+        // The mutation reconnects to refresh hello-owned plugin tabs before the outcome settles.
+        const connections = (await gateway.getRequests("connect")).length;
+        await gateway.deferNext("connect");
         await toggle.click();
         await gateway.waitForRequest("plugins.setEnabled");
+        await gateway.waitForRequest("connect", { after: connections });
+        await gateway.resolveDeferred("connect");
         await expect
           .poll(() =>
             page

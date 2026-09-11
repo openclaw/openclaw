@@ -17,6 +17,9 @@ openclaw team-reports list --json
 
 Reports use UTC windows, remain in the plugin-owned SQLite store, and are
 served behind Gateway authentication at `/plugins/team-reports/` by default.
+Database operations run in a worker so SQLite lock waits do not block the
+Gateway event loop. Plugin shutdown drains admitted database work before closing
+the connection.
 The Control UI tab opens at `/reports` (prefixed by the Control UI base path).
 Model summary calls are optional; set `summaries.enabled: false` for deterministic text.
 

@@ -2,6 +2,10 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import {
+  ServiceInspectionError,
+  type ServiceInspectionReason,
+} from "./service-inspection-error.js";
 
 /** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
 type GatewayServiceSystemdRuntime = {
@@ -20,6 +24,7 @@ type GatewayServiceSystemdRuntime = {
 };
 
 export type GatewayServiceRuntime = {
+  inspectionReason?: ServiceInspectionReason;
   status?: string;
   state?: string;
   subState?: string;
@@ -59,6 +64,7 @@ export function createServiceRuntimeInspectionFailure(
   const rawDetail = error instanceof Error ? error.message : String(error);
   return {
     status: "unknown",
+    ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
     detail: SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL,
     inspectionFailure: {
       code: "service-runtime-inspection-failed",

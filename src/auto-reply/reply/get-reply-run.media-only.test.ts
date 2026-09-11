@@ -3144,6 +3144,9 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
     expect(vi.mocked(resolveSessionAuthSelection)).toHaveBeenCalledTimes(1);
+    expect(resolveSessionAuthSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "default" }),
+    );
   });
 
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {

@@ -127,9 +127,78 @@ describe("prepared worker intent admission", () => {
     );
   });
 
-  it.each([false, true])(
-    "replays a fresh admitted intent after display metadata changes (legacy=%s)",
-    async (legacy) => {
+  it("replays a removed linked source through its canonical repository while rejecting other projects and commits", async () => {
+    const f = await fixture();
+    const linked = path.join(support.testState.root, "linked-source");
+    await requireGit(f.projectPath, ["worktree", "add", "--detach", linked, "HEAD"]);
+    await fs.writeFile(path.join(linked, "input.txt"), "session commit\n");
+    await requireGit(linked, ["commit", "--quiet", "-am", "session"]);
+    const options = { projectPath: linked };
+    const admitted = await f.owner.prepareIntent("development", options);
+    const stored = await f.owner.createWithProfile(
+      "development",
+      "linked-replay",
+      options,
+      admitted,
+    );
+    await fs.writeFile(path.join(f.projectPath, "input.txt"), "new primary commit\n");
+    await requireGit(f.projectPath, ["commit", "--quiet", "-am", "advance primary"]);
+    const primaryCommit = await requireGit(f.projectPath, ["rev-parse", "HEAD"]);
+    await requireGit(f.projectPath, ["worktree", "remove", linked]);
+
+    await expect(
+      f.owner.createWithProfile("development", "linked-replay", {
+        projectPath: f.projectPath,
+      }),
+    ).resolves.toMatchObject({
+      environmentId: stored.environmentId,
+      profileSnapshot: stored.profileSnapshot,
+    });
+    const nested = path.join(f.projectPath, "nested");
+    await fs.mkdir(nested);
+    await expect(
+      f.owner.createWithProfile("development", "linked-replay", { projectPath: nested }),
+    ).resolves.toMatchObject({
+      environmentId: stored.environmentId,
+      profileSnapshot: stored.profileSnapshot,
+    });
+    expect(
+      (await f.owner.prepareIntent("development", { projectPath: nested })).profileSnapshot.project,
+    ).toBeUndefined();
+
+    const other = path.join(support.testState.root, "other-clone");
+    await requireGit(support.testState.root, ["clone", "--no-hardlinks", f.projectPath, other]);
+    await expect(
+      f.owner.createWithProfile("development", "linked-replay", {
+        projectPath: other,
+      }),
+    ).rejects.toThrow("Idempotency key belongs to another project");
+    await expect(
+      f.owner.createWithProfile("development", "linked-replay", {
+        projectPath: f.projectPath,
+        projectCommit: primaryCommit,
+      }),
+    ).rejects.toThrow("Idempotency key belongs to another project preparation");
+    const changed = await f.owner.prepareIntent("development", { projectPath: f.projectPath });
+    await expect(
+      f.owner.createWithProfile(
+        "development",
+        "linked-replay",
+        {
+          projectPath: f.projectPath,
+        },
+        changed,
+      ),
+    ).rejects.toThrow("Idempotency key belongs to another project preparation");
+    expect(support.testState.store.get(stored.environmentId)?.profileSnapshot).toEqual(
+      stored.profileSnapshot,
+    );
+    expect(f.resumeProvision).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["current", "legacy-label", "linked-transport"])(
+    "replays a fresh admitted intent after display or transport metadata changes (%s)",
+    async (variant) => {
       const f = await fixture();
       const options = { projectPath: f.projectPath };
       const original = await f.owner.prepareIntent("development", options);
@@ -137,8 +206,12 @@ describe("prepared worker intent admission", () => {
       if (!isRecord(profileSnapshot.project)) {
         throw new Error("Expected prepared project");
       }
-      if (legacy) {
+      if (variant === "legacy-label") {
         delete profileSnapshot.project.label;
+      } else if (variant === "linked-transport") {
+        const linked = path.join(support.testState.root, "previous-transport");
+        await requireGit(f.projectPath, ["worktree", "add", "--detach", linked, "HEAD"]);
+        profileSnapshot.project.root = linked;
       }
       const stored = support.testState.store.createIntent({
         ...deriveEnvironmentIntent("display-replay"),

@@ -173,6 +173,12 @@ const RELEASE_TYPED_ONBOARDING_SCENARIO_PATH =
 const RELEASE_TYPED_ONBOARDING_DOCKER_E2E_PATH = "scripts/e2e/release-typed-onboarding-docker.sh";
 const RELEASE_USER_JOURNEY_DOCKER_E2E_PATH = "scripts/e2e/release-user-journey-docker.sh";
 const RELEASE_USER_JOURNEY_SCENARIO_PATH = "scripts/e2e/lib/release-user-journey/scenario.sh";
+const RELEASE_PACKAGE_CLEANUP_CASES = [
+  ["release-media-memory", "marked-other-name"],
+  ["release-plugin-marketplace", "package-removal-failure"],
+  ["release-upgrade-user-journey", "log-removal-failure"],
+  ["release-user-journey", "provided-success"],
+] as const;
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 const UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH =
   "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
@@ -6090,8 +6096,198 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(runner).not.toContain('plugin_tgz="$fixture_dir/$plugin_pack"');
   });
 
-  it("cleans every prepared Docker package tarball on every runner exit path", () => {
-    const paths = packageBackedDockerRunnerPaths();
+  it.each(
+    RELEASE_PACKAGE_CLEANUP_CASES.flatMap(([label, extra]) =>
+      ["generated-success", "setup-failure", "provided-run-failure", extra].map((scenario) => ({
+        label,
+        scenario,
+      })),
+    ),
+  )("cleans release package runner $label on $scenario", ({ label, scenario }) => {
+    const workDir = join(realpathSync(tempDirs.make("openclaw-release-cleanup-")), "with spaces");
+    const binDir = join(workDir, "bin");
+    const evidenceDir = join(workDir, "retained evidence");
+    const packageRecord = join(workDir, "package-path");
+    const eventsPath = join(workDir, "events.jsonl");
+    mkdirSync(evidenceDir, { recursive: true });
+    writeFileSync(join(evidenceDir, "sentinel"), "keep evidence");
+    writeFileSync(join(workDir, "sentinel"), "keep unrelated file");
+    writeFileSync(eventsPath, "");
+
+    const provided = scenario.startsWith("provided-") || scenario === "marked-other-name";
+    const providedDir = join(workDir, "provided package");
+    const providedPackage = join(
+      providedDir,
+      scenario === "marked-other-name" ? "other.tgz" : "openclaw-current.tgz",
+    );
+    if (provided) {
+      mkdirSync(providedDir);
+      writeFileSync(providedPackage, "fixture package");
+      writeFileSync(packageRecord, providedPackage);
+      if (scenario === "marked-other-name") {
+        writeFileSync(join(providedDir, ".openclaw-docker-e2e-generated-package"), "");
+      }
+    }
+
+    const commandStub = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+const command = path.basename(process.argv[1]);
+const root = ${JSON.stringify(workDir)};
+const label = ${JSON.stringify(label)};
+const scenario = ${JSON.stringify(scenario)};
+const packageRecord = ${JSON.stringify(packageRecord)};
+const record = (...event) => fs.appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify(event) + "\\n");
+if (command === "node") {
+  if (args[0].endsWith("/package-openclaw-for-docker.mjs")) {
+    const output = path.join(args[args.indexOf("--output-dir") + 1], args[args.indexOf("--output-name") + 1]);
+    fs.writeFileSync(output, "fixture package");
+    fs.writeFileSync(packageRecord, output);
+    record("package", output);
+    console.log(output);
+    process.exit(0);
+  }
+  if (/\\/openclaw-test-state\\.(mts|mjs)$/.test(args[0])) {
+    console.log("export OPENCLAW_STATE_DIR=/tmp/release-cleanup-fixture");
+    process.exit(0);
+  }
+}
+if (command === "rm") {
+  record("rm", ...args);
+  const packDir = path.dirname(fs.readFileSync(packageRecord, "utf8"));
+  if (scenario === "package-removal-failure" && args.includes(packDir)) process.exit(37);
+  if (scenario === "log-removal-failure" && args.some(arg => arg.startsWith(path.join(root, "openclaw-" + label + ".")))) process.exit(38);
+  const result = spawnSync("/bin/rm", args, { stdio: "inherit" });
+  process.exit(result.status ?? 99);
+}
+if (command === "docker") {
+  record("docker", ...args);
+  if (args[0] === "image" && args[1] === "inspect") process.exit(scenario === "setup-failure" ? 9 : 0);
+  if (args[0] === "rm") process.exit(0);
+  if (args[0] === "inspect") {
+    console.log("ExitCode=7\\nOOMKilled=false\\nError=fixture run failure");
+    process.exit(0);
+  }
+  if (args[0] === "run") {
+    const packagePath = fs.readFileSync(packageRecord, "utf8");
+    if (!args.includes(packagePath + ":/tmp/openclaw-current.tgz:ro")) throw new Error("package mount missing");
+    if (fs.readFileSync(packagePath, "utf8") !== "fixture package") throw new Error("package unavailable during run");
+    fs.writeFileSync(args[args.indexOf("--cidfile") + 1], "fixture-container\\n");
+    const evidenceMount = args.find(arg => arg.endsWith(":/tmp/release-upgrade-evidence"));
+    if (evidenceMount) fs.writeFileSync(path.join(evidenceMount.split(":")[0], "result.txt"), "keep run evidence");
+    console.log("fixture container output");
+    process.exit(scenario === "provided-run-failure" ? 7 : 0);
+  }
+}
+throw new Error("unexpected fixture command: " + command + " " + JSON.stringify(args));
+`;
+    writeExecutables(binDir, {
+      node: commandStub,
+      docker: commandStub,
+      rm: commandStub,
+      timeout: PASSTHROUGH_TIMEOUT_SCRIPT,
+    });
+
+    const result = spawnSync("/bin/bash", [`scripts/e2e/${label}-docker.sh`], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        HOME: workDir,
+        TMPDIR: workDir,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: provided ? providedPackage : "",
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+        OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1",
+        OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS: "2",
+        OPENCLAW_RELEASE_UPGRADE_ARTIFACT_DIR: evidenceDir,
+      },
+    });
+    const expectedStatus =
+      scenario === "package-removal-failure"
+        ? 37
+        : scenario === "log-removal-failure"
+          ? 38
+          : scenario === "setup-failure" || scenario === "provided-run-failure"
+            ? 1
+            : 0;
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
+
+    const packagePath = readFileSync(packageRecord, "utf8");
+    const packDir = dirname(packagePath);
+    const events: string[][] = readFileSync(eventsPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const packageRemovals = events.filter((event) => event[0] === "rm" && event.includes(packDir));
+    const logPrefix = join(workDir, `openclaw-${label}.`);
+    const logRemoval = events.find(
+      (event) => event[0] === "rm" && event.some((arg) => arg.startsWith(logPrefix)),
+    );
+    const logs = readdirSync(workDir).filter((name) => join(workDir, name).startsWith(logPrefix));
+    expect(existsSync(packagePath)).toBe(provided || scenario === "package-removal-failure");
+    expect(logs).toHaveLength(scenario.endsWith("removal-failure") ? 1 : 0);
+    if (provided) {
+      expect(readFileSync(providedPackage, "utf8")).toBe("fixture package");
+      expect(packageRemovals).toEqual([]);
+    } else {
+      expect(packageRemovals).toEqual(
+        Array.from({ length: scenario === "package-removal-failure" ? 2 : 1 }, () => [
+          "rm",
+          "-rf",
+          packDir,
+        ]),
+      );
+    }
+    if (scenario === "setup-failure") {
+      expect(events.some((event) => event[0] === "docker" && event[1] === "run")).toBe(false);
+      expect(logRemoval).toBeUndefined();
+      expect(result.stderr).toContain("Required local Docker E2E image not found");
+    } else {
+      const run = events.find((event) => event[0] === "docker" && event[1] === "run");
+      expect(run).toContain(packagePath + ":/tmp/openclaw-current.tgz:ro");
+      if (scenario === "package-removal-failure") {
+        expect(logRemoval).toBeUndefined();
+      } else {
+        expect(logRemoval).toEqual(["rm", "-f", expect.stringMatching(/^.+$/)]);
+        if (packageRemovals.length > 0) {
+          const packageRemoval = packageRemovals[0];
+          const logRemovalEvent = logRemoval;
+          if (packageRemoval === undefined || logRemovalEvent === undefined) {
+            throw new Error("Expected package and log removal events");
+          }
+          expect(events.indexOf(packageRemoval)).toBeLessThan(events.indexOf(logRemovalEvent));
+        }
+      }
+      if (scenario === "provided-run-failure") {
+        expect(result.stdout + result.stderr).toContain("fixture container output");
+      }
+      if (label === "release-upgrade-user-journey") {
+        const runs = readdirSync(evidenceDir).filter((name) => name.startsWith("run."));
+        expect(runs).toHaveLength(1);
+        const runName = runs[0];
+        if (runName === undefined) {
+          throw new Error("Expected retained run evidence");
+        }
+        expect(readFileSync(join(evidenceDir, runName, "result.txt"), "utf8")).toBe(
+          "keep run evidence",
+        );
+      }
+    }
+    expect(
+      readdirSync(workDir).some((name) => name.startsWith("openclaw-docker-e2e-container.")),
+    ).toBe(false);
+    expect(readFileSync(join(evidenceDir, "sentinel"), "utf8")).toBe("keep evidence");
+    expect(readFileSync(join(workDir, "sentinel"), "utf8")).toBe("keep unrelated file");
+  });
+
+  it("keeps cleanup registered for the remaining package-backed Docker runners", () => {
+    const covered = new Set(
+      RELEASE_PACKAGE_CLEANUP_CASES.map(([label]) => `scripts/e2e/${label}-docker.sh`),
+    );
+    const paths = packageBackedDockerRunnerPaths().filter((path) => !covered.has(path));
 
     expect(paths.length).toBeGreaterThan(0);
     for (const path of paths) {

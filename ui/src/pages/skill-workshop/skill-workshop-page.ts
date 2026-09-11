@@ -227,9 +227,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    void runSkillWorkshopEvaluation(scope.state, scope.context, proposalId, () =>
-      this.isCurrentSourceScope(scope),
-    ).finally(this.requestPageUpdate);
+    void runSkillWorkshopEvaluation(scope.state, scope.context, proposalId, {
+      isCurrent: () => this.isCurrentSourceScope(scope),
+      onProgress: this.requestPageUpdate,
+    }).finally(this.requestPageUpdate);
   };
 
   private readonly handleRevisionSubmit = (proposalId: string) => {
@@ -242,7 +243,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       scope.context,
       proposalId,
       this.handleRevisionRequest,
-      () => this.isCurrentSourceScope(scope),
+      {
+        isCurrent: () => this.isCurrentSourceScope(scope),
+        onProgress: this.requestPageUpdate,
+      },
     )
       .then((outcome) => {
         if (!outcome || outcome.status !== "admitted" || !this.isCurrentSourceScope(scope)) {

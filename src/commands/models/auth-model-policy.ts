@@ -162,11 +162,9 @@ export async function completeProviderModelAccess(params: {
     },
     attachRuntimeConfigWriteApplication({}, application),
   );
-  if (application.claimed && (await application.result) !== "applied") {
-    throw new Error("The running Gateway did not apply the saved model restrictions.");
-  }
+  const applied = application.claimed && (await application.result) === "applied";
   logConfigUpdated(params.runtime);
-  const message = application.claimed
+  const message = applied
     ? `All ${prepared.providerLabel} models are now visible.`
     : "Model access saved. Application by the running Gateway is not confirmed. Run `openclaw gateway restart` to apply it.";
   params.runtime.log(`Credentials saved. ${message}`);

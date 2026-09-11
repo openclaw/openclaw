@@ -207,11 +207,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   and Android at 2. Every compact profile has an enforced 80-row budget, plugin
   fallback has a 50-row budget, and the final Node matrix enforces 64 push or
   120 PR rows, including precise plans. Excess inventory fails preflight.
-- Windows keeps two disjoint file inventories. Jobs requesting the existing
-  Blacksmith class admit at most two project processes with one Vitest worker
-  each; hosted fallbacks remain serial. Runtime preparation completes before
-  project readers start. Native proof must cover available CPUs/RAM, concurrent
-  fixture memory and cleanup. This adds no runner registrations.
+- Windows keeps two disjoint file inventories and at most two concurrent jobs.
+  Each job runs project processes serially with one Vitest worker on every
+  backend, after runtime preparation completes. Native allocation can be smaller
+  than the runner label. Native proof must cover available CPUs/RAM, fixture
+  memory and cleanup. This adds no runner registrations.
 - macOS Swift regular PR/main and PR `release_gate` CI retains the complete
   shared/app test workload plus lint/schema guards in one `tests` phase.
   Ordinary full-scope manual validation adds independent release compilation,

@@ -322,7 +322,7 @@ export async function handleWindowAct(
         driver,
         state,
         "launch_app",
-        app.launchPath
+        platform !== "darwin" && app.launchPath
           ? { launch_path: app.launchPath }
           : app.bundleId
             ? { bundle_id: app.bundleId }

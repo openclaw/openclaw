@@ -75,6 +75,7 @@ import {
 } from "./session-lifecycle-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
+import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import {
   loadGatewaySessionEntryReadOnly,
   loadGatewaySessionLifecycleSnapshot,
@@ -581,7 +582,14 @@ export function createAgentEventHandler({
     }
     let result: string | null = null;
     try {
-      result = loadGatewaySessionLifecycleSnapshotForEvent(sessionKey).row?.spawnedBy ?? null;
+      const { entry, canonicalKey } = loadGatewaySessionEntryReadOnly(sessionKey, { clone: false });
+      if (entry) {
+        result =
+          projectGatewaySessionRunState({ key: canonicalKey, entry, now: Date.now() })
+            .subagentOwner ||
+          entry.spawnedBy ||
+          null;
+      }
     } catch {
       // result stays null
     }

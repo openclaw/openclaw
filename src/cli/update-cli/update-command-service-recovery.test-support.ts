@@ -113,7 +113,7 @@ export function registerRecoveryTests(params: {
 }): void {
   it.each([
     { startup: "fast", readyAfterMs: 0, needsRecovery: false },
-    { startup: "slow", readyAfterMs: 20_000, needsRecovery: false },
+    { startup: "slow", readyAfterMs: 20_000, needsRecovery: true },
     { startup: "unready", readyAfterMs: Infinity, needsRecovery: true },
     { startup: "wrong version", readyAfterMs: 0, needsRecovery: true },
   ])(
@@ -220,8 +220,8 @@ export function registerRecoveryTests(params: {
       ]);
       expect(mocks.script).not.toHaveBeenCalled();
       expect(mocks.restart).not.toHaveBeenCalled();
-      if (startup === "unready") {
-        expect(healthResults[0]?.elapsedMs).toBeGreaterThanOrEqual(60_000);
+      if (startup === "unready" || startup === "slow") {
+        expect(healthResults[0]?.elapsedMs).toBe(6_500);
       } else if (!needsRecovery) {
         expect(nowMs).toBeGreaterThanOrEqual(readyAfterMs + 5_500);
       }

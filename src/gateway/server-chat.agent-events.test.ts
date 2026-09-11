@@ -18,6 +18,8 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import {
@@ -6806,6 +6808,10 @@ describe("agent event handler", () => {
 
   describe("spawnedBy enrichment in chat and agent broadcasts", () => {
     function mockSessionLineage(key: string, spawnedBy?: string) {
+      mockSessionEntry(
+        { sessionId: "lineage", updatedAt: 1, ...(spawnedBy ? { spawnedBy } : {}) },
+        key,
+      );
       vi.mocked(loadGatewaySessionRow).mockReturnValue({
         key,
         kind: "direct",
@@ -6813,6 +6819,50 @@ describe("agent event handler", () => {
         ...(spawnedBy ? { spawnedBy } : {}),
       });
     }
+
+    it.each([false, true])(
+      "requires a stored session before projecting registry lineage (stored=%s)",
+      (stored) => {
+        const key = "agent:main:subagent:lineage-presence";
+        const runId = "lineage-presence-run";
+        const controller = "agent:main:controller";
+        mockSessionEntry(
+          stored
+            ? {
+                sessionId: "lineage-session",
+                updatedAt: 1,
+                spawnedBy: "agent:main:former-controller",
+              }
+            : undefined,
+          key,
+        );
+        subagentRuns.set(
+          runId,
+          createSubagentRunRecord({
+            runId,
+            childSessionKey: key,
+            requesterSessionKey: controller,
+            controllerSessionKey: controller,
+          }),
+        );
+        const { handler, broadcast } = createHarness({ resolveSessionKeyForRun: () => key });
+        try {
+          emitAgentEvent(handler, runId, "assistant", { text: "Child response" });
+          expect(broadcast).toHaveBeenCalled();
+          for (const [, payload] of broadcast.mock.calls) {
+            if (stored) {
+              expect(payload.spawnedBy).toBe(controller);
+            } else {
+              expect(payload).not.toHaveProperty("spawnedBy");
+            }
+          }
+          expect(loadGatewaySessionLifecycleSnapshotMock).not.toHaveBeenCalled();
+        } finally {
+          handler.dispose();
+          subagentRuns.delete(runId);
+        }
+      },
+    );
 
     it.each([
       {
@@ -7116,7 +7166,7 @@ describe("agent event handler", () => {
       expectPayloadDataFields(gapError[1], { reason: "seq gap", expected: 2, received: 5 });
     });
 
-    it("caches spawnedBy lookup so repeated events for the same subagent session only load the row once", () => {
+    it("projects repeated subagent lineage without loading full session rows", () => {
       vi.mocked(loadGatewaySessionRow).mockClear();
       mockSessionLineage("agent:coder:subagent:cache-test", "agent:conductor:task:parent-cache");
 
@@ -7132,9 +7182,7 @@ describe("agent event handler", () => {
         ["lifecycle", { phase: "end" }],
       ]);
 
-      // Key assertion: loadGatewaySessionRow called exactly once despite 3 events
-      expect(loadGatewaySessionRow).toHaveBeenCalledTimes(1);
-      expect(loadGatewaySessionRow).toHaveBeenCalledWith("agent:coder:subagent:cache-test");
+      expect(loadGatewaySessionRow).not.toHaveBeenCalled();
 
       // All broadcasts still have correct spawnedBy
       const chatCalls = chatBroadcastCalls(broadcast);
@@ -7160,8 +7208,8 @@ describe("agent event handler", () => {
         ["assistant", { text: "chunk 2" }],
       ]);
 
-      // null result is cached — only one DB call despite two events
-      expect(loadGatewaySessionRow).toHaveBeenCalledTimes(1);
+      expect(loadGatewaySessionRow).not.toHaveBeenCalled();
+      expect(loadSessionEntry).toHaveBeenCalledOnce();
 
       const chatCalls = chatBroadcastCalls(broadcast);
       for (const [, payload] of chatCalls) {

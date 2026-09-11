@@ -1,3 +1,4 @@
+import { Server } from "node:http";
 // Codex tests cover side question plugin behavior.
 import path from "node:path";
 import {
@@ -16,6 +17,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import {
+  createAdmittedHostCapabilityTestFixture,
   createMockPluginRegistry,
   loadWebFetchToolFactoryForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -573,8 +575,8 @@ async function runSideQuestionWithManagedWebSearchCall(
 describe("runCodexAppServerSideQuestion", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  beforeEach(() => {
-    nativeHookRelayTesting.clearNativeHookRelaysForTests();
+  beforeEach(async () => {
+    await nativeHookRelayTesting.clearNativeHookRelaysForTests();
     readCodexAppServerBindingMock.mockReset();
     isCodexAppServerNativeAuthProfileMock.mockReset();
     getSharedCodexAppServerClientMock.mockReset();
@@ -633,8 +635,8 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
-  afterEach(() => {
-    nativeHookRelayTesting.clearNativeHookRelaysForTests();
+  afterEach(async () => {
+    await nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     vi.unstubAllGlobals();
@@ -2241,7 +2243,21 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   );
 
-  it("installs native hook relay config for opted-in side threads", async () => {
+  it.each([false, true])("keeps side hooks after listener failure: %s", async (failed) => {
+    if (failed) {
+      vi.spyOn(Server.prototype, "listen").mockImplementationOnce(function (this: Server) {
+        queueMicrotask(() => this.emit("error", new Error("fixture side listener unavailable")));
+        return this;
+      });
+    }
+    const beforeToolCall = vi.fn(() => ({
+      block: true,
+      blockReason: "fixture side policy denial",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const host = await createAdmittedHostCapabilityTestFixture({ runId: "run-side-1" });
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
     client.request.mockImplementation(async (method: string, requestParams: unknown) => {
@@ -2258,6 +2274,23 @@ describe("runCodexAppServerSideQuestion", () => {
           channelId: "voice-room",
           allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
         });
+        const generation = codexHookCommand(config, "hooks.PreToolUse")?.command?.match(
+          /--generation ([^ ]+)/,
+        )?.[1];
+        const response = await invokeNativeHookRelay({
+          provider: "codex",
+          relayId: relayIdDuringFork,
+          generation,
+          requireGeneration: true,
+          event: "pre_tool_use",
+          rawPayload: {
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_use_id: "side-listener-unavailable-tool",
+            tool_input: { command: "pwd" },
+          },
+        });
+        expect(response.stdout).toContain("fixture side policy denial");
         return threadResult("side-thread");
       }
       if (method === "thread/inject_items") {
@@ -2280,6 +2313,7 @@ describe("runCodexAppServerSideQuestion", () => {
     await expect(
       runCodexAppServerSideQuestion(
         sideLoopRelayParams({
+          hostCapabilities: host.hostCapabilities,
           sessionKey: "agent:main:session-1",
           sessionEntry: {
             sessionId: "session-1",
@@ -2293,7 +2327,10 @@ describe("runCodexAppServerSideQuestion", () => {
           opts: { runId: "run-side-1" },
         }),
         { nativeHookRelay: { enabled: true, hookTimeoutSec: 9 } },
-      ),
+      ).finally(() => {
+        host.closeHost();
+        host.closeAdmission();
+      }),
     ).resolves.toEqual({ text: "Side answer." });
 
     const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
@@ -2320,6 +2357,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
     expect(turnStartCall?.[1]).not.toHaveProperty("config");
     expect(relayIdDuringFork).toBeDefined();
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
     expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-side-1" }),
     );

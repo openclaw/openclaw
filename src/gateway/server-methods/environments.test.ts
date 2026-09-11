@@ -64,6 +64,41 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
+  it.each(["locked", "unlocked", "unknown"])(
+    "projects %s desktop availability only from its matching live node",
+    async (state) => {
+      const connectedNodes = [
+        {
+          nodeId: "node-live",
+          connId: "conn-live",
+          caps: [],
+          commands: [],
+          desktopAvailability: { state },
+        },
+        { nodeId: "node-other", connId: "conn-other", caps: [], commands: [] },
+      ];
+      const [ok, payload] = await callEnvironmentMethod(
+        "environments.list",
+        {},
+        { connectedNodes },
+      );
+      expect(ok).toBe(true);
+      const { environments } = payload as { environments: Array<Record<string, unknown>> };
+      expect(environments.find((entry) => entry.id === "node:node-live")).toMatchObject({
+        desktopAvailability: { state },
+      });
+      for (const entry of environments.filter((candidate) => candidate.id !== "node:node-live")) {
+        expect(entry).not.toHaveProperty("desktopAvailability");
+      }
+      const [statusOk, summary] = await callEnvironmentMethod(
+        "environments.status",
+        { environmentId: "node:node-live" },
+        { connectedNodes },
+      );
+      expect(statusOk).toBe(true);
+      expect(summary).toMatchObject({ desktopAvailability: { state } });
+    },
+  );
   it.each(["devices", "nodes"] as const)(
     "waits for both independent pairing reads when %s finishes first",
     async (first) => {

@@ -51,7 +51,12 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
         const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-        await expect.poll(() => textarea.isDisabled()).toBe(true);
+        const send = page.getByRole("button", { name: "Send message", exact: true });
+        const draft = "Continue our conversation.";
+        await expect.poll(() => textarea.isDisabled()).toBe(false);
+        await textarea.fill(draft);
+        await expect.poll(() => send.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         const startupCount = (await gateway.getRequests("chat.startup")).length;
         const socketCount = await gateway.getSocketCount();
 
@@ -62,9 +67,14 @@ suite.define(() => {
         });
         await gateway.emitGatewayEvent(event, {});
         await gateway.waitForRequest("models.list", { after: 1 });
-        expect(await textarea.isDisabled()).toBe(true);
+        expect(await textarea.isDisabled()).toBe(false);
+        expect(await textarea.inputValue()).toBe(draft);
+        expect(await send.isDisabled()).toBe(true);
         await gateway.resolveDeferred("models.list");
-        await expect.poll(() => textarea.isDisabled()).toBe(false);
+        await expect.poll(() => send.isDisabled()).toBe(false);
+        expect(await textarea.isDisabled()).toBe(false);
+        expect(await textarea.inputValue()).toBe(draft);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await expect.poll(() => page.getByText("Earlier reply", { exact: true }).count()).toBe(1);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(startupCount);
         expect(await gateway.getRequests("models.list")).toHaveLength(2);
@@ -297,7 +307,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps an auth-cold configured catalog visible and blocks chat until setup", async () => {
+  it("keeps an auth-cold configured catalog visible and blocks messages until setup", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = [
         {
@@ -348,6 +358,11 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
 
       const composer = page.locator(".agent-chat__input");
+      const textarea = composer.locator("textarea");
+      const send = composer.getByRole("button", { name: "Send message", exact: true });
+      const draft = "Continue our conversation.";
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      await textarea.fill(draft);
       const picker = composer.locator("details.chat-controls__model-picker");
       const options = picker.locator(
         "button[data-chat-model-option]:not([data-chat-model-target])",
@@ -385,7 +400,9 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator(".chat-controls__model-catalog-state").textContent())
         .toContain("No models available");
-      await expect.poll(() => composer.locator("textarea").isDisabled()).toBe(true);
+      expect(await textarea.isDisabled()).toBe(false);
+      expect(await textarea.inputValue()).toBe(draft);
+      await expect.poll(() => send.isDisabled()).toBe(true);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
       const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();

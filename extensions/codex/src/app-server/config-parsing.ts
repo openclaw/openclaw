@@ -54,6 +54,13 @@ const codexAppServerServiceTierSchema = z
     z.string().trim().min(1).nullable().optional(),
   )
   .optional();
+const codexAppServerCyberFailoverSchema = z
+  .object({
+    mode: z.enum(["auto", "off"]).optional(),
+    model: z.string().trim().min(1).optional(),
+    cooloffMs: z.number().positive().optional(),
+  })
+  .strict();
 const codexAppServerExperimentalSchema = z
   .object({
     sandboxExecServer: z.boolean().optional(),
@@ -179,6 +186,7 @@ const codexPluginConfigSchema = z
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
+        cyberFailover: codexAppServerCyberFailoverSchema.optional(),
         networkProxy: codexAppServerNetworkProxySchema.optional(),
         defaultWorkspaceDir: z.string().optional(),
         experimental: codexAppServerExperimentalSchema.optional(),

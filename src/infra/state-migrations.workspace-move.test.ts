@@ -53,7 +53,7 @@ describe("workspace move migration recovery", () => {
       const raw = JSON.stringify(milestones);
       const sourcePath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
       fs.writeFileSync(sourcePath, raw);
-      const detected = detect(configured);
+      const detected = await detect(configured);
       const source = detected.sources.find((entry) => entry.kind === "setup")!;
       const imported = await migrateLegacyWorkspaceState({
         detected,

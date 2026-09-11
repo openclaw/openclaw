@@ -199,7 +199,7 @@ describe("worker provisioning cancellation ownership", () => {
     },
   );
 
-  it.each(["cancelled", "late-success", "profile-error"] as const)(
+  it.each(["cancelled", "late-success", "profile-error", "cleanup-complete"] as const)(
     "retains allocation cleanup after cancellation with a %s provider result",
     async (result) => {
       const started = createDeferredCore();
@@ -218,6 +218,12 @@ describe("worker provisioning cancellation ownership", () => {
           events.push("child-closed");
           if (result === "profile-error") {
             throw new WorkerProviderError("late provider rejection");
+          }
+          if (result === "cleanup-complete") {
+            throw WorkerProviderError.cleanupComplete(
+              "lease-cancelled",
+              new Error("provider setup failed before cleanup"),
+            );
           }
           if (result === "cancelled") {
             providerSignal?.throwIfAborted();

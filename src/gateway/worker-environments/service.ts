@@ -685,7 +685,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
       ),
     destroyUnattached: async (environmentId: string) => {
-      preparedPool.cancelBuild(environmentId);
+      preparedPool.cancelPreparation(environmentId);
       return environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { requireUnattached: true }),
       );

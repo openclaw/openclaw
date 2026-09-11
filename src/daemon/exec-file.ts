@@ -27,7 +27,8 @@ export async function execFileUtf8(
       [command, ...args],
       {
         baseEnv: resolveServiceManagerEnv(options.env),
-        cwd: options.cwd,
+        // sudo -u can inherit an operator directory the service account cannot enter.
+        cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
         killSignal: options.killSignal,
         maxOutputBytes: 1024 * 1024,
         timeoutMs: options.timeout,

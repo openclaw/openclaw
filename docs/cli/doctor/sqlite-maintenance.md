@@ -121,7 +121,7 @@ Modes:
 Selectors:
 
 - Default: the configured default agent store; SQLite inspection does not require a legacy file.
-- `--session-sqlite-agent <id>`: one configured agent.
+- `--session-sqlite-agent <id>`: one configured agent, or the expected database owner when paired with `--session-sqlite-store` (which otherwise assumes `main`).
 - `--session-sqlite-all-agents`: configured agent stores plus discovered agent stores.
 - `--session-sqlite-store <path>`: one explicit `.sqlite` database or legacy `sessions.json` path.
 

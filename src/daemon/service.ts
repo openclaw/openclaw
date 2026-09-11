@@ -31,6 +31,10 @@ import {
   uninstallScheduledTask,
 } from "./schtasks.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
+import {
+  ServiceInspectionError,
+  type ServiceInspectionReason,
+} from "./service-inspection-error.js";
 import { resolveServiceEntrypoint } from "./service-layout.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import {
@@ -200,7 +204,11 @@ export async function readGatewayServiceLoadState(
   try {
     return { status: (await service.isLoaded(args)) ? "loaded" : "not-loaded" };
   } catch (error) {
-    return { status: "unknown", detail: String(error) };
+    return {
+      status: "unknown",
+      detail: String(error),
+      ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
+    };
   }
 }
 
@@ -222,6 +230,7 @@ export async function readGatewayServiceState(
       runtime: { status: "stopped", missingUnit: true },
     };
   }
+  let commandInspectionReason: ServiceInspectionReason | undefined;
   const command = args.requireEffective
     ? await service.readCommand(baseEnv, {
         timeoutMs,
@@ -229,7 +238,14 @@ export async function readGatewayServiceState(
         ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
         ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
       })
-    : await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
+    : await service
+        .readCommand(baseEnv, {
+          timeoutMs,
+          onInspectionFailure: (reason) => {
+            commandInspectionReason = reason;
+          },
+        })
+        .catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
   // Reject persisted selector drift before invoking the native service manager.
   args.validateEnvBeforeStatusRead?.(env);
@@ -258,6 +274,10 @@ export async function readGatewayServiceState(
       : undefined,
   ]);
   return {
+    inspectionReason:
+      commandInspectionReason ??
+      runtime?.inspectionReason ??
+      (loadState.status === "unknown" ? loadState.inspectionReason : undefined),
     installed,
     loadState,
     running: runtime?.status === "running",
