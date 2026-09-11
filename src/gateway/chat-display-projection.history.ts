@@ -14,12 +14,14 @@ import {
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
   asRoleContentMessage,
   extractProjectedText,
   hasAssistantNonTextContent,
+  hasAssistantDisplayableNonTextContent,
   hasTranscriptMediaFacts,
   isEmptyTextOnlyContent,
   isProjectedSessionsSendForwardedMessage,
@@ -158,7 +160,10 @@ export function mergeTtsSupplementMessages(
 
 function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unknown>): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
-  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+  if (
+    provenance?.kind === "inter_session" &&
+    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
+  ) {
     return true;
   }
   const text = extractProjectedText(message.content ?? message.text);
@@ -178,7 +183,10 @@ function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown):
     return false;
   }
   const provenance = normalizeInputProvenance(record.provenance);
-  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+  if (
+    provenance?.kind === "inter_session" &&
+    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
+  ) {
     return true;
   }
   const text = extractChatHistoryBlockText(record);
@@ -350,6 +358,21 @@ function isDuplicateChannelFinalDeliveryMirror(
     return false;
   }
   const previousMeta = readRecord(previousVisible["__openclaw"]);
+  if (typeof deliveryMirror.sourceAssistantMessageId === "string") {
+    if (
+      !deliveryMirror.sourceAssistantMessageId ||
+      deliveryMirror.sourceAssistantMessageId !== previousMeta?.id ||
+      hasAssistantDisplayableNonTextContent(previousVisible) ||
+      hasAssistantNonTextContent(current) ||
+      hasTranscriptMediaFacts(previousVisible) ||
+      hasTranscriptMediaFacts(current)
+    ) {
+      return false;
+    }
+    const previousText = extractAssistantPhaseText(previousVisible)?.trim();
+    const currentText = extractAssistantPhaseText(current)?.trim();
+    return Boolean(previousText && currentText && previousText === currentText);
+  }
   if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
     return false;
   }

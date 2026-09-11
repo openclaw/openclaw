@@ -1,3 +1,4 @@
+import type { SkillsDetailResult } from "@openclaw/gateway-protocol";
 // ClawHub skill metadata, trust, install resolution, cards, and telemetry.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -7,7 +8,7 @@ import {
   isClawHubTelemetryDisabled,
   parseClawHubJsonBody,
   readClawHubBytes,
-  requestClawHub,
+  withClawHubResponse,
   resolveClawHubAuthToken,
   resolveClawHubBaseUrl,
   resolveClawHubImageUrl,
@@ -25,6 +26,7 @@ export type ClawHubSkillsShTrustState = typeof CLAWHUB_SKILLS_SH_TRUST_STATE;
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  registry: string;
   /**
    * Reference install must send back. Search returns the same slug for several publishers, so
    * the bare slug alone resolves to 409 AMBIGUOUS_SKILL_SLUG. This names the result's own
@@ -40,6 +42,8 @@ export type ClawHubSkillSearchResult = {
   trustState?: ClawHubSkillsShTrustState;
   // Search may return the same slug for multiple publishers; exact install refs need this handle.
   ownerHandle?: string | null;
+  /** Official status comes from ClawHub's canonical search result, never the handle. */
+  official?: boolean;
   displayName: string;
   summary?: string;
   icon?: string | null;
@@ -58,42 +62,22 @@ const CLAWHUB_SUPPORTED_INSTALL_KINDS = new Set(["clawhub", "github", "skills-sh
  */
 type ClawHubSkillSearchWireEntry = Omit<
   ClawHubSkillSearchResult,
-  "installRef" | "installOnly" | "trustState"
+  "registry" | "installRef" | "installOnly" | "trustState"
 > & {
   source?: string | null;
   install?: { kind?: string | null; reference?: string | null } | null;
 };
 
-export type ClawHubSkillDetail = {
-  skill: {
-    slug: string;
-    displayName: string;
-    summary?: string;
-    icon?: string | null;
-    tags?: Record<string, string>;
-    channel?: string | null;
-    isOfficial?: boolean | null;
-    createdAt: number;
-    updatedAt: number;
-  } | null;
-  latestVersion?: {
-    version: string;
-    createdAt: number;
-    changelog?: string;
-  } | null;
-  metadata?: {
-    os?: string[] | null;
-    systems?: string[] | null;
-  } | null;
-  owner?: {
-    handle?: string | null;
-    displayName?: string | null;
-    image?: string | null;
-    official?: boolean | null;
-    channel?: string | null;
-    isOfficial?: boolean | null;
-  } | null;
+type ClawHubSkillTrendingWireEntry = Pick<
+  ClawHubSkillSearchWireEntry,
+  "slug" | "displayName" | "source" | "install" | "official"
+> & {
+  summary?: string | null;
+  publisher?: { handle?: string | null } | null;
+  metrics?: { updatedAt?: number | null };
 };
+
+export type ClawHubSkillDetail = SkillsDetailResult;
 
 export type ClawHubSkillInstallResolutionResponse =
   | {
@@ -218,19 +202,44 @@ export async function searchClawHubSkills(params: {
   fetchImpl?: ClawHubFetch;
   limit?: number;
 }): Promise<ClawHubSkillSearchResult[]> {
-  const result = await fetchClawHubJson<{ results: ClawHubSkillSearchWireEntry[] }>({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/search",
+  const registry = resolveClawHubBaseUrl(params.baseUrl);
+  const query = params.query.trim();
+  const request = {
+    baseUrl: registry,
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
-    search: {
-      q: params.query.trim(),
-      limit: params.limit ? String(params.limit) : undefined,
-    },
-  });
-  return (result.results ?? []).flatMap((entry) => {
-    const mapped = toClawHubSkillSearchResult(entry, params.baseUrl);
+  };
+  let entries: ClawHubSkillSearchWireEntry[];
+  if (query) {
+    const result = await fetchClawHubJson<{ results: ClawHubSkillSearchWireEntry[] }>({
+      ...request,
+      path: "/api/v1/search",
+      search: { q: query, limit: params.limit ? String(params.limit) : undefined },
+    });
+    entries = result.results ?? [];
+  } else {
+    const result = await fetchClawHubJson<{ items: ClawHubSkillTrendingWireEntry[] }>({
+      ...request,
+      path: "/api/v1/trending",
+      search: { kind: "skills", limit: String(Math.min(params.limit ?? 20, 100)) },
+    });
+    // Trending owns ordering and publisher identity; the plain skills list has no publisher.
+    // Both feeds enter the same source-qualified mapping before detail or install is offered.
+    entries = (result.items ?? []).map((entry) => ({
+      score: 0,
+      slug: entry.slug,
+      displayName: entry.displayName,
+      summary: entry.summary ?? undefined,
+      source: entry.source,
+      install: entry.install,
+      official: entry.official,
+      ownerHandle: entry.publisher?.handle,
+      updatedAt: entry.metrics?.updatedAt ?? undefined,
+    }));
+  }
+  return entries.flatMap((entry) => {
+    const mapped = toClawHubSkillSearchResult(entry, registry);
     return mapped ? [mapped] : [];
   });
 }
@@ -242,10 +251,10 @@ export async function searchClawHubSkills(params: {
  */
 function toClawHubSkillSearchResult(
   entry: ClawHubSkillSearchWireEntry,
-  baseUrl?: string,
+  registry: string,
 ): ClawHubSkillSearchResult | undefined {
   const { install: _install, source: _source, ...rest } = entry;
-  const base = { ...rest, icon: resolveClawHubImageUrl(entry.icon, baseUrl) };
+  const base = { ...rest, registry, icon: resolveClawHubImageUrl(entry.icon, registry) };
   const source = normalizeOptionalString(entry.source);
   const installKind = normalizeOptionalString(entry.install?.kind);
   const reference = normalizeOptionalString(entry.install?.reference);
@@ -316,26 +325,30 @@ export async function fetchClawHubSkillInstallResolution(params: {
   fetchImpl?: ClawHubFetch;
   forceInstall?: boolean;
 }): Promise<ClawHubSkillInstallResolutionResponse> {
-  const { response, url, hasToken } = await requestClawHub({
-    baseUrl: params.baseUrl,
-    path: `/api/v1/skills/${encodeURIComponent(params.slug)}/install`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: {
-      ownerHandle: params.ownerHandle,
-      reference: params.requestedReference,
-      forceInstall: params.forceInstall ? "1" : undefined,
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      path: `/api/v1/skills/${encodeURIComponent(params.slug)}/install`,
+      token: params.token,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      search: {
+        ownerHandle: params.ownerHandle,
+        reference: params.requestedReference,
+        forceInstall: params.forceInstall ? "1" : undefined,
+      },
     },
-  });
-  const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
-  if (!response.ok && !isStructuredBlock) {
-    throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(
-    response,
-    url,
-    params.timeoutMs,
+    async ({ response, url, hasToken }) => {
+      const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
+      if (!response.ok && !isStructuredBlock) {
+        throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(
+        response,
+        url,
+        params.timeoutMs,
+      );
+    },
   );
 }
 
@@ -407,26 +420,30 @@ export async function fetchClawHubSkillCard(params: {
     providedToken == null &&
     new URL(cardUrl, `${resolveClawHubBaseUrl(params.baseUrl)}/`).origin !==
       new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`).origin;
-  const { response, url, hasToken } = await requestClawHub({
-    baseUrl: params.baseUrl,
-    url: cardUrl,
-    path: slug ? `/api/v1/skills/${encodeURIComponent(slug)}/card` : undefined,
-    token: providedToken,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: cardUrl ? undefined : buildVersionOrTagSearch(params),
-    skipAuth,
-  });
-  if (!response.ok) {
-    throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  const bytes = await readClawHubBytes({
-    response,
-    maxBytes: SKILL_CARD_MAX_BYTES,
-    timeoutMs: params.timeoutMs,
-    resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
-  });
-  return decodeClawHubResponseBody(bytes);
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      url: cardUrl,
+      path: slug ? `/api/v1/skills/${encodeURIComponent(slug)}/card` : undefined,
+      token: providedToken,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      search: cardUrl ? undefined : buildVersionOrTagSearch(params),
+      skipAuth,
+    },
+    async ({ response, url, hasToken }) => {
+      if (!response.ok) {
+        throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      const bytes = await readClawHubBytes({
+        response,
+        maxBytes: SKILL_CARD_MAX_BYTES,
+        timeoutMs: params.timeoutMs,
+        resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
+      });
+      return decodeClawHubResponseBody(bytes);
+    },
+  );
 }
 
 export async function reportClawHubSkillInstallTelemetry(params: {
@@ -449,23 +466,27 @@ export async function reportClawHubSkillInstallTelemetry(params: {
     return;
   }
 
-  const { response, url, hasToken } = await requestClawHub({
-    baseUrl: params.baseUrl,
-    path: "/api/cli/telemetry/install",
-    method: "POST",
-    token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    json: {
-      event: "install",
-      slug,
-      ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-      ...(params.requestedReference ? { reference: params.requestedReference } : {}),
-      ...(params.trustState ? { trustState: params.trustState } : {}),
-      version: params.version ?? undefined,
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      path: "/api/cli/telemetry/install",
+      method: "POST",
+      token,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      json: {
+        event: "install",
+        slug,
+        ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+        ...(params.requestedReference ? { reference: params.requestedReference } : {}),
+        ...(params.trustState ? { trustState: params.trustState } : {}),
+        version: params.version ?? undefined,
+      },
     },
-  });
-  if (!response.ok) {
-    throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-  }
+    async ({ response, url, hasToken }) => {
+      if (!response.ok) {
+        throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+    },
+  );
 }

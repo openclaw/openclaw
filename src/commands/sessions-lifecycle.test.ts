@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionsArchiveCommand, sessionsDeleteCommand } from "./sessions-lifecycle.js";
 
 const mocks = vi.hoisted(() => ({
@@ -30,13 +30,21 @@ function createRuntime() {
 }
 
 function listResult(
-  sessions: Array<{ key: string; sessionId?: string; archived?: boolean; isMain?: boolean }>,
+  sessions: Array<{
+    key: string;
+    sessionId?: string;
+    agentId?: string;
+    archived?: boolean;
+    isMain?: boolean;
+  }>,
   pagination: { hasMore?: boolean; nextOffset?: number | null } = {},
 ) {
   return { sessions, hasMore: false, nextOffset: null, ...pagination };
 }
 
 describe("sessions lifecycle commands", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.confirm.mockResolvedValue(true);
@@ -349,7 +357,9 @@ describe("sessions lifecycle commands", () => {
   it("deletes archived sessions with the same gated artifact contract as Control UI", async () => {
     mocks.callGateway
       .mockResolvedValueOnce(
-        listResult([{ key: "agent:main:archived", sessionId: "session-1", archived: true }]),
+        listResult([
+          { key: "agent:main:archived", sessionId: "session-1", agentId: "main", archived: true },
+        ]),
       )
       .mockResolvedValueOnce({
         ok: true,
@@ -401,6 +411,142 @@ describe("sessions lifecycle commands", () => {
       },
       2,
     );
+  });
+
+  it.each([
+    { key: "agent:main:active", canonicalKey: "agent:main:active", agentId: "main" },
+    { key: "agent:work:active", canonicalKey: "agent:work:active", agentId: "work" },
+    { key: "global", canonicalKey: "global", agentId: "work" },
+    { key: "unknown", canonicalKey: "unknown", agentId: "work" },
+    { key: "agent:work:main", canonicalKey: "global", agentId: "work" },
+  ])(
+    "targets the Gateway owner of $key when explaining retained memory",
+    async ({ key, canonicalKey, agentId }) => {
+      mocks.callGateway
+        .mockResolvedValueOnce(listResult([{ key, sessionId: "session-1", agentId }]))
+        .mockResolvedValueOnce({
+          ok: true,
+          key: canonicalKey,
+          deleted: true,
+          archived: ["/state/session-1.jsonl.deleted.123"],
+        });
+      const runtime = createRuntime();
+
+      await sessionsDeleteCommand({ keys: [key], yes: true }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith(`Deleted session ${canonicalKey}.`);
+      expect(runtime.log).toHaveBeenCalledWith(
+        "Archived transcript: /state/session-1.jsonl.deleted.123",
+      );
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("Archived transcripts can remain eligible for memory search"),
+      );
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `openclaw memory forget --agent ${agentId} --session ${canonicalKey} on the Gateway host or container using its state and configuration`,
+        ),
+      );
+    },
+  );
+
+  it("keeps separate owners when delete responses share a canonical key", async () => {
+    mocks.callGateway
+      .mockResolvedValueOnce(
+        listResult([
+          { key: "agent:work:main", sessionId: "work-session", agentId: "work" },
+          { key: "agent:peer:main", sessionId: "peer-session", agentId: "peer" },
+        ]),
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        key: "global",
+        deleted: true,
+        archived: ["/work/archive"],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        key: "global",
+        deleted: true,
+        archived: ["/peer/archive"],
+      });
+    const runtime = createRuntime();
+
+    await sessionsDeleteCommand(
+      { keys: ["agent:work:main", "agent:peer:main"], yes: true },
+      runtime,
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw memory forget --agent work --session global"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw memory forget --agent peer --session global"),
+    );
+  });
+
+  it.each([undefined, "ws://gateway.test"])(
+    "keeps client target hints out of Gateway-host cleanup (url=%s)",
+    async (url) => {
+      vi.stubEnv("OPENCLAW_PROFILE", "client-profile");
+      vi.stubEnv("OPENCLAW_CONTAINER_HINT", "client-container");
+      const key = "agent:work:notes;echo unsafe";
+      mocks.getRuntimeConfig.mockReturnValue({
+        agents: { entries: { main: { default: true }, work: {} } },
+        gateway: { mode: "remote", remote: { url: "ws://configured-gateway.test" } },
+      });
+      mocks.callGateway
+        .mockResolvedValueOnce(listResult([{ key, sessionId: "session-1", agentId: "work" }]))
+        .mockResolvedValueOnce({ ok: true, key, deleted: true, archived: ["/gateway/archive"] });
+      const runtime = createRuntime();
+
+      await sessionsDeleteCommand({ keys: [key], yes: true, url }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "openclaw memory forget --agent work --session 'agent:work:notes;echo unsafe' on the Gateway host or container using its state and configuration",
+        ),
+      );
+      expect(runtime.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("--profile client-profile"),
+      );
+      expect(runtime.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("--container client-container"),
+      );
+    },
+  );
+
+  it("does not guess an owner when the Gateway omits its optional agent field", async () => {
+    mocks.callGateway
+      .mockResolvedValueOnce(listResult([{ key: "unknown", sessionId: "session-1" }]))
+      .mockResolvedValueOnce({ ok: true, key: "unknown", deleted: true, archived: ["/archive"] });
+    const runtime = createRuntime();
+
+    await sessionsDeleteCommand({ keys: ["unknown"], yes: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "select the owning agent with --agent and this session with --session",
+      ),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("--agent main"));
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not print memory forget guidance when no delete archive is retained", async () => {
+    mocks.callGateway
+      .mockResolvedValueOnce(listResult([{ key: "agent:main:active", sessionId: "session-1" }]))
+      .mockResolvedValueOnce({
+        ok: true,
+        key: "agent:main:active",
+        deleted: true,
+        archived: [],
+      });
+    const runtime = createRuntime();
+
+    await sessionsDeleteCommand({ keys: ["agent:main:active"], yes: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith("Deleted session agent:main:active.");
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("openclaw memory forget"));
   });
 
   it("prints the preserved worktree cleanup reason without claiming source changes", async () => {

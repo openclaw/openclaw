@@ -179,7 +179,7 @@ export function workerProbe(
     "configured-value.ts",
     'export const value: string = "configured";',
   );
-  const parent = path.join(root, "src/infra/sqlite-readonly-location.ts");
+  const parent = path.join(root, "src/infra/sqlite-snapshot-source.ts");
   const test = writeFixture(
     directory,
     "child.test.ts",
@@ -199,7 +199,7 @@ export function workerProbe(
     import { tuiPtyRuntimeEntrypoints } from ${JSON.stringify(path.join(root, "src/tui/tui-pty-runtime-test-support.ts"))};
     import { cliCompactionBackendEntrypoints } from ${JSON.stringify(path.join(root, "src/agents/command/cli-compaction-runtime.test-support.ts"))};
     import { resolveRuntimeWorkerUrl } from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
-    import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-readonly-location.ts"))};
+    import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-snapshot-source.ts"))};
     import { runSqliteTranscriptArchivePublishWorker } from ${JSON.stringify(path.join(root, "src/config/sessions/session-accessor.sqlite-archive.ts"))};
     const tuiUrls = Object.values(tuiPtyRuntimeEntrypoints).map(entry => resolveRuntimeWorkerUrl(entry).href);
     const setupUrls = cliCompactionBackendEntrypoints.map(entry => resolveRuntimeWorkerUrl(entry).href);
@@ -256,7 +256,8 @@ export function workerProbe(
             if (!sourceMode) expect(fileURLToPath(url).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
           }
           const sourceLoader = sourceMode && !process.versions.bun;
-          expect(args.includes('tsx')).toBe(sourceLoader);
+          expect(args.includes('--import')).toBe(sourceLoader);
+          if (sourceLoader) expect(args[1].startsWith('file:')).toBe(true);
           expect(args[sourceLoader ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
           fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');

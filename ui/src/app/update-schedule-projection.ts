@@ -108,13 +108,19 @@ export function formatUpdateCampaignLabel(
   });
 }
 
+/** Formats update availability using the refreshed checkout distance when present. */
 export function formatUpdateTargetLabel(
   schedule: UpdateScheduleState | null | undefined,
   updateAvailable: UpdateAvailable | null | undefined,
 ): string | null {
   const target = schedule?.target;
+  const git = schedule?.install?.git;
+  // Checkout refreshes update install status without replacing the announced target.
+  const comparedBehind =
+    git?.status === "behind" || git?.status === "diverged" ? git.commitsBehind : undefined;
   const commitsBehind =
-    target?.kind === "git" ? target.commitsBehind : updateAvailable?.commitsBehind;
+    comparedBehind ??
+    (target?.kind === "git" ? target.commitsBehind : updateAvailable?.commitsBehind);
   if (commitsBehind !== undefined) {
     return t(commitsBehind === 1 ? "updates.target.commitBehind" : "updates.target.commitsBehind", {
       count: String(commitsBehind),

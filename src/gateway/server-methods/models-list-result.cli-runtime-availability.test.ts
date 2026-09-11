@@ -245,7 +245,7 @@ describe("models.list CLI runtime availability", () => {
           });
           const snapshot = await loadDeferredCatalog(context, "main", { readOnly: true });
           const result = await buildModelsListResult({
-            context,
+            source: { kind: "gateway", context },
             agentId: "main",
             requesterProfileId: owner.id,
             params: { view: "configured", preparedOnly: true },
@@ -357,7 +357,7 @@ describe("models.list CLI runtime availability", () => {
         });
         const snapshot = await loadDeferredCatalog(context, "main", { readOnly: true });
         const result = await buildModelsListResult({
-          context,
+          source: { kind: "gateway", context },
           agentId: "main",
           params: { view: "all", preparedOnly: true },
           preloadedCatalog: { agentId: "main", config: cfg, snapshot },

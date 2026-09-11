@@ -217,6 +217,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
   const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
   return await resolveThinkingDefaultWithRuntimeCatalog({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
     agentRuntime: params.agentRuntime,

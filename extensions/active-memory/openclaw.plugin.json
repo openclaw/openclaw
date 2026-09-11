@@ -1,5 +1,6 @@
 {
   "id": "active-memory",
+  "categories": ["memory"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [{ "id": "active-memory-session-toggles-json-to-plugin-state" }]

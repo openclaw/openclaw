@@ -179,6 +179,9 @@ export const SystemAgentSetupDetectParamsSchema = closedObject({
 const ProviderAutoSetupInferenceKind = Type.TemplateLiteral("provider-auto:${string}", {
   pattern: "^provider-auto:.+$",
 });
+const SavedAuthSetupInferenceKind = Type.TemplateLiteral("saved-auth:${string}", {
+  pattern: "^saved-auth:.+$",
+});
 
 const SetupInferenceHttpsUrl = Type.String({
   minLength: 1,
@@ -194,6 +197,7 @@ const SetupInferenceKind = Type.Union([
   Type.Literal("codex-cli"),
   Type.Literal("gemini-cli"),
   ProviderAutoSetupInferenceKind,
+  SavedAuthSetupInferenceKind,
 ]);
 
 const SetupInferenceStatus = Type.Union([
@@ -346,6 +350,7 @@ export const SystemAgentSetupActivateParamsSchema = closedObject({
     Type.Literal("codex-cli"),
     Type.Literal("gemini-cli"),
     ProviderAutoSetupInferenceKind,
+    SavedAuthSetupInferenceKind,
     Type.Literal("api-key"),
   ]),
   /** Exact detected model for this route; prevents detect/activate drift. */

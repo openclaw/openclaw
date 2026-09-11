@@ -114,7 +114,7 @@ suite.define(() => {
     }
   });
 
-  it("collapses the sidebar only for a session opened in a new tab, and Cmd+B restores it", async () => {
+  it("collapses the sidebar only for a session opened in a new tab, and the platform shortcut restores it", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -144,10 +144,10 @@ suite.define(() => {
       );
       await captureUiProof(suite, page, "per-tab-02-session-tab-collapsed.png");
 
-      await page.keyboard.press("Meta+B");
+      await page.keyboard.press("ControlOrMeta+B");
       await sidebar.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await captureUiProof(suite, page, "per-tab-03-session-tab-after-cmd-b.png");
+      await captureUiProof(suite, page, "per-tab-03-session-tab-after-shortcut.png");
 
       await page.reload();
       await composer.waitFor({ state: "visible", timeout: 10_000 });

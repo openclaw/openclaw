@@ -279,32 +279,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     this.syncHistoryObserver();
   }
 
-  protected async showEarlierMessages(): Promise<void> {
-    const state = this.state;
-    const root = this.transcript.scrollElement;
-    if (!state || !root) {
-      return;
-    }
-    const sessionKey = state.sessionKey;
-    const sessionStillCurrent = () =>
-      this.state === state && areUiSessionKeysEquivalent(state.sessionKey, sessionKey);
-    const loaded = await this.loadOlderMessages();
-    if (!loaded || !sessionStillCurrent()) {
-      return;
-    }
-    await this.updateComplete;
-    if (!sessionStillCurrent()) {
-      return;
-    }
-    // The explicit reveal can leave the sentinel visible. Disarm it before the
-    // programmatic jump so one click cannot chain another automatic page load.
-    this.transcriptScrollTop = 0;
-    this.historyObserverArmed = false;
-    this.historyAutoLoadBlocked = this.hasOlderMessages();
-    this.clearHistoryObserver();
-    this.transcript.scrollToOffset(0);
-  }
-
   protected async loadOlderMessages(): Promise<boolean> {
     if (this.activeOlderLoad) {
       return this.activeOlderLoad;

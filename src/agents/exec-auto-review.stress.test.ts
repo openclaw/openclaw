@@ -40,6 +40,7 @@ function createStressReviewer(params: {
     selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
     model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
     auth: { apiKey: "redacted", mode: "env" as const },
+    release: () => {},
   }));
   const complete = vi.fn(params.complete);
   const reviewer = createModelExecAutoReviewer({
@@ -47,8 +48,8 @@ function createStressReviewer(params: {
     signal: params.signal,
     ...(params.timeoutMs === undefined ? {} : { reviewer: { timeoutMs: params.timeoutMs } }),
     deps: {
-      prepareSimpleCompletionModelForAgent:
-        prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+      acquireSimpleCompletionModelForAgent:
+        prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
       completeWithPreparedSimpleCompletionModel:
         complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
     },
@@ -56,7 +57,7 @@ function createStressReviewer(params: {
   return { reviewer, prepare, complete };
 }
 
-function modelResponse(decision: "allow" | "ask", risk: "low" | "medium") {
+function modelResponse(decision: "allow" | "deny" | "ask", risk: "low" | "medium") {
   return {
     stopReason: "stop" as const,
     content: [
@@ -737,6 +738,7 @@ describe("exec auto-review concurrency stress", () => {
           selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
           model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
           auth: { apiKey: "redacted", mode: "env" as const },
+          release: () => {},
         };
       });
       const complete = vi.fn(async () => {
@@ -755,8 +757,8 @@ describe("exec auto-review concurrency stress", () => {
       const reviewer = createModelExecAutoReviewer({
         cfg: {},
         deps: {
-          prepareSimpleCompletionModelForAgent:
-            prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+          acquireSimpleCompletionModelForAgent:
+            prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
           completeWithPreparedSimpleCompletionModel:
             complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
         },
@@ -863,13 +865,15 @@ describe("exec auto-review concurrency stress", () => {
         const match = /--case=(\d+)/.exec(prompt);
         const index = Number(match?.[1]);
         await Promise.resolve();
-        switch (index % 4) {
+        switch (index % 5) {
           case 0:
             return modelResponse("allow", "low");
           case 1:
             return modelResponse("allow", "medium");
           case 2:
             return modelResponse("ask", "medium");
+          case 3:
+            return modelResponse("deny", "medium");
           default:
             throw new Error("stress provider failure");
         }
@@ -890,7 +894,7 @@ describe("exec auto-review concurrency stress", () => {
 
     for (const [index, decision] of decisions.entries()) {
       expect(decision.decision, `concurrent case ${index}`).toBe(
-        index % 4 === 0 ? "allow-once" : "ask",
+        index % 5 < 2 ? "allow-once" : index % 5 === 3 ? "deny" : "ask",
       );
     }
     expect(prepare).toHaveBeenCalledTimes(128);

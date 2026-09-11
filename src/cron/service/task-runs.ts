@@ -287,12 +287,20 @@ function tryCreateCronTaskRunRecord(params: {
   startedAt: number;
   runId: string;
   childSessionKey?: string;
+  ownerlessManualRun?: true;
 }): { runId: string; taskId: string; flowId?: string } | undefined {
   try {
     const childSessionKey = params.childSessionKey;
-    const effectiveJobAgentId = params.job
-      ? resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state))
-      : undefined;
+    const agentId = params.ownerlessManualRun
+      ? undefined
+      : params.job
+        ? resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state))
+        : childSessionKey
+          ? resolveAgentIdFromSessionKey(
+              childSessionKey,
+              resolveCurrentDefaultAgentId(params.state),
+            )
+          : requireCronAgentId(resolveCurrentDefaultAgentId(params.state));
     const task = createRunningTaskRunCore({
       runtime: "cron",
       taskKind: CRON_TASK_KIND,
@@ -300,14 +308,7 @@ function tryCreateCronTaskRunRecord(params: {
       ownerKey: "",
       scopeKind: "system",
       childSessionKey,
-      agentId:
-        effectiveJobAgentId ??
-        (childSessionKey
-          ? resolveAgentIdFromSessionKey(
-              childSessionKey,
-              resolveCurrentDefaultAgentId(params.state),
-            )
-          : requireCronAgentId(resolveCurrentDefaultAgentId(params.state))),
+      agentId,
       runId: params.runId,
       label: params.job?.name,
       task: params.job?.name || params.jobId,
@@ -403,6 +404,8 @@ export function tryFinishCronTaskRun(
     taskRunId?: string;
     job?: CronJob;
     event: CronEvent & { action: "finished" };
+    /** An acknowledged rejection needs history without claiming an agent executed. */
+    ownerlessManualRun?: true;
     errorClassification?: CronRunErrorClassification;
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
@@ -428,6 +431,7 @@ export function tryFinishCronTaskRun(
             startedAt,
             runId: candidateRunId,
             childSessionKey: entry.sessionKey,
+            ownerlessManualRun: result.ownerlessManualRun,
           });
     const taskRunId = existingCandidate?.runtime === "cron" ? candidateRunId : created?.runId;
     if (!taskRunId) {
@@ -503,6 +507,7 @@ export function tryFinishCronTaskRun(
           startedAt,
           runId: taskRunId,
           childSessionKey: entry.sessionKey,
+          ownerlessManualRun: result.ownerlessManualRun,
         });
         if (recreated) {
           updated = finalize(recreated.runId);

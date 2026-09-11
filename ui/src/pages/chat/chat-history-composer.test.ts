@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { rewindChatHistory } from "./chat-history-actions.ts";
@@ -25,12 +25,14 @@ function createRewindHost(response: Promise<{ editorText: string }>) {
       chatHistoryPagination: { hasMore: false as const },
       handleChatDraftChange: (next: string, mentions?: ChatState["chatMentions"]): void =>
         handleChatDraftChange(state, next, mentions),
-      sessions: {
-        rewind: vi.fn(() => response),
-        refreshReplacement: vi.fn(async () => null),
-      },
     },
   );
+  Object.assign(state.sessions, {
+    rewind: vi.fn(() => response),
+    refreshReplacement: vi.fn(async () => null),
+  });
+  vi.spyOn(state.sessions, "listBranches").mockResolvedValue([]);
+  onTestFinished(() => state.sessions.dispose());
   return state;
 }
 
@@ -132,12 +134,14 @@ describe("rewind composer ownership", () => {
         chatHistoryPagination: { hasMore: false as const },
         handleChatDraftChange: (next: string, mentions?: ChatState["chatMentions"]): void =>
           handleChatDraftChange(state, next, mentions),
-        sessions: {
-          rewind: vi.fn(() => response.promise),
-          refreshReplacement: vi.fn(async () => null),
-        },
       },
     );
+    Object.assign(state.sessions, {
+      rewind: vi.fn(() => response.promise),
+      refreshReplacement: vi.fn(async () => null),
+    });
+    vi.spyOn(state.sessions, "listBranches").mockResolvedValue([]);
+    onTestFinished(() => state.sessions.dispose());
     state.chatMessage = edit === "goal mode" ? "" : "@Alex keep this draft";
     state.chatMentions = edit === "goal mode" ? [] : [{ profileId: "alex", start: 0, end: 5 }];
     const pending = rewindChatHistory(state, "original-user");
@@ -184,12 +188,14 @@ describe("rewind composer ownership", () => {
         chatHistoryPagination: { hasMore: false as const },
         handleChatDraftChange: (next: string, mentions?: ChatState["chatMentions"]): void =>
           handleChatDraftChange(state, next, mentions),
-        sessions: {
-          rewind: vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise),
-          refreshReplacement: vi.fn(async () => null),
-        },
       },
     );
+    Object.assign(state.sessions, {
+      rewind: vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise),
+      refreshReplacement: vi.fn(async () => null),
+    });
+    vi.spyOn(state.sessions, "listBranches").mockResolvedValue([]);
+    onTestFinished(() => state.sessions.dispose());
     state.chatMessage = "current draft";
     const first = rewindChatHistory(state, "earlier-user");
     const second = rewindChatHistory(state, "later-user");

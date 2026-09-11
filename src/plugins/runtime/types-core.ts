@@ -10,9 +10,7 @@ import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-ta
 
 type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
 type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
-type PrepareTtsRequest = (
-  ...args: Parameters<TtsRuntimeApi["prepareTtsRequest"]>
-) => Promise<ReturnType<TtsRuntimeApi["prepareTtsRequest"]>>;
+type PrepareTtsRequest = TtsRuntimeApi["prepareTtsRequest"];
 type TextToSpeech = typeof import("../../tts/tts.js").textToSpeech;
 type TextToSpeechStream = TtsRuntimeApi["textToSpeechStream"];
 type TextToSpeechTelephony = TtsRuntimeApi["textToSpeechTelephony"];

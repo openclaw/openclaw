@@ -24,7 +24,7 @@ describe("PDF tool static prepared runtime", () => {
     vi.restoreAllMocks();
   });
 
-  it("resolves a config-inline model when the static registry is empty", async () => {
+  it("resolves a configured model from the static prepared registry", async () => {
     await withOpenClawTestState(
       {
         label: "pdf-static-inline-model",
@@ -75,7 +75,12 @@ describe("PDF tool static prepared runtime", () => {
 
         try {
           const stores = lease.snapshot.createStores();
-          expect(stores.modelRegistry.find("openai", modelId)).toBeUndefined();
+          expect(stores.modelRegistry.find("openai", modelId)).toMatchObject({
+            provider: "openai",
+            id: modelId,
+            api: "openai-responses",
+            baseUrl: "http://127.0.0.1:9/v1",
+          });
           expect(
             lease.snapshot.configuredRuntimeModels.map((entry) => ({
               provider: entry.provider,

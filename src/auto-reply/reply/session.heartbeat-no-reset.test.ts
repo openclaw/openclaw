@@ -1,10 +1,11 @@
 // Tests heartbeat messages do not reset active session routing.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { MsgContext } from "../templating.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { initSessionState as initSessionStateRaw } from "./session.js";
@@ -21,16 +22,18 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
 
 describe("initSessionState - heartbeat should not trigger session reset", () => {
   const sessionKey = "agent:main:main:user123";
+  const tempDirs = createTempDirTracker();
   let tempDir: string;
   let storePath: string;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp("/tmp/openclaw-test-");
+  beforeEach(() => {
+    tempDir = tempDirs.make("openclaw-test-");
     storePath = path.join(tempDir, "sessions.json");
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await cleanupSessionStateForTest({ stateDir: tempDir });
+    tempDirs.cleanup();
   });
 
   const createBaseConfig = (): OpenClawConfig => ({

@@ -29,8 +29,7 @@ export async function promosListCommand(opts: { json?: boolean }, runtime: Runti
     }
     return;
   }
-  // The user has now seen these offers; suppress the one-time passive
-  // discovery notice for them (`models list` reads the same markers).
+  // Retain the explicit notice history without refreshing passive inventory.
   markPromotionSlugsNotified(promotions.map((promotion) => promotion.slug));
   if (opts.json) {
     writeRuntimeJson(runtime, { promotions });

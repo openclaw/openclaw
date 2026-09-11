@@ -31,7 +31,7 @@ Create a Gradium API key, then expose it with an env var or the config key. Conf
 <Tabs>
   <Tab title="Env var">
     ```bash
-    export GRADIUM_API_KEY="gsk_..."
+    export GRADIUM_API_KEY="<your-gradium-api-key>"
     ```
   </Tab>
 

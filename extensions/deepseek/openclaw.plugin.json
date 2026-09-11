@@ -1,5 +1,6 @@
 {
   "id": "deepseek",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

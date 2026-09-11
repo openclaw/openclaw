@@ -36,6 +36,7 @@ function presentation(
     restartingKey: null,
     row,
     startupPending: false,
+    workspaceResultReconciling: false,
     onRestart: vi.fn(),
     onReclaim: vi.fn(),
     ...overrides,
@@ -55,8 +56,63 @@ describe("chat placement composer presentation", () => {
     const result = presentation(placementSession(state));
 
     expect(result.state.kind).toBe(kind);
-    expect(result.blocksSend).toBe(kind !== "ready");
+    expect(result.blocksSend).toBe(state === "draining" || state === "reconciling");
     expect(result.busyMessage).toBe(busyMessage ?? null);
+  });
+
+  it.each(["active"] as const)(
+    "accepts a follow-up while an %s placement reconciles a completed result",
+    (state) => {
+      const result = presentation(placementSession(state), { workspaceResultReconciling: true });
+
+      expect(result.state).toEqual({
+        kind: "busy",
+        message: "Send now; your message starts automatically after workspace sync.",
+      });
+      expect(result.blocksSend).toBe(false);
+      expect(result.busyMessage).toBe(
+        "Send now; your message starts automatically after workspace sync.",
+      );
+    },
+  );
+
+  it.each([
+    { state: "syncing", operation: "reclaimingKey", message: "Stopping session…" },
+    { state: "syncing", operation: "restartingKey", message: "Restarting session…" },
+    { state: "syncing", operation: "movingKey", message: "Finishing session move…" },
+    { state: "syncing", operation: "placementMove", message: "Finishing session move…" },
+    { state: "draining", message: "Finishing session move…" },
+    { state: "reconciling", message: "Finishing session move…" },
+    { state: "active", operation: "reclaimingKey", message: "Stopping session…" },
+    { state: "active", operation: "restartingKey", message: "Restarting session…" },
+    { state: "active", operation: "movingKey", message: "Finishing session move…" },
+    { state: "active", operation: "placementMove", message: "Finishing session move…" },
+  ] as const)("blocks sync sends during $state $operation", ({ state, message, ...scenario }) => {
+    const row = placementSession(state);
+    const operation = "operation" in scenario ? scenario.operation : undefined;
+    if (operation === "placementMove") {
+      row.placementMove = { target: { kind: "gateway" }, updatedAtMs: 1 };
+    }
+    const result = presentation(row, {
+      workspaceResultReconciling: true,
+      ...(operation && operation !== "placementMove" ? { [operation]: row.key } : {}),
+    });
+
+    expect(result.blocksSend).toBe(true);
+    expect(result.busyMessage).toBe(message);
+  });
+
+  it("keeps an unfinished New Session submission blocked during setup", () => {
+    expect(presentation(placementSession("syncing"), { startupPending: true }).blocksSend).toBe(
+      true,
+    );
+  });
+
+  it("keeps move reconciliation blocked with truthful copy", () => {
+    const result = presentation(placementSession("reconciling"));
+
+    expect(result.blocksSend).toBe(true);
+    expect(result.busyMessage).toBe("Finishing session move…");
   });
 
   it.each(["restart", "stop-first"] as const)(

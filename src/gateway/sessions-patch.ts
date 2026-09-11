@@ -41,6 +41,7 @@ import {
   buildSessionCreationStamp,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
+import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -116,9 +117,9 @@ export function resolveSessionPatchModelSelection(params: {
     provider: resolved.ref.provider,
     model: resolved.ref.model,
     ...(profile ? { profile } : {}),
-    isDefault:
-      resolved.ref.provider === params.defaultProvider &&
-      resolved.ref.model === params.defaultModel,
+    // A concrete model request is a pin even when it currently equals the
+    // configured default. Only the explicit null patch represents Default.
+    isDefault: false,
   };
 }
 
@@ -282,6 +283,7 @@ function* projectSessionPatchSteps(
   };
   if (existing && !existing.sessionId) {
     delete next.label;
+    delete next.autoLabel;
     delete next.category;
     delete next.displayName;
   }
@@ -363,10 +365,17 @@ function* projectSessionPatchSteps(
     }
   }
 
+  const pinnable = isPinnableSessionEntry(storeKey, next);
+  if (!pinnable) {
+    delete next.pinnedAt;
+  }
   if ("pinned" in patch) {
     if (patch.pinned === true) {
       if (next.archivedAt !== undefined) {
         return invalid("cannot pin an archived session; restore it first");
+      }
+      if (!pinnable) {
+        return invalid("cannot pin a child session; pin its parent session instead");
       }
       next.pinnedAt ??= now;
     } else {
@@ -620,6 +629,7 @@ function* projectSessionPatchSteps(
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection,
+        explicitDefaultSelection: raw === null,
         profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }

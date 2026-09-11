@@ -734,6 +734,7 @@ describe("followup queue collect routing", () => {
           if (owner?.kind === "deliver") {
             await owner.deliver({
               kind: "queued-followup",
+              completion: { kind: "completed" },
               runId: "overflow-summary-run",
               originatingChannel: "webchat",
               payloads: [{ text: "overflow summary reached its owner" }],

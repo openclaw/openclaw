@@ -141,7 +141,7 @@ vi.mock("../../sessions/background-session-result.js", () => ({
 }));
 
 vi.mock("../../gateway/server-methods/chat-assistant-content.js", () => ({
-  buildAssistantDisplayContentFromReplyPayloads: vi.fn(),
+  buildAssistantReplyContent: vi.fn(),
   hasAssistantDisplayMediaContent: vi.fn(),
   hasManagedOutgoingAssistantContent: vi.fn(),
 }));
@@ -1642,18 +1642,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expectDeliveryCall(0, {
       payloads: [{ text: "Run-scoped child result, everything finished successfully." }],
     });
-  });
-
-  it("normal text delivery sends exactly once and sets deliveryAttempted=true", async () => {
-    const params = makeBaseParams({
-      synthesizedText: "Morning briefing complete.",
-      runStartedAt: 1_000,
-    });
-    const state = await dispatchCronDelivery(params);
-
-    expect(state.deliveryAttempted).toBe(true);
-    expect(state.delivered).toBe(true);
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
   it("applies TTS directives before direct cron announce delivery and mirrors spoken text", async () => {

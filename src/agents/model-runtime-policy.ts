@@ -7,6 +7,7 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
@@ -60,27 +61,6 @@ type AgentModelRuntimePolicyResolution = ResolvedModelRuntimePolicy & {
 
 function hasRuntimePolicy(value: AgentRuntimePolicyConfig | undefined): boolean {
   return Boolean(value?.id?.trim());
-}
-
-function resolveProviderConfig(
-  config: OpenClawConfig | undefined,
-  provider: string | undefined,
-): ModelProviderConfig | undefined {
-  if (!config?.models?.providers || !provider?.trim()) {
-    return undefined;
-  }
-  const providers = config.models.providers;
-  const direct = providers[provider];
-  if (direct) {
-    return direct;
-  }
-  const normalizedProvider = normalizeProviderId(provider);
-  for (const [candidateProvider, providerConfig] of Object.entries(providers)) {
-    if (normalizeProviderId(candidateProvider) === normalizedProvider) {
-      return providerConfig;
-    }
-  }
-  return undefined;
 }
 
 function normalizeModelIdForProvider(
@@ -258,7 +238,9 @@ export function resolveModelRuntimePolicy(
   if (agentModelPolicy.policy) {
     return agentModelPolicy;
   }
-  const providerConfig = resolveProviderConfig(params.config, effectiveProvider);
+  const providerConfig = effectiveProvider
+    ? resolveMergedModelProviderConfig(params.config, effectiveProvider)
+    : undefined;
   const modelConfig = resolveModelConfig({
     providerConfig,
     provider: effectiveProvider,

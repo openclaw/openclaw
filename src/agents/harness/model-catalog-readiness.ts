@@ -18,6 +18,7 @@ export function createAgentHarnessCatalogEvaluator(
   params: AgentHarnessModelCatalogParams & {
     preferredProfileId?: string;
     pinnedProfileId?: string;
+    profileProvider?: string;
     pluginRegistry?: PluginRegistry;
     isCurrent?: () => boolean;
     observationConfig?: AgentHarnessModelCatalogParams["config"];
@@ -27,27 +28,33 @@ export function createAgentHarnessCatalogEvaluator(
   return (
     entry: ModelCatalogEntry,
     host: ModelAuthAvailabilityEvaluation,
+    runtimeId?: string,
   ): ModelAuthAvailabilityEvaluation => {
-    const runtime = resolveAgentHarnessPolicy({
-      provider: entry.provider,
-      modelId: entry.id,
-      modelApi: entry.api,
-      modelBaseUrl: entry.baseUrl,
-      config: params.config,
-      agentId: params.agentId,
-    }).runtime;
+    const runtime =
+      runtimeId ??
+      host.requestedRuntimeId ??
+      resolveAgentHarnessPolicy({
+        provider: entry.provider,
+        modelId: entry.id,
+        modelApi: entry.api,
+        modelBaseUrl: entry.baseUrl,
+        config: params.config,
+        agentId: params.agentId,
+      }).runtime;
     if (runtime === "auto" || runtime === "openclaw") {
       return host;
     }
     const provider = normalizeProviderId(entry.provider);
+    const sameProvider =
+      !params.profileProvider || normalizeProviderId(params.profileProvider) === provider;
     const configured = resolveMergedModelProviderConfig(params.config, provider);
     const modelKey = (id: string) =>
       stripSelfProviderModelPrefix(provider, splitTrailingAuthProfile(id).model.trim()).trim();
     // Native account evidence cannot satisfy an authored host route, key, profile,
     // or request override. Those keep the existing prepared-route evaluator.
     if (
-      params.preferredProfileId ||
-      params.pinnedProfileId ||
+      (sameProvider && params.preferredProfileId) ||
+      (sameProvider && params.pinnedProfileId) ||
       (host.selectedAuthMode && (host.evidence !== "runtime" || entry.nativeRuntime !== runtime)) ||
       configured?.api ||
       configured?.baseUrl ||
@@ -86,7 +93,8 @@ export function createAgentHarnessCatalogEvaluator(
     if (!harness?.readModelCatalogReadiness && entry.nativeRuntime !== runtime) {
       return host;
     }
-    let ready = false;
+    let ready: boolean;
+    let authMode: string | undefined;
     try {
       ready =
         isCurrent() &&
@@ -97,19 +105,32 @@ export function createAgentHarnessCatalogEvaluator(
           requestedRuntime: runtime,
           modelProvider: { preparedAuth: { source: "harness" } },
         }).supported &&
-        harness.readModelCatalogReadiness?.({
-          config: params.observationConfig ?? params.config,
-          agentId: params.agentId,
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          provider,
-          modelId: entry.id,
-        }) !== undefined &&
         isCurrent() &&
         resolveRegistry() === registry;
+      const observation = ready
+        ? harness?.readModelCatalogReadiness?.({
+            config: params.observationConfig ?? params.config,
+            agentId: params.agentId,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            provider,
+            modelId: entry.id,
+          })
+        : undefined;
+      ready = ready && observation !== undefined && isCurrent() && resolveRegistry() === registry;
+      authMode = ready ? observation?.authMode : undefined;
     } catch {
       // A failed/disposed owner supplies no account observation; do not infer host readiness.
+      ready = false;
+      authMode = undefined;
     }
-    return { availability: ready, routeResolution: null };
+    return {
+      availability: ready,
+      availabilityAuthoritative: true,
+      routeResolution: null,
+      ...(host.requestedRuntimeId ? { requestedRuntimeId: host.requestedRuntimeId } : {}),
+      runtimeAuth: { id: runtime, source: "native" },
+      ...(authMode ? { selectedAuthMode: authMode } : {}),
+    };
   };
 }

@@ -19,7 +19,7 @@ import {
   formatTimeAgo,
 } from "../../lib/format.ts";
 import { macFamilyLabel } from "../../lib/mac-form-factor.ts";
-import type { DeviceTokenSummary, InventoryRemovalRequest } from "../../lib/nodes/index.ts";
+import type { DeviceTokenSummary } from "../../lib/nodes/index.ts";
 import {
   buildDeviceInventory,
   findGatewayPresence,
@@ -29,6 +29,7 @@ import {
   type DeviceInventoryEntry,
   type DeviceInventoryGroup,
 } from "../../lib/nodes/inventory.ts";
+import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { renderCapabilityChips } from "./capability-chips.ts";
 import { deviceDesktopEnvironment, renderDeviceEntryMenu } from "./entry-menu.ts";
@@ -252,7 +253,7 @@ function formatInputRecency(lastInputSeconds: number): string {
 function entryMetaLine(entry: DeviceInventoryEntry): string {
   const parts: string[] = [];
   if (entry.platform) {
-    parts.push(prettifyPlatform(entry.platform));
+    parts.push(prettifyPlatform(entry.platform, entry.deviceFamily));
   }
   if (entry.modelIdentifier) {
     const family = macFamilyLabel(entry.modelIdentifier);
@@ -333,7 +334,11 @@ function renderEntryDetails(entry: DeviceInventoryEntry, props: DevicesProps) {
           tokens.length > 0
             ? html`<dt class="settings-row__desc">${t("devices.inventory.tokens")}</dt>
                 <dd class="device-entry__tokens">
-                  <table class="device-token-table" aria-label=${t("devices.inventory.tokens")}>
+                  <table
+                    class="device-token-table settings-table--stacked"
+                    role="table"
+                    aria-label=${t("devices.inventory.tokens")}
+                  >
                     <thead>
                       <tr>
                         <th scope="col">${t("devices.inventory.tokenRole")}</th>
@@ -417,7 +422,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
 function presenceMetaParts(entry: PresenceEntry): string[] {
   const parts: string[] = [];
   if (entry.platform) {
-    parts.push(prettifyPlatform(entry.platform));
+    parts.push(prettifyPlatform(entry.platform, entry.deviceFamily));
   }
   if (entry.modelIdentifier) {
     const family = macFamilyLabel(entry.modelIdentifier);
@@ -536,11 +541,11 @@ function renderTokenRow(
   );
   return html`
     <tr>
-      <td>${tokenSummary.role}</td>
-      <td>${status}</td>
-      <td>${scopes}</td>
-      <td>${when}</td>
-      <td>
+      <td data-label=${t("devices.inventory.tokenRole")}>${tokenSummary.role}</td>
+      <td data-label=${t("devices.inventory.tokenStatus")}>${status}</td>
+      <td data-label=${t("devices.inventory.scopesLabel")}>${scopes}</td>
+      <td data-label=${t("devices.inventory.tokenAge")}>${when}</td>
+      <td data-label=${t("devices.inventory.actions")}>
         <div class="device-entry__token-actions">
           <button
             class="btn btn--sm"
