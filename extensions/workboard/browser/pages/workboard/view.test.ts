@@ -556,9 +556,9 @@ describe("renderWorkboard", () => {
     state.lastRefreshError = "Card refresh unavailable";
     renderView();
     await waitForFast(() =>
-      expect(toast(container).shadowRoot?.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
-        "Card refresh unavailable",
-      ),
+      expect(
+        toast(container).shadowRoot?.querySelector('[role="alert"]')?.textContent?.trim(),
+      ).toBe("Card refresh unavailable"),
     );
     expect(buttonByLabel(container, "Refresh")?.disabled).toBe(false);
 

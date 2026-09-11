@@ -542,6 +542,12 @@ it.each(["mini", "board"] as const)(
       expect(all.container.querySelector("a")?.getAttribute("href")).toBe("/workboard");
     } else {
       expect(scoped.container.querySelectorAll(".workboard-column")).toHaveLength(3);
+      const product = mount("board", { boardId: "product" });
+      await vi.waitFor(() => expect(product.container.textContent).toContain("Other card"));
+      expect(
+        product.container.querySelector(".workboard-column--running")?.textContent,
+      ).toContain("No cards yet");
+      expect(product.container.textContent).not.toContain("No cards match this view");
     }
   },
 );

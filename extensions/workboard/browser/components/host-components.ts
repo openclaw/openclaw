@@ -7,7 +7,9 @@ import { workboardHost } from "../host.ts";
 type Components = ControlUiHost["components"];
 type DialogProps = Parameters<Components["mountDialog"]>[1];
 type PickerProps = Parameters<Components["mountAgentPicker"]>[1];
+type AvatarProps = Parameters<Components["mountAgentAvatar"]>[1];
 type SelectPickerProps = Parameters<Components["mountSelectPicker"]>[1];
+type AppearanceGlyphProps = Parameters<Components["mountAppearanceGlyph"]>[1];
 type DashboardProps = Parameters<Components["mountDashboard"]>[1];
 function createHostComponent<Props extends object>(
   mount: (container: HTMLElement, props: Props) => ControlUiComponentHandle<Props>,
@@ -76,8 +78,14 @@ const mountDialog = createHostComponent(
 const mountAgentPicker = createHostComponent((container, props: PickerProps) =>
   workboardHost().components.mountAgentPicker(container, props),
 );
+const mountAgentAvatar = createHostComponent((container, props: AvatarProps) =>
+  workboardHost().components.mountAgentAvatar(container, props),
+);
 const mountSelectPicker = createHostComponent((container, props: SelectPickerProps) =>
   workboardHost().components.mountSelectPicker(container, props),
+);
+const mountAppearanceGlyph = createHostComponent((container, props: AppearanceGlyphProps) =>
+  workboardHost().components.mountAppearanceGlyph(container, props),
 );
 const mountDashboard = createHostComponent((container, props: DashboardProps) =>
   workboardHost().components.mountDashboard(container, props),
@@ -91,8 +99,21 @@ export function renderAgentPicker(props: PickerProps, className = "") {
   return html`<div class=${className} ${mountAgentPicker(props)}></div>`;
 }
 
+export function renderAgentAvatar(props: AvatarProps) {
+  return html`<span aria-hidden="true" ${mountAgentAvatar(props)}></span>`;
+}
+
 export function renderSelectPicker(props: SelectPickerProps, className = "") {
   return html`<div class=${className} ${mountSelectPicker(props)}></div>`;
+}
+
+export function renderAppearanceGlyph(props: AppearanceGlyphProps, className = "") {
+  return html`<span
+    class=${className}
+    style="--workboard-board-color: var(--appearance-color, var(--muted))"
+    aria-hidden="true"
+    ${mountAppearanceGlyph(props)}
+  ></span>`;
 }
 
 export function renderDashboard(props: DashboardProps) {

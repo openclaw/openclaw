@@ -297,7 +297,7 @@ export function renderColumn(
       (card) =>
         card.status === status &&
         (state.showArchived || isActiveWorkboardCard(card)) &&
-        matchesBoardFilter(card, state.boardFilter) &&
+        matchesBoardFilter(card, options.boardFilter ?? state.boardFilter) &&
         matchesAgentScope(
           card,
           props.agentsList?.defaultId ?? props.defaultAgentId,
