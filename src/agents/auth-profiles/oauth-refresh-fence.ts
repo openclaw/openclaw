@@ -131,6 +131,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
     data: TData,
   ) => Promise<SerializedOAuthRefreshResult | null>;
   resolve: (credential: OAuthCredential) => Promise<SerializedOAuthRefreshResult | null>;
+  /** Publish only after the caller validates the snapshot against its current owner. */
   commit: (data: TData) => void;
 }): Promise<SerializedOAuthRefreshResult | null> {
   const observeFence = async (generation: OAuthCredential) =>
@@ -220,7 +221,6 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
     params.commit(claim.data);
     return await params.resolve(claim.credential);
   }
-  params.commit(claim.nextData);
   const markFailed = async () => {
     const failed = await params.backend.withLock<TData | null>((current) => {
       const data = params.parse(current);
@@ -262,6 +262,12 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
     }
     return null;
   };
+
+  try {
+    params.commit(claim.nextData);
+  } catch (error) {
+    return await settleFailure({ error });
+  }
 
   const settlement = (async () => {
     let refreshed: SerializedOAuthRefreshResult | null;
