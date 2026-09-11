@@ -128,13 +128,17 @@ async function finalizeInput(
   let exitCode = 0;
   let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
-    result = await finishUpdate({
-      ...input.params,
-      opts: { ...input.params.opts, run },
-      ...(stopped
-        ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
-        : {}),
-    });
+    // This worker already loaded the candidate; the local flag conveys no authority.
+    result = await finishUpdate(
+      {
+        ...input.params,
+        opts: { ...input.params.opts, run },
+        ...(stopped
+          ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
+          : {}),
+      },
+      { candidateRuntime: true },
+    );
   } catch (error) {
     if (!(error instanceof UpdateCommandFailure)) {
       throw error;

@@ -318,7 +318,11 @@ export async function completePostCorePluginUpdate(params: {
     freshConfigValid = freshResult.configValid;
   }
 
-  const configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());
+  // Fresh checks can outlive the updater's grant; this verification read must not
+  // publish health or audit state before the caller rechecks its authority.
+  const configSnapshot = await withNormalConfigValidation(() =>
+    readConfigFileSnapshot({ observe: false }),
+  );
   // Strict validity belongs to the target runtime even when no plugin changed.
   // The parent may retain the previous schema; its snapshot is best-effort context.
   pluginUpdate = applyPostPluginConfigValidation(

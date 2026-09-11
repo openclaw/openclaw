@@ -1,11 +1,13 @@
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import {
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
   POST_CORE_UPDATE_RESULT_PATH_ENV,
   POST_CORE_UPDATE_STARTED_AT_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
+  type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -51,6 +53,8 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
 }
 
 async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams): Promise<void> {
+  const assertCurrent = params.opts.run?.executorFence?.assertCurrent;
+  assertCurrent?.();
   if (
     params.channel !== "stable" &&
     params.channel !== "extended-stable" &&
@@ -75,10 +79,12 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
 
   process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION =
     (await readPackageVersion(params.root)) ?? VERSION;
+  assertCurrent?.();
 
   const configSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: true,
     suppressFutureVersionWarning: true,
+    observe: false,
   });
   const updateStartedAtMs = await resolvePostCoreUpdateStartedAtMs(process.env);
   const preUpdateSourceConfig = await readPostCorePreUpdateSourceConfig({
@@ -89,49 +95,26 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
     process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
   );
-  const pluginUpdate = await withPluginLifecycleLease({}, async () => {
-    // The core migration owner committed before activation. This fresh process
-    // reads that generation and only owns plugin convergence.
-    const preparedConfig = await preparePostCorePluginConfig({
-      requestedChannel,
-      preUpdateConfig: preUpdateSourceConfig,
-      suppressFutureVersionWarning: true,
-    });
-    // The updated doctor may have repaired or removed plugin installs before this process resumed.
-    const currentPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-    const persistedPluginIndex = await readPersistedInstalledPluginIndex();
-    const hasForwardedUpdateStart = Boolean(process.env[POST_CORE_UPDATE_STARTED_AT_ENV]?.trim());
-    const currentIndexIsAuthoritative =
-      Object.keys(currentPluginInstallRecords).length > 0 ||
-      Boolean(
-        persistedPluginIndex &&
-        hasForwardedUpdateStart &&
-        updateStartedAtMs !== undefined &&
-        persistedPluginIndex.generatedAtMs >= updateStartedAtMs,
-      );
-    const pluginInstallRecords = currentIndexIsAuthoritative
-      ? currentPluginInstallRecords
-      : parentPluginInstallRecords;
-
-    return await updatePluginsAfterCoreUpdate({
-      root: params.root,
-      channel,
-      ...preparedConfig,
-      json: params.opts.json,
-      acceptCapabilities: params.opts.acceptCapabilities,
-      timeoutMs: params.timeoutMs,
-      pluginInstallRecords,
-    });
+  assertCurrent?.();
+  const { pluginUpdate } = await convergePostCoreUpdatePlugins({
+    ...params,
+    channel,
+    requestedChannel,
+    preUpdateConfig: preUpdateSourceConfig,
+    parentPluginInstallRecords,
+    updateStartedAtMs: process.env[POST_CORE_UPDATE_STARTED_AT_ENV]?.trim()
+      ? updateStartedAtMs
+      : undefined,
+    assertCurrent,
   });
-  // Only the target process may restamp an unchanged downgrade config. Plugin
-  // migrations that still invalidate it will write through the target Doctor later.
-  await persistValidatedDowngradeConfig(await readConfigFileSnapshot());
+  assertCurrent?.();
   if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
     await writePostCorePluginUpdateResultFile(
       process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
       pluginUpdate,
     );
   }
+  assertCurrent?.();
   if (params.opts.json && !process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
     const result: UpdateRunResult = {
       status: pluginUpdate.status === "error" ? "error" : "ok",
@@ -144,4 +127,66 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
     defaultRuntime.writeJson(result);
   }
   defaultRuntime.exit(0);
+}
+
+/** Candidate code owns this phase whether reached by CLI resume or migrated finalization. */
+export async function convergePostCoreUpdatePlugins(params: {
+  root: string;
+  channel: UpdateChannel;
+  requestedChannel: UpdateChannel | null;
+  opts: UpdateCommandOptions;
+  timeoutMs: number;
+  preUpdateConfig?: PreUpdateConfigRestoreInput;
+  parentPluginInstallRecords?: Record<string, PluginInstallRecord>;
+  /** Only an explicitly forwarded update start makes an empty index authoritative. */
+  updateStartedAtMs?: number;
+  assertCurrent?: () => void;
+}) {
+  const { assertCurrent } = params;
+  assertCurrent?.();
+  const pluginUpdate = await withPluginLifecycleLease({ assertCurrent }, async () => {
+    assertCurrent?.();
+    // The core migration owner committed before activation. This fresh process
+    // reads that generation and only owns plugin convergence.
+    const preparedConfig = await preparePostCorePluginConfig({
+      requestedChannel: params.requestedChannel,
+      preUpdateConfig: params.preUpdateConfig,
+      suppressFutureVersionWarning: true,
+      observe: false,
+      assertCurrent,
+    });
+    // The updated doctor may have repaired or removed plugin installs before this process resumed.
+    const currentPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+    const persistedPluginIndex = await readPersistedInstalledPluginIndex();
+    assertCurrent?.();
+    const currentIndexIsAuthoritative =
+      Object.keys(currentPluginInstallRecords).length > 0 ||
+      Boolean(
+        persistedPluginIndex &&
+        params.updateStartedAtMs !== undefined &&
+        persistedPluginIndex.generatedAtMs >= params.updateStartedAtMs,
+      );
+    const pluginInstallRecords = currentIndexIsAuthoritative
+      ? currentPluginInstallRecords
+      : params.parentPluginInstallRecords;
+
+    return await updatePluginsAfterCoreUpdate({
+      root: params.root,
+      channel: params.channel,
+      ...preparedConfig,
+      json: params.opts.json,
+      acceptCapabilities: params.opts.acceptCapabilities,
+      timeoutMs: params.timeoutMs,
+      pluginInstallRecords,
+      assertCurrent,
+    });
+  });
+  assertCurrent?.();
+  // Only the target process may restamp an unchanged downgrade config. Plugin
+  // migrations that still invalidate it will write through the target Doctor later.
+  const finalSnapshot = await readConfigFileSnapshot({ observe: false });
+  assertCurrent?.();
+  await persistValidatedDowngradeConfig(finalSnapshot, assertCurrent);
+  assertCurrent?.();
+  return { pluginUpdate, configSnapshot: finalSnapshot };
 }

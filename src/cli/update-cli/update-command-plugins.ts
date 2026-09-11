@@ -35,6 +35,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { readPackageVersion } from "./shared.js";
+import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   type PostCorePluginUpdateResult,
@@ -380,11 +381,14 @@ export async function updatePluginsAfterCoreUpdate(params: {
       nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
-      writeOptions: {
-        ...params.configWriteOptions,
-        inputBase: "source",
-        skipPluginValidation: true,
-      },
+      writeOptions: withUpdateConfigWriteAuthority(
+        {
+          ...params.configWriteOptions,
+          inputBase: "source",
+          skipPluginValidation: true,
+        },
+        params.assertCurrent,
+      ),
     });
     params.assertCurrent?.();
     await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, async (lease) =>

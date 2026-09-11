@@ -20,10 +20,13 @@ import {
   continuePostCoreUpdateInFreshProcess,
   shouldResumePostCoreUpdateInFreshProcess,
 } from "./update-command-post-core.js";
+import { convergePostCoreUpdatePlugins } from "./update-command-resume.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
   coreAlreadyCurrent?: boolean;
+  /** Local running-code context, never installation state or mutation authority. */
+  candidateRuntime?: boolean;
   result: UpdateRunResult;
   root: string;
   installKindChanged: boolean;
@@ -61,6 +64,7 @@ export async function convergeUpdatePlugins(params: {
 
   const shouldResumePostCoreInFreshProcess =
     !params.coreAlreadyCurrent &&
+    !params.candidateRuntime &&
     shouldResumePostCoreUpdateInFreshProcess({
       result: params.result,
       downgradeRisk: params.downgradeRisk,
@@ -100,18 +104,38 @@ export async function convergeUpdatePlugins(params: {
       postUpdateInstalledVersion && VERSION
         ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
         : null;
-    const compatibilityDowngradeTarget =
-      versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
-    if (compatibilityDowngradeTarget) {
-      // The parent still reports its pre-update VERSION. Convergence and fresh
-      // completion must both use the installed target's compatibility contract.
-      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
+    const compatibilityHostVersion = params.candidateRuntime
+      ? (postUpdateInstalledVersion ?? VERSION)
+      : versionComparison != null && versionComparison > 0
+        ? postUpdateInstalledVersion
+        : null;
+    if (compatibilityHostVersion) {
+      // Downgraded parents and candidate workers both use the installed target,
+      // not a pre-update VERSION or an inherited compatibility-host override.
+      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityHostVersion;
     }
     try {
       let postCorePluginUpdate;
       const doctorWarnings: string[] = [];
-      let pluginsUpdatedInFreshProcess = false;
-      if (shouldResumePostCoreInFreshProcess) {
+      let targetRuntimeConverged = false;
+      if (params.candidateRuntime) {
+        // Migrated finalization already runs candidate code under the parent's
+        // live grant. Reuse resume's phase without attempting nested delegation.
+        const phase = await convergePostCoreUpdatePlugins({
+          root: postUpdateRoot,
+          channel: params.channel,
+          requestedChannel: params.requestedChannel,
+          opts: params.opts,
+          timeoutMs: params.updateStepTimeoutMs,
+          preUpdateConfig,
+          parentPluginInstallRecords: params.preUpdatePluginInstallRecords,
+          updateStartedAtMs: params.startedAt,
+          assertCurrent,
+        });
+        postCorePluginUpdate = phase.pluginUpdate;
+        postUpdateConfigSnapshot = phase.configSnapshot;
+        targetRuntimeConverged = true;
+      } else if (shouldResumePostCoreInFreshProcess) {
         const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
           root: postUpdateRoot,
           channel: params.channel,
@@ -135,16 +159,18 @@ export async function convergeUpdatePlugins(params: {
             cancelled: freshProcessResult.exitCode === 130 || freshProcessResult.exitCode === 143,
           };
         }
-        pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
+        targetRuntimeConverged = freshProcessResult.resumed;
         postCorePluginUpdate = freshProcessResult.pluginUpdate;
       }
 
-      if (!pluginsUpdatedInFreshProcess) {
+      if (!targetRuntimeConverged) {
         postCorePluginUpdate = await withPluginLifecycleLease({ assertCurrent }, async () => {
           const preparedConfig = await preparePostCorePluginConfig({
             requestedChannel: params.requestedChannel,
             preUpdateConfig,
             suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
+            ...(assertCurrent ? { observe: false } : {}),
+            assertCurrent,
           });
           assertCurrent?.();
           postUpdateConfigSnapshot = preparedConfig.configSnapshot;
@@ -184,6 +210,7 @@ export async function convergeUpdatePlugins(params: {
         postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
         postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
       }
+      assertCurrent?.();
 
       let resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
         ? {
@@ -240,7 +267,7 @@ export async function convergeUpdatePlugins(params: {
 
       return { resultWithPostUpdate, postUpdateConfigSnapshot };
     } finally {
-      if (compatibilityDowngradeTarget) {
+      if (compatibilityHostVersion) {
         if (previousCompatibilityHostVersion === undefined) {
           delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
         } else {
