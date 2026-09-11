@@ -53,6 +53,7 @@ describe("Radius catalog", () => {
     const catalog = await fetchRadiusCatalog("test-radius-token", controller.signal);
     expect(catalog).toEqual({
       baseUrl: "https://radius.pi.dev/v1",
+      api: "pi-messages",
       models: [
         {
           ...MODEL,

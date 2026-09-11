@@ -55,7 +55,7 @@ does not extend an API key's lifetime.
 ## Choose a model
 
 ```bash
-openclaw models list --provider radius
+openclaw models list --provider radius --refresh
 openclaw models set radius/balanced
 ```
 

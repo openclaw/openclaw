@@ -14,6 +14,11 @@ export const RADIUS_BASE_URL = "https://radius.pi.dev/v1";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type ModelCost = ModelDefinitionConfig["cost"];
+type RadiusModel = Omit<ModelDefinitionConfig, "input" | "contextWindow"> & {
+  input: Array<"text" | "image">;
+  contextWindow: number;
+};
+type RadiusCatalog = Omit<ModelProviderConfig, "models"> & { models: RadiusModel[] };
 
 function readRates(value: unknown): ModelCost | undefined {
   const row = asOptionalRecord(value);
@@ -73,7 +78,7 @@ function readCost(value: unknown): ModelCost | undefined {
   };
 }
 
-function readModel(value: unknown): ModelDefinitionConfig | undefined {
+function readModel(value: unknown): RadiusModel | undefined {
   const row = asOptionalRecord(value);
   const id = normalizeOptionalString(row?.id);
   const name = normalizeOptionalString(row?.name);
@@ -95,7 +100,7 @@ function readModel(value: unknown): ModelDefinitionConfig | undefined {
   ) {
     return undefined;
   }
-  const input: ModelDefinitionConfig["input"] = row.input.filter(
+  const input: RadiusModel["input"] = row.input.filter(
     (item): item is "text" | "image" => item === "text" || item === "image",
   );
   let thinkingLevelMap: ModelDefinitionConfig["thinkingLevelMap"];
@@ -130,7 +135,7 @@ function readModel(value: unknown): ModelDefinitionConfig | undefined {
 export async function fetchRadiusCatalog(
   apiKey?: string,
   signal?: AbortSignal,
-): Promise<ModelProviderConfig> {
+): Promise<RadiusCatalog> {
   const documents = await fetchLiveProviderModelRows({
     providerId: "radius",
     endpoint: `${RADIUS_BASE_URL}/config`,
@@ -156,8 +161,9 @@ export async function fetchRadiusCatalog(
   }
   return {
     baseUrl: baseUrl.replace(/\/+$/u, ""),
+    api: "pi-messages",
     models: config.models
       .map(readModel)
-      .filter((model): model is ModelDefinitionConfig => model !== undefined),
+      .filter((model): model is RadiusModel => model !== undefined),
   };
 }

@@ -1,12 +1,19 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
+import fs from "node:fs";
+import path from "node:path";
+import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import radiusPlugin from "./index.js";
 
-const { fetchGuard, streamFetch } = vi.hoisted(() => ({
+const { fetchGuard, streamFetch, resolveAuth } = vi.hoisted(() => ({
   fetchGuard: vi.fn(),
   streamFetch: vi.fn(),
+  resolveAuth: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: resolveAuth,
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
@@ -18,6 +25,7 @@ vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal)
 }));
 
 afterEach(() => vi.resetAllMocks());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("routes a discovered organization model through the registered native transport", async () => {
   const metadata = {
@@ -34,7 +42,6 @@ it("routes a discovered organization model through the registered native transpo
     release: async () => undefined,
   });
   const provider = await registerSingleProviderPlugin(radiusPlugin);
-  expect(provider.normalizeTransport?.({ provider: "another-provider" })).toBeUndefined();
   const catalog = await runSingleProviderCatalog(provider, {
     resolveProviderAuth: () => ({
       apiKey: "RADIUS_API_KEY",
@@ -44,21 +51,16 @@ it("routes a discovered organization model through the registered native transpo
     }),
   });
   expect(catalog.models).toHaveLength(1);
-  const model: Model = {
-    ...metadata,
-    input: ["text"],
-    provider: "radius",
-    api: "openai-completions",
-    baseUrl: catalog.baseUrl,
-  };
-  const normalized = provider.normalizeResolvedModel?.({
-    model,
-    modelId: model.id,
-    provider: "radius",
-  });
-  expect(normalized?.api).toBe("pi-messages");
+  const modelsPath = path.join(tempDirs.make("radius-catalog-"), "models.json");
+  fs.writeFileSync(modelsPath, JSON.stringify({ providers: { radius: catalog } }));
+  const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+  const model = registry.find("radius", metadata.id);
+  if (!model) {
+    throw new Error("Discovered Radius model is missing from the registry");
+  }
+  expect(model.api).toBe("pi-messages");
   const streamFn = provider.createStreamFn?.({
-    model: normalized ?? model,
+    model,
     modelId: model.id,
     provider: "radius",
   });
@@ -86,7 +88,7 @@ it("routes a discovered organization model through the registered native transpo
     ),
   );
   const stream = await streamFn(
-    normalized ?? model,
+    model,
     { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
     { apiKey: "test-radius-key" },
   );
@@ -103,4 +105,45 @@ it("routes a discovered organization model through the registered native transpo
   const [url, request] = call;
   expect(url).toBe("https://radius.pi.dev/v1/messages");
   expect(JSON.parse(request.body).model).toBe("organization/custom-model");
+});
+
+it("resolves a cold agent's model from its pinned account without inventing unknown models", async () => {
+  const model = {
+    id: "organization/cold-model",
+    name: "Cold model",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 64_000,
+    maxTokens: 4096,
+    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+  };
+  fetchGuard.mockImplementation(async () => ({
+    response: Response.json({ baseUrl: "https://radius.pi.dev/v1", models: [model] }),
+    release: async () => undefined,
+  }));
+  resolveAuth.mockResolvedValue({ apiKey: "test-pinned-key" });
+  const provider = await registerSingleProviderPlugin(radiusPlugin);
+  const ctx = {
+    provider: "radius",
+    modelId: model.id,
+    authProfileId: "radius:account-a",
+    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+  };
+  expect(ctx.modelRegistry.find("radius", model.id)).toBeUndefined();
+  expect(await provider.prepareDynamicModel?.(ctx)).toMatchObject({
+    ...model,
+    provider: "radius",
+    api: "pi-messages",
+    baseUrl: "https://radius.pi.dev/v1",
+  });
+  expect(resolveAuth).toHaveBeenCalledWith(
+    expect.objectContaining({
+      provider: "radius",
+      profileId: "radius:account-a",
+      lockedProfile: true,
+    }),
+  );
+  expect(
+    await provider.prepareDynamicModel?.({ ...ctx, modelId: "not-in-account" }),
+  ).toBeUndefined();
 });
