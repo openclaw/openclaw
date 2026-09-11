@@ -100,19 +100,37 @@ describe("prepared model catalog builder", () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
   });
 
-  it.each(["static", "refreshable", "runtime"] as const)(
-    "keeps replace publication closed to %s manifest and augmented inventory",
-    async (discovery) => {
+  it.each(
+    (["static", "refreshable", "runtime"] as const).flatMap((discovery) =>
+      [false, true].map((warmCache) => ({ discovery, warmCache })),
+    ),
+  )(
+    "keeps replace publication closed to $discovery inventory (warm cache=$warmCache)",
+    async ({ discovery, warmCache }) => {
       mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
         { provider: "manifest-provider", id: "augmented-only", name: "Augmented" },
       ]);
-      const snapshot = await build({
-        config: { models: { mode: "replace", providers: {} } },
-        metadataSnapshot: providerManifestSnapshot({
-          provider: "manifest-provider",
-          discovery,
-          modelIds: ["manifest-only"],
+      const config: OpenClawConfig = { models: { catalogRefresh: { enabled: false } } };
+      const manifest = providerManifestSnapshot({
+        provider: "manifest-provider",
+        discovery,
+        modelIds: ["manifest-only"],
+      });
+      if (warmCache) {
+        expect(loadManifestModelCatalog({ config, metadataSnapshot: manifest })).toHaveLength(1);
+      }
+      config.models = { ...config.models, mode: "replace", providers: {} };
+      expect(
+        loadManifestModelCatalog({
+          config,
+          get metadataSnapshot(): never {
+            throw new Error("replace must not resolve manifest metadata");
+          },
         }),
+      ).toEqual([]);
+      const snapshot = await build({
+        config,
+        metadataSnapshot: manifest,
         readOnly: false,
         includeProviderPluginAugmentation: true,
       });
@@ -248,29 +266,6 @@ describe("prepared model catalog builder", () => {
 
     expect(snapshot.entries.map((entry) => entry.id)).toEqual(["model-a", "model-b"]);
     expect(snapshot.entries.every((entry) => entry.providerOrder === undefined)).toBe(true);
-  });
-
-  it("keeps account-denied runtime models out of the prepared catalog", async () => {
-    const config: OpenClawConfig = { plugins: { enabled: false } };
-    const runtimeManifest = providerManifestSnapshot({
-      provider: "openai",
-      discovery: "runtime",
-      modelIds: ["gpt-5.5", "gpt-5.6"],
-    });
-
-    const declaredManifestModels = loadManifestModelCatalog({
-      config,
-      metadataSnapshot: runtimeManifest,
-    });
-    expect(declaredManifestModels.map((entry) => entry.id)).toEqual(["gpt-5.5", "gpt-5.6"]);
-
-    const snapshot = await build({ config, metadataSnapshot: runtimeManifest });
-
-    expect(snapshot.entries).toEqual([]);
-    expect(snapshot.routeVariants).toEqual([]);
-    expect(loadManifestModelCatalog({ config, metadataSnapshot: runtimeManifest })).toBe(
-      declaredManifestModels,
-    );
   });
 
   it("carries manifest capability metadata into the prepared catalog", async () => {

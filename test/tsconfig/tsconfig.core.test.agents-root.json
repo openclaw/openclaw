@@ -17,6 +17,8 @@
     "../../src/agents/code-mode*.test.tsx",
     "../../src/agents/model-catalog-view.test.ts",
     "../../src/agents/tool-search*.test.ts",
-    "../../src/agents/tool-search*.test.tsx"
+    "../../src/agents/tool-search*.test.tsx",
+    "../../src/agents/model-catalog.test.ts",
+    "../../src/agents/model-catalog.planning.test.ts"
   ]
 }
