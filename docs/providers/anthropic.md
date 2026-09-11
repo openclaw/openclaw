@@ -471,10 +471,14 @@ stored `adaptive` selections resolve to the provider's `high` default. Custom
 routing namespaces such as `Claude Gateway/claude-fable-5-1`.
 
 `anthropic/claude-mythos-5` is a limited-access model with the same always-on
-adaptive-thinking contract. OpenClaw defaults to `high`, maps `/think off` and
-`/think minimal` to `low`, and omits caller-selected sampling parameters.
+adaptive-thinking and five-effort contract. OpenClaw defaults to `high`, maps
+stored `off` and `minimal` settings to `low`, and omits caller-selected sampling parameters.
 The catalog publishes its 1,000,000-token context window, 128,000-token output
 limit, image input, and `$10/$50` input/output pricing.
+
+For Fable and Mythos, new `/think minimal` and `/think adaptive` directives are
+rejected with the supported choices. Use `/think low` and `/think high`,
+respectively; the remapping above applies to previously stored settings.
 
 Claude Opus 4.8 keeps thinking off by default in OpenClaw. When you explicitly
 enable adaptive thinking with `/think high|xhigh|max`, OpenClaw sends
