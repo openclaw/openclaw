@@ -14,6 +14,7 @@ import type {
   updateClawInstallRecordStatus,
 } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "./types.js";
+import type { recordClawBootstrapSeeded } from "./workspace-origin.js";
 import type {
   createClawWorkspaceFiles,
   PersistedClawWorkspaceFile,
@@ -39,6 +40,7 @@ export type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
   installMcpServers?: typeof installClawMcpServers;
   installCronJobs?: typeof installClawCronJobs;
   seedPackageBootstrap?: typeof seedClawPackageBootstrap;
+  recordBootstrapSeeded?: typeof recordClawBootstrapSeeded;
   cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable">;
   nowMs?: number;
 };

@@ -27,16 +27,13 @@ export function inspectAgentWorkspaceOwnership(params: {
     .filter((path) => !identifiedPaths.has(path))
     .map((path) => ({ agentId: undefined, path }));
   const candidates = [...agentCandidates, ...pathCandidates];
-  const configuredWorkspaceConflict = candidates.some(
-    (candidate) =>
-      (candidate.path === params.workspace &&
-        !(params.adopting && candidate.agentId === params.finalId)) ||
-      (params.adopting &&
-        candidate.agentId === params.finalId &&
-        candidate.path !== params.workspace) ||
-      (params.adopting &&
-        !(candidate.agentId === params.finalId && candidate.path === params.workspace) &&
-        workspacePathsOverlap(params.workspace, candidate.path)),
+  // Ancestor/descendant overlap with any other agent's workspace is the same collision the
+  // config commit rejects via findOverlappingWorkspaceAgentIds; an adopted agent must sit at
+  // exactly this workspace, so its own entry conflicts only when the paths differ.
+  const configuredWorkspaceConflict = candidates.some((candidate) =>
+    params.adopting && candidate.agentId === params.finalId
+      ? candidate.path !== params.workspace
+      : workspacePathsOverlap(params.workspace, candidate.path),
   );
   return {
     configuredWorkspaceConflict,

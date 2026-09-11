@@ -70,6 +70,15 @@ export function exactCommittedClawAgentExists(params: {
   );
 }
 
+/** Apply-time config reads bypass the pinned runtime snapshot: the plan may be minutes stale. */
+export function resolveClawConfigReader(
+  readConfig?: () => OpenClawConfig | Promise<OpenClawConfig>,
+): () => OpenClawConfig | Promise<OpenClawConfig> {
+  return (
+    readConfig ?? (async () => (await readConfigFileSnapshot({ observe: false })).sourceConfig)
+  );
+}
+
 export async function assertAgentAdoptionDigest(params: {
   plan: ClawAddPlan;
   install: PersistedClawInstall;
@@ -77,10 +86,7 @@ export async function assertAgentAdoptionDigest(params: {
 }): Promise<void> {
   // The runtime snapshot may predate package preflight. Re-read disk here so mutations cannot
   // begin after an adoption target has changed behind the pinned CLI view.
-  const config = await (
-    params.readConfig ??
-    (async () => (await readConfigFileSnapshot({ observe: false })).sourceConfig)
-  )();
+  const config = await resolveClawConfigReader(params.readConfig)();
   const normalizedAgentId = normalizeAgentId(params.plan.agent.finalId);
   const canonicalAgent = resolveCanonicalClawAgent(config, normalizedAgentId);
   if (

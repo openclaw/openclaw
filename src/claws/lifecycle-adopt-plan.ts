@@ -102,6 +102,10 @@ export async function planWorkspaceAdoption(params: {
     !adopted &&
     (params.configuredWorkspaceConflict ||
       (workspaceExistsOnDisk && params.resumableWorkspace !== params.workspace));
+  // Overlap gets its own message regardless of requested/disk state: the conflicting path is
+  // frequently absent on disk (a brand-new subdirectory of another agent's workspace), so the
+  // "already exists" wording below would misstate why the plan blocked.
+  const conflictMessage = `Workspace ${JSON.stringify(params.workspace)} overlaps another agent's configured workspace.`;
   const blockers: ClawDiagnostic[] = [];
   if (blocked) {
     blockers.push({
@@ -109,13 +113,10 @@ export async function planWorkspaceAdoption(params: {
       code: params.configuredWorkspaceConflictCode ?? "workspace_collision",
       phase: "plan",
       path: "$.workspace",
-      message:
-        params.requested && workspaceExistsOnDisk
-          ? `Workspace ${JSON.stringify(params.workspace)} cannot be adopted; it is ${
-              params.configuredWorkspaceConflict
-                ? "already configured for another agent"
-                : "not a directory"
-            }.`
+      message: params.configuredWorkspaceConflict
+        ? conflictMessage
+        : params.requested && workspaceExistsOnDisk
+          ? `Workspace ${JSON.stringify(params.workspace)} cannot be adopted; it is not a directory.`
           : `Workspace ${JSON.stringify(params.workspace)} already exists; a Claw requires a new workspace.`,
     });
   }
@@ -130,7 +131,11 @@ export async function planWorkspaceAdoption(params: {
       details: { expectedState: adopted ? "existing-directory" : "absent" },
       blocked,
       ...(blocked
-        ? { reason: `Workspace ${JSON.stringify(params.workspace)} already exists.` }
+        ? {
+            reason: params.configuredWorkspaceConflict
+              ? conflictMessage
+              : `Workspace ${JSON.stringify(params.workspace)} already exists.`,
+          }
         : {}),
     },
   };
@@ -167,7 +172,7 @@ async function readAdoptableTarget(
 export type WorkspaceAdoptionOwnership = {
   adoptedFiles: readonly string[];
   ownedFiles: readonly PersistedClawWorkspaceFile[];
-  bootstrapDigest?: string;
+  bootstrapSeeded: boolean;
 };
 
 /**
@@ -187,9 +192,13 @@ export async function planWorkspaceAdoptionTargets(params: {
     const existing = await readAdoptableTarget(workspaceRoot, params.packageBootstrap.id);
     // A prior attempt of this same adoption seeds BOOTSTRAP.md before later phases can fail; a
     // resume sees the identical digest it already wrote and must not read its own seed as a
-    // fresh operator conflict (seedWorkspaceBootstrap treats it as "already-seeded").
+    // fresh operator conflict (seedWorkspaceBootstrap treats it as "already-seeded"). The waiver
+    // requires this install's own recorded seed, not just a matching digest: an operator-created
+    // BOOTSTRAP.md that happens to match byte-for-byte must still block, never adopt silently.
     const alreadySeeded =
-      existing.state === "adoptable" && existing.digest === params.ownership?.bootstrapDigest;
+      existing.state === "adoptable" &&
+      params.ownership?.bootstrapSeeded === true &&
+      existing.digest === params.packageBootstrap.digest;
     if (existing.state !== "absent" && !alreadySeeded) {
       const diagnostic = adoptionBlocker(
         "$packageBootstrap",

@@ -9,6 +9,7 @@ import {
   CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
   upsertClawWorkspaceFile,
 } from "../claws/workspace.js";
+import * as openClawStateDb from "../state/openclaw-state-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const mocks = vi.hoisted(() => ({
@@ -46,6 +47,9 @@ vi.mock("../claws/add.js", async () => ({
 
 const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Spies in place (not a full vi.mock replacement) so the real implementation still runs; only
+// the call count is observed to prove the dry-run resume preview never opens the DB writably.
+const openOpenClawStateDatabaseSpy = vi.spyOn(openClawStateDb, "openOpenClawStateDatabase");
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
@@ -120,6 +124,29 @@ describe("claws add adopted-workspace resume", () => {
       createdAtMs: 1,
       updatedAtMs: 1,
     });
+    mocks.logs.length = 0;
+
+    // A dry-run preview of this resumable install must never open the state database writably:
+    // fresh-open runs schema checks/repair, which would mutate a compatible migration-pending
+    // state DB before the operator ever consents. A byte-hash of the DB file is not discriminating
+    // here — a writable open of an already-current schema writes no bytes either way — so this
+    // asserts the mechanism directly. openOpenClawStateDatabase(options) also serves a safe
+    // passthrough when `options.database` already carries an open (here, read-only) handle — that
+    // call never opens or repairs anything, so only a call WITHOUT options.database is a fresh
+    // open and the thing this proof cares about.
+    // Close the cached writable handle from the setup writes above first, so the read-only open
+    // below opens the file fresh rather than reusing state left by this test's own bootstrap.
+    closeOpenClawStateDatabaseForTest();
+    openOpenClawStateDatabaseSpy.mockClear();
+    await runClawsAddCommand(manifestPath, {
+      dryRun: true,
+      workspace,
+      adoptExistingWorkspace: true,
+      json: true,
+    });
+    const freshOpens = openOpenClawStateDatabaseSpy.mock.calls.filter(([opts]) => !opts?.database);
+    expect(freshOpens).toEqual([]);
+
     mocks.logs.length = 0;
 
     // Without the resume-ownership fix, HEARTBEAT.md flips to "adopt" on disk presence alone, the

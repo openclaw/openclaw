@@ -35,7 +35,7 @@ export function isInheritedAuthStoreOwner(cfg: OpenClawConfig, agentId: string):
   }
   return agentId === normalizeAgentId(resolveLegacyInheritedAuthAgentId(cfg));
 }
-
+/** True when two workspace paths are identical, or one is an ancestor/descendant of the other. */
 export function workspacePathsOverlap(left: string, right: string): boolean {
   const normalizedLeft = resolveCanonicalWorkspacePath(left.replaceAll("\0", ""));
   const normalizedRight = resolveCanonicalWorkspacePath(right.replaceAll("\0", ""));

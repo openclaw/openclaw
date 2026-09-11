@@ -4,36 +4,33 @@ import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
-import { listAgentEntries } from "../agents/agent-scope.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
-import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { resolveUserPath } from "../utils.js";
 import { releaseUnclaimedClawAdoption } from "./add-adoption-release.js";
+import { commitClawAddAgentConfig } from "./add-config-commit.js";
 import {
   CLAW_ADD_RESULT_SCHEMA_VERSION,
   type ClawAddApplyOptions,
   type ClawAddResult,
   partialResult,
 } from "./add-contract.js";
+import { ClawAddMutationError } from "./add-errors.js";
 import {
   hasUnsupportedMutationActions,
   planWithPackageActions,
-  sameCommittedAgent,
   statusAtLeast,
 } from "./add-plan-helpers.js";
 import {
   assertAgentAdoptionDigest,
-  exactExistingAgentIsAuthorized,
   planAdoptsAgent,
+  resolveClawConfigReader,
 } from "./agent-adoption-apply.js";
 import { ClawBootstrapWriteError, seedClawPackageBootstrap } from "./bootstrap.js";
 import { ClawCronInstallError, installClawCronJobs, type PersistedClawCronRef } from "./cron.js";
-import { replaceLegacyCommittedAgent } from "./legacy-resume.js";
 import {
   ClawMcpInstallError,
   installClawMcpServers,
@@ -49,7 +46,7 @@ import {
   type PersistedClawPackageRef,
 } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "./types.js";
-import { planAdoptsWorkspace } from "./workspace-origin.js";
+import { planAdoptsWorkspace, recordClawBootstrapSeeded } from "./workspace-origin.js";
 import {
   ClawWorkspaceWriteError,
   createClawWorkspaceFiles,
@@ -59,15 +56,6 @@ import {
 export { CLAW_ADD_RESULT_SCHEMA_VERSION } from "./add-contract.js";
 
 type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
-export class ClawAddMutationError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "ClawAddMutationError";
-  }
-}
 
 function markInstallStatus(
   agentId: string,
@@ -185,6 +173,29 @@ export async function applyClawAddPlan(
       "workspace_parent_failed",
       `Could not inspect workspace ${JSON.stringify(workspace)}: ${coerceErrorMessage(error)}`,
     );
+  }
+
+  // Revalidate admission against live config before any workspace effect (adoption's
+  // workspace_ready mark, mkdir for a created workspace, seeding, or file ownership rows): the
+  // plan-time overlap check can race a concurrent add that configures an overlapping workspace
+  // for a different agent after this plan was built but before it was applied.
+  const currentConfig = await resolveClawConfigReader(options.readConfig)();
+  if (findOverlappingWorkspaceAgentIds(currentConfig, plan.agent.finalId, workspace).length > 0) {
+    const message = `Workspace ${JSON.stringify(workspace)} is already assigned to another agent.`;
+    if (workspacePhaseRecorded) {
+      markInstallStatus(plan.agent.finalId, "partial", [installRecord.status], options);
+      return partialResult({
+        plan,
+        installRecord,
+        workspaceCreated: false,
+        configCommitted: false,
+        packages: [],
+        error: { code: "workspace_collision", message },
+        nowMs: options.nowMs,
+      });
+    }
+    clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
+    throw new ClawAddMutationError("workspace_collision", message);
   }
 
   if (!workspacePhaseRecorded && workspaceState && !workspaceAdoption) {
@@ -365,13 +376,12 @@ export async function applyClawAddPlan(
   // private. Committing the agent config first makes the agent routable, so a
   // concurrent `sessions.create` can stock-seed BOOTSTRAP.md and strand the add at
   // `config_committed` with a seed conflict that no retry can clear.
-  let bootstrapSeeded: boolean;
+  let bootstrapSeedResult: Awaited<ReturnType<typeof seedClawPackageBootstrap>>;
   try {
-    bootstrapSeeded =
-      (await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, {
-        ...options,
-        ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
-      })) === "seeded";
+    bootstrapSeedResult = await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, {
+      ...options,
+      ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+    });
   } catch (error) {
     const installStatus: ClawInstallStatus = configCommitted
       ? "config_committed"
@@ -395,6 +405,42 @@ export async function applyClawAddPlan(
       },
       nowMs: options.nowMs,
     });
+  }
+
+  const bootstrapSeeded = bootstrapSeedResult === "seeded";
+
+  // A seed this install actually performed waives the bootstrap conflict on a later resume; an
+  // operator-created BOOTSTRAP.md that merely matches by content must never be read as our own
+  // seed. Record it before file ownership so a crash here leaves the marker unseeded (fail
+  // closed: the next resume blocks on its own seed rather than silently skipping it).
+  if (workspaceAdoption && bootstrapSeedResult === "seeded") {
+    try {
+      (options.recordBootstrapSeeded ?? recordClawBootstrapSeeded)(
+        plan.agent.finalId,
+        workspace,
+        options,
+      );
+    } catch (error) {
+      const installStatus: ClawInstallStatus = configCommitted
+        ? "config_committed"
+        : "workspace_ready";
+      markInstallStatus(
+        plan.agent.finalId,
+        installStatus,
+        configCommitted ? ["config_committed"] : ["workspace_ready", "config_committed"],
+        options,
+      );
+      return partialResult({
+        plan,
+        installRecord,
+        workspaceCreated,
+        configCommitted,
+        packages,
+        installStatus,
+        error: { code: "provenance_failed", message: coerceErrorMessage(error) },
+        nowMs: options.nowMs,
+      });
+    }
   }
 
   // Workspace ownership must be complete before the agent becomes routable. Besides writing new
@@ -455,89 +501,17 @@ export async function applyClawAddPlan(
           transform: (config) => ({ nextConfig: transform(config) }),
         });
       });
-    await commit((config) => {
-      const existingAgents = listAgentEntries(config);
-      const agentsToPreserve: AgentConfig[] =
-        existingAgents.length > 0 ? existingAgents : [{ id: DEFAULT_AGENT_ID, default: true }];
-      const configWithPreservedAgents: OpenClawConfig = {
-        ...config,
-        agents: {
-          ...config.agents,
-          entries: Object.fromEntries(agentsToPreserve.map(({ id, ...entry }) => [id, entry])),
-        },
-      };
-      const normalizedAgentId = normalizeAgentId(plan.agent.finalId);
-      const existingAgent = agentsToPreserve.find(
-        (agent) => normalizeAgentId(agent.id) === normalizedAgentId,
-      );
-      if (existingAgent) {
-        if (
-          sameCommittedAgent(existingAgent, plan) &&
-          exactExistingAgentIsAuthorized({
-            adoption: agentAdoption,
-            resume: options.resumeRecord !== undefined,
-            persistedStatus: installRecord.status,
-          })
-        ) {
-          if (
-            findOverlappingWorkspaceAgentIds(
-              configWithPreservedAgents,
-              plan.agent.finalId,
-              workspace,
-            ).length > 0
-          ) {
-            throw new ClawAddMutationError(
-              "agent_workspace_conflict",
-              "Workspace " + JSON.stringify(workspace) + " is assigned to another agent.",
-            );
-          }
-          return config;
-        }
-        const nextConfig = replaceLegacyCommittedAgent({
-          config: configWithPreservedAgents,
-          agents: agentsToPreserve,
-          normalizedAgentId,
-          plan,
-          resumePlan: options.resumePlan,
-          resumeRecord: options.resumeRecord,
-          matchesPlan: sameCommittedAgent,
-        });
-        if (nextConfig) {
-          return nextConfig;
-        }
-        throw new ClawAddMutationError(
-          agentAdoption ? "agent_config_conflict" : "agent_id_collision",
-          agentAdoption
-            ? `Agent ${JSON.stringify(plan.agent.finalId)} changed after adoption planning.`
-            : "Agent " + JSON.stringify(plan.agent.finalId) + " was created after planning.",
-        );
-      }
-      if (agentAdoption) {
-        throw new ClawAddMutationError(
-          "agent_config_conflict",
-          `Agent ${JSON.stringify(plan.agent.finalId)} disappeared after adoption planning.`,
-        );
-      }
-      if (
-        findOverlappingWorkspaceAgentIds(configWithPreservedAgents, plan.agent.finalId, workspace)
-          .length > 0
-      ) {
-        throw new ClawAddMutationError(
-          "workspace_collision",
-          "Workspace " + JSON.stringify(workspace) + " is already assigned to an agent.",
-        );
-      }
-      const nextConfig: OpenClawConfig = {
-        ...config,
-        agents: {
-          ...config.agents,
-          entries: Object.fromEntries(
-            [...agentsToPreserve, plan.agent.config].map(({ id, ...entry }) => [id, entry]),
-          ),
-        },
-      };
-      return nextConfig;
-    });
+    await commit((config) =>
+      commitClawAddAgentConfig({
+        config,
+        plan,
+        workspace,
+        agentAdoption,
+        persistedStatus: installRecord.status,
+        resumePlan: options.resumePlan,
+        resumeRecord: options.resumeRecord,
+      }),
+    );
     // The transform runs before persistence can still fail; record the fact only after commit.
     // Moving this into the callback retains the workspace and reports a write that never landed.
     configCommitted = true;

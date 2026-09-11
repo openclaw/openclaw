@@ -184,6 +184,55 @@ describe("buildClawAddPlan workspace adoption", () => {
 
     expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "workspace_collision" }));
   });
+
+  it("blocks adopting a subdirectory of another agent's configured workspace", async () => {
+    const { source, workspace: parent } = await createPlanSource();
+    const subdir = join(parent, "subdir");
+    await mkdir(join(subdir, "reference"), { recursive: true });
+    await writeFile(join(subdir, "AGENTS.md"), "# Agent\n", "utf8");
+    await writeFile(join(subdir, "reference", "policy.md"), "Policy\n", "utf8");
+
+    // Every declared file matches on disk; absent the overlap check this would adopt cleanly.
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      context: {
+        workspace: subdir,
+        adoptExistingWorkspace: true,
+        existingWorkspacePaths: [parent],
+      },
+    });
+
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({ code: "workspace_collision", path: "$.workspace" }),
+    );
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspace", blocked: true }),
+    );
+  });
+
+  it("blocks adopting a workspace that contains another agent's configured subdirectory", async () => {
+    const { source, workspace: parent } = await createPlanSource();
+    const subdir = join(parent, "subdir");
+    await mkdir(subdir, { recursive: true });
+
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      context: {
+        workspace: parent,
+        adoptExistingWorkspace: true,
+        existingWorkspacePaths: [subdir],
+      },
+    });
+
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({ code: "workspace_collision", path: "$.workspace" }),
+    );
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspace", blocked: true }),
+    );
+  });
 });
 
 describe("applyClawAddPlan workspace adoption", () => {
@@ -408,7 +457,13 @@ describe("planWorkspaceAdoptionTargets resume ownership", () => {
     await expect(readFile(join(workspace, "BOOTSTRAP.md"))).resolves.toEqual(bootstrapContent);
 
     const workspaceOrigin = readClawWorkspaceAdoption("worker", workspace, { env });
-    expect(workspaceOrigin).toEqual({ adopted: true, adoptedFiles: ["SOUL.md"] });
+    // The seed step ran before the config-commit failure, so this install's own
+    // recordClawBootstrapSeeded call already flipped the marker's bootstrapSeeded flag.
+    expect(workspaceOrigin).toEqual({
+      adopted: true,
+      adoptedFiles: ["SOUL.md"],
+      bootstrapSeeded: true,
+    });
     if (!workspaceOrigin.adopted) {
       throw new Error("expected the workspace to be recorded as adopted");
     }
@@ -428,7 +483,7 @@ describe("planWorkspaceAdoptionTargets resume ownership", () => {
         resumableWorkspaceOwnership: {
           adoptedFiles: workspaceOrigin.adoptedFiles,
           ownedFiles,
-          bootstrapDigest: first.installRecord.bootstrap?.contentDigest,
+          bootstrapSeeded: workspaceOrigin.bootstrapSeeded,
         },
       },
     });
@@ -456,7 +511,7 @@ describe("planWorkspaceAdoptionTargets resume ownership", () => {
         resumableWorkspaceOwnership: {
           adoptedFiles: workspaceOrigin.adoptedFiles,
           ownedFiles: unownedFiles,
-          bootstrapDigest: first.installRecord.bootstrap?.contentDigest,
+          bootstrapSeeded: workspaceOrigin.bootstrapSeeded,
         },
       },
     });
@@ -465,6 +520,117 @@ describe("planWorkspaceAdoptionTargets resume ownership", () => {
     );
     expect(collisionPlan.actions).toContainEqual(
       expect.objectContaining({ kind: "workspaceFile", id: "HEARTBEAT.md", blocked: true }),
+    );
+  });
+
+  it("blocks an operator-created bootstrap that only looks identical when this install never seeded it", async () => {
+    const root = tempDirs.make("openclaw-claw-adopt-unseeded-bootstrap-");
+    await mkdir(join(root, "content"), { recursive: true });
+    await writeFile(join(root, "content", "SOUL.md"), "# Soul\n", "utf8");
+    const bootstrapContent = Buffer.from("Package bootstrap\n");
+    const bootstrapPath = join(root, "BOOTSTRAP.md");
+    await writeFile(bootstrapPath, bootstrapContent);
+    const parsed = parseClawManifest({
+      schemaVersion: 1,
+      agent: { id: "worker" },
+      workspace: { bootstrapFiles: { "SOUL.md": { source: "content/SOUL.md" } } },
+      packages: [{ kind: "plugin", source: "clawhub", ref: "@acme/audit", version: "1.0.0" }],
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+    const source: ClawSourceIdentity = {
+      kind: "package",
+      name: "@acme/worker",
+      version: "1.0.0",
+      packageRoot: root,
+      manifestPath: join(root, "openclaw.claw.json"),
+      integrityKind: "development-snapshot",
+      integrity: "sha256:test",
+      byteLength: 0,
+    };
+    const packageBootstrap = {
+      sourcePath: "BOOTSTRAP.md",
+      realPath: bootstrapPath,
+      byteLength: bootstrapContent.byteLength,
+      digest: `sha256:${createHash("sha256").update(bootstrapContent).digest("hex")}`,
+    };
+    const workspace = join(root, "existing-workspace");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "SOUL.md"), "# Soul\n", "utf8");
+
+    const plan = await buildClawAddPlan({
+      manifest: parsed.manifest,
+      source,
+      packageBootstrap,
+      context: {
+        workspace,
+        adoptExistingWorkspace: true,
+        packagePreflight: async () => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${"a".repeat(64)}`,
+          installId: "audit",
+        }),
+      },
+    });
+    expect(plan.blockers).toEqual([]);
+    const env = stateEnv(root);
+
+    // installPackages runs, and fails, before the bootstrap seed step: this install never
+    // gets a chance to write BOOTSTRAP.md itself.
+    const first = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      installPackages: async () => {
+        throw new ClawPackageInstallError("package_install_failed", "install failed", []);
+      },
+    });
+    expect(first).toMatchObject({
+      status: "partial",
+      installRecord: { status: "workspace_ready" },
+      error: { code: "package_install_failed" },
+    });
+    await expect(readFile(join(workspace, "BOOTSTRAP.md"))).rejects.toThrow();
+
+    // An operator (or another tool) writes a byte-identical BOOTSTRAP.md while the install sits
+    // partial. Its content matches what this install would seed, but this install did not write it.
+    await writeFile(join(workspace, "BOOTSTRAP.md"), bootstrapContent);
+
+    const workspaceOrigin = readClawWorkspaceAdoption("worker", workspace, { env });
+    expect(workspaceOrigin).toMatchObject({ adopted: true, bootstrapSeeded: false });
+    if (!workspaceOrigin.adopted) {
+      throw new Error("expected the workspace to be recorded as adopted");
+    }
+    const ownedFiles = readClawWorkspaceFiles("worker", { env });
+
+    const resumedPlan = await buildClawAddPlan({
+      manifest: parsed.manifest,
+      source,
+      packageBootstrap,
+      context: {
+        workspace,
+        adoptExistingWorkspace: true,
+        resumableWorkspace: workspace,
+        packagePreflight: async () => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${"a".repeat(64)}`,
+          installId: "audit",
+        }),
+        resumableWorkspaceOwnership: {
+          adoptedFiles: workspaceOrigin.adoptedFiles,
+          ownedFiles,
+          bootstrapSeeded: workspaceOrigin.bootstrapSeeded,
+        },
+      },
+    });
+
+    expect(resumedPlan.blockers).toContainEqual(
+      expect.objectContaining({ code: "workspace_file_conflict", path: "$packageBootstrap" }),
+    );
+    expect(resumedPlan.actions).toContainEqual(
+      expect.objectContaining({ kind: "bootstrap", id: "BOOTSTRAP.md", blocked: true }),
     );
   });
 });

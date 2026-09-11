@@ -1,13 +1,16 @@
 // Durable record of which Claw workspaces were adopted rather than created by the install.
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import type { ClawAddPlan } from "./types.js";
@@ -49,7 +52,9 @@ function recordAdoptedWorkspaceRow(params: {
   // The consented adopted set is stored here, not derived from ownership rows: adopted and
   // written files persist identically shaped rows, so a retried adoption plan (rebuilt after a
   // later-phase failure) needs this to tell which declared destinations it may re-label "adopt".
-  const sourcePath = JSON.stringify(params.adoptedFiles);
+  // bootstrapSeeded starts false: only a successful seed by *this* install may flip it, so an
+  // operator-created identical BOOTSTRAP.md can never be mistaken for an already-seeded one.
+  const sourcePath = JSON.stringify({ adoptedFiles: params.adoptedFiles, bootstrapSeeded: false });
   executeSqliteQuerySync(
     params.db,
     kyselyFor(params.db)
@@ -111,20 +116,14 @@ export function deleteAdoptedWorkspaceRow(db: DatabaseSync, agentId: string): vo
 
 export type ClawWorkspaceAdoption =
   | { adopted: false }
-  | { adopted: true; adoptedFiles: readonly string[] };
+  | { adopted: true; adoptedFiles: readonly string[]; bootstrapSeeded: boolean };
 
-/**
- * Whether this agent's current workspace directory existed before the Claw adopted it, and,
- * when adopted, the consented declared-file ids a resume must relabel "adopt" to reconstruct
- * the identical plan. The stored set is unshipped; a non-JSON value fails closed, no compat.
- */
-export function readClawWorkspaceAdoption(
+function selectWorkspaceOriginRow(
+  db: DatabaseSync,
   agentId: string,
   workspace: string,
-  options: OpenClawStateDatabaseOptions = {},
-): ClawWorkspaceAdoption {
-  const { db } = openOpenClawStateDatabase(options);
-  const row = executeSqliteQueryTakeFirstSync(
+): { source_path: string } | undefined {
+  return executeSqliteQueryTakeFirstSync(
     db,
     kyselyFor(db)
       .selectFrom("claw_workspace_files")
@@ -134,23 +133,102 @@ export function readClawWorkspaceAdoption(
       .where("workspace", "=", workspace)
       .where("content_digest", "=", CLAW_ADOPTED_WORKSPACE_MARKER_DIGEST),
   );
+}
+
+/** The marker's stored shape is unshipped: a non-object or malformed value fails closed, no compat. */
+function parseWorkspaceOriginMarker(
+  agentId: string,
+  sourcePath: string,
+): { adoptedFiles: string[]; bootstrapSeeded: boolean } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(sourcePath);
+  } catch {
+    throw new Error(
+      `Claw adopted-workspace marker for agent ${JSON.stringify(agentId)} has a non-JSON consented record.`,
+    );
+  }
+  if (
+    !isRecord(parsed) ||
+    !Array.isArray(parsed.adoptedFiles) ||
+    parsed.adoptedFiles.some((value) => typeof value !== "string") ||
+    typeof parsed.bootstrapSeeded !== "boolean"
+  ) {
+    throw new Error(
+      `Claw adopted-workspace marker for agent ${JSON.stringify(agentId)} has a malformed consented record.`,
+    );
+  }
+  return { adoptedFiles: parsed.adoptedFiles, bootstrapSeeded: parsed.bootstrapSeeded };
+}
+
+/**
+ * Whether this agent's current workspace directory existed before the Claw adopted it, and,
+ * when adopted, the consented declared-file ids a resume must relabel "adopt" to reconstruct
+ * the identical plan, plus whether this install itself already seeded BOOTSTRAP.md.
+ */
+export function readClawWorkspaceAdoptionFromDatabase(
+  db: DatabaseSync,
+  agentId: string,
+  workspace: string,
+): ClawWorkspaceAdoption {
+  // Read-only previews may run against schema-compatible but pre-migration state where this
+  // table does not exist yet; absence reads as "not adopted", not a hard failure.
+  if (!tableExists(db, "claw_workspace_files")) {
+    return { adopted: false };
+  }
+  const row = selectWorkspaceOriginRow(db, agentId, workspace);
   if (!row) {
     return { adopted: false };
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(row.source_path);
-  } catch {
-    throw new Error(
-      `Claw adopted-workspace marker for agent ${JSON.stringify(agentId)} has a non-JSON consented file list.`,
+  return { adopted: true, ...parseWorkspaceOriginMarker(agentId, row.source_path) };
+}
+
+export function readClawWorkspaceAdoption(
+  agentId: string,
+  workspace: string,
+  options: OpenClawStateDatabaseOptions = {},
+): ClawWorkspaceAdoption {
+  const { db } = openOpenClawStateDatabase(options);
+  return readClawWorkspaceAdoptionFromDatabase(db, agentId, workspace);
+}
+
+/**
+ * Flips the marker's bootstrapSeeded flag once this install actually writes BOOTSTRAP.md, so a
+ * later resume can tell its own seed apart from an operator-created file with the same content.
+ * Must affect exactly the one marker row created for this agent/workspace, or it throws.
+ */
+export function recordClawBootstrapSeeded(
+  agentId: string,
+  workspace: string,
+  options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const row = selectWorkspaceOriginRow(db, agentId, workspace);
+    if (!row) {
+      throw new Error(
+        `Claw adopted-workspace marker for agent ${JSON.stringify(agentId)} is missing; cannot record the bootstrap seed.`,
+      );
+    }
+    const marker = parseWorkspaceOriginMarker(agentId, row.source_path);
+    const result = executeSqliteQuerySync(
+      db,
+      kyselyFor(db)
+        .updateTable("claw_workspace_files")
+        .set({
+          source_path: JSON.stringify({ adoptedFiles: marker.adoptedFiles, bootstrapSeeded: true }),
+          updated_at_ms: options.nowMs ?? Date.now(),
+        })
+        .where("agent_id", "=", agentId)
+        .where("target_path", "=", CLAW_ADOPTED_WORKSPACE_MARKER_PATH)
+        .where("workspace", "=", workspace)
+        .where("content_digest", "=", CLAW_ADOPTED_WORKSPACE_MARKER_DIGEST),
     );
-  }
-  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string")) {
-    throw new Error(
-      `Claw adopted-workspace marker for agent ${JSON.stringify(agentId)} has a malformed consented file list.`,
-    );
-  }
-  return { adopted: true, adoptedFiles: parsed };
+    if (result.numAffectedRows !== 1n) {
+      throw new Error(
+        `Claw adopted-workspace marker for agent ${JSON.stringify(agentId)} did not update exactly one row.`,
+      );
+    }
+  }, options);
 }
 
 /** True when this agent's current workspace directory existed before the Claw adopted it. */
