@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -117,7 +118,7 @@ describe("memory forget phase-signal failures", () => {
     });
     const db = openOpenClawStateDatabase().db;
     const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
-    const deletionSettled = Promise.withResolvers<void>();
+    const deletionSettled = createDeferred<void>();
     let metadataFailureObserved = false;
     db.function("observe_phase_metadata_failure", () => {
       metadataFailureObserved = true;
