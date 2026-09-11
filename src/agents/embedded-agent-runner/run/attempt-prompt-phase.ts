@@ -192,7 +192,6 @@ export async function runEmbeddedAttemptPromptPhase(
       isRawModelRun,
       ...(preparedUserTurnMessage ? { preparedUserTurnMessage } : {}),
       sessionAgentId,
-      setActiveSessionSystemPrompt,
       ...(systemPromptReport ? { systemPromptReport } : {}),
       systemPromptText,
       toolResultPromptProjectionState,

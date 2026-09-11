@@ -86,10 +86,9 @@ function projectRuntimeContextMessages(messages: AgentMessage[]): AgentMessage[]
       if (details.success) {
         return {
           ...message,
-          content: buildRuntimeContextMessageContent({
-            runtimeContext: projectRuntimeContextFragments(details.data.fragments),
-            kind: "next-turn",
-          }),
+          content: buildRuntimeContextMessageContent(
+            projectRuntimeContextFragments(details.data.fragments),
+          ),
         };
       }
     }

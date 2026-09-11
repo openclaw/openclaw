@@ -402,7 +402,6 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   prompt: PromptAssemblyContext;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
-  setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   systemPromptReport?: SessionSystemPromptReport;
   systemPromptText: string;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;

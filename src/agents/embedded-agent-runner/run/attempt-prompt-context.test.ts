@@ -96,7 +96,6 @@ function createInput(options?: {
   report?: SessionSystemPromptReport;
 }) {
   const replaceSessionMessages = vi.fn();
-  const setActiveSessionSystemPrompt = vi.fn();
   const report = options?.report ?? ({} as SessionSystemPromptReport);
   return {
     input: {
@@ -111,14 +110,12 @@ function createInput(options?: {
       prompt: options?.prompt ?? createPrompt(),
       replaceSessionMessages,
       sessionAgentId: "agent-1",
-      setActiveSessionSystemPrompt,
       systemPromptReport: report,
       systemPromptText: "Base system prompt",
       toolResultPromptProjectionState: projectionState,
     },
     replaceSessionMessages,
     report,
-    setActiveSessionSystemPrompt,
   };
 }
 
@@ -167,7 +164,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       );
       expect(after.systemPromptForHook).toBe(before.systemPromptForHook);
       expect(after.promptForSession).toBe(before.promptForSession);
-      expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
     }));
   it("carries execution-owned processes in id order without elapsed time or output", () => {
     const fixture = createInput();
@@ -191,7 +187,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       text: expect.stringContaining("Active exec sessions:"),
     });
     expect(active.promptForSession).toBe("Visible request");
-    expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
   });
 
   it("carries changed subagent status without rewriting the system prompt", () => {
@@ -222,7 +217,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(completed.runtimeContextMessageForCurrentTurn?.content).toContain(
       "## Active Subagents\nnone",
     );
-    expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
   });
 
   it("carries changed media progress without rewriting the system prompt", () => {
@@ -248,7 +242,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       'progress_json="Encoding"',
     );
     expect(encoding.runtimeContextMessageForCurrentTurn?.content).not.toContain("Rendering");
-    expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
   });
 
   it("supersedes retained active facts with explicit empty snapshots", () => {
@@ -353,7 +346,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       modelOnlyPromptChars: 0,
     });
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
-    expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
     expect(hoisted.reconcileToolResultPromptProjectionState).toHaveBeenCalledWith(
       messages,
       projectionState,
@@ -475,7 +467,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         "Active exec sessions:\nnone",
       );
       expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Runtime room event");
-      expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
       expect(fixture.report.currentTurn?.kind).toBe("room_event");
       expect(fixture.report.currentTurn?.runtimeContextChars).toBeGreaterThan(0);
     },
@@ -507,7 +498,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(runtimeTurn.runtimeContextMessageForCurrentTurn?.content).toContain(
       "Subagent completed task 42",
     );
-    expect(runtimeEventFixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
   });
 
   it("keeps a pure heartbeat task active while persisting only the poll marker", () => {
