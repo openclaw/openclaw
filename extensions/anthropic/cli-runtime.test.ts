@@ -119,6 +119,84 @@ function resultDetail(records: Record<string, unknown>[]): Record<string, unknow
 }
 
 describe("Claude native stdio boundary", () => {
+  it("relocates an oversized tool allowlist into a settings file reused across turns", async () => {
+    const liveSession = createLiveSession();
+    const toolNames = Array.from(
+      { length: 600 },
+      (_, index) => `heavy-mcp-server__tool_with_a_long_name_${index}`,
+    );
+    const context = await createContext("normal", {
+      liveSession,
+      toolAvailability: { native: ["read", "bash"], openClaw: toolNames },
+    });
+    context.args = [...context.args, "--allowedTools", "mcp__openclaw__*"];
+    const expectedAllow = toolNames.map((name) => `mcp__openclaw__${name}`);
+
+    // Fresh turn: the allowlist travels in a temporary settings file, not inline argv.
+    const first = resultDetail(await collect(context));
+    expect(first.turn).toBe(1);
+    const argv = first.argv as string[];
+    expect(argv).not.toContain("--allowedTools");
+    const settingsPath = argv[argv.indexOf("--settings") + 1];
+    expect(typeof settingsPath).toBe("string");
+    const settings = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      permissions?: { allow?: string[] };
+    };
+    expect(settings.permissions?.allow).toEqual(expectedAllow);
+
+    // Reused turn: the warm session keeps the same process, argv, and settings file.
+    const second = resultDetail(await collect(context));
+    expect(second.turn).toBe(2);
+    expect(second.argv).toEqual(argv);
+
+    // Closing the session releases the temporary settings file.
+    const handle = liveSession.current();
+    expect(handle).toBeDefined();
+    handle!.close("idle");
+    await handle!.waitForExit();
+    await expect(access(settingsPath)).rejects.toThrow();
+  });
+
+  it("merges a relocated allowlist into inline settings the projection already passed", async () => {
+    const liveSession = createLiveSession();
+    const toolNames = Array.from(
+      { length: 600 },
+      (_, index) => `heavy-mcp-server__tool_with_a_long_name_${index}`,
+    );
+    const inlineSettings = JSON.stringify({
+      disableAllHooks: true,
+      enabledPlugins: {},
+      permissions: { deny: ["mcp__*"] },
+    });
+    const context = await createContext("normal", {
+      liveSession,
+      toolAvailability: { native: ["read"], openClaw: toolNames },
+    });
+    context.args = [
+      ...context.args,
+      "--allowedTools",
+      "mcp__openclaw__*",
+      "--settings",
+      inlineSettings,
+    ];
+
+    const first = resultDetail(await collect(context));
+    const argv = first.argv as string[];
+    expect(argv).not.toContain("--allowedTools");
+    expect(argv).not.toContain(inlineSettings);
+    expect(argv.filter((arg) => arg === "--settings")).toHaveLength(1);
+    const settingsPath = argv[argv.indexOf("--settings") + 1];
+    const settings = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      disableAllHooks?: boolean;
+      enabledPlugins?: Record<string, unknown>;
+      permissions?: { allow?: string[]; deny?: string[] };
+    };
+    expect(settings.disableAllHooks).toBe(true);
+    expect(settings.enabledPlugins).toEqual({});
+    expect(settings.permissions?.deny).toEqual(["mcp__*"]);
+    expect(settings.permissions?.allow).toEqual(toolNames.map((name) => `mcp__openclaw__${name}`));
+  });
+
   it.each([
     { scenario: "shutdown-ignore", name: "native parent and child ignore EOF and SIGTERM" },
     { scenario: "shutdown-eof", name: "native parent exits immediately on EOF" },
