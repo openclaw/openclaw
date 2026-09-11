@@ -9,6 +9,14 @@ const { guardedFetch, release } = vi.hoisted(() => ({
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: guardedFetch }));
 
+function requestAt(index: number) {
+  const call = guardedFetch.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected Radius OAuth request ${index}`);
+  }
+  return call[0];
+}
+
 function reply(payload: unknown, status = 200) {
   guardedFetch.mockResolvedValueOnce({
     response: new Response(JSON.stringify(payload), {
@@ -112,17 +120,17 @@ describe("Radius OAuth", () => {
       refresh: "refresh-test",
       expires: Date.now() + 3_540_000,
     });
-    expect(guardedFetch.mock.calls[0][0]).toMatchObject({
+    expect(requestAt(0)).toMatchObject({
       url: "https://radius.pi.dev/v1/oauth/device",
       requireHttps: true,
       policy: { hostnameAllowlist: ["radius.pi.dev"] },
     });
-    expect(Object.fromEntries(guardedFetch.mock.calls[0][0].init.body)).toEqual({
+    expect(Object.fromEntries(requestAt(0).init.body)).toEqual({
       client_id: "pi-gateway",
       scope: "gateway offline_access",
     });
-    expect(guardedFetch.mock.calls[1][0].url).toBe("https://radius.pi.dev/v1/oauth/token");
-    expect(Object.fromEntries(guardedFetch.mock.calls[1][0].init.body)).toEqual({
+    expect(requestAt(1).url).toBe("https://radius.pi.dev/v1/oauth/token");
+    expect(Object.fromEntries(requestAt(1).init.body)).toEqual({
       client_id: "pi-gateway",
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       device_code: "device-secret",
@@ -248,7 +256,7 @@ describe("Radius OAuth", () => {
         refresh: refreshToken ?? "old-refresh",
         expires: Date.now() + 3_540_000,
       });
-      expect(Object.fromEntries(guardedFetch.mock.calls[0][0].init.body)).toEqual({
+      expect(Object.fromEntries(requestAt(0).init.body)).toEqual({
         client_id: "pi-gateway",
         grant_type: "refresh_token",
         refresh_token: "old-refresh",

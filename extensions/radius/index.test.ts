@@ -96,7 +96,11 @@ it("routes a discovered organization model through the registered native transpo
     content: [{ type: "text", text: "Connected" }],
     usage,
   });
-  const [url, request] = streamFetch.mock.calls[0];
+  const call = streamFetch.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected a Radius model request");
+  }
+  const [url, request] = call;
   expect(url).toBe("https://radius.pi.dev/v1/messages");
   expect(JSON.parse(request.body).model).toBe("organization/custom-model");
 });

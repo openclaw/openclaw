@@ -39,10 +39,6 @@ function string(value: unknown): string {
   return value;
 }
 
-function optionalString(value: unknown): string | undefined {
-  return value === undefined ? undefined : string(value);
-}
-
 function number(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     throw new Error("Invalid Radius usage value");
@@ -81,7 +77,9 @@ function createEventConverter(partial: AssistantMessage) {
     const type = string(event.type);
     if (type === "done" || type === "error") {
       partial.usage = usage(event.usage);
-      partial.responseId = optionalString(event.responseId);
+      if (event.responseId !== undefined) {
+        partial.responseId = string(event.responseId);
+      }
       const reason = event.reason;
       if (type === "done" && (reason === "stop" || reason === "length" || reason === "toolUse")) {
         if (toolJson.size > 0) {
@@ -92,7 +90,8 @@ function createEventConverter(partial: AssistantMessage) {
       }
       if (type === "error" && (reason === "error" || reason === "aborted")) {
         partial.stopReason = reason;
-        partial.errorMessage = optionalString(event.errorMessage) ?? "Radius request failed";
+        partial.errorMessage =
+          event.errorMessage === undefined ? "Radius request failed" : string(event.errorMessage);
         return { type, reason, error: partial };
       }
       throw new Error("Invalid Radius terminal reason");
@@ -145,7 +144,9 @@ function createEventConverter(partial: AssistantMessage) {
           break;
         }
         block.text = string(event.content);
-        block.textSignature = optionalString(event.contentSignature);
+        if (event.contentSignature !== undefined) {
+          block.textSignature = string(event.contentSignature);
+        }
         return { type, contentIndex, content: block.text, partial };
       }
       case "thinking_delta": {
@@ -161,7 +162,9 @@ function createEventConverter(partial: AssistantMessage) {
           break;
         }
         block.thinking = string(event.content);
-        block.thinkingSignature = optionalString(event.contentSignature);
+        if (event.contentSignature !== undefined) {
+          block.thinkingSignature = string(event.contentSignature);
+        }
         if (event.redacted !== undefined && typeof event.redacted !== "boolean") {
           throw new Error("Invalid Radius redacted thinking flag");
         }
@@ -189,7 +192,9 @@ function createEventConverter(partial: AssistantMessage) {
           throw new Error("Radius terminal tool call does not match its start");
         }
         block.arguments = parseTerminalToolCallArguments(call.arguments);
-        block.thoughtSignature = optionalString(call.thoughtSignature);
+        if (call.thoughtSignature !== undefined) {
+          block.thoughtSignature = string(call.thoughtSignature);
+        }
         toolJson.delete(contentIndex);
         return { type, contentIndex, toolCall: block, partial };
       }
