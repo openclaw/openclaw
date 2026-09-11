@@ -68,6 +68,7 @@ export async function createRemoteShellSandboxBackend(
 class RemoteShellSandboxBackendImpl {
   private ensurePromise: Promise<void> | null = null;
   private refreshedSkillsForNextExecWorkdir: string | null = null;
+  private readonly pendingExecs = new WeakMap<object, PendingExec>();
 
   constructor(
     private readonly params: {
@@ -127,13 +128,15 @@ class RemoteShellSandboxBackendImpl {
             await prepared.cleanup();
             throw error;
           }
+          const finalizeToken = {};
+          this.pendingExecs.set(finalizeToken, { session, cleanup: prepared.cleanup });
           return {
             argv: prepared.argv,
             env: prepared.env,
             cwd: prepared.cwd,
             stdinMode: "pipe-open",
             assertCurrent: this.params.createParams.assertRuntimeCurrent,
-            finalizeToken: { session, cleanup: prepared.cleanup } satisfies PendingExec,
+            finalizeToken,
           };
         } catch (error) {
           await session.dispose();
@@ -141,13 +144,18 @@ class RemoteShellSandboxBackendImpl {
         }
       },
       finalizeExec: async ({ token }) => {
-        const pending = token as PendingExec | undefined;
-        if (pending) {
-          try {
-            await pending.cleanup();
-          } finally {
-            await pending.session.dispose();
-          }
+        if (!token || typeof token !== "object") {
+          return;
+        }
+        const pending = this.pendingExecs.get(token);
+        if (!pending) {
+          return;
+        }
+        this.pendingExecs.delete(token);
+        try {
+          await pending.cleanup();
+        } finally {
+          await pending.session.dispose();
         }
       },
       runShellCommand: async (command) => await this.runRemoteShellScript(command),

@@ -486,6 +486,35 @@ describe("ssh sandbox backend", () => {
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledOnce();
   });
 
+  it("finalizes only its own prepared exec once and ignores forged or foreign tokens", async () => {
+    const params = createBackendParams(
+      createBackendSandboxConfig({ target: "worker@example.com:22" }),
+    );
+    const workdir = { runtimeId: "owned-finalization", remoteWorkspaceDir: "/remote/workspace" };
+    const owner = await createPreprovisionedSshSandboxBackend(params, workdir);
+    const foreign = await createPreprovisionedSshSandboxBackend(params, workdir);
+    const spec = await owner.buildExecSpec({ command: "true", env: {}, usePty: false });
+    const forgedCleanup = vi.fn(async () => {});
+    const outcome = { status: "completed" as const, exitCode: 0, timedOut: false };
+
+    await foreign.finalizeExec?.({ ...outcome, token: spec.finalizeToken });
+    await owner.finalizeExec?.({
+      ...outcome,
+      token: { cleanup: forgedCleanup, session: { dispose: forgedCleanup } },
+    });
+    expect(forgedCleanup).not.toHaveBeenCalled();
+    expect(sshMocks.spawnCommand).toHaveBeenCalledOnce();
+    expect(sshMocks.disposeSshSandboxSession).not.toHaveBeenCalled();
+
+    await Promise.all([
+      owner.finalizeExec?.({ ...outcome, token: spec.finalizeToken }),
+      owner.finalizeExec?.({ ...outcome, token: spec.finalizeToken }),
+    ]);
+    await owner.finalizeExec?.({ ...outcome, token: spec.finalizeToken });
+    expect(sshMocks.spawnCommand).toHaveBeenCalledTimes(2);
+    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledOnce();
+  });
+
   it("disposes the SSH session when staged exec upload or final cleanup fails", async () => {
     const backend = await createPreprovisionedSshSandboxBackend(
       {

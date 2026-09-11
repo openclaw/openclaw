@@ -1878,7 +1878,6 @@ src/agents/sandbox/container-engine.ts	1
 src/agents/sandbox/podman-runtime.ts	1
 src/agents/sandbox/provisioning-error.ts	1
 src/agents/sandbox/registry.ts	3
-src/agents/sandbox/ssh-backend.ts	1
 src/agents/sandbox/test-args.ts	1
 src/agents/sandbox/tool-policy.ts	2
 src/agents/session-activity-notes.ts	1
