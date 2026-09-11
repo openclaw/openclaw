@@ -1,36 +1,36 @@
 // Bound ACP events must persist a coherent source or target session owner.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
-import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
-import { registerChatAbortController } from "./chat-abort.js";
+import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
+} from "../server-chat-state.js";
 
 const agentEventHandlerMocks = vi.hoisted(() => ({
   create: vi.fn(),
   persistLifecycle: vi.fn(async () => {}),
 }));
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
-vi.mock("../audit/audit-config.js", () => ({
+vi.mock("../../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../../audit/audit-config.js", () => ({
   isAuditLedgerEnabled: () => false,
   isExecutionIdentityCollectionEnabled: () => false,
   resolveAuditMessageMode: () => "off",
 }));
-vi.mock("../audit/audit-recorder.js", () => ({
+vi.mock("../../audit/audit-recorder.js", () => ({
   createAuditEventRecorder: () => ({ stop: vi.fn(async () => {}) }),
 }));
-vi.mock("./server-chat.js", () => ({
+vi.mock("../server-chat.js", () => ({
   createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
 }));
-vi.mock("./session-lifecycle-state.js", () => ({
+vi.mock("../session-lifecycle-state.js", () => ({
   persistGatewaySessionLifecycleEvent: agentEventHandlerMocks.persistLifecycle,
 }));
-const { startGatewayEventSubscriptions } = await import("./server-runtime-subscriptions.js");
+const { startGatewayEventSubscriptions } = await import("../server-runtime-subscriptions.js");
 type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
 const mockLog: SubsystemLogger = {
   subsystem: "gateway-test",
