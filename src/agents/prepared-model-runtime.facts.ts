@@ -26,10 +26,7 @@ import {
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
-import {
-  getPreparedRuntimeAuthProfileStoreSnapshotCore,
-  getRuntimeAuthProfileStoreCredentialsRevision,
-} from "./auth-profiles/runtime-snapshots.js";
+import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
 import {
   createBundledStaticCatalogModelResolver,
@@ -554,7 +551,6 @@ export function preparedModelInventoryKey(input: PreparedModelRuntimeInput): str
     config: { models, auth, env, plugins },
     env: input.env ?? process.env,
     runtimePluginSelections: undefined,
-    credentials: getRuntimeAuthProfileStoreCredentialsRevision(),
     order:
       getPreparedRuntimeAuthProfileStoreSnapshotCore(input.agentDir, input.inheritedAuthDir)
         ?.order ?? {},

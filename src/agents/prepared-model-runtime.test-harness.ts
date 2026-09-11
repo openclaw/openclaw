@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -127,9 +128,9 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
           catalog,
           getPreparedModelFullCatalogAuth(catalog) ?? {
             providerAuthLabels: new Map(),
-            authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
-            authModes: {},
-            credentials: preparedModelRuntimeMocks.authStorage.getAll(),
+            authStore: factoryArgs[0].agentFacts.authStore,
+            authModes: resolveUsableAgentCredentialModes(factoryArgs[0].agentFacts.credentials),
+            credentials: factoryArgs[0].agentFacts.credentials,
           },
         );
         return {
