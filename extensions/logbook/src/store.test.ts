@@ -1,12 +1,22 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LogbookStore, dayKeyFor } from "./store.js";
+import { dayKeyFor } from "./day.js";
+import { LogbookStore } from "./store.js";
 import type { LogbookCardDraft } from "./types.js";
 
+const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
 const DAY = "2026-07-03";
 
 function queryPlanDetails(database: DatabaseSync, sql: string): string[] {
@@ -41,7 +51,7 @@ describe("LogbookStore", () => {
 
   beforeEach(async () => {
     dir = mkdtempSync(path.join(tmpdir(), "logbook-store-"));
-    store = await LogbookStore.open(dir);
+    store = await LogbookStore.open(dir, workerModuleUrl);
   });
 
   afterEach(async () => {
@@ -79,6 +89,32 @@ describe("LogbookStore", () => {
     });
     expect(await store.countUnbatchedActiveFrames()).toBe(0);
     expect(await store.batchFrames(batchId)).toHaveLength(2);
+  });
+
+  it("refuses a hardlinked database with another frame root before bootstrapping that root", async () => {
+    const capturedAtMs = Date.now();
+    const frameId = await insertFrame(capturedAtMs);
+    const otherRoot = path.join(dir, "another-root");
+    mkdirSync(otherRoot);
+    linkSync(path.join(dir, "logbook.sqlite"), path.join(otherRoot, "logbook.sqlite"));
+    const [result] = await Promise.allSettled([LogbookStore.open(otherRoot, workerModuleUrl)]);
+    try {
+      expect(existsSync(path.join(otherRoot, "frames"))).toBe(false);
+      expect(result).toMatchObject({
+        status: "rejected",
+        reason: { message: "SQLite database already belongs to another worker backend" },
+      });
+      expect(await store.frameById(frameId)).toMatchObject({
+        id: frameId,
+        capturedAtMs,
+        path: store.frameFilePath(dayKeyFor(capturedAtMs), capturedAtMs),
+      });
+      expect(await store.countUnbatchedActiveFrames()).toBe(1);
+    } finally {
+      if (result.status === "fulfilled") {
+        await result.value.close();
+      }
+    }
   });
 
   it("creates every owned table as STRICT with foreign keys enabled", () => {
@@ -182,7 +218,7 @@ describe("LogbookStore", () => {
     expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     database.close();
 
-    store = await LogbookStore.open(dir);
+    store = await LogbookStore.open(dir, workerModuleUrl);
 
     const reopened = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -511,7 +547,7 @@ describe("LogbookStore", () => {
     `);
     legacy.close();
 
-    store = await LogbookStore.open(dir);
+    store = await LogbookStore.open(dir, workerModuleUrl);
 
     expect((await store.batchFrames(7)).map((frame) => frame.id)).toEqual([11]);
     const migrated = new DatabaseSync(databasePath, { readOnly: true });
@@ -536,6 +572,28 @@ describe("LogbookStore", () => {
     }
   });
 
+  it("refuses a newer schema without changing its stored data", async () => {
+    await store.saveStandup(DAY, "Preserved future-version fixture");
+    await store.close();
+    const databasePath = path.join(dir, "logbook.sqlite");
+    const future = new DatabaseSync(databasePath);
+    future.exec("PRAGMA user_version = 2");
+    future.close();
+
+    await expect(LogbookStore.open(dir, workerModuleUrl)).rejects.toThrow(
+      "Logbook database uses newer schema version 2; this build supports 1",
+    );
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(preserved.prepare("SELECT day, text FROM standups").all()).toEqual([
+        { day: DAY, text: "Preserved future-version fixture" },
+      ]);
+    } finally {
+      preserved.close();
+    }
+  });
+
   it("rolls back a legacy STRICT migration when stored data has the wrong type", async () => {
     const legacyDir = path.join(dir, "invalid-legacy");
     mkdirSync(legacyDir);
@@ -547,7 +605,7 @@ describe("LogbookStore", () => {
     `);
     legacy.close();
 
-    await expect(LogbookStore.open(legacyDir)).rejects.toThrow(
+    await expect(LogbookStore.open(legacyDir, workerModuleUrl)).rejects.toThrow(
       "Failed migrating SQLite table standups to STRICT",
     );
 
