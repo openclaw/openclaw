@@ -283,15 +283,15 @@ final class ChatModelSignInModel {
 }
 
 @MainActor
-public struct OpenClawChatModelSignInSheet: View {
+struct OpenClawChatModelSignInSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model: ChatModelSignInModel
 
-    public init(context: OpenClawChatModelSignInContext, onAuthChanged: @escaping @MainActor () async -> Void) {
+    init(context: OpenClawChatModelSignInContext, onAuthChanged: @escaping @MainActor () async -> Void) {
         self._model = State(initialValue: ChatModelSignInModel(context: context, onAuthChanged: onAuthChanged))
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Model sign-in").font(OpenClawChatTypography.heading(level: 2))
             ScrollView {
