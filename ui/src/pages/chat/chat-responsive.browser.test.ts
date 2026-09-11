@@ -276,8 +276,11 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
+    "ui/src/styles/rail-header.css",
+    "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/layout.css",
     "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer-surface.css",
     "ui/src/styles/chat/composer.css",
     "ui/src/styles/chat/composer-queue.css",
     "ui/src/styles/chat/progress-card.css",
@@ -288,6 +291,7 @@ function readUiCss(): string {
     "ui/src/styles/chat/working-indicator.css",
     "ui/src/styles/chat/question-card.css",
     "ui/src/styles/chat/sidebar.css",
+    "ui/src/styles/chat/session-rail.css",
     "ui/src/styles/chat/side-panel.css",
   ];
   cachedUiCss = files.map((file) => readStyleSheet(file)).join("\n");

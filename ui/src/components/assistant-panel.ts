@@ -1,3 +1,4 @@
+import "../styles/rail-header.css";
 import { consume } from "@lit/context";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
@@ -11,7 +12,6 @@ import {
   isOptionalElementDefined,
 } from "../app/lazy-custom-element.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
-import { CHAT_ROUTE_READY_EVENT } from "../app/route-transition.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
@@ -26,7 +26,10 @@ import {
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
+import {
+  CHAT_ROUTE_READY_EVENT,
+  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+} from "../pages/chat/chat-history-events.ts";
 import { buildHomeWorkContext, subscribeChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import {

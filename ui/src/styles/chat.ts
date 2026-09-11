@@ -1,3 +1,5 @@
+import "./rail-header.css";
+import "./chat/startup-layout.css";
 // Keep shared sheets as module imports: CSS @import would inline a second copy
 // into Chat after New Session has already loaded the passive transcript styles.
 import "./chat/layout.css";

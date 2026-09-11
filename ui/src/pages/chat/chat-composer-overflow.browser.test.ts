@@ -8,6 +8,7 @@ import { renderChatGoal } from "./components/chat-composer-goal.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
 import baseStyles from "../../styles/base.css?inline";
 import goalStyles from "../../styles/chat/composer-progress.css?inline";
+import composerSurfaceStyles from "../../styles/chat/composer-surface.css?inline";
 import composerStyles from "../../styles/chat/composer.css?inline";
 
 const attachments = Array.from({ length: 7 }, (_, index) => ({
@@ -27,7 +28,7 @@ describe("composer overflow presentation", () => {
   beforeEach(async () => {
     await page.viewport(1200, 800);
     styles = document.createElement("style");
-    styles.textContent = [baseStyles, composerStyles, goalStyles].join("\n");
+    styles.textContent = [baseStyles, composerStyles, composerSurfaceStyles, goalStyles].join("\n");
     document.head.append(styles);
     container = document.createElement("div");
     container.className = "agent-chat__input";

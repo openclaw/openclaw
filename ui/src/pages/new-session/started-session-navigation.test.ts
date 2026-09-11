@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
 import { consumeSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 
 afterEach(() => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CHAT_ROUTE_READY_EVENT, navigateWithRouteTransition } from "./route-transition.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../pages/chat/chat-history-events.ts";
+import { navigateWithRouteTransition } from "./route-transition.ts";
 
 function testDocumentWithOutlet(animate = vi.fn()) {
   const outlet = document.createElement("openclaw-router-outlet") as HTMLElement & {

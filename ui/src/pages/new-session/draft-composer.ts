@@ -1,3 +1,4 @@
+import "../../styles/chat/startup-layout.css";
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";

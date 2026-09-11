@@ -1,0 +1,768 @@
+@media (min-width: 1121px) {
+  .content--chat:has(.chat-workbench) {
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  :root {
+    /* Shell-owned toasts clear the mobile task header. Content regions below
+       that in-flow header do not reserve its height a second time. */
+    --chat-mobile-pane-header-height: 52px;
+  }
+
+  .sidebar-region [data-region] {
+    --chat-mobile-pane-header-height: 0px;
+  }
+
+  .sidebar-region__header > .chat-pane__header {
+    position: relative;
+    z-index: 3;
+    isolation: isolate;
+    min-height: var(--chat-mobile-pane-header-height);
+    padding-inline: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px))
+      max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px));
+    overflow: visible;
+  }
+  .chat-main__conversation {
+    --chat-composer-top-margin: 6px;
+  }
+}
+
+.chat {
+  --chat-thread-max-width: 48rem;
+  /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
+  --chat-thread-gutter: 18px;
+  /* Composer box insets. The docked progress card derives its own edge from
+     both, so the two never overlap and their bottoms stay on one line. */
+  --chat-composer-side-inset: 36px;
+  --chat-composer-bottom-gap: 14px;
+  /* Docked progress-card width. Kept in step with PROGRESS_CARD_DOCK_MIN_GUTTER_PX
+     in chat-pane-rails.ts, which gates the placement on a gutter wide enough for
+     this card plus the gutter stack's insets. */
+  --chat-progress-dock-width: 250px;
+  --chat-thread-side-inset: clamp(6px, 1vw, 12px);
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  /* Allow flex shrinking */
+  padding: 0 !important;
+  overflow: hidden;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Chat thread - scrollable middle section, transparent */
+.chat-thread {
+  --chat-thread-padding-top: clamp(20px, 3vh, 28px);
+  --chat-thread-padding-bottom: calc(
+    6px + var(--chat-transcript-composer-underlap, 0px) + var(--chat-transcript-fade-height, 0px)
+  );
+
+  container: chat-transcript / size;
+  flex: 1 1 0;
+  /* Grow, shrink, and use 0 base for proper scrolling */
+  overflow-y: auto;
+  overflow-x: hidden;
+  overflow-anchor: none;
+  /* The transcript is document content, unlike the surrounding app chrome. */
+  user-select: text;
+  scrollbar-gutter: stable both-edges;
+  /* The pane header owns the titlebar and native drag surface. No horizontal
+     padding: macOS overlay scrollbars render inside the
+     scroll container's padding, which floats the thumb away from the pane
+     edge (visible next to the sidebar divider). The side inset lives on
+     .chat-thread-inner instead so the scrollbar hugs the edge. */
+  padding: var(--chat-thread-padding-top) 0 var(--chat-thread-padding-bottom);
+  margin: 0 0 0 0;
+  min-height: 0;
+  /* Allow shrinking for flex scroll behavior */
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+
+/* Keep the route's initial skeleton in the full transcript region as the real composer mounts. */
+.chat-thread:has(> .lazy-view-state--loading) {
+  display: flex;
+  padding: 0;
+}
+
+/* Extend only the scroll viewport behind the composer's own surface. The
+   bottom padding keeps resting content above the fade; the following
+   zero-height anchor keeps its original layout position. */
+.chat-main__conversation > .chat-thread {
+  margin-bottom: calc(
+    0px - var(--chat-composer-top-margin) - var(--chat-transcript-composer-underlap)
+  );
+}
+
+.chat-main__conversation {
+  --chat-composer-top-margin: 8px;
+  --chat-transcript-composer-underlap: 30px;
+  --chat-transcript-fade-height: 24px;
+  --chat-transcript-fade-stack-overlap: calc(20px * var(--openclaw-corner-radius-scale));
+
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-text {
+  font-family: var(--font-chat);
+  font-size: var(--chat-text-size);
+  line-height: 1.5;
+  color: var(--chat-text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  /* Serif chat faces need macOS stem darkening to stay crisp at chat size:
+     the app-wide `antialiased` (base.css body) thins their hairlines into
+     gray smear. applyChatFontSmoothing (app/typography.ts) sets `auto` when
+     the resolved chat typeface is a serif; unset falls back to the inherited
+     app-wide smoothing. */
+  -webkit-font-smoothing: var(--chat-font-smoothing, inherit);
+  -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
+}
+
+/* Chat Group Layout - default (assistant/other on left). Groups without a
+   footer keep the shared turn gap directly. Footer-bearing groups split
+   message content and footer into separate rows so each row keeps the avatar
+   gutter while only the message row controls avatar alignment. */
+.chat-group {
+  --chat-avatar-column: 36px;
+  --chat-avatar-gap: 10px;
+  --chat-avatar-gutter: calc(var(--chat-avatar-column) + var(--chat-avatar-gap));
+  --chat-footer-row-offset: 26px;
+  --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
+  --chat-run-block-gap: 12px;
+  --chat-touch-row-margin: 14px;
+  --chat-turn-gap: 50px;
+  display: flex;
+  gap: var(--chat-avatar-gap);
+  align-items: flex-start;
+  padding-bottom: var(--chat-turn-gap);
+  margin-inline: 4px 16px;
+}
+
+/* User messages on right */
+.chat-group.user {
+  --chat-user-content-align: end;
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+}
+
+.chat-group-messages {
+  --chat-message-type-boundary-gap: var(--space-1);
+  position: relative; /* anchors message-local popovers */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  width: 100%;
+  max-width: var(--chat-message-column-max);
+  min-width: 0;
+}
+
+/* Content follows the same side as the participant's bubble. */
+.chat-group.user .chat-group-messages {
+  align-items: var(--chat-user-content-align);
+}
+
+/* Avatar Styles. Identity avatars are circles everywhere (sidebar, pickers,
+   profile, native apps); square tiles expose opaque avatar corners. */
+.chat-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: var(--panel-strong);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 13px;
+  flex-shrink: 0;
+  align-self: flex-end;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+}
+
+/* Minimal Bubble Design - dynamic width based on content */
+.chat-bubble {
+  position: relative;
+  display: block;
+  border: 1px solid transparent;
+  background: var(--card);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  box-shadow: none;
+  transition: border-color var(--duration-fast) ease-out;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+/* Assistant replies render as a flat text stream; user and forwarded messages
+   keep bubble cards. Border collapses to 0 so the streaming border pulse and hover
+   outline become no-ops without extra rules. */
+.chat-group.assistant {
+  --chat-message-column-max: var(
+    --chat-message-max-width,
+    min(980px, calc(100% - var(--chat-avatar-gutter)))
+  );
+}
+
+.chat-group.assistant .chat-bubble {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Direct (1:1) threads drop avatars entirely: one agent plus one user makes
+   the repeated identity icons pure decoration. Group threads (any labeled
+   foreign sender) keep avatars as the always-visible identity marker. */
+.chat-thread--direct :is(.chat-avatar, .chat-avatar-slot) {
+  display: none;
+}
+
+.chat-thread--direct .chat-group {
+  --chat-avatar-column: 0px;
+  --chat-avatar-gap: 0px;
+  margin-inline: 0;
+}
+
+@media (hover: none),
+  (max-width: 768px),
+  (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-group {
+    padding-bottom: calc(var(--chat-turn-gap) - var(--chat-touch-row-margin));
+    margin-bottom: var(--chat-touch-row-margin);
+  }
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-group {
+    --chat-avatar-column: 0px;
+    --chat-avatar-gap: 0px;
+    --chat-message-column-max: 82%;
+    margin-inline: 0;
+  }
+
+  .chat-group :is(.chat-avatar, .chat-avatar-slot) {
+    display: none;
+  }
+}
+
+@media (max-width: 400px) {
+  .chat-group {
+    --chat-message-column-max: 88%;
+  }
+}
+
+.chat-pane__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  container-type: inline-size;
+  /* 48px centers the 28px actions on the app's shared 24px chrome
+     centerline (sidebar brand row, floating toggles), so split headers
+     line up with the sidebar across the top of the shell. */
+  min-height: 48px;
+  padding: 0 6px 0 12px;
+  background: var(--chat-surface);
+  /* Chrome row, not content: a selectable title would fight the native
+     window drag the macOS app starts from this row. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chat-pane__header-leading,
+.chat-pane__header-center,
+.chat-pane__header-trailing {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.chat-pane__header-leading,
+.chat-pane__header-trailing {
+  gap: 8px;
+}
+
+.chat-pane__header-center {
+  position: relative;
+  justify-self: center;
+}
+
+.chat-pane__header-trailing {
+  margin-left: auto;
+  justify-self: end;
+}
+
+/* Identity trail: project, then session. One flex row owns the alignment of
+   every segment, so the 26px project chip and the 12px text segments centre on
+   a single line and a future parent-session segment inherits it for free. */
+.chat-pane__crumbs {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  /* Inter's visible glyph mass sits slightly below the 28px action glyphs even
+     when their CSS boxes share a center. Lift the whole trail as one optical
+     unit so project icon, labels, and separator meet the chrome centerline. */
+  transform: translateY(-1px);
+  /* Both interactive segments pull their 5px hover padding back out of flow, so
+     this gap is the separator's actual optical air on each side. */
+  gap: 6px;
+}
+
+/* House separator treatment: an aria-hidden glyph tinted with --muted, spacing
+   from the row gap, no size or color of its own beyond matching the title. */
+.chat-pane__crumb-sep {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* The title hugs its text so the segments after it stay adjacent (the trail's
+   shared 8px gap provides the spacing); it may shrink with ellipsis
+   when space runs out, and the action row pushes itself to the right edge. */
+.chat-pane__session-title {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+}
+
+/* A breadcrumb segment, not a badge: flat and inline, sharing the title's type
+   size so the two read as one trail and the hierarchy comes from colour alone —
+   the project is --muted, the session --text. Hover and focus reuse the sibling
+   title button's tint, which keeps a visible focus indicator without a border. */
+.chat-pane__workspace-chip {
+  display: inline-flex;
+  max-width: 180px;
+  align-items: center;
+  gap: 6px;
+  /* Hover padding drawn outside the text box, matching the title button, so the
+     icon starts flush at the row and the separator keeps equal air on both
+     sides instead of inheriting only the title's pull-back. */
+  padding: 3px 5px;
+  margin-inline: -5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__workspace-chip .workspace-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.chat-pane__workspace-chip span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .sidebar-region__header > .chat-pane__header .chat-pane__crumbs {
+    flex: 1 1 auto;
+    flex-direction: column;
+    align-self: center;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 0;
+    transform: none;
+  }
+
+  .sidebar-region__header > .chat-pane__header .chat-pane__project-row,
+  .sidebar-region__header > .chat-pane__header .chat-pane__session-trail {
+    display: flex;
+    min-width: 0;
+    max-width: 100%;
+    align-items: center;
+  }
+
+  .sidebar-region__header > .chat-pane__header .chat-pane__session-trail {
+    gap: 6px;
+  }
+
+  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip,
+  .sidebar-region__header > .chat-pane__header .chat-pane__session-title,
+  .sidebar-region__header > .chat-pane__header .chat-pane__parent-session {
+    line-height: 18px;
+  }
+
+  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip > svg {
+    transform: translateY(1px);
+  }
+
+  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip--fallback-icon > svg,
+  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip .workspace-icon-fallback {
+    display: none;
+  }
+
+  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip,
+  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip:hover,
+  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip:focus-visible {
+    color: var(--muted);
+  }
+
+  .sidebar-region__header > .chat-pane__header .chat-pane__session-title {
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip,
+  .sidebar-region__header > .chat-pane__header .chat-pane__session-title-button,
+  .sidebar-region__header > .chat-pane__header .chat-pane__parent-session {
+    padding-block: 0;
+  }
+
+  .sidebar-region__header > .chat-pane__header .chat-pane__crumb-sep {
+    display: none;
+  }
+
+  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip span {
+    display: block;
+  }
+}
+
+@container (max-width: 480px) {
+  .chat-pane__workspace-chip {
+    max-width: none;
+  }
+
+  .chat-pane__workspace-chip span {
+    display: none;
+  }
+
+  /* The project name is gone at this width, so the separator would trail an
+     icon-only pill and read as punctuation with nothing on its left. */
+  .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
+    display: none;
+  }
+}
+
+@media (display-mode: standalone) and (max-width: 768px),
+  (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .sidebar-region__header > .chat-pane__header {
+    padding-inline: var(--chat-mobile-edge-inset, 4px);
+  }
+}
+
+/* Native macOS desktop shells: the pane header is the window's top surface,
+   so it adopts the app titlebar height (52px injected by
+   DashboardWindowController; the 50px fallback mirrors
+   .macos-titlebar-controls for older app builds). The web 48px default would
+   center the session title/actions 2px above the traffic-light/hosted-button
+   centerline. Drawer layouts instead fold titlebar clearance into their 58px
+   topbar row (layout.mobile.css). */
+html.openclaw-native-macos .shell:not(.shell--mobile-nav) .chat-pane__header {
+  min-height: var(--openclaw-native-titlebar-height, 50px);
+}
+
+openclaw-chat-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-split-view__drop-container {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view {
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chat-split-view__column {
+  display: flex;
+  flex-direction: column;
+  min-width: min(320px, 100%);
+  min-height: 0;
+}
+
+/* One cell = pane header + pane; the header lives in-flow with its pane, so
+   split geometry needs no mirrored toolbar layer. */
+.chat-split-view__cell {
+  --chat-surface: var(--bg-content, var(--bg));
+
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 200px;
+  overflow: hidden;
+}
+
+.chat-split-view__pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view--narrow .chat-split-view__cell {
+  min-height: 0;
+}
+
+.chat-split-view--narrow .chat-split-view__cell--narrow-hidden,
+.chat-split-view--narrow .chat-split-view__column--narrow-hidden,
+.chat-split-view--narrow resizable-divider {
+  display: none;
+}
+
+openclaw-chat-sidebar-region,
+.sidebar-region__right-runtime {
+  display: contents;
+}
+
+.sidebar-region {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "main-header" "main";
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-region__header {
+  grid-area: main-header;
+  min-width: 0;
+}
+
+.sidebar-region__primary {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-region--open:not(.sidebar-region--expanded) {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, var(--side-panel-width));
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "main-header divider side-header" "main divider side";
+}
+
+.sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded) {
+  grid-template-columns: minmax(0, var(--side-panel-width)) auto minmax(0, 1fr);
+  grid-template-areas: "side-header divider main-header" "side divider main";
+}
+
+.sidebar-region--bottom.sidebar-region--open:not(.sidebar-region--expanded),
+.sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
+  /* Fit saved heights to short task panes without consuming the main content row. */
+  --side-panel-max-height: calc(
+    (100% - 2 * var(--rail-header-height) - var(--resize-handle-size, 6px)) * 0.6
+  );
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(
+      0,
+      min(var(--side-panel-height), var(--side-panel-max-height))
+    );
+  grid-template-areas: "main-header" "main" "divider" "side-header" "side";
+}
+
+.sidebar-region [data-region="main"] {
+  grid-area: main;
+}
+
+.sidebar-region [data-region="side"] {
+  grid-area: side;
+}
+
+.sidebar-region [data-region-header="side"] {
+  grid-area: side-header;
+  height: auto;
+}
+
+.sidebar-region__primary[hidden],
+.sidebar-region:not(.sidebar-region--open) [data-region-header="side"],
+.sidebar-region--expanded:not(.sidebar-region--expanded-side) [data-region-header="side"],
+.sidebar-region--expanded-side .sidebar-region__header {
+  display: none;
+}
+
+/* Focus the side in place; its header (including restore/close) stays reachable. */
+.sidebar-region--expanded-side {
+  grid-template-areas: "side-header" "side";
+}
+
+.sidebar-region--bottom .sidebar-column__divider {
+  --resize-handle-line-block: 100%;
+  width: 100%;
+}
+
+.sidebar-column__divider {
+  --resize-handle-line-inline: 100%;
+  z-index: 2;
+  grid-area: divider;
+}
+
+.sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
+  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(0, 1fr);
+}
+
+.chat-pane-primary-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Keep live panel roots in one DOM owner. Grid placement changes their role
+   without reconnecting iframe documents, terminals, or browser sessions. */
+.side-panel,
+.side-panel__body {
+  display: contents;
+}
+
+.side-panel__header {
+  --rail-header-action-glyph-size: 15px;
+  margin-bottom: 0;
+  padding-left: 0;
+  border-bottom: 0;
+}
+
+.side-panel__panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.side-panel__empty-body {
+  display: flex;
+  grid-area: side;
+  min-height: 0;
+}
+
+.sidebar-region:not(.sidebar-region--open) .side-panel__empty-body,
+.sidebar-region--expanded .side-panel__empty-body {
+  display: none;
+}
+
+.side-panel__panel[hidden] {
+  display: none;
+}
+
+/* Shell layout owns the dynamic physical-left safe edge. Native hosts replace
+   the web-control calculation with their actual window chrome. */
+.shell {
+  --shell-attention-width: 0px;
+  --shell-titlebar-inset: calc(var(--shell-chrome-safe-area-left) + var(--shell-attention-width));
+}
+
+html.openclaw-native-macos .shell:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: 12px;
+}
+
+html.openclaw-native-macos .shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: 90px;
+}
+
+html.openclaw-native-nav .shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: 204px;
+}
+
+html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: calc(
+    var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
+      var(--shell-chrome-controls-gap) + var(--shell-attention-width)
+  );
+}
+
+/* Only the physical top-left header needs window-control clearance. A left
+   dock puts the side tabs there; mobile has a separate topbar row. */
+.shell:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .sidebar-region:not(
+    .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+        .sidebar-region--narrow
+      )
+  )
+  > .sidebar-region__header
+  > .chat-pane__header,
+.shell:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+    .sidebar-region--narrow
+  )
+  [data-region-header="side"] {
+  padding-left: var(--shell-titlebar-inset);
+}
+
+/* Native macOS: with the nav column collapsed the top-left pane header is the
+   window's top surface, so its content shifts right of the floating window
+   chrome (Safari-style) instead of hiding under it. Traffic lights end at
+   x=78; newer apps (openclaw-native-nav) also float the titlebar accessory
+   (sidebar toggle + back/forward, DashboardWindowController) ending ~x=194.
+   Drawer layouts reserve a 58px topbar row instead (layout.mobile.css). The
+   first column's min-width grows by the extra inset above the 12px base
+   padding: the header's action row cannot
+   shrink, and the cell's overflow:hidden would clip the close/split buttons
+   at the 320px column minimum otherwise. */
+html.openclaw-native-macos
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child {
+  min-width: calc(308px + var(--shell-titlebar-inset));
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat {
+    --chat-thread-gutter: var(--chat-mobile-edge-inset);
+    --chat-thread-side-inset: 0px;
+    --chat-mobile-edge-inset: 4px;
+  }
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-thread {
+    scrollbar-gutter: auto;
+    scrollbar-width: none;
+  }
+}

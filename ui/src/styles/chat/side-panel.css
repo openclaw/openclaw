@@ -1,17 +1,3 @@
-/* Keep live panel roots in one DOM owner. Grid placement changes their role
-   without reconnecting iframe documents, terminals, or browser sessions. */
-.side-panel,
-.side-panel__body {
-  display: contents;
-}
-
-.side-panel__header {
-  --rail-header-action-glyph-size: 15px;
-  margin-bottom: 0;
-  padding-left: 0;
-  border-bottom: 0;
-}
-
 /* Width model: the tabs region takes the free space, but the strip itself sizes
    to its tabs and is the only thing that clips. The new-tab control sits outside
    that clip, so it hugs the last tab when everything fits and stays pinned at
@@ -319,30 +305,6 @@
 .side-panel__action-group + .side-panel__action-group--close {
   padding-left: 5px;
   border-left: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
-}
-
-.side-panel__panel {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 0;
-  overflow: hidden;
-  background: var(--bg);
-}
-
-.side-panel__empty-body {
-  display: flex;
-  grid-area: side;
-  min-height: 0;
-}
-
-.sidebar-region:not(.sidebar-region--open) .side-panel__empty-body,
-.sidebar-region--expanded .side-panel__empty-body {
-  display: none;
-}
-
-.side-panel__panel[hidden] {
-  display: none;
 }
 
 .side-panel__panel

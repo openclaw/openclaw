@@ -9,9 +9,12 @@ import { createLobsterPetLook, renderLobsterSvg } from "../../../components/lobs
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/modal-dialog.ts";
 import { i18n, t } from "../../../i18n/index.ts";
-import { formatUiError } from "../../../lib/format-error.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import "../../../styles/dreams.css";
+import { formatUiError } from "../../../lib/format-error.ts";
 import type { DreamingEntry, WikiImportInsights, WikiOverview } from "./dreaming.ts";
+
+registerDreamingEnglish();
 
 // ── Diary entry parser ─────────────────────────────────────────────────
 

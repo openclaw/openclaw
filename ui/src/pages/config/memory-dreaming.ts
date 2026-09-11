@@ -13,6 +13,9 @@ import {
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDreamingEnglish } from "../../i18n/locales/en-dreaming.ts";
+
+registerDreamingEnglish();
 
 /** Manifest bounds for a numeric field; `count` is `{integer, minimum}`, `ratio` is `0..1`. */
 type DreamingNumberBounds = { integer: boolean; min: number; max?: number };
