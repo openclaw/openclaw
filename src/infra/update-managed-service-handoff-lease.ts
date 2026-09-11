@@ -8,11 +8,7 @@ import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { isPidDefinitelyDead, getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { hasErrnoCode } from "./errno.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import type { SqliteTransactionOptions } from "./sqlite-transaction.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { canCleanupLegacyManagedHandoff } from "./update-managed-service-handoff-cleanup.js";
@@ -33,6 +29,7 @@ import {
   type ManagedHandoffLeaseAction,
   type ManagedHandoffLeasePayload,
 } from "./update-managed-service-handoff-schema.js";
+import { hasManagedHandoffSchemaObject } from "./update-managed-service-handoff-source-inspection.js";
 
 const text = z.string().min(1).max(4096);
 export const triageFailureSchema = z.strictObject({
@@ -632,18 +629,8 @@ export function createManagedHandoffLeaseStore(
       throw error;
     }
     return withDatabase(false, (db) => {
-      // Only ordinary inspection may accept an uninitialized store. Check all
-      // schema objects with SQLite's name matching so wrong shapes still refuse.
-      if (
-        !options.existingIdentity &&
-        !executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<{ sqlite_schema: { name: string } }>(db)
-            .selectFrom("sqlite_schema")
-            .select("name")
-            .where((eb) => eb(eb.fn<string>("lower", ["name"]), "=", "managed_update_handoffs")),
-        )
-      ) {
+      // Only ordinary inspection may accept an uninitialized store.
+      if (!options.existingIdentity && !hasManagedHandoffSchemaObject(db)) {
         return [];
       }
       return executeSqliteQuerySync(
