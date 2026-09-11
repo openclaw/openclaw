@@ -93,7 +93,7 @@ export function createCommandBot(params: CreateCommandBotParams = {}): CreateCom
 export function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<RegisterTelegramNativeCommandsParams> = {},
-): RegisterTelegramNativeCommandsParams {
+): RegisterTelegramNativeCommandsParams & { telegramDeps: TelegramNativeCommandDeps } {
   const telegramDeps: TelegramNativeCommandDeps = {
     getRuntimeConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["getRuntimeConfig"],
     readChannelAllowFromStore: vi.fn(
@@ -119,13 +119,15 @@ export function createNativeCommandTestParams(
     editMessageTelegram,
     sendMessageTelegram: vi.fn(async () => ({ messageId: "999", chatId: "100" })),
   };
-  return createBaseNativeCommandTestParams({
-    cfg,
-    runtime: params.runtime ?? ({} as RuntimeEnv),
-    nativeSkillsEnabled: true,
-    telegramDeps,
-    ...params,
-  });
+  return {
+    ...createBaseNativeCommandTestParams({
+      cfg,
+      runtime: params.runtime ?? ({} as RuntimeEnv),
+      nativeSkillsEnabled: true,
+      ...params,
+    }),
+    telegramDeps: params.telegramDeps ?? telegramDeps,
+  };
 }
 
 export function createPrivateCommandContext(

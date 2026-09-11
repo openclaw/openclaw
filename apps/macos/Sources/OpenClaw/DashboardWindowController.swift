@@ -808,6 +808,7 @@ extension DashboardWindowController {
         // the drawer topbar row (layout.mobile.css); their body-qualified
         // !important selectors also outrank the rules older app builds inject.
         let css = """
+        \(DashboardDeviceSymbolStyle.css())
         html.openclaw-native-macos {
           /* Matches the 52pt unified-toolbar titlebar so the web buttons and the
              traffic lights share one vertical center. */

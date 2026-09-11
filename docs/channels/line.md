@@ -287,6 +287,37 @@ as untrusted.
   alternatives reach the agent as `[emoji]`. Meaningful alternatives such as
   `(hello)` and parentheses typed by the sender are preserved.
 
+## Block streaming
+
+Block streaming sends each completed assistant block as its own LINE message
+instead of waiting for the whole reply. It is off by default, and
+`channels.line.streaming` decides it for LINE alone:
+
+```json5
+{ channels: { line: { streaming: { block: { enabled: true } } } } }
+```
+
+| Setting                          | Effect                                                               |
+| -------------------------------- | -------------------------------------------------------------------- |
+| `streaming.block.enabled: true`  | Send completed blocks as they finish, whatever the agent default is  |
+| `streaming.block.enabled: false` | Keep LINE on whole replies even when the agent default is `on`       |
+| unset (default)                  | Follow `agents.defaults.blockStreamingDefault`                       |
+| `streaming.block.coalesce`       | Merge small blocks before sending (`minChars`, `maxChars`, `idleMs`) |
+| `streaming.chunkMode`            | `length` (default) or `newline` to split on paragraph boundaries     |
+
+Per-account override: `channels.line.accounts.<id>.streaming`. These are the
+block-mode streaming controls shared across channels; see
+[Streaming](/concepts/streaming).
+
+Each block LINE receives is a separate message, and LINE counts messages against
+the channel's monthly quota, so leaving this off keeps a long reply to the fewest
+messages. `coalesce.minChars` is the lever if you want blocks to arrive early but
+not one paragraph at a time — OpenClaw's own default is 800 characters.
+
+LINE cannot edit a message it has already sent, so it has no preview streaming
+mode: there is no `streaming.mode` or `streaming.preview` here, and a reply is
+never revised in place.
+
 ## Structured rich messages
 
 Use the shared message presentation fields for portable choices. LINE renders
@@ -414,8 +445,16 @@ link-local, and private-network targets.
 
 - **Webhook verification fails:** ensure the webhook URL is HTTPS and the
   `channelSecret` matches the LINE console.
-- **No inbound events:** confirm the webhook path matches `channels.line.webhookPath`
-  and that the Gateway is reachable from LINE.
+- **No inbound events:** run `openclaw channels status --probe`. LINE only delivers
+  events while the channel's webhook URL is registered and **Use webhook** is on in
+  the Messaging API tab of the LINE Developers Console, and the probe reports both —
+  a channel whose webhook is off or unregistered is named with the setting to change.
+  OpenClaw does not set either for you: the URL has an API but depends on a public
+  address OpenClaw does not know, and the **Use webhook** switch has no API at all.
+  The webhook state comes from the probe, so
+  `openclaw channels status` without `--probe` does not report it. If the probe
+  reports the webhook as on, confirm the webhook path matches
+  `channels.line.webhookPath` and that the Gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
 - **Pushes refused with HTTP 429:** Run

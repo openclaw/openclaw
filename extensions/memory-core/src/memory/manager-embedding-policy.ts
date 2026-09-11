@@ -176,12 +176,14 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   profile: MemoryEmbeddingRetryProfileName;
   items: TInput[];
   run: (items: TInput[]) => Promise<TOutput[]>;
+  onSuccess?: (items: TInput[], outputs: TOutput[]) => void | Promise<void>;
   isSplittable: (message: string) => boolean;
   waitForRetry: (delayMs: number) => Promise<void>;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
+  let outputs: TOutput[];
   try {
-    return await runMemoryEmbeddingRetryLoop({
+    outputs = await runMemoryEmbeddingRetryLoop({
       profile: params.profile,
       run: async () => await params.run(params.items),
       waitForRetry: params.waitForRetry,
@@ -204,6 +206,8 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
     });
     return [...left, ...right];
   }
+  await params.onSuccess?.(params.items, outputs);
+  return outputs;
 }
 
 export function buildTextEmbeddingInputs(chunks: MemoryEmbeddingChunk[]): EmbeddingInput[] {

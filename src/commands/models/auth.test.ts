@@ -182,7 +182,7 @@ vi.mock("../../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
-vi.mock("../onboard-helpers.js", () => ({
+vi.mock("../../infra/browser-open.js", () => ({
   openUrl: mocks.openUrl,
 }));
 
@@ -1773,6 +1773,8 @@ describe("modelsAuthLoginCommand", () => {
         key: "sk-openai-chatgpt-api-key-value",
       },
       agentDir: "/tmp/openclaw/agents/coder",
+      preserveApiKeyMetadata: true,
+      validateCurrentCredential: expect.any(Function),
     });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
       provider: "openai",
@@ -1802,6 +1804,8 @@ describe("modelsAuthLoginCommand", () => {
         key: "sk-openai-chatgpt-api-key-value",
       },
       agentDir: "/tmp/openclaw/agents/main",
+      preserveApiKeyMetadata: true,
+      validateCurrentCredential: expect.any(Function),
     });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
       provider: "openai",
@@ -1825,6 +1829,8 @@ describe("modelsAuthLoginCommand", () => {
         key: "sk-openai-chat-api-key-value",
       },
       agentDir: "/tmp/openclaw/agents/main",
+      preserveApiKeyMetadata: true,
+      validateCurrentCredential: expect.any(Function),
     });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
       provider: "openai",

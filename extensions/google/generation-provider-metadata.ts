@@ -1,5 +1,5 @@
-// Google provider module implements model/runtime integration.
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import type {
@@ -10,6 +10,12 @@ import type {
 
 export const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image";
 export const GOOGLE_MAX_IMAGE_RESULTS = 4;
+
+export const GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS = {
+  image: "gemini-3-flash-preview",
+  audio: "gemini-3-flash-preview",
+  video: "gemini-3-flash-preview",
+} as const;
 
 export const DEFAULT_GOOGLE_MUSIC_MODEL = "lyria-3-clip-preview";
 export const GOOGLE_PRO_MUSIC_MODEL = "lyria-3-pro-preview";
@@ -67,6 +73,21 @@ export function createGoogleImageGenerationProviderMetadata(): Omit<
         resolutions: ["1K", "2K", "4K"],
       },
     },
+  };
+}
+
+export function createGoogleMediaUnderstandingProviderMetadata(): Omit<
+  MediaUnderstandingProvider,
+  "transcribeAudio" | "describeVideo"
+> {
+  return {
+    id: "google",
+    capabilities: ["image", "audio", "video"],
+    defaultModels: { ...GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS },
+    autoPriority: { image: 30, audio: 40, video: 10 },
+    nativeDocumentInputs: ["pdf"],
+    describeImage: undefined,
+    describeImages: undefined,
   };
 }
 

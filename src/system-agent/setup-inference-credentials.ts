@@ -18,7 +18,6 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
   prepareAuthChoiceLoadedPluginProvider,
-  runProviderPluginAuthMethodUnpersisted,
 } from "../plugins/provider-auth-choice.js";
 import {
   type ProviderAuthChoiceMetadata,
@@ -26,6 +25,7 @@ import {
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
 import { buildApiKeyCredential } from "../plugins/provider-auth-helpers.js";
+import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth-method.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { resolveProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";

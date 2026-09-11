@@ -26,10 +26,10 @@ export function showProfileActionError(error: unknown): void {
   });
 }
 
-export function showProfileLogoutSuccess(): void {
+export function showProfileLogoutSuccess(warning?: string): void {
   showToast({
     placement: "bottom",
-    message: t("modelProviders.logout.done"),
+    message: [t("modelProviders.logout.done"), warning].filter(Boolean).join(" "),
     icon: icons.check,
   });
 }

@@ -23,7 +23,7 @@ struct DashboardCloseShortcutTests {
           event.preventDefault();
         });
         """)
-        try controller.nativeBrowser.open(tabId: "focused", url: #require(URL(string: "about:blank")))
+        try controller.nativeBrowser.open(tabId: "focused", url: #require(URL(string: "about:blank")), sessionKey: "")
         let browser = try #require(controller.nativeBrowser.webView(for: "focused"))
         let rect = DashboardBrowserRect(x: 100, y: 100, width: 300, height: 200)
         try controller.nativeBrowser.present(scope: "older-panel", tabId: "focused", rect: rect, visible: true)

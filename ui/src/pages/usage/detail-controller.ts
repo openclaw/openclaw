@@ -38,6 +38,7 @@ function createUsageDetailRequest<T>(
   ) => Promise<T>,
   resolveTarget: (key: string) => UsageDetailTarget,
   canLoad?: (key: string) => boolean,
+  onClear?: () => void,
 ) {
   let value: { target: UsageDetailTarget; data?: T } | null = null;
   let status = createPanelRefreshStatus();
@@ -86,6 +87,11 @@ function createUsageDetailRequest<T>(
     generation += 1;
     task.cancel();
   };
+  const reset = (target?: UsageDetailTarget) => {
+    value = target ? { target } : null;
+    status = createPanelRefreshStatus();
+    onClear?.();
+  };
   return {
     get data() {
       return value?.data ?? null;
@@ -119,8 +125,7 @@ function createUsageDetailRequest<T>(
       const target = resolveTarget(sessionKey);
       const sameTarget = sameUsageTarget(value?.target, target);
       if (!sameTarget || !enabled) {
-        value = enabled ? { target } : null;
-        status = createPanelRefreshStatus();
+        reset(enabled ? target : undefined);
       }
       if (!enabled) {
         cancel();
@@ -136,8 +141,7 @@ function createUsageDetailRequest<T>(
     },
     cancel,
     clear() {
-      value = null;
-      status = createPanelRefreshStatus();
+      reset();
       cancel();
     },
   };
@@ -153,6 +157,7 @@ export class UsageDetailsController {
     gateway: GatewayPageController,
     query: () => SessionUsageQuery,
     sessions: () => UsageSessionEntry[],
+    clearTimeSeriesRange: () => void,
   ) {
     const resolveTarget = (key: string): UsageDetailTarget => {
       const session = sessions().find((entry) => entry.key === key);
@@ -164,6 +169,8 @@ export class UsageDetailsController {
       gateway,
       requestSessionUsageTimeSeries,
       resolveTarget,
+      undefined,
+      clearTimeSeriesRange,
     );
     this.sessionLogs = createUsageDetailRequest(
       host,

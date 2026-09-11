@@ -20,6 +20,10 @@ import {
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
+  sharedRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildEntries,
+} from "./scripts/lib/runtime-process-core-build-entries.mts";
+import {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
 } from "./scripts/lib/state-schema-inline-plugin.mts";
@@ -813,7 +817,7 @@ const configs: UserConfig[] = [
       // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: {
-        ...unifiedDistEntries,
+        ...sharedRuntimeProcessBuildEntries(unifiedDistEntries),
         "native-hook-relay/entry": "src/cli/native-hook-relay-entry.ts",
       },
       deps: unifiedDeps,
@@ -825,6 +829,16 @@ const configs: UserConfig[] = [
         createGatewayRunChunkMetadataPlugin(),
         createRuntimeDependencyOwnershipBuildPlugin(),
       ],
+    },
+    false,
+  ),
+  nodeBuildConfig(
+    {
+      name: TSDOWN_UNIFIED_CONFIG_GROUP,
+      entry: standaloneRuntimeProcessBuildEntries,
+      deps: unifiedDeps,
+      outputOptions: { codeSplitting: false },
+      plugins: [createStateSchemaInlinePlugin()],
     },
     false,
   ),

@@ -20,6 +20,7 @@ import {
   buildSlackMessageDispatchReplayKey,
   claimSlackMessageDispatchReplay,
   createSlackMessageDispatchReplayGuard,
+  SlackMessageDispatchRetryError,
   type SlackMessageDispatchReplayClaim,
   type SlackMessageDispatchReplayGuard,
 } from "./message-dispatch-dedupe.js";
@@ -61,7 +62,9 @@ const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization con
 
 function isRetryableSlackInboundError(error: unknown): boolean {
   return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
-    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+    (candidate) =>
+      candidate instanceof SlackMessageDispatchRetryError ||
+      REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
   );
 }
 
@@ -120,6 +123,7 @@ export function createSlackMessageHandler(params: {
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;
     debounceMs: number;
+    retry?: { attempt: number; runtimeContext: SlackMonitorContext };
   }>({
     cfg: ctx.cfg,
     channel: "slack",
@@ -128,7 +132,7 @@ export function createSlackMessageHandler(params: {
     buildKey: (entry) =>
       buildSlackDebounceKey(entry.message, ctx.accountId, entry.opts.eventScope?.teamId),
     shouldDebounce: (entry) =>
-      !entry.opts.eventScope && shouldDebounceSlackMessage(entry.message, ctx.cfg),
+      !entry.retry && !entry.opts.eventScope && shouldDebounceSlackMessage(entry.message, ctx.cfg),
     onFlush: (entries, createFlush) =>
       createFlush({
         lifecycle: {
@@ -143,8 +147,9 @@ export function createSlackMessageHandler(params: {
           const completions = entries
             .map((entry) => entry.opts.dispatchCompletion)
             .filter((completion) => completion !== undefined);
-          const runtimeContext = resolveRuntimeContext();
-          for (let retryAttempt = 0; ; retryAttempt += 1) {
+          const retry = entries.find((entry) => entry.retry)?.retry;
+          const runtimeContext = retry?.runtimeContext ?? resolveRuntimeContext();
+          for (let retryAttempt = retry?.attempt ?? 0; ; retryAttempt += 1) {
             try {
               admissionLifecycle.abortSignal.throwIfAborted();
               await (async () => {
@@ -176,6 +181,11 @@ export function createSlackMessageHandler(params: {
                 // them. Same-flush twins share one claim and one logical message while
                 // retaining the latest event's routing and any earlier mention.
                 const claims: SlackMessageDispatchReplayClaim[] = [];
+                const releaseClaims = (error?: unknown) => {
+                  for (const handle of claims) {
+                    handle.release(error === undefined ? {} : { error });
+                  }
+                };
                 const claimedKeys = new Map<string, number>();
                 const surviving: typeof entries = [];
                 let latestSurviving: (typeof entries)[number] | undefined;
@@ -211,6 +221,15 @@ export function createSlackMessageHandler(params: {
                   const claim = await claimSlackMessageDispatchReplay({
                     guard: dispatchReplayGuard,
                     key: replayKey,
+                    onWaiting: () => {
+                      entry.opts.turnAdoptionLifecycle?.onDispatchWaiting?.();
+                      // The logical owner already holds this message's ordering.
+                      // Let later input reach the active turn while its twin waits.
+                      admissionLifecycle.onDeferred();
+                    },
+                  }).catch((error: unknown) => {
+                    releaseClaims(error);
+                    throw error;
                   });
                   if (claim.kind === "claimed") {
                     claims.push(claim.handle);
@@ -219,11 +238,6 @@ export function createSlackMessageHandler(params: {
                     latestSurviving = entry;
                   }
                 }
-                const releaseClaims = (error?: unknown) => {
-                  for (const handle of claims) {
-                    handle.release(error === undefined ? {} : { error });
-                  }
-                };
                 const commitClaims = async () => {
                   for (const handle of claims) {
                     await handle.commit();
@@ -358,6 +372,19 @@ export function createSlackMessageHandler(params: {
                   RETRYABLE_FLUSH_RETRY_DELAY_MS,
                   admissionLifecycle.abortSignal,
                 );
+                if (error instanceof SlackMessageDispatchRetryError) {
+                  // A waiting twin released admission. Re-enter the keyed lane before
+                  // taking over, retaining its config and bounded retry budget.
+                  await Promise.all(
+                    entries.map((entry) =>
+                      debouncer.enqueue({
+                        ...entry,
+                        retry: { attempt: retryAttempt + 1, runtimeContext },
+                      }),
+                    ),
+                  );
+                  return;
+                }
                 continue;
               }
               for (const completion of completions) {

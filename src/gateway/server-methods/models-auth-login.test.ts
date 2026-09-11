@@ -4,6 +4,7 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
 import type { ProviderAuthChoiceMetadata } from "../../plugins/provider-auth-choices.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
+import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import type { GatewayClient } from "./client-types.js";
 import { modelsAuthLoginHandlers } from "./models-auth-login.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
@@ -224,6 +225,74 @@ describe("models.authLogin ownership", () => {
       }),
       undefined,
     );
+  });
+
+  it.each(["https://gateway.example", "http://localhost:18789", undefined])(
+    "binds browser callback eligibility and cancellation to the connected origin (%s)",
+    async (origin) => {
+      const withdraw = prepareTailscalePublishedOrigin({
+        origin: "https://gateway.example",
+        mode: "serve",
+      });
+      const h = harness();
+      h.client.browserOrigin = origin ? { origin } : undefined;
+      const started = createDeferred<ModelsAuthLoginFlowOptions>();
+      hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
+        started.resolve(options);
+        await options.openUrl?.("https://provider.example/authorize");
+        await options.prompter.text({ message: "Paste the redirect URL" });
+        return result;
+      });
+      try {
+        await h.start();
+        const options = await started.promise;
+        expect(typeof options.browserAuthorization).toBe(
+          origin === "https://gateway.example" ? "function" : "undefined",
+        );
+        const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
+        expect((await session.next()).step).toMatchObject({
+          type: "text",
+          message: "Paste the redirect URL",
+          externalUrl: "https://provider.example/authorize",
+        });
+        h.controller.abort();
+        await whenAdmittedWizardSessionSettled(session);
+        expect(options.signal?.aborted).toBe(true);
+        expect(options.beforePersistentEffect).toThrow();
+        expect(session.getStatus()).toBe("error");
+      } finally {
+        h.controller.abort();
+        withdraw();
+      }
+    },
+  );
+
+  it("keeps the hosted browser capability live through credential persistence and closes afterward", async () => {
+    const withdraw = prepareTailscalePublishedOrigin({
+      origin: "https://gateway.example",
+      mode: "serve",
+    });
+    const h = harness();
+    h.client.browserOrigin = { origin: "https://gateway.example" };
+    const received = createDeferred<ModelsAuthLoginFlowOptions>();
+    hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
+      received.resolve(options);
+      await options.beforePersistentEffect?.();
+      expect(options.signal?.aborted).toBe(false);
+      expect(options.assertCurrent).not.toThrow();
+      return result;
+    });
+    try {
+      await h.start();
+      const options = await received.promise;
+      const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
+      await whenAdmittedWizardSessionSettled(session);
+      expect(session.getStatus()).toBe("done");
+      expect(options.signal?.aborted).toBe(true);
+      expect(options.assertCurrent).toThrow("closed");
+    } finally {
+      withdraw();
+    }
   });
 
   it("releases admission on disconnect with a pending note after cancellation locks", async () => {

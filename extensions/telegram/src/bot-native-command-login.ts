@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  cancelProviderLoginFlow,
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
   formatProviderLoginCommand,
@@ -100,6 +101,11 @@ export async function executeTelegramLoginCommand(params: {
     config: dispatch.runtimeCfg,
     agentId: dispatch.route.agentId,
     signal: dispatch.opts.accountAbortSignal,
+    cancelLogin: () =>
+      cancelProviderLoginFlow({
+        flows: activeTelegramProviderLoginFlows,
+        flowKey: buildTelegramProviderLoginFlowKey(dispatch),
+      }),
   });
   if (!prepared) {
     return false;
@@ -172,6 +178,23 @@ export async function executeTelegramLoginCommand(params: {
         signal: flowSignal,
         assertCurrent,
         sendMessage: sendLoginMessage,
+        sendReply: async (reply) => {
+          flowSignal.throwIfAborted();
+          const { deliverReplies } = await dispatch.loadDeliveryRuntime();
+          const result = await deliverReplies({
+            replies: [reply],
+            ...dispatch.buildDeliveryBaseOptions({
+              sessionKeyForInternalHooks: dispatch.targetSessionKey,
+              policySessionKey: dispatch.targetSessionKey,
+            }),
+          });
+          flowSignal.throwIfAborted();
+          if (!result.delivered) {
+            throw new Error("Provider sign-in action could not be delivered.");
+          }
+          signInActionWasDelivered = true;
+          signInActionDelivered.resolve();
+        },
         sendDeviceCode: async (deviceCode) => {
           flowSignal.throwIfAborted();
           await sendLoginDeviceCode(deviceCode);

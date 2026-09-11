@@ -20,33 +20,6 @@ import {
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
 
-const visibleFinalReceipt = {
-  counts: {
-    tool: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    block: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    final: {
-      delivered: 1,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-  },
-  anyVisibleDelivered: true,
-} as const;
-
 function createMessageToolOnlyGroupContext(): TelegramMessageContext {
   return createContext({
     chatId: -1001234,
@@ -71,7 +44,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
   it("uses resolved DM config for auto-topic-label overrides", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: true,
-      settledReceipt: visibleFinalReceipt,
     });
     loadSessionStore.mockReturnValue({ s1: {} });
     const bot = createBot();
@@ -110,7 +82,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     });
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: true,
-      settledReceipt: visibleFinalReceipt,
     });
     const bot = createBot();
     const base = "a".repeat(499);

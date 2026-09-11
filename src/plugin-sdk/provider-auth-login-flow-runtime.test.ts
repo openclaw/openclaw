@@ -3,7 +3,11 @@ import type { ModelsAuthLoginFlowOptions } from "../commands/models/auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildProviderLoginChoicesReply,
+  cancelProviderLoginFlow,
+  createProviderLoginFlowRegistry,
   decideProviderLoginSessionAdoption,
+  prepareProviderChannelLogin,
+  reserveProviderLoginFlow,
   runProviderChannelLoginFlow,
   type ProviderChannelLoginChoice,
 } from "./provider-auth-login-flow-runtime.js";
@@ -39,6 +43,36 @@ describe("provider channel login runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveChoice.mockReturnValue({ status: "resolved", choice });
+  });
+
+  it("authorizes private cancellation and leaves other conversations active", async () => {
+    const flows = createProviderLoginFlowRegistry();
+    const first = reserveProviderLoginFlow({ flows, flowKey: "first" });
+    const other = reserveProviderLoginFlow({ flows, flowKey: "other" });
+    const params = {
+      commandText: "/login cancel",
+      commandAuthorized: true,
+      senderIsOwner: true,
+      isPrivateChat: true,
+      config: { commands: { ownerAllowFrom: ["owner"] } },
+      agentId: "main",
+      cancelLogin: () => cancelProviderLoginFlow({ flows, flowKey: "first" }),
+    };
+    await prepareProviderChannelLogin({ ...params, senderIsOwner: false });
+    await prepareProviderChannelLogin({ ...params, commandAuthorized: false });
+    await prepareProviderChannelLogin({ ...params, isPrivateChat: false });
+    expect(flows.size).toBe(2);
+    expect(await prepareProviderChannelLogin(params)).toMatchObject({
+      status: "reply",
+      reply: { text: "Provider login cancelled for this chat." },
+    });
+    expect(first.status === "reserved" && first.record.signal.aborted).toBe(true);
+    expect(other.status === "reserved" && other.record.signal.aborted).toBe(false);
+    expect(await prepareProviderChannelLogin(params)).toMatchObject({
+      status: "reply",
+      reply: { text: "No provider login is active in this chat." },
+    });
+    cancelProviderLoginFlow({ flows, flowKey: "other" });
   });
 
   it("uses the host config replaced before flow entry", async () => {

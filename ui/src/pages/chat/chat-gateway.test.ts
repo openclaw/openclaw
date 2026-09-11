@@ -24,6 +24,7 @@ import {
   type ChatRunUiStatus,
   type LocalTerminalReconcile,
 } from "./run-lifecycle.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   visibleAssistantStreamParts,
@@ -63,43 +64,73 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
   };
 }
 
-it("completes an overtaken commentary item from the final cumulative delta without another item", () => {
-  const text = "- first file\n- second file\n\n```python\n    execute()\n```";
-  const state = Object.assign(
-    createState(),
-    createHost({
-      chatRunId: "run-1",
-      chatStream: text.slice(0, -4),
-    }),
-  );
-  handleAgentEvent(state, {
-    sessionKey: "main",
-    runId: "run-1",
-    seq: 1,
-    ts: 1,
-    stream: "item",
-    data: {
-      kind: "preamble",
-      phase: "end",
-      itemId: "commentary-1",
-      progressText: text.replace(/\s+/gu, " "),
-    },
-  });
-  handleChatGatewayEvent(state, {
-    sessionKey: "main",
-    runId: "run-1",
-    seq: 2,
-    state: "delta",
-    message: { role: "assistant", content: [{ type: "text", text }] },
-  });
-  expect(
-    visibleAssistantStreamParts(state, {
-      includeCurrent: true,
-      isHiddenStreamText: () => false,
-    }).map((part) => ({ text: part.text, itemId: part.itemId })),
-  ).toEqual([{ text, itemId: "commentary-1" }]);
-  expect(state.chatStream).toBe(text);
-});
+it.each([false, true])(
+  "completes an overtaken commentary item with formatting (persisted=%s)",
+  (persisted) => {
+    const text = "- first file\n- second file\n\n```python\n    execute()\n```";
+    const state = Object.assign(
+      createState(),
+      createHost({
+        chatRunId: "run-1",
+        chatStream: text.slice(0, -4),
+      }),
+    );
+    handleAgentEvent(state, {
+      sessionKey: "main",
+      runId: "run-1",
+      seq: 1,
+      ts: 1,
+      stream: "item",
+      data: {
+        kind: "preamble",
+        phase: "end",
+        itemId: "commentary-1",
+        progressText: text.replace(/\s+/gu, " "),
+      },
+    });
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: true,
+        isHiddenStreamText: () => false,
+      }).map((part) => ({ text: part.text, itemId: part.itemId })),
+    ).toEqual([{ text: text.replace(/\s+/gu, " "), itemId: "commentary-1" }]);
+    if (persisted) {
+      // Durable history projects the transcript text, not flattened progressText.
+      applySessionMessagePayload(
+        state,
+        {
+          runId: "run-1",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            __openclaw: { id: "saved-commentary", seq: 1, runId: "run-1" },
+            openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
+          },
+        },
+        true,
+        { kind: "history-delta" },
+      );
+      expect(state.chatMessages.map(extractText)).toEqual([text]);
+    }
+    handleChatGatewayEvent(state, {
+      sessionKey: "main",
+      runId: "run-1",
+      seq: 2,
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: true,
+        isHiddenStreamText: () => false,
+      }).map((part) => ({ text: part.text, itemId: part.itemId })),
+    ).toEqual(persisted ? [] : [{ text, itemId: "commentary-1" }]);
+    if (persisted) {
+      expect(state.chatMessages.map(extractText)).toEqual([text]);
+    }
+    expect(state.chatStream).toBe(text);
+  },
+);
 
 type HistoryResult = {
   messages: Array<unknown>;

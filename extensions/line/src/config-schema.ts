@@ -1,5 +1,6 @@
 // Line helper module supports config schema behavior.
 import {
+  ChannelDeliveryStreamingConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   buildChannelConfigSchema,
@@ -35,6 +36,9 @@ const LineCommonConfigSchemaBase = z.object({
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   responsePrefix: z.string().optional(),
+  // LINE cannot edit a sent message, so it has no preview streaming mode and takes
+  // the delivery-only shape this shared schema is written for.
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
   mediaMaxMb: z.number().optional(),
   webhookPath: z.string().optional(),
   threadBindings: ThreadBindingsSchema.optional(),

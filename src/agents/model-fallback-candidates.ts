@@ -153,20 +153,19 @@ export function resolveImageFallbackCandidates(
 export function resolveModelCandidateChain(
   params: ModelCandidateChainParams,
 ): ModelFallbackCandidate[] {
-  const cacheKey = resolveFallbackCandidateCacheKey(params);
-  if (!cacheKey) {
-    return resolveFallbackCandidatesUncached(params);
-  }
-  const cached = fallbackCandidateCache.get(cacheKey);
+  const { cacheKey, manifestPlugins } = resolveFallbackCandidateContext(params);
+  const cached = cacheKey ? fallbackCandidateCache.get(cacheKey) : undefined;
   if (cached) {
     return cached.map((candidate) => Object.assign({}, candidate));
   }
-  const candidates = resolveFallbackCandidatesUncached(params);
-  fallbackCandidateCache.set(
-    cacheKey,
-    candidates.map((candidate) => Object.assign({}, candidate)),
-  );
-  pruneMapToMaxSize(fallbackCandidateCache, MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES);
+  const candidates = resolveFallbackCandidatesUncached({ ...params, manifestPlugins });
+  if (cacheKey) {
+    fallbackCandidateCache.set(
+      cacheKey,
+      candidates.map((candidate) => Object.assign({}, candidate)),
+    );
+    pruneMapToMaxSize(fallbackCandidateCache, MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES);
+  }
   return candidates;
 }
 
@@ -180,9 +179,9 @@ function getFallbackContextId(value: object): number {
   return id;
 }
 
-function resolveFallbackCandidateCacheKey(params: ModelCandidateChainParams): string | null {
-  if (params.manifestPlugins) {
-    return null;
+function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
+  if (params.manifestPlugins !== undefined) {
+    return { cacheKey: null, manifestPlugins: params.manifestPlugins };
   }
   const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
   const env = process.env;
@@ -196,6 +195,7 @@ function resolveFallbackCandidateCacheKey(params: ModelCandidateChainParams): st
     env,
     workspaceDir,
     allowWorkspaceScopedSnapshot: true,
+    requireDefaultDiscoveryContext: params.cfg === undefined,
   });
   if (
     isPluginProvidersLoadInFlight({
@@ -206,13 +206,13 @@ function resolveFallbackCandidateCacheKey(params: ModelCandidateChainParams): st
       activate: false,
     })
   ) {
-    return null;
+    return { cacheKey: null, manifestPlugins: providerLoadMetadata };
   }
   const registryState = getPluginRegistryState();
   const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
   const agentConfig =
     params.cfg && params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
-  return JSON.stringify({
+  const cacheKey = JSON.stringify({
     agentId: params.agentId,
     agentModel: agentConfig?.model,
     agentModels: agentConfig?.models,
@@ -233,11 +233,15 @@ function resolveFallbackCandidateCacheKey(params: ModelCandidateChainParams): st
     // Fingerprints omit executable hooks and narrowed metadata views. Weak ids
     // isolate both without retaining retired registries or growing the cache bound.
     pluginMetadataIdentity: pluginMetadata ? getFallbackContextId(pluginMetadata) : null,
+    normalizationMetadataIdentity: providerLoadMetadata
+      ? getFallbackContextId(providerLoadMetadata)
+      : null,
     pluginRegistryIdentity: registry ? getFallbackContextId(registry) : null,
     pluginRegistryKey: registryState?.key ?? null,
     pluginRegistryVersion: registryState?.activeVersion ?? null,
     pluginWorkspaceDir: workspaceDir ?? null,
   });
+  return { cacheKey, manifestPlugins: providerLoadMetadata };
 }
 
 function resolveFallbackCandidateModelProviderCacheParts(cfg: OpenClawConfig | undefined): unknown {
@@ -325,7 +329,11 @@ function resolveFallbackCandidatesUncached(
         manifestPlugins: params.manifestPlugins,
       }) ?? normalizedPrimary;
   }
-  addCandidate(requestedCandidate, "requested", requestedRouteResolution);
+  addCandidate(
+    requestedCandidate,
+    "requested",
+    params.manifestPlugins !== undefined ? "resolved" : requestedRouteResolution,
+  );
 
   const modelFallbacks =
     params.fallbacksOverride !== undefined

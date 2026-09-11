@@ -8,11 +8,15 @@ import {
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchDeadlineControl,
 } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
-import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
+import {
+  createProviderHttpError,
+  readProviderJsonArrayFieldResponse,
+} from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
 } from "../agents/provider-local-service-target.js";
+import { redactProviderResponseErrorText } from "../agents/provider-request-header-redaction.js";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
@@ -305,11 +309,27 @@ async function readEmbeddingErrorBodySnippet(response: Response): Promise<string
   return truncated ? `${text}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}` : text;
 }
 
-async function createEmbeddingHttpError(response: Response): Promise<Error> {
+async function createEmbeddingHttpError(
+  response: Response,
+  requestHeaders: HeadersInit,
+): Promise<Error> {
   const snippet = await readEmbeddingErrorBodySnippet(response);
-  return new Error(
-    `openai-compatible embeddings failed: HTTP ${response.status}${snippet ? `: ${snippet}` : ""}`,
+  const error = await createProviderHttpError(
+    new Response(snippet, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+    "openai-compatible embeddings failed",
+    { requestHeaders },
   );
+  const safeSnippet = snippet
+    ? redactProviderResponseErrorText(snippet, requestHeaders, {
+        sourceTruncated: snippet.endsWith(EMBEDDING_ERROR_TRUNCATED_SUFFIX),
+      })
+    : undefined;
+  error.message = `openai-compatible embeddings failed: HTTP ${response.status}${safeSnippet ? `: ${safeSnippet}` : ""}`;
+  return error;
 }
 
 async function postEmbeddingRequest(params: {
@@ -355,7 +375,7 @@ async function postEmbeddingRequest(params: {
       auditContext: "embedding-provider:openai-compatible",
       onResponse: async (response) => {
         if (!response.ok) {
-          throw await createEmbeddingHttpError(response);
+          throw await createEmbeddingHttpError(response, client.headers);
         }
         return readEmbeddingVectors(
           await readProviderJsonArrayFieldResponse(

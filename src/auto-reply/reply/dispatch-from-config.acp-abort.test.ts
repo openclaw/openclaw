@@ -1448,6 +1448,76 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
+  it("admits login cancellation past a pending command ticket while executable commands wait", async () => {
+    const sessionKey = "agent:main:login-ticket";
+    const releaseLogin = createDeferred();
+    const loginEntered = vi.fn();
+    const cancelEntered = vi.fn();
+    const shellEntered = vi.fn();
+    const dispatchCommand = (
+      body: string,
+      commandName: string,
+      replyResolver: NonNullable<Parameters<typeof dispatchReplyFromConfig>[0]["replyResolver"]>,
+    ) =>
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          CommandAuthorized: true,
+          CommandSource: "text",
+          CommandTurn: {
+            kind: "text-slash",
+            source: "text",
+            authorized: true,
+            commandName,
+            body,
+          },
+          SessionKey: sessionKey,
+          MessageSid: body,
+          Body: body,
+          RawBody: body,
+          CommandBody: body,
+          BodyForAgent: body,
+        }),
+        cfg: {
+          diagnostics: { enabled: true },
+          session: { sendPolicy: { default: "allow" } },
+        },
+        dispatcher: createDispatcher(),
+        replyResolver,
+      });
+    const login = dispatchCommand("/login openrouter", "login", async () => {
+      loginEntered();
+      await releaseLogin.promise;
+      return markCommandReplyForDelivery({ text: "Login ended." });
+    });
+    const pending = [login];
+    try {
+      await vi.waitFor(() => expect(loginEntered).toHaveBeenCalledOnce());
+      const shell = dispatchCommand("/bash echo ready", "bash", async () => {
+        shellEntered();
+        return markCommandReplyForDelivery({ text: "Shell command completed." });
+      });
+      pending.push(shell);
+      const cancel = dispatchCommand("/login cancel", "login", async () => {
+        cancelEntered();
+        return markCommandReplyForDelivery({ text: "Provider login cancelled for this chat." });
+      });
+      pending.push(cancel);
+
+      await vi.waitFor(() => expect(cancelEntered).toHaveBeenCalledOnce());
+      expect(shellEntered).not.toHaveBeenCalled();
+      expect(replyRunRegistry.isActive(sessionKey)).toBe(true);
+      releaseLogin.resolve();
+      await Promise.all(pending);
+      expect(shellEntered).toHaveBeenCalledOnce();
+      expect(getActiveReplyRunCount()).toBe(0);
+    } finally {
+      releaseLogin.resolve();
+      await Promise.all(pending);
+    }
+  });
+
   it("delivers a directive acknowledgement while its terminal path stays serialized", async () => {
     const sessionKey = "agent:main:directive-reply-active";
     const activeOperation = createReplyOperation({

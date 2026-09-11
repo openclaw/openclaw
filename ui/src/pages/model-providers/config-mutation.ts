@@ -1,3 +1,4 @@
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -103,4 +104,88 @@ export async function runModelProviderConfigMutation(
       owner.setBusy(false);
     }
   }
+}
+
+/** Credential writes share config serialization and retain acknowledged success during refresh. */
+export async function runModelProviderApiKeyMutation(
+  owner: Omit<ModelProviderConfigMutationOwner, "refreshProviders"> & {
+    canMutate: () => boolean;
+    refreshProviders: () => Promise<string | null>;
+  },
+  params: {
+    client: GatewayBrowserClient;
+    agentId: string;
+    provider: string;
+    apiKey: string | null;
+    success: string;
+  },
+): Promise<ModelProviderConfigMutationResult> {
+  const isCurrent = () => owner.isCurrentClient() && owner.isCurrentAgent();
+  owner.setBusy(true);
+  owner.setMessage(null);
+  try {
+    const result = await owner.runtimeConfig.runExternalMutation(
+      (client) => {
+        if (client !== params.client) {
+          throw new Error(t("modelProviders.requestFailed"));
+        }
+        const target = { provider: params.provider, agentId: params.agentId };
+        return params.apiKey === null
+          ? client.request<{ warning?: string }>("models.authLogout", {
+              ...target,
+              credentialType: "api_key",
+            })
+          : client.request<{ warning?: string }>("models.authSetApiKey", {
+              ...target,
+              apiKey: params.apiKey,
+            });
+      },
+      { canDispatch: () => isCurrent() && owner.canMutate() },
+    );
+    if (!isCurrent()) {
+      return { ok: false };
+    }
+    if (!result.ok) {
+      owner.setMessage({ kind: "error", text: result.error });
+      return { ok: false };
+    }
+    const warnings = result.value.warning ? [result.value.warning] : [];
+    if (!result.refresh.ok) {
+      warnings.push(result.refresh.error);
+    } else {
+      try {
+        const warning = await owner.refreshProviders();
+        if (warning) {
+          warnings.push(warning);
+        }
+      } catch (error) {
+        warnings.push(modelProviderErrorMessage(error));
+      }
+    }
+    if (!isCurrent()) {
+      return { ok: false };
+    }
+    const warning = warnings.length > 0 ? warnings.join(" ") : null;
+    owner.setMessage({ kind: "success", text: params.success, ...(warning ? { warning } : {}) });
+    return { ok: true, agentEpoch: owner.agentEpoch, warning };
+  } finally {
+    if (isCurrent()) {
+      owner.setBusy(false);
+    }
+  }
+}
+
+export function modelProviderApiKeySuccess(
+  action: "edit" | "add",
+  apiKey: string | null,
+  provider: string,
+): string {
+  return t(
+    action === "add"
+      ? "modelProviders.add.saved"
+      : apiKey === null
+        ? "modelProviders.apiKey.removed"
+        : "modelProviders.apiKey.saved",
+    { provider },
+  );
 }

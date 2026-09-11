@@ -18,7 +18,9 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { createCatalogDiscoveryController } from "./catalog-discovery.ts";
 import {
+  modelProviderApiKeySuccess,
   modelProviderErrorMessage,
+  runModelProviderApiKeyMutation,
   runModelProviderConfigMutation,
   type ModelProviderConfigMutation,
   type ModelProviderConfigMutationResult,
@@ -40,11 +42,7 @@ import {
 } from "./load.ts";
 import { ModelProviderLoginController } from "./login-controller.ts";
 import { readModelBehaviorConfig, type ModelBehaviorConfig } from "./model-behavior.ts";
-import {
-  buildDefaultsPatch,
-  buildProviderApiKeyPatch,
-  DEFAULT_MODELS_REPLACE_PATHS,
-} from "./mutations.ts";
+import { buildDefaultsPatch, DEFAULT_MODELS_REPLACE_PATHS } from "./mutations.ts";
 import { isMissingMethodError, mergeProbeResults } from "./probe-results.ts";
 import { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.ts";
@@ -177,6 +175,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     setBusy: (key, value) => this.setBusy(key, value),
     clearProbe: (cardId) => this.clearProbe(cardId),
     setLogoutSuccess: showProfileLogoutSuccess,
+    getConfig: () => this.context.runtimeConfig,
   });
   private readonly login = new ModelProviderLoginController(this, {
     getScope: () => ({ context: this.context, agentId: this.selectedAgentId, data: this.data }),
@@ -429,53 +428,68 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.keyDraft = "";
   }
 
-  private async saveKey(provider: string, configKey: string) {
-    const apiKey = this.keyDraft.trim();
-    if (!apiKey) {
+  private async mutateApiKey(
+    provider: string,
+    configKey: string,
+    apiKey: string | null,
+    action: "edit" | "add" = "edit",
+  ) {
+    const client = this.gateway.client;
+    const key = action === "add" ? "add" : `key:${provider}`;
+    if (!client || !this.canMutate() || this.busy[key] || apiKey === "") {
       return;
     }
+    const clientEpoch = this.gateway.epoch;
+    const agentEpoch = this.agentEpoch;
+    const isCurrent = () =>
+      this.gateway.isCurrent({ client, epoch: clientEpoch }) && this.agentEpoch === agentEpoch;
     this.clearProbe(provider);
-    this.setMessage(provider, null);
-    this.setMessage(`key:${provider}`, null);
-    const result = await this.patchConfig({
-      key: `key:${provider}`,
-      raw: buildProviderApiKeyPatch(configKey, apiKey),
-      note: t("modelProviders.notes.saveKey", { provider }),
-      success: t("modelProviders.apiKey.saved"),
-    });
-    if (result.ok && this.agentEpoch === result.agentEpoch) {
-      this.setMessage(`key:${provider}`, null);
-      if (this.keyEditorProvider === provider && this.keyDraft.trim() === apiKey) {
-        this.closeKeyEditor();
-      }
-      this.setMessage(provider, {
-        kind: "success",
-        text: t("modelProviders.apiKey.saved"),
-        ...(result.warning ? { warning: result.warning } : {}),
-      });
+    const result = await runModelProviderApiKeyMutation(
+      {
+        runtimeConfig: this.context.runtimeConfig,
+        agentEpoch,
+        isCurrentClient: isCurrent,
+        isCurrentAgent: isCurrent,
+        canMutate: () => this.canMutate(),
+        refreshProviders: async () => {
+          const previous = this.data;
+          await this.refresh({ force: false });
+          if (isCurrent() && this.data?.error) {
+            const warning = this.data.error;
+            this.data = previous;
+            return warning;
+          }
+          return this.data?.error ?? this.data?.catalogError ?? null;
+        },
+        setBusy: (busy) => this.setBusy(key, busy),
+        setMessage: (message) => {
+          this.setMessage(provider, message);
+          if (action === "add") {
+            this.setMessage("add", message);
+          }
+        },
+      },
+      {
+        client,
+        agentId: this.selectedAgentId,
+        provider: configKey,
+        apiKey,
+        success: modelProviderApiKeySuccess(action, apiKey, provider),
+      },
+    );
+    if (!result.ok || !isCurrent()) {
+      return;
     }
-  }
-
-  private async removeKey(provider: string, configKey: string) {
-    this.clearProbe(provider);
-    this.setMessage(provider, null);
-    this.setMessage(`key:${provider}`, null);
-    const result = await this.patchConfig({
-      key: `key:${provider}`,
-      raw: buildProviderApiKeyPatch(configKey, null),
-      note: t("modelProviders.notes.removeKey", { provider }),
-      success: t("modelProviders.apiKey.removed"),
-    });
-    if (result.ok && this.agentEpoch === result.agentEpoch) {
-      this.setMessage(`key:${provider}`, null);
-      if (this.keyEditorProvider === provider) {
-        this.closeKeyEditor();
+    if (action === "add") {
+      if (this.addProviderId === provider && this.addProviderKey.trim() === apiKey) {
+        this.addProviderOpen = Boolean(result.warning);
+        if (!result.warning) {
+          this.addProviderId = "";
+        }
+        this.addProviderKey = "";
       }
-      this.setMessage(provider, {
-        kind: "success",
-        text: t("modelProviders.apiKey.removed"),
-        ...(result.warning ? { warning: result.warning } : {}),
-      });
+    } else if (this.keyEditorProvider === provider && this.keyDraft.trim() === apiKey) {
+      this.closeKeyEditor();
     }
   }
 
@@ -557,31 +571,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   private async addProvider() {
     const provider = this.addProviderId;
-    const apiKey = this.addProviderKey.trim();
-    if (!provider || !apiKey) {
-      return;
-    }
-    const result = await this.patchConfig({
-      key: "add",
-      raw: buildProviderApiKeyPatch(provider, apiKey),
-      note: t("modelProviders.notes.addProvider", { provider }),
-      success: t("modelProviders.add.saved", { provider }),
-    });
-    if (result.ok && this.agentEpoch === result.agentEpoch) {
-      if (this.addProviderId === provider && this.addProviderKey.trim() === apiKey) {
-        // A failed refresh leaves a new provider without a card. Keep its
-        // success + warning visible in the open form instead of losing both.
-        this.addProviderOpen = Boolean(result.warning);
-        if (!result.warning) {
-          this.addProviderId = "";
-        }
-        this.addProviderKey = "";
-      }
-      this.setMessage(provider, {
-        kind: "success",
-        text: t("modelProviders.add.saved", { provider }),
-        ...(result.warning ? { warning: result.warning } : {}),
-      });
+    if (provider) {
+      await this.mutateApiKey(provider, provider, this.addProviderKey.trim(), "add");
     }
   }
 
@@ -694,8 +685,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onOpenKeyEditor: (provider) => this.openKeyEditor(provider),
       onCloseKeyEditor: () => this.closeKeyEditor(),
       onKeyDraftChange: (value) => (this.keyDraft = value),
-      onSaveKey: (provider, configKey) => void this.saveKey(provider, configKey),
-      onRemoveKey: (provider, configKey) => void this.removeKey(provider, configKey),
+      onSaveKey: (provider, configKey) =>
+        void this.mutateApiKey(provider, configKey, this.keyDraft.trim()),
+      onRemoveKey: (provider, configKey) => void this.mutateApiKey(provider, configKey, null),
       onProbe: (cardId, providers) => void this.probe(cardId, providers),
       onRequestLogout: (pending) => void this.requestLogout(pending),
       onProfileOrderChange: (cardId, provider, profileIds) =>

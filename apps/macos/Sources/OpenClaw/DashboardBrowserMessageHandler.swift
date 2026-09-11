@@ -15,7 +15,7 @@ enum DashboardBrowserAction: String, Equatable, Sendable {
 }
 
 enum DashboardBrowserRequest: Equatable, Sendable {
-    case open(tabId: String, url: URL, activate: Bool)
+    case open(tabId: String, url: URL, sessionKey: String?, activate: Bool)
     case navigate(tabId: String, url: URL)
     case action(DashboardBrowserAction, tabId: String)
     case present(scope: String, tabId: String?, rect: DashboardBrowserRect?, visible: Bool)
@@ -70,8 +70,14 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
         switch type {
         case "open":
             let activate = try Self.boolean(payload["activate"] ?? true)
+            // Released UIs omit sessionKey; nil keeps their tabs window-owned, distinct
+            // from the empty shell scope. Remove when supported Mac/Gateway pairs all send it.
+            let sessionKey = try payload["sessionKey"].map { try Self.identifier($0, allowEmpty: true) }
             return try .open(
-                tabId: Self.identifier(payload["tabId"]), url: Self.url(payload["url"]), activate: activate)
+                tabId: Self.identifier(payload["tabId"]),
+                url: Self.url(payload["url"]),
+                sessionKey: sessionKey,
+                activate: activate)
         case "navigate":
             return try .navigate(tabId: Self.identifier(payload["tabId"]), url: Self.url(payload["url"]))
         case "present":
@@ -123,8 +129,8 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
         return url
     }
 
-    private nonisolated static func identifier(_ value: Any?) throws -> String {
-        guard let value = value as? String, !value.isEmpty,
+    private nonisolated static func identifier(_ value: Any?, allowEmpty: Bool = false) throws -> String {
+        guard let value = value as? String, allowEmpty || !value.isEmpty,
               value == value.trimmingCharacters(in: .whitespacesAndNewlines)
         else { throw DashboardBrowserError.invalidRequest }
         return value

@@ -1,25 +1,22 @@
 // Tests Telegram native Codex login command behavior.
-import {
-  createEmptyPluginRegistry,
-  withPluginRuntimeRegistryScope,
-} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   type ModelsAuthLoginFlowOptions,
-  type ModelsAuthLoginFlowResult,
   ProviderAuthConfigApplyError,
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
-import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
-import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
-  createCommandBot,
+  createLoginResult,
+  createOwnerLoginConfig,
+  registerLoginCommand,
+} from "./bot-native-command-login.test-support.js";
+import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
+import {
   deliverReplies,
-  createNativeCommandTestParams,
   createPrivateCommandContext,
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
@@ -63,91 +60,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   };
 });
 
-type LoginFlowMock = ReturnType<typeof vi.fn>;
 type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLoginFlow"]>;
-
-let loginAccountIndex = 0;
-
-function createLoginResult(
-  profileId: string,
-  authRefresh: ModelsAuthLoginFlowResult["authRefresh"] = "refreshed",
-): ModelsAuthLoginFlowResult {
-  return {
-    providerId: "openai",
-    methodId: "device-code",
-    authRefresh,
-    profiles: [{ profileId, provider: "openai", mode: "oauth" }],
-  };
-}
-
-function createOwnerLoginConfig(): OpenClawConfig {
-  return {
-    commands: { native: true, ownerAllowFrom: ["200"] },
-    agents: { list: [{ id: "main", default: true }] },
-  };
-}
-
-function registerLoginCommand(params: {
-  cfg: OpenClawConfig;
-  loginFlow: LoginFlowMock;
-  accountId?: string;
-  allowFrom?: string[];
-  abortSignal?: AbortSignal;
-  runtime?: RuntimeEnv;
-  getRuntimeConfig?: () => OpenClawConfig;
-}) {
-  const botHarness = createCommandBot();
-  const accountId = params.accountId ?? `login-test-${++loginAccountIndex}`;
-  const cfg = {
-    ...params.cfg,
-    agents: {
-      ...params.cfg.agents,
-      defaults: { model: "openai/gpt-5.4", ...params.cfg.agents?.defaults },
-    },
-  };
-  const nativeParams = createNativeCommandTestParams(cfg, {
-    accountId,
-    bot: botHarness.bot,
-    allowFrom: params.allowFrom ?? ["200"],
-    ...(params.abortSignal
-      ? {
-          opts: {
-            token: "token",
-            accountAbortSignal: params.abortSignal,
-          },
-        }
-      : {}),
-    ...(params.runtime ? { runtime: params.runtime } : {}),
-  });
-  const sendMessageTelegram = vi.fn(async (_to, text) => {
-    const result = await botHarness.bot.api.sendMessage(100, text, {});
-    return { messageId: String(result.message_id), chatId: "100" };
-  });
-  const nativeCommandCallbackDispatcher = withPluginRuntimeRegistryScope(
-    createEmptyPluginRegistry(),
-    () =>
-      registerTelegramNativeCommands({
-        ...nativeParams,
-        telegramDeps: {
-          ...nativeParams.telegramDeps,
-          ...(params.getRuntimeConfig ? { getRuntimeConfig: params.getRuntimeConfig } : {}),
-          runModelsAuthLoginFlow: params.loginFlow,
-          sendMessageTelegram,
-        } as never,
-      }),
-  );
-  const handler = botHarness.commandHandlers.get("login");
-  if (!handler) {
-    throw new Error("expected login command handler to be registered");
-  }
-  return {
-    ...botHarness,
-    accountId,
-    handler,
-    nativeCommandCallbackDispatcher,
-    sendMessageTelegram,
-  };
-}
 
 describe("registerTelegramNativeCommands /login", () => {
   beforeEach(() => {
@@ -421,7 +334,7 @@ describe("registerTelegramNativeCommands /login", () => {
   });
 
   it("rejects /login for authorized senders who are not owners", async () => {
-    const loginFlow = vi.fn(async () => ({
+    const loginFlow = vi.fn<TelegramLoginFlow>(async () => ({
       providerId: "openai",
       methodId: "device-code",
       authRefresh: "refreshed",
@@ -476,6 +389,61 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
       "OpenAI login is already active for this Telegram chat. Complete it, or wait for it to expire before requesting a new one.",
     );
+  });
+
+  it("cancels only the owner's private chat after browser-link delivery", async () => {
+    const finish = createDeferred<void>();
+    const signals: AbortSignal[] = [];
+    let settled = 0;
+    const loginFlow = vi.fn<TelegramLoginFlow>(async (params) => {
+      if (!params.signal) {
+        throw new Error("Expected login cancellation signal.");
+      }
+      signals.push(params.signal);
+      try {
+        await params.openUrl?.("https://openrouter.ai/auth?code_challenge=fixture");
+        await finish.promise;
+        params.signal.throwIfAborted();
+        return {
+          providerId: "openrouter",
+          methodId: "oauth",
+          authRefresh: "refreshed",
+          profiles: [{ profileId: "openrouter:default", provider: "openrouter", mode: "api_key" }],
+        };
+      } finally {
+        settled += 1;
+      }
+    });
+    const { handler, sendMessage } = registerLoginCommand({
+      cfg: createOwnerLoginConfig(),
+      loginFlow,
+      allowFrom: ["200", "201"],
+    });
+    const command = (match: string, chatId = 100, userId = 200) =>
+      handler(createPrivateCommandContext({ match, chatId, userId }));
+    try {
+      await command("openrouter");
+      await command("openrouter", 101);
+      expect(signals).toHaveLength(2);
+      await command("cancel", 100, 201);
+      expect(signals.every((signal) => !signal.aborted)).toBe(true);
+      await command("cancel");
+      expect(signals[0]?.aborted).toBe(true);
+      expect(signals[1]?.aborted).toBe(false);
+      expect(sendMessage).toHaveBeenCalledWith(100, "Provider login cancelled for this chat.", {});
+      await command("cancel");
+      expect(sendMessage).toHaveBeenCalledWith(
+        100,
+        "No provider login is active in this chat.",
+        {},
+      );
+    } finally {
+      await command("cancel");
+      await command("cancel", 101);
+      finish.resolve();
+      await vi.waitFor(() => expect(settled).toBe(signals.length));
+    }
+    expect(loginSessionMocks.patchSessionEntry).not.toHaveBeenCalled();
   });
 
   it("rejects credential persistence after the command owner is removed", async () => {
@@ -639,6 +607,7 @@ describe("registerTelegramNativeCommands /login", () => {
         throw new Error("unreachable");
       } catch {
         await params.prompter.note("Trouble with device code login?", "OAuth help");
+        throw new Error("Telegram stopped");
       } finally {
         loginSettled = true;
       }

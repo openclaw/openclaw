@@ -6,6 +6,7 @@ import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
+  cancelProviderLoginFlow,
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
   formatProviderLoginCommand,
@@ -87,7 +88,7 @@ function keyPart(value: unknown, fallback: string): string {
   return fallback;
 }
 
-function buildProviderLoginFlowKey(params: HandleCommandsParams, choiceId: string): string {
+function buildProviderLoginFlowKey(params: HandleCommandsParams): string {
   const threadId =
     params.ctx.MessageThreadId ?? params.ctx.TransportThreadId ?? params.ctx.ThreadParentId;
   return [
@@ -97,7 +98,7 @@ function buildProviderLoginFlowKey(params: HandleCommandsParams, choiceId: strin
     keyPart(params.ctx.OriginatingTo ?? params.command.to ?? params.command.channelId, "unknown"),
     keyPart(threadId, "main"),
     params.agentId,
-    choiceId,
+    params.sessionKey,
   ].join(":");
 }
 
@@ -219,7 +220,7 @@ async function runChannelProviderLogin(params: {
   agentId: string;
   runtime?: RuntimeEnv;
 }): Promise<ReplyPayload> {
-  const flowKey = buildProviderLoginFlowKey(params.commandParams, params.choice.command);
+  const flowKey = buildProviderLoginFlowKey(params.commandParams);
   const sendReply = params.commandParams.opts?.onBlockReply;
   if (!sendReply) {
     return {
@@ -233,7 +234,7 @@ async function runChannelProviderLogin(params: {
   });
   if (reservation.status === "active") {
     return {
-      text: `${params.choice.providerLabel} login is already active for this chat or channel. Complete it, or wait for it to expire before requesting a new one.`,
+      text: "A provider login is already active for this chat. Complete it, or send `/login cancel` before requesting a new one.",
     };
   }
 
@@ -264,6 +265,7 @@ async function runChannelProviderLogin(params: {
       signal: flowSignal,
       assertCurrent,
       sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
+      sendReply,
       unsupportedPromptMessage:
         "This provider needs input that chat cannot collect. Open Control UI → Models and choose Sign in.",
     });
@@ -316,6 +318,11 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     signal: params.opts?.abortSignal,
+    cancelLogin: () =>
+      cancelProviderLoginFlow({
+        flows: activeProviderLoginFlows,
+        flowKey: buildProviderLoginFlowKey(params),
+      }),
   });
   if (!prepared) {
     return null;

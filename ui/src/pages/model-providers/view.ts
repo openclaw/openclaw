@@ -336,7 +336,8 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
                 @click=${() => props.onOpenKeyEditor(card.id)}
               >
                 ${
-                  card.hasConfigApiKey
+                  card.hasConfigApiKey ||
+                  card.profiles.some((profile) => profile.type === "api_key")
                     ? t("modelProviders.apiKey.replace")
                     : t("modelProviders.apiKey.set")
                 }
@@ -344,7 +345,8 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
             `
       }
       ${
-        card.hasConfigApiKey
+        card.hasConfigApiKey ||
+        card.profiles.some((profile) => profile.type === "api_key" && profile.logoutSupported)
           ? html`
               <button
                 class="btn btn--sm danger"

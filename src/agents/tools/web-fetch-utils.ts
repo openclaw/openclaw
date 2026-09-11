@@ -14,7 +14,7 @@ import {
   findRawTextOpenTagStart,
   startsLikeHtmlTag,
   readTagToken,
-  closeRawTextTagEnd,
+  readRawTextBounds,
   skipRawTextElement,
 } from "./web-fetch-html-tag.js";
 import { sanitizeHtml } from "./web-fetch-visibility.js";
@@ -304,7 +304,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
     }
 
     if (RAW_TEXT_TAGS.has(token.name)) {
-      i = closeRawTextTagEnd(html, token.name, i);
+      i = readRawTextBounds(html, token.name, i).end;
       continue;
     }
     if (BLOCK_BREAK_TAGS.has(token.name)) {

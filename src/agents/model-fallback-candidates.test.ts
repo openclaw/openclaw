@@ -76,9 +76,31 @@ describe("resolveModelCandidateChain", () => {
     },
   );
 
-  it.each(["raw", "resolved", "configured-fallback", "configured-primary"] as const)(
-    "does not reapply manifest aliases after resolving the %s route",
-    (origin) => {
+  it.each([
+    { source: "raw", model: "latest", inputResolution: "raw", origin: "requested" },
+    { source: "resolved", model: "release", inputResolution: "resolved", origin: "requested" },
+    {
+      source: "provider prefix",
+      model: "candidate/latest",
+      inputResolution: "raw",
+      origin: "requested",
+    },
+    { source: "config alias", model: "shortcut", inputResolution: "raw", origin: "requested" },
+    {
+      source: "configured-fallback",
+      model: "unrelated",
+      inputResolution: "resolved",
+      origin: "configured-fallback",
+    },
+    {
+      source: "configured-primary",
+      model: "unrelated",
+      inputResolution: "resolved",
+      origin: "configured-primary",
+    },
+  ] as const)(
+    "preserves the resolved $source output when reused as input",
+    ({ source, model, inputResolution, origin }) => {
       const primary = origin === "configured-primary" ? "latest" : "unrelated";
       const cfg: OpenClawConfig = {
         agents: {
@@ -87,30 +109,55 @@ describe("resolveModelCandidateChain", () => {
               primary: `candidate/${primary}`,
               fallbacks: origin === "configured-fallback" ? ["candidate/latest"] : [],
             },
+            ...(source === "config alias"
+              ? { models: { "candidate/latest": { alias: "shortcut" } } }
+              : {}),
           },
         },
       };
+      const manifestPlugins = [
+        {
+          modelIdNormalization: {
+            providers: { candidate: { aliases: { latest: "release", release: "stable" } } },
+          },
+        },
+      ];
       const candidates = resolveModelCandidateChain({
         cfg,
         provider: "candidate",
-        model: origin === "raw" ? "latest" : origin === "resolved" ? "release" : "unrelated",
-        requestedRouteResolution: origin === "raw" ? "raw" : "resolved",
-        manifestPlugins: [
-          {
-            modelIdNormalization: {
-              providers: { candidate: { aliases: { latest: "release", release: "stable" } } },
-            },
-          },
-        ],
+        model,
+        requestedRouteResolution: inputResolution,
+        manifestPlugins,
       });
-
-      expect(candidates).toContainEqual({
+      const selected = candidates.find((candidate) => candidate.routeOrigin === origin);
+      expect(selected).toMatchObject({
         provider: "candidate",
         model: "release",
-        routeOrigin: origin === "raw" || origin === "resolved" ? "requested" : origin,
-        routeResolution: origin === "raw" ? "raw" : "resolved",
+        routeOrigin: origin,
       });
-      expect(candidates.some(({ model }) => model === "stable")).toBe(false);
+      expect(candidates.some(({ model: candidateModel }) => candidateModel === "stable")).toBe(
+        false,
+      );
+      if (!selected) {
+        throw new Error("Expected selected candidate");
+      }
+      expect(
+        resolveModelCandidateChain({
+          cfg,
+          provider: selected.provider,
+          model: selected.model,
+          requestedRouteResolution: selected.routeResolution,
+          fallbacksOverride: [],
+          manifestPlugins,
+        }),
+      ).toEqual([
+        {
+          provider: "candidate",
+          model: "release",
+          routeOrigin: "requested",
+          routeResolution: "resolved",
+        },
+      ]);
     },
   );
 });

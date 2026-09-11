@@ -1295,7 +1295,7 @@ describe("runWithModelFallback", () => {
         provider: "google",
         model: "gemini-2.5-flash-lite",
         routeOrigin: "requested",
-        routeResolution: "raw",
+        routeResolution: "resolved",
       },
       {
         provider: "anthropic",

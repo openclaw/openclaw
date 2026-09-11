@@ -86,7 +86,7 @@ describe("config form composition integrity", () => {
     expect(unsupportedUnion.unsupportedPaths).toEqual(["mixed"]);
   });
 
-  it("renders finite boolean unions while keeping open typed unions in Raw mode", () => {
+  it("renders finite boolean unions and string-or-literal unions while keeping constrained unions in Raw mode", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
       properties: {
@@ -98,6 +98,9 @@ describe("config form composition integrity", () => {
         },
         nullableBoolean: {
           anyOf: [{ type: ["boolean", "null"] }, { const: "auto" }],
+        },
+        nullableString: {
+          anyOf: [{ type: ["string", "null"] }, { type: "boolean", const: false }],
         },
         ambiguousBooleanLabel: {
           anyOf: [{ type: "boolean" }, { const: "true" }],
@@ -124,9 +127,9 @@ describe("config form composition integrity", () => {
     });
 
     expect(analysis.unsupportedPaths).toEqual([
-      "retention",
       "guarded",
       "nullableBoolean",
+      "nullableString",
       "ambiguousBooleanLabel",
       "overlappingOneOf",
     ]);
