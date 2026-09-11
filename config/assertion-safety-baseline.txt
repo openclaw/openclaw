@@ -1127,7 +1127,7 @@ extensions/slack/src/monitor/provider-support.ts	3
 extensions/slack/src/monitor/provider.ts	5
 extensions/slack/src/monitor/reconnect-policy.ts	6
 extensions/slack/src/monitor/relay-source.ts	2
-extensions/slack/src/monitor/slash.ts	11
+extensions/slack/src/monitor/slash.ts	10
 extensions/slack/src/monitor/thread-resolution.ts	1
 extensions/slack/src/monitor/thread.ts	2
 extensions/slack/src/native-data-blocks.ts	1
