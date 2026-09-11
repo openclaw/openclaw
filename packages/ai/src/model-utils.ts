@@ -37,6 +37,48 @@ function resolveThinkingLevelMap<TApi extends Api>(model: Model<TApi>) {
     : model.thinkingLevelMap;
 }
 
+function modelCompatSupportsReasoningEffort<TApi extends Api>(
+  model: Model<TApi>,
+  level: "xhigh" | "max",
+): boolean {
+  // SAFETY: compat is verified as an object at runtime before reading optional reasoning effort properties.
+  const compat = model.compat as
+    | {
+        supportsReasoningEffort?: unknown;
+        supportedReasoningEfforts?: unknown;
+      }
+    | undefined;
+  if (!compat || typeof compat !== "object") {
+    return false;
+  }
+  if (compat.supportsReasoningEffort === false) {
+    return false;
+  }
+  if (!Object.hasOwn(compat, "supportedReasoningEfforts")) {
+    return false;
+  }
+  const efforts = compat.supportedReasoningEfforts;
+  if (!Array.isArray(efforts)) {
+    return false;
+  }
+  return efforts.some((effort) => {
+    if (typeof effort !== "string") {
+      return false;
+    }
+    const normalized = effort
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]+/g, "");
+    if (level === "xhigh") {
+      return normalized === "xhigh" || normalized === "extrahigh";
+    }
+    if (level === "max") {
+      return normalized === "max";
+    }
+    return false;
+  });
+}
+
 /** Returns thinking levels exposed by a reasoning-capable model. */
 export function getSupportedThinkingLevels<TApi extends Api>(
   model: Model<TApi>,
@@ -54,7 +96,7 @@ export function getSupportedThinkingLevels<TApi extends Api>(
       return false;
     }
     if (level === "xhigh" || level === "max") {
-      return mapped !== undefined;
+      return mapped !== undefined || modelCompatSupportsReasoningEffort(model, level);
     }
     return true;
   });
@@ -75,15 +117,15 @@ export function clampThinkingLevel<TApi extends Api>(
     return availableLevels[0] ?? "off";
   }
 
-  // Explicit provider opt-outs are hard caps. Downgrade them before considering
-  // stronger levels so unsupported xhigh/max requests cannot increase cost.
-  const thinkingLevelMap = resolveThinkingLevelMap(model);
-  if ((level === "xhigh" || level === "max") && thinkingLevelMap?.[level] === null) {
+  // Extended tiers (xhigh, max) must never clamp upward to a stronger level.
+  // Walk down immediately to prevent unintended token spend and billing inflation.
+  if (level === "xhigh" || level === "max") {
     for (const candidate of EXTENDED_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
       if (availableLevels.includes(candidate)) {
         return candidate;
       }
     }
+    return availableLevels[0] ?? "off";
   }
 
   // Prefer the next stronger available level, then walk down if the request was above the model cap.

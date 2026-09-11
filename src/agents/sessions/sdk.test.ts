@@ -971,6 +971,34 @@ describe("createAgentSession thinking level defaults", () => {
 
     expect(session.thinkingLevel).toBe("off");
   });
+
+  it("preserves max thinking level when model compat declares supportedReasoningEfforts", async () => {
+    const customModel: Model = {
+      ...testModel,
+      reasoning: true,
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    };
+    const sessionManager = SessionManager.inMemory();
+    const { session } = await createAgentSession({
+      model: customModel,
+      thinkingLevel: "max",
+      resourceLoader: createResourceLoader(),
+      sessionManager,
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.thinkingLevel).toBe("max");
+    const changes = sessionManager
+      .getEntries()
+      .filter(
+        (entry): entry is Extract<typeof entry, { type: "thinking_level_change" }> =>
+          entry.type === "thinking_level_change",
+      );
+    expect(changes.at(-1)?.thinkingLevel).toBe("max");
+  });
 });
 
 describe("AgentSession retry behavior", () => {
