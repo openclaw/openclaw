@@ -1432,7 +1432,12 @@ describe("renderWorkboard", () => {
       onRequestUpdate: () => renderInto(container, props),
     });
     renderInto(container, props);
-    expect(container.querySelector("openclaw-workboard-toast:not([hidden])")).toBeNull();
+    expect(
+      expectDefined(
+        container.querySelector<HTMLElement>(".workboard > openclaw-workboard-toast"),
+        "board feedback",
+      ).hidden,
+    ).toBe(true);
     const dialog = container.querySelector("[data-test-dialog]")!;
     expect(dialog.getAttribute("aria-label")).toBe("New card");
     expect(dialog.getAttribute("aria-description")).toContain("Queue work");

@@ -15,6 +15,7 @@ import { loadWorkboard } from "./loading.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload, normalizeCardsPayload } from "./normalization.ts";
 import {
+  getWorkboardRuntime,
   getWorkboardState,
   invalidateWorkboardLoads,
   resetWorkboardLifecycleTaskConfirmations,
@@ -204,6 +205,8 @@ export async function moveWorkboardCard(
     state.busyCardIds.add(move.id);
   }
   state.error = null;
+  // A recovered older load must not clear an error owned by this move.
+  delete getWorkboardRuntime(params.host).loadError;
   params.requestUpdate?.();
   let reloadAfterFailure = false;
   try {

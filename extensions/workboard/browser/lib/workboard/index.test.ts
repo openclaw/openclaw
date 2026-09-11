@@ -3582,6 +3582,13 @@ describe("workboard controller", () => {
   it.each([false, true])(
     "reconciles a partially acknowledged drop with reload failure=%s",
     async (reloadFails) => {
+      await loadWorkboard({
+        host,
+        client: createSequencedClient({
+          "workboard.cards.list": [new Error("move acknowledgment lost")],
+        }),
+      });
+      expect(state.error).toBe("move acknowledgment lost");
       const a = makeCard({ id: "a", status: "todo", position: 0 });
       const b = makeCard({ id: "b", status: "todo", position: 1 });
       const c = makeCard({ id: "c", status: "todo", position: 2 });
