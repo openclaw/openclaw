@@ -3,9 +3,9 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { createModelAuthAvailabilityResolver } from "../../agents/model-auth-availability.js";
 import * as modelDecisions from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import * as providerAuth from "../../agents/model-provider-auth.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
@@ -229,7 +229,7 @@ describe("/models browse catalog recovery", () => {
         },
       ],
     });
-    const checker = providerAuth.createProviderAuthChecker({
+    const resolver = createModelAuthAvailabilityResolver({
       cfg: {
         agents: {
           defaults: {
@@ -240,12 +240,14 @@ describe("/models browse catalog recovery", () => {
         },
       },
       env: { ANTHROPIC_API_KEY: "synthetic-provider-key" },
-      discoverExternalCliAuth: false,
-      allowPluginSyntheticAuth: false,
+      authStore: { version: 1, profiles: {} },
+      skipSetupProviderFallback: true,
       allowPreparedRuntimeAuth: false,
     });
 
-    await expect(checker("anthropic", { modelId: "claude-sonnet-4-6" })).resolves.toBe(true);
+    expect(
+      resolver.evaluateModelAuth("anthropic", { modelId: "claude-sonnet-4-6" }).availability,
+    ).toBe(true);
   });
 
   it.each(["pinnedProfileId", "requiredProfileId"] as const)(
@@ -261,7 +263,18 @@ describe("/models browse catalog recovery", () => {
           },
         ],
       });
-      const checker = providerAuth.createProviderAuthChecker({
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          selected: {
+            provider: "anthropic",
+            type: "token",
+            token: "synthetic-expired-token",
+            expires: 1,
+          },
+        },
+      };
+      const resolver = createModelAuthAvailabilityResolver({
         cfg: {
           agents: {
             defaults: {
@@ -272,28 +285,21 @@ describe("/models browse catalog recovery", () => {
           },
         },
         env: {},
-        discoverExternalCliAuth: false,
-        allowPluginSyntheticAuth: false,
-        allowPreparedRuntimeAuth: true,
-        preparedAuth: {
-          authModes: { "claude-cli": "api_key" },
-          authStore: {
-            version: 1,
-            profiles: {
-              selected: {
-                provider: "anthropic",
-                type: "token",
-                token: "synthetic-expired-token",
-                expires: 1,
-              },
-            },
-          },
-        },
+        skipSetupProviderFallback: true,
+        preparedRuntimeAuthModes: { "claude-cli": "api_key" },
+        authStore: store,
+        preparedRuntimeAuthStore: store,
       });
 
-      await expect(
-        checker("anthropic", { modelId: "claude-sonnet-4-6", [selection]: "selected" }),
-      ).resolves.toBe(false);
+      expect(
+        resolver.evaluateRuntimeModelAuth("anthropic", { modelId: "claude-sonnet-4-6" }),
+      ).toMatchObject({ availability: true, evidence: "runtime" });
+      expect(
+        resolver.evaluateRuntimeModelAuth("anthropic", {
+          modelId: "claude-sonnet-4-6",
+          [selection]: "selected",
+        }).availability,
+      ).toBe(false);
     },
   );
 

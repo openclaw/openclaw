@@ -91,10 +91,6 @@ vi.mock("../../agents/model-auth-label.js", () => ({
 
 vi.mock("../../agents/model-provider-auth.js", () => ({
   createProviderAuthChecker: modelProviderAuthMocks.createProviderAuthChecker,
-  hasAuthForModelProvider: ({ provider }: { provider: string }) =>
-    modelProviderAuthMocks.authenticatedProviders.has(provider),
-  getCurrentProviderAuthState: () => null,
-  clearCurrentProviderAuthState: () => undefined,
 }));
 
 vi.mock("../../agents/model-catalog-decisions.js", () => ({

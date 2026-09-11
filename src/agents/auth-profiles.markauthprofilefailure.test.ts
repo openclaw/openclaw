@@ -1,7 +1,7 @@
 /**
  * Auth-profile failure persistence tests.
- * Exercises lock-based usage updates, provider bypasses, and cooldown hook
- * behavior against temporary SQLite-backed stores.
+ * Exercises lock-based usage updates, provider bypasses, and cooldown
+ * persistence against temporary SQLite-backed stores.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -20,7 +20,6 @@ vi.mock("../plugins/provider-external-auth-core.js", () => ({
   }),
 }));
 
-import { setAuthProfileFailureHook } from "./auth-profiles/failure-hook.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import {
@@ -181,6 +180,9 @@ describe("markAuthProfileFailure", () => {
       const stats = store.usageStats?.[usageId];
       expect(store.profiles[usageId]).toBeUndefined();
       expect(stats?.disabledReason).toBe("billing");
+      expect(ensureAuthProfileStore(agentDir).usageStats?.[usageId]?.disabledReason).toBe(
+        "billing",
+      );
       expect(typeof stats?.disabledUntil).toBe("number");
       const remainingMs = (stats?.disabledUntil as number) - startedAt;
       expectCooldownInRange(remainingMs, 9 * 60 * 1000, 11 * 60 * 1000);
@@ -397,94 +399,6 @@ describe("markAuthProfileFailure", () => {
 
       const reloaded = ensureAuthProfileStore(agentDir);
       expect(reloaded.usageStats?.["openrouter:default"]).toBeUndefined();
-    });
-  });
-
-  it.each(["rate_limit", "auth", "billing"] as const)(
-    "reports %s to the auth failure subscriber",
-    async (reason) => {
-      await withAuthProfileStore(async ({ agentDir, store }) => {
-        const hook = vi.fn();
-        setAuthProfileFailureHook(hook);
-        try {
-          await markAuthProfileFailure({
-            store,
-            profileId: "anthropic:default",
-            reason,
-            agentDir,
-          });
-          expect(hook).toHaveBeenCalledExactlyOnceWith(reason);
-        } finally {
-          setAuthProfileFailureHook(undefined);
-        }
-      });
-    },
-  );
-
-  it("fires the auth profile failure hook for inline provider api key failures", async () => {
-    await withAuthProfileStore(async ({ agentDir, store }) => {
-      const hook = vi.fn();
-      setAuthProfileFailureHook(hook);
-      try {
-        await markInlineProviderApiKeyFailure({
-          store,
-          provider: "anthropic",
-          reason: "billing",
-          agentDir,
-        });
-        expect(hook).toHaveBeenCalledExactlyOnceWith("billing");
-      } finally {
-        setAuthProfileFailureHook(undefined);
-      }
-    });
-  });
-
-  it("does not break failure recording when the hook throws", async () => {
-    await withAuthProfileStore(async ({ agentDir, store }) => {
-      const throwingHook = vi.fn(() => {
-        throw new Error("boom");
-      });
-      setAuthProfileFailureHook(throwingHook);
-      try {
-        await markAuthProfileFailure({
-          store,
-          profileId: "anthropic:default",
-          reason: "auth",
-          agentDir,
-        });
-        expect(throwingHook).toHaveBeenCalledTimes(1);
-        // Failure still got recorded despite the hook throwing.
-        expect(store.usageStats?.["anthropic:default"]?.errorCount ?? 0).toBeGreaterThan(0);
-      } finally {
-        setAuthProfileFailureHook(undefined);
-      }
-    });
-  });
-
-  it("does not break inline failure recording when the hook throws", async () => {
-    await withAuthProfileStore(async ({ agentDir, store }) => {
-      const throwingHook = vi.fn(() => {
-        throw new Error("boom");
-      });
-      setAuthProfileFailureHook(throwingHook);
-      try {
-        await expect(
-          markInlineProviderApiKeyFailure({
-            store,
-            provider: "anthropic",
-            reason: "billing",
-            agentDir,
-          }),
-        ).resolves.toBeUndefined();
-        expect(throwingHook).toHaveBeenCalledTimes(1);
-        const usageId = resolveInlineProviderApiKeyUsageId("anthropic");
-        expect(store.usageStats?.[usageId]?.disabledReason).toBe("billing");
-        expect(ensureAuthProfileStore(agentDir).usageStats?.[usageId]?.disabledReason).toBe(
-          "billing",
-        );
-      } finally {
-        setAuthProfileFailureHook(undefined);
-      }
     });
   });
 });

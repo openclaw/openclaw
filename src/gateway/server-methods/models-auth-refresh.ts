@@ -2,21 +2,13 @@ import { validateModelsAuthRefreshParams } from "../../../packages/gateway-proto
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { reloadSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import { noteRuntimeAuthProfileStorePersistedMutation } from "../../agents/auth-profiles/runtime-snapshots.js";
-import {
-  clearCurrentProviderAuthState,
-  warmCurrentProviderAuthStateOffMainThread,
-} from "../../agents/model-provider-auth.js";
 import { prepareModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
-import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-const log = createSubsystemLogger("models-auth-refresh");
 
 export async function refreshModelAuthStateAfterMutation(
   context: GatewayRequestContext,
@@ -26,7 +18,6 @@ export async function refreshModelAuthStateAfterMutation(
   // The first CLI login can move the shared store after this Gateway pinned its owner.
   reloadSharedAuthStoreOwnership();
   clearModelAuthStatusUsageCache();
-  clearCurrentProviderAuthState();
   await refreshActiveProviderAuthRuntimeSnapshot();
   const config = context.getRuntimeConfig();
   const scope = resolveModelAuthAgentScope(config, agentId);
@@ -42,9 +33,6 @@ export async function refreshModelAuthStateAfterMutation(
     profileIds: [],
   });
   await prepareModelRuntimeSnapshot({ config, agentId, agentDir: scope.agentDir });
-  void warmCurrentProviderAuthStateOffMainThread(config).catch((error: unknown) => {
-    log.warn(`provider auth warmup after ${operation} failed: ${formatForLog(error)}`);
-  });
 }
 
 export const modelsAuthRefreshHandlers: GatewayRequestHandlers = {
