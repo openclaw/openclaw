@@ -361,7 +361,10 @@ suite.define(() => {
       expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
       await page.locator("#new-session-where-trigger").click();
       const where = page.locator("wa-popover.new-session-page__where-popover");
-      const cloud = where.getByRole("button", { name: "aws", exact: true });
+      const cloud = where.getByRole("button", {
+        name: "aws · Cloud needs a Git checkout",
+        exact: true,
+      });
       await cloud.waitFor();
       expect(await cloud.isDisabled()).toBe(true);
       await expect.poll(() => tooltipTitleText(cloud)).toBe("Cloud needs a Git checkout");
