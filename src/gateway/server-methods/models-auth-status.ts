@@ -327,6 +327,9 @@ function mapProvider(
         ...(includeProfileIdentity && metadata.displayName
           ? { displayName: metadata.displayName }
           : {}),
+        ...(prof.reasonCode === "setup_inactive"
+          ? { displayName: "Saved sign-in (inactive)" }
+          : {}),
         ...(includeProfileIdentity && metadata.email ? { email: metadata.email } : {}),
         ...(includeProfileIdentity && lastUsedAt ? { lastUsedAt } : {}),
         ...(logoutProfileIds.has(prof.profileId) ? { logoutSupported: true } : {}),

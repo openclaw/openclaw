@@ -1013,7 +1013,11 @@ export async function markAuthProfileFailure(params: {
 }): Promise<void> {
   const { store, profileId, reason, agentDir, runId, modelId } = params;
   const profile = store.profiles[profileId];
-  if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+  if (
+    !profile ||
+    profile.setup?.replacement ||
+    isAuthCooldownBypassedForProvider(profile.provider)
+  ) {
     return;
   }
 
@@ -1033,7 +1037,11 @@ export async function markAuthProfileFailure(params: {
     agentDir,
     updater: (freshStore) => {
       const profileValue = freshStore.profiles[profileId];
-      if (!profileValue || isAuthCooldownBypassedForProvider(profileValue.provider)) {
+      if (
+        !profileValue ||
+        profileValue.setup?.replacement ||
+        isAuthCooldownBypassedForProvider(profileValue.provider)
+      ) {
         return false;
       }
       const currentWhamResult =

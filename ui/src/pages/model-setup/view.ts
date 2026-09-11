@@ -70,6 +70,9 @@ type ModelSetupViewProps = {
 };
 
 function candidateStatus(candidate: Candidate): string {
+  if (candidate.kind.startsWith("saved-auth:")) {
+    return t("modelSetup.candidates.detected");
+  }
   if (candidate.recommended) {
     return t("modelSetup.candidates.recommended");
   }

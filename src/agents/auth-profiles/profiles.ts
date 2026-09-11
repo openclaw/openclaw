@@ -489,7 +489,11 @@ export async function markAuthProfileSuccess(params: {
   const { store, provider, profileId, agentDir } = params;
   const providerKey = resolveProviderIdForAuth(provider);
   const profile = store.profiles[profileId];
-  if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
+  if (
+    !profile ||
+    profile.setup?.replacement ||
+    resolveProviderIdForAuth(profile.provider) !== providerKey
+  ) {
     return;
   }
   const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
@@ -504,7 +508,11 @@ export async function markAuthProfileSuccess(params: {
     profileId,
     updater: (freshStore) => {
       const freshProfile = freshStore.profiles[profileId];
-      if (!freshProfile || resolveProviderIdForAuth(freshProfile.provider) !== providerKey) {
+      if (
+        !freshProfile ||
+        freshProfile.setup?.replacement ||
+        resolveProviderIdForAuth(freshProfile.provider) !== providerKey
+      ) {
         return false;
       }
       // Inherited selection ownership is not defined. Clear shared health in
