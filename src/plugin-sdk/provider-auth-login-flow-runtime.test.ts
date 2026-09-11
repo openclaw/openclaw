@@ -194,7 +194,8 @@ describe("provider channel login runtime", () => {
       expect(await fs.readFile(state.configPath, "utf8")).not.toContain("acme-cloud/*");
       const result = await answerProviderLoginModelAccess({ ...request, assertCurrent: () => {} });
       expect(result?.text).toContain(outcome);
-      expect(result?.text).toContain("Gateway could not apply the auth update");
+      expect(result?.text).not.toContain("Gateway could not apply the auth update");
+      expect(result?.text).toContain("To update saved sign-in status, send /login refresh.");
       const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
       expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(allow);
       expect(saved.agents?.defaults?.model).toBe("other/current");

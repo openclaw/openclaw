@@ -82,10 +82,9 @@ describe("handleLoginCommand model consent", () => {
         const result = await command(modelAccessCommand(initial?.reply));
         const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
         expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current", "openai/*"]);
-        expect(result?.reply?.text).toContain(
-          "Model access was saved, but OpenClaw did not apply it.",
+        expect(result?.reply?.text).toBe(
+          "Model access was saved, but OpenClaw did not apply it. Open Settings and select Apply changes, then send /models.",
         );
-        expect(result?.reply?.text).toContain("Apply changes");
         expect(result?.reply?.presentation).toBeUndefined();
         expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
       } finally {
@@ -117,6 +116,9 @@ describe("handleLoginCommand model consent", () => {
         const initial = await command("/login codex");
         const oldChoice = modelAccessCommand(initial?.reply);
         const now = vi.spyOn(Date, "now");
+        const stop = registerRuntimeConfigWriteListener((event) => {
+          getRuntimeConfigWriteApplication(event)?.claim()?.settle("applied");
+        });
         try {
           if (cause === "expired") {
             now.mockReturnValue(Date.now() + 15 * 60_000 + 1);
@@ -142,7 +144,10 @@ describe("handleLoginCommand model consent", () => {
           expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
           expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
 
-          await command(freshChoice);
+          const completed = await command(freshChoice);
+          expect(completed?.reply?.text).toBe(
+            "All OpenAI models are now visible.\n\nSend /models to choose a model. To update saved sign-in status, send /login refresh.",
+          );
           const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
           expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(
             cause === "changed" ? ["other/replacement", "openai/*"] : ["other/current", "openai/*"],
@@ -150,6 +155,7 @@ describe("handleLoginCommand model consent", () => {
           expect(saved.agents?.defaults?.model).toBe("other/current");
           expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
         } finally {
+          stop();
           now.mockRestore();
           await command("/login cancel");
         }

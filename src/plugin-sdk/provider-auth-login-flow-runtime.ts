@@ -66,7 +66,6 @@ type ProviderModelAccessRecord = {
   expiresAt: number;
   prepared: PreparedProviderModelAccess;
   prompt: ReturnType<typeof createLoginChoicePrompt<"all" | "keep">>;
-  terminalMessage: string;
 };
 
 type ProviderLoginFlowRegistry = {
@@ -169,7 +168,6 @@ export function offerProviderLoginModelAccess(params: {
     expiresAt: Date.now() + PROVIDER_LOGIN_FLOW_TTL_MS,
     prepared: params.prepared,
     prompt,
-    terminalMessage: params.terminalMessage,
   };
   params.flows.modelAccess.set(params.flowKey, record);
   signal.addEventListener(
@@ -273,11 +271,13 @@ export async function answerProviderLoginModelAccess(params: {
       runtime: params.runtime,
       assertCurrent,
     });
-    return { text: `${record.terminalMessage}\n\n${message}` };
+    return {
+      text: `${message}\n\nSend /models to choose a model. To update saved sign-in status, send /login refresh.`,
+    };
   } catch (error) {
     if (error instanceof ProviderModelPolicyApplicationError) {
       assertAuthority();
-      return { text: `${record.terminalMessage}\n\n${error.message}` };
+      return { text: error.message };
     }
     assertCurrent();
     if (error instanceof ProviderModelPolicyChangedError) {
