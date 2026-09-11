@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -18,12 +16,10 @@ import {
   persistHeartbeatOutcome,
 } from "./heartbeat-outcome-store.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 
 async function createEnv(): Promise<NodeJS.ProcessEnv> {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-outcome-"));
-  tempDirs.push(stateDir);
-  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-heartbeat-outcome-") };
   await upsertSessionEntryCore(
     { agentId: "main", env, sessionKey: "agent:main:main" },
     { sessionId: "heartbeat-outcome-test", updatedAt: 1 },
@@ -34,9 +30,7 @@ async function createEnv(): Promise<NodeJS.ProcessEnv> {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("heartbeat outcome store", () => {
