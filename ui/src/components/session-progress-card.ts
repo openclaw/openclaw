@@ -379,8 +379,12 @@ export function renderSessionProgressCard(
     : "sessionProgressCard.activity.updated";
   const accessibleLabel = countLabel;
   const lastActivity = progressActivityTime(activityTimestamp, activityKey);
+  // Durable progress can outlive an interrupted run. Keep active work protected,
+  // but let an operator dismiss an inactive checklist even when it is incomplete.
   const dismissible = Boolean(
-    onDismiss && card.steps?.length && card.steps.every((step) => step.status === "completed"),
+    onDismiss &&
+    card.steps?.length &&
+    (!hasCurrentRunActivity || card.steps.every((step) => step.status === "completed")),
   );
   const dismiss = dismissible
     ? html`<button

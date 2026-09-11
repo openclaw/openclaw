@@ -621,6 +621,66 @@ suite.define(() => {
     }
   });
 
+  it("dismisses inactive interrupted progress across reload", async () => {
+    const sessionKey = "agent:main:progress-interrupted";
+    const updatedAt = Date.now() - 5 * 60_000;
+    const plan = [
+      { step: "Inspected owner", status: "completed" },
+      { step: "Implemented fix", status: "in_progress" },
+      { step: "Filed issue", status: "pending" },
+    ];
+
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 560 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get", "progressCard.put"],
+          methodResponses: {
+            "progressCard.get": {
+              card: { revision: 3, sessionKey, steps: plan, updatedAt },
+            },
+            "progressCard.put": { card: null },
+            "sessions.list": chatSessionListResponse([
+              {
+                key: sessionKey,
+                kind: "direct",
+                label: "Interrupted progress",
+                hasActiveRun: false,
+                status: "running",
+                updatedAt,
+              },
+            ]),
+          },
+          sessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const card = page.locator('[data-progress-card-placement="composer"]');
+        await expect.poll(() => card.isVisible()).toBe(true);
+        await expect
+          .poll(() => card.locator(".session-progress-card__step--paused").count())
+          .toBe(1);
+        await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(0);
+        await captureProof(page, "interrupted-before.png");
+
+        await card.getByRole("button", { name: "Dismiss progress card" }).click();
+        const dismissRequest = await gateway.waitForRequest("progressCard.put");
+        expect(dismissRequest.params).toEqual({ sessionKey, expectedRevision: 3 });
+        await expect.poll(() => card.count()).toBe(0);
+
+        await gateway.setMethodResponse("progressCard.get", { card: null });
+        await page.reload();
+        await page.locator("textarea").waitFor({ state: "visible" });
+        await expect.poll(() => card.count()).toBe(0);
+        await captureProof(page, "interrupted-after.png");
+      },
+    );
+  });
+
   it("keeps dismissal unavailable to a restricted session viewer", async () => {
     const sessionKey = "agent:main:progress-viewer";
     await suite.withPage(

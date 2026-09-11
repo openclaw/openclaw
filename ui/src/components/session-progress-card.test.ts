@@ -322,6 +322,29 @@ describe("renderSessionProgressCard", () => {
     expect(container.querySelector(".session-progress-card__chevron svg")).not.toBeNull();
   });
 
+  it("offers dismissal for an incomplete checklist only after its run is inactive", () => {
+    const container = document.createElement("div");
+    const renderCard = (hasActiveRun: boolean) =>
+      render(
+        renderSessionProgressCard(
+          progressCard,
+          "composer",
+          () => undefined,
+          undefined,
+          undefined,
+          undefined,
+          hasActiveRun,
+        ),
+        container,
+      );
+
+    renderCard(true);
+    expect(container.querySelector(".session-progress-card__dismiss")).toBeNull();
+
+    renderCard(false);
+    expect(container.querySelector(".session-progress-card__dismiss")).not.toBeNull();
+  });
+
   it("opens active composer progress as a native disclosure without a progress bar", () => {
     const container = document.createElement("div");
     render(
