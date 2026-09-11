@@ -16,16 +16,15 @@ import {
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import {
-  hasNodeErrorCode,
-  isPathInside,
-  normalizeWindowsPathPreservingCase,
-} from "./path-guards.js";
+import { hasNodeErrorCode, normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
+import {
+  resolveUpdateCandidateStateIdentity,
+  resolveUpdateCandidateStatePath,
+} from "./update-candidate-paths.js";
 
 const UpdateStateSchemaVersionsSchema = z.array(
   z.object({
@@ -111,19 +110,13 @@ function collectRegisteredPaths(db: DatabaseSync, shared: string, files: string[
     : [];
   return rows.map(({ path: stored }) => {
     const source = resolveOpenClawRegisteredAgentDatabasePath(shared, stored);
-    // Discover one projection identity per database, using the same raw
-    // eligibility as resolveUpdateCandidateStatePath: a canonically spelled
-    // in-root extended-length \\?\ alias dedupes against the plain spelling
-    // directory discovery already listed, because projection rebases both to
-    // the same candidate path. External and non-canonical locators keep their
-    // raw spelling so the copy and the registry rebound write share one
-    // destination.
-    const discovered =
-      process.platform === "win32" &&
-      path.normalize(source) === source &&
-      isPathInside(resolveOpenClawStateDirForDatabasePath(shared), source)
-        ? normalizeWindowsPathPreservingCase(source)
-        : source;
+    // Discover one projection identity per database so every spelling of a
+    // database dedupes to the destination the copy and the registry rebound
+    // write both derive.
+    const discovered = resolveUpdateCandidateStateIdentity(
+      resolveOpenClawStateDirForDatabasePath(shared),
+      source,
+    );
     // Discover registrations from the exact private generation being inspected.
     if (!files.includes(discovered)) {
       files.push(discovered);
@@ -165,6 +158,12 @@ async function withStateDatabaseSnapshot<T>(
 async function collectStateDatabasePaths(input: StateInput): Promise<string[]> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const files = new Set([shared]);
+  // Every discovery source queues one projection identity per database: with an
+  // extended-length state root, directory enumeration and a registry
+  // registration spell the same file differently, and queuing both copies
+  // breaks the snapshot with a duplicate destination.
+  const stateRoot = path.resolve(input.stateDir);
+  const queue = (file: string) => files.add(resolveUpdateCandidateStateIdentity(stateRoot, file));
   let directories: string[] = [];
   try {
     directories = (await fs.readdir(path.join(input.stateDir, "agents"), { withFileTypes: true }))
@@ -178,18 +177,18 @@ async function collectStateDatabasePaths(input: StateInput): Promise<string[]> {
   const configured = Object.entries(input.config.agents?.entries ?? {});
   for (const directory of [input.env?.OPENCLAW_AGENT_DIR, input.env?.PI_CODING_AGENT_DIR]) {
     if (directory?.trim()) {
-      files.add(path.join(resolveUserPath(directory, input.env), "openclaw-agent.sqlite"));
+      queue(path.join(resolveUserPath(directory, input.env), "openclaw-agent.sqlite"));
     }
   }
   const projected = (input.config.agents?.list ?? []).map((agent) => [agent.id, agent] as const);
   for (const [id, agent] of [...configured, ...projected]) {
     directories.push(id);
     if (agent.agentDir) {
-      files.add(path.join(resolveUserPath(agent.agentDir, input.env), "openclaw-agent.sqlite"));
+      queue(path.join(resolveUserPath(agent.agentDir, input.env), "openclaw-agent.sqlite"));
     }
   }
   for (const id of new Set(["main", ...directories])) {
-    files.add(path.resolve(input.stateDir, "agents", id, "agent", "openclaw-agent.sqlite"));
+    queue(path.resolve(input.stateDir, "agents", id, "agent", "openclaw-agent.sqlite"));
   }
   return [...files].toSorted();
 }

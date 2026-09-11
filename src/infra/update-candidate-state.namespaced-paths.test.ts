@@ -190,3 +190,41 @@ it.skipIf(process.platform !== "win32")(
     copied.close();
   },
 );
+
+// With an extended-length state root, directory discovery queues the
+// namespaced spelling while a relative registration resolves to the same
+// database; both must dedupe to one copy at one projection identity.
+it.skipIf(process.platform !== "win32")(
+  "dedupes a relative registration under a namespaced state root",
+  async () => {
+    const plainState = path.join(root, "source");
+    const namespacedState = `\\\\?\\${plainState}`;
+    const target = path.join(root, "copy");
+    const canonical = path.join(plainState, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await createDatabase(canonical);
+    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: plainState } }).db;
+    registry
+      .prepare(
+        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
+      )
+      .run("main", path.join("agents", "main", "agent", "openclaw-agent.sqlite"));
+    closeOpenClawStateDatabaseByPath(path.join(plainState, "state", "openclaw.sqlite"));
+    await runSnapshotWorker({
+      stateDir: namespacedState,
+      targetStateDir: target,
+      config: {},
+    });
+    const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
+    const rebound = copiedRegistry
+      .prepare("SELECT path FROM agent_databases WHERE agent_id = 'main'")
+      .get() as { path: string };
+    copiedRegistry.close();
+    expect(path.isAbsolute(rebound.path)).toBe(false);
+    // The rebound registry entry must name exactly the one copied database.
+    const copied = openNodeSqliteDatabase(path.join(target, rebound.path));
+    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
+      value: "preserved",
+    });
+    copied.close();
+  },
+);

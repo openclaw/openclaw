@@ -2,6 +2,22 @@ import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "./path-guards.js";
 
+/**
+ * One projection identity per locator, matching the raw canonical-spelling
+ * eligibility of the rebase branch in resolveUpdateCandidateStatePath: only
+ * canonically spelled in-root aliases take their case-preserving plain
+ * spelling; external and noncanonical locators keep their raw spelling.
+ * Discovery dedupes on this identity so the copy and the registry rebound
+ * write always agree on one destination for every spelling of a database.
+ */
+export function resolveUpdateCandidateStateIdentity(sourceRoot: string, source: string): string {
+  return process.platform === "win32" &&
+    path.normalize(source) === source &&
+    isPathInside(sourceRoot, source)
+    ? normalizeWindowsPathPreservingCase(source)
+    : source;
+}
+
 // Keep path projection independent of snapshot orchestration: the snapshot owner
 // dynamically loads plugin projection, so importing it back creates a worker build cycle.
 /** Shared with config projection so custom agent directories use their copied database. */
@@ -20,9 +36,10 @@ export function resolveUpdateCandidateStatePath(
     // case-preserving plain spelling.
     const projectionRoot =
       process.platform === "win32" ? normalizeWindowsPathPreservingCase(sourceRoot) : sourceRoot;
-    const projectionSource =
-      process.platform === "win32" ? normalizeWindowsPathPreservingCase(source) : source;
-    return path.join(targetRoot, path.relative(projectionRoot, projectionSource));
+    return path.join(
+      targetRoot,
+      path.relative(projectionRoot, resolveUpdateCandidateStateIdentity(sourceRoot, source)),
+    );
   }
   // External and noncanonical locators keep their raw spelling as their
   // projection identity: registered link/../ locators can identify a different
