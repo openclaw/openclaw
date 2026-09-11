@@ -238,7 +238,8 @@ export async function convergeUpdatePlugins(params: {
         ...(postCorePluginUpdate?.warnings ?? []).filter(
           (warning) => warning.reason === "plugin-target-unavailable",
         ),
-        ...(postCorePluginUpdate?.npm.outcomes ?? []).filter(
+        // Committed handoff files can acknowledge success without npm details.
+        ...(postCorePluginUpdate?.npm?.outcomes ?? []).filter(
           (outcome) => outcome.code === "source-bundled-plugin",
         ),
       ];
