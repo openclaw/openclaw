@@ -286,7 +286,7 @@ struct TalkMLXSpeechSynthesizerTests {
         } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {
             #expect(await transport.closeCount == 1)
         } catch {
-            Issue.record("expected cancellation without system-voice fallback: \(error)")
+            Issue.record("expected a canceled terminal outcome after helper closure: \(error)")
         }
         await synthesizer.shutdown()
     }
@@ -495,7 +495,7 @@ struct TalkMLXSpeechSynthesizerTests {
             _ = try await synthesis.value
             Issue.record("expected canceled helper failure")
         } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {} catch {
-            Issue.record("late helper failure requested system-voice fallback: \(error)")
+            Issue.record("late helper failure returned a non-cancellation outcome: \(error)")
         }
         #expect(await factory.callCount == 1)
         await synthesizer.shutdown()
@@ -546,7 +546,7 @@ struct TalkMLXSpeechSynthesizerTests {
             _ = try await synthesis.value
             Issue.record("expected stopped stream cancellation")
         } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {} catch {
-            Issue.record("stopped stream requested system-voice fallback: \(error)")
+            Issue.record("stopped stream returned a non-cancellation outcome: \(error)")
         }
         #expect(await transport.closeCount == 1)
         #expect(await factory.callCount == 1)

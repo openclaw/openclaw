@@ -130,12 +130,7 @@ actor TalkMLXSpeechSynthesizer {
                         })
                 }
             } catch let error as SynthesizeError {
-                let requiresFallback = self.fallbackRequiredIDs.contains(id)
-                self.finishRequest(id: id)
-                if requiresFallback {
-                    throw SynthesizeError.audioGenerationFailed
-                }
-                throw error
+                throw self.finishRequestFailure(id: id, error: error)
             } catch is CancellationError {
                 if self.activeID == id {
                     try? await self.transport?.send(.cancel(id: id))
@@ -148,27 +143,19 @@ actor TalkMLXSpeechSynthesizer {
                     "talk mlx helper stream failed attempt=\(attempt + 1, privacy: .public): " +
                         "\(error.localizedDescription, privacy: .public)")
                 await self.discardTransport(forRequest: id)
-                if self.fallbackRequiredIDs.contains(id) {
-                    self.finishRequest(id: id)
-                    throw SynthesizeError.audioGenerationFailed
-                }
-                if self.cancelRequestedID == id {
-                    self.finishRequest(id: id)
-                    throw SynthesizeError.canceled
-                }
-                guard self.activeID == id else {
-                    throw SynthesizeError.canceled
+                if self.fallbackRequiredIDs.contains(id) || self.cancelRequestedID == id || self.activeID != id {
+                    throw self.finishRequestFailure(id: id, error: error)
                 }
                 if attempt == 0 {
                     continue
                 }
-                self.finishRequest(id: id)
-                throw SynthesizeError.modelLoadFailed(Self.helperInvocation().displayName)
+                throw self.finishRequestFailure(
+                    id: id,
+                    error: SynthesizeError.modelLoadFailed(Self.helperInvocation().displayName))
             }
         }
 
-        self.finishRequest(id: id)
-        throw SynthesizeError.audioGenerationFailed
+        throw self.finishRequestFailure(id: id, error: SynthesizeError.audioGenerationFailed)
         #endif
     }
 
@@ -339,14 +326,11 @@ actor TalkMLXSpeechSynthesizer {
                     continue
                 }
             }
-        } catch SynthesizeError.timedOut {
-            await self.discardTransport(forRequest: id)
-            self.finishRequest(id: id)
-            continuation.finish(throwing: SynthesizeError.timedOut)
         } catch {
-            let requiresFallback = self.fallbackRequiredIDs.contains(id)
-            self.finishRequest(id: id)
-            continuation.finish(throwing: requiresFallback ? SynthesizeError.audioGenerationFailed : error)
+            if case SynthesizeError.timedOut = error {
+                await self.discardTransport(forRequest: id)
+            }
+            continuation.finish(throwing: self.finishRequestFailure(id: id, error: error))
         }
     }
 
@@ -359,6 +343,19 @@ actor TalkMLXSpeechSynthesizer {
         case .busy, .generationFailed, .invalidRequest, .protocolError:
             .audioGenerationFailed
         }
+    }
+
+    private func finishRequestFailure(id: String, error: Error) -> Error {
+        // Capture provider failure intent before finishing clears the request's state.
+        let failure: Error = if self.fallbackRequiredIDs.contains(id) {
+            SynthesizeError.audioGenerationFailed
+        } else if self.cancelRequestedID == id || self.activeID != id {
+            SynthesizeError.canceled
+        } else {
+            error
+        }
+        self.finishRequest(id: id)
+        return failure
     }
 
     private func finishRequest(id: String) {
