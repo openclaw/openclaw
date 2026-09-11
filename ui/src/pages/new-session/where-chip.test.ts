@@ -408,6 +408,10 @@ describe("Where chip", () => {
         true,
       );
     }
+    expect(
+      container.querySelector('[data-value="cloud:blocked"] .session-menu__description')
+        ?.textContent,
+    ).toBe(" · Runtime unavailable");
     expect(container.querySelector('[data-value="gateway"]')?.getAttribute("aria-pressed")).toBe(
       String(!autoDevice),
     );
@@ -616,7 +620,9 @@ describe("Where chip", () => {
 
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.disabled).toBe(true);
-    expect(device?.textContent).not.toContain("This runtime does not support paired devices");
+    expect(device?.querySelector(".session-menu__description")?.textContent).toBe(
+      " · This runtime does not support paired devices",
+    );
     // The disabled reason owns the title; the meter's no-claim alt text stays on its aria-label.
     expect(device?.title).toBe("This runtime does not support paired devices");
   });
@@ -685,8 +691,7 @@ describe("Where chip", () => {
     const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
     expect(automatic?.disabled).toBe(true);
     expect(automatic?.title).toMatch(reason);
-    expect(automatic?.textContent).not.toMatch(reason);
-    expect(automatic?.textContent).toContain("Least-busy device");
+    expect(automatic?.querySelector(".session-menu__description")?.textContent).toMatch(reason);
   });
 
   it.each([

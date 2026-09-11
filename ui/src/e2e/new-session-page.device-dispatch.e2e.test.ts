@@ -72,7 +72,7 @@ suite.define(() => {
         exact: true,
       });
       expect(await auto.getAttribute("aria-pressed")).toBe("false");
-      expect(await destinations.getByRole("button", { name: "aws", exact: true }).count()).toBe(1);
+      expect(await destinations.getByRole("button", { name: /^aws(?: · .+)?$/ }).count()).toBe(1);
       await auto.click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-auto-device")).toBe("true");

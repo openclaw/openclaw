@@ -153,7 +153,7 @@ suite.define(() => {
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.6");
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
-      expect(await device.textContent()).not.toContain(
+      expect(await device.locator(".session-menu__description").textContent()).toContain(
         "This runtime does not support paired devices",
       );
       await expect
@@ -286,12 +286,23 @@ suite.define(() => {
       expect(await row("missing-capacity").isDisabled()).toBe(true);
       expect(await row("offline").isDisabled()).toBe(true);
       expect(await row("offline").locator(".session-menu__description").textContent()).toMatch(
-        /^ · Offline /,
+        /^ · Offline for .+ · Device unavailable\. Reconnect it and try again\.$/,
       );
-      expect(await row("offline").textContent()).not.toContain("Device unavailable");
       expect(await tooltipTitleText(row("offline"))).toBe(
         "Device unavailable. Reconnect it and try again.",
       );
+      expect(await row("offline").locator(".session-menu__description").isVisible()).toBe(true);
+      expect(
+        await row("offline").evaluate((element) => element.getBoundingClientRect().height),
+      ).toBe(32);
+      expect(
+        await row("offline")
+          .locator(".session-menu__text")
+          .evaluate((element) => ({
+            truncated: element.scrollWidth > element.clientWidth,
+            overflow: getComputedStyle(element).textOverflow,
+          })),
+      ).toEqual({ truncated: true, overflow: "ellipsis" });
       expect(await row("disabled").isDisabled()).toBe(true);
       expect(await row("outdated").isDisabled()).toBe(true);
 

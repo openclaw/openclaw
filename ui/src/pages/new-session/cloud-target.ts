@@ -125,6 +125,7 @@ export function renderCloudProfileMenuItems(params: {
 }) {
   return params.profiles.map((profile) => {
     const profileDisabledReason = params.profileDisabledReason?.(profile);
+    const disabledReason = params.disabled ? params.disabledReason : profileDisabledReason;
     return renderSessionMenuItem(
       {
         value: `cloud:${profile.id}`,
@@ -133,6 +134,7 @@ export function renderCloudProfileMenuItems(params: {
           : t("newSession.cloudWorker", { profile: profile.id }),
         icon: params.icon,
         environment: params.environment,
+        description: params.environment ? disabledReason : undefined,
         facts: params.environment
           ? undefined
           : profile.trust === "disposable"
@@ -143,8 +145,7 @@ export function renderCloudProfileMenuItems(params: {
         checked: params.selectedId === profile.id,
         disabled: params.disabled || Boolean(profileDisabledReason),
         title:
-          (params.disabled ? params.disabledReason : profileDisabledReason) ??
-          t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
+          disabledReason ?? t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
         onSelect: () => params.onSelect(profile.id),
       },
       params.submitting,

@@ -348,6 +348,7 @@ export function renderWhereChip(params: {
                   device.subtitle,
                   device.facts.find((fact) => fact !== device.disabledReason) ??
                     (device.platform ? prettifyPlatform(device.platform) : undefined),
+                  !device.selectable ? device.disabledReason : undefined,
                 ]
                   .filter(Boolean)
                   .join(" · "),
@@ -369,11 +370,13 @@ export function renderWhereChip(params: {
                   {
                     value: "auto-device",
                     label: t("newSession.autoDevice"),
-                    description: t(
-                      params.autoPlacementMode === "eligible-order"
-                        ? "newSession.autoDeviceSubEligible"
-                        : "newSession.autoDeviceSub",
-                    ),
+                    description:
+                      params.state.autoDeviceDisabledReason ??
+                      t(
+                        params.autoPlacementMode === "eligible-order"
+                          ? "newSession.autoDeviceSubEligible"
+                          : "newSession.autoDeviceSub",
+                      ),
                     icon: shuffleIcon,
                     environment: true,
                     checked: params.state.kind === "auto-device",
