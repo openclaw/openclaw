@@ -13,7 +13,7 @@ import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-st
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { hasNodeErrorCode } from "./path-guards.js";
+import { hasNodeErrorCode, normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
@@ -104,9 +104,14 @@ function collectRegisteredPaths(db: DatabaseSync, shared: string, files: string[
     : [];
   return rows.map(({ path: stored }) => {
     const source = resolveOpenClawRegisteredAgentDatabasePath(shared, stored);
+    // Windows registries can carry extended-length \\?\ spellings of a database
+    // that directory discovery already listed; both spellings project to the same
+    // candidate target, so discover the case-preserving plain spelling once.
+    const discovered =
+      process.platform === "win32" ? normalizeWindowsPathPreservingCase(source) : source;
     // Discover registrations from the exact private generation being inspected.
-    if (!files.includes(source)) {
-      files.push(source);
+    if (!files.includes(discovered)) {
+      files.push(discovered);
     }
     return { stored, source };
   });
@@ -294,10 +299,18 @@ export async function snapshotUpdateCandidateState(
                 for (const { stored, source } of collectRegisteredPaths(db, shared, files)) {
                   const rebound = targetPath(source);
                   const reboundStored = path.relative(input.targetStateDir, rebound);
-                  if (
-                    stored !== reboundStored &&
-                    source === resolveOpenClawRegisteredAgentDatabasePath(shared, reboundStored)
-                  ) {
+                  const resolvedRebound = resolveOpenClawRegisteredAgentDatabasePath(
+                    shared,
+                    reboundStored,
+                  );
+                  // Extended-length \\?\ and plain spellings of one registered database
+                  // are the same duplicate pair as a legacy absolute/relative pair.
+                  const sameRegisteredDatabase =
+                    source === resolvedRebound ||
+                    (process.platform === "win32" &&
+                      normalizeWindowsPathPreservingCase(source) ===
+                        normalizeWindowsPathPreservingCase(resolvedRebound));
+                  if (stored !== reboundStored && sameRegisteredDatabase) {
                     // A legacy absolute/relative pair names exactly the same source.
                     // Collapse only that duplicate in the copy before its unique-key update.
                     executeSqliteQuerySync(
