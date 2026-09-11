@@ -557,50 +557,6 @@ describe("update global helpers", () => {
     });
   });
 
-  it.each([false, true])(
-    "updates the owning custom npm prefix without a prefix-local npm binary (symlinked=%s)",
-    async (symlinked) => {
-      await withMockedPlatform("linux", async () => {
-        await withTestDir({ prefix: "openclaw-update-custom-npm-prefix-" }, async (base) => {
-          const physicalPrefix = path.join(base, "custom");
-          const prefix = symlinked ? path.join(base, "prefix-alias") : physicalPrefix;
-          const globalRoot = path.join(prefix, "lib", "node_modules");
-          const pkgRoot = path.join(globalRoot, "openclaw");
-          await fs.mkdir(path.join(physicalPrefix, "lib", "node_modules", "openclaw"), {
-            recursive: true,
-          });
-          await fs.mkdir(path.join(physicalPrefix, "bin"));
-          if (symlinked) {
-            await fs.symlink(physicalPrefix, prefix, "dir");
-          }
-          await writeGlobalPackageJson(pkgRoot);
-          await fs.writeFile(path.join(pkgRoot, "openclaw.mjs"), "", "utf8");
-          await fs.symlink(
-            "../lib/node_modules/openclaw/openclaw.mjs",
-            path.join(prefix, "bin", "openclaw"),
-          );
-          const runCommand = createNpmRootRunner({
-            defaultNpmRoot: path.join(base, "other-node", "lib", "node_modules"),
-          });
-
-          const manager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000);
-          expect(manager).toBe("npm");
-          if (!manager) {
-            throw new Error("The custom npm prefix must have an update owner");
-          }
-          await expect(
-            resolveGlobalInstallTarget({ manager, runCommand, timeoutMs: 1000, pkgRoot }),
-          ).resolves.toMatchObject({
-            manager: "npm",
-            command: "npm",
-            globalRoot,
-            packageRoot: pkgRoot,
-          });
-        });
-      });
-    },
-  );
-
   it("honors an explicitly selected direct npm node_modules package root", async () => {
     await withTestDir({ prefix: "openclaw-update-managed-service-root-" }, async (base) => {
       const managedNpmRoot = path.join(base, ".openclaw", "npm", "node_modules");

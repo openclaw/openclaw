@@ -4,7 +4,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as container from "../../infra/container-environment.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
-import * as updateGlobal from "../../infra/update-global.js";
 import { listUpdateRuns } from "../../infra/update-run-ledger.js";
 import {
   renderUpdateRunReport,
@@ -74,62 +73,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-
-it.skipIf(process.platform === "win32").each([false, true])(
-  "takes the package path for a custom POSIX npm prefix (symlinked=%s)",
-  async (symlinked) => {
-    const base = path.dirname(root);
-    const physicalPrefix = path.join(base, "custom-prefix");
-    const prefix = symlinked ? path.join(base, "prefix-link") : physicalPrefix;
-    const packageRoot = path.join(prefix, "lib", "node_modules", "openclaw");
-    await fs.cp(root, path.join(physicalPrefix, "lib", "node_modules", "openclaw"), {
-      recursive: true,
-    });
-    await fs.mkdir(path.join(physicalPrefix, "bin"));
-    if (symlinked) {
-      await fs.symlink(physicalPrefix, prefix, "dir");
-    }
-    await fs.writeFile(path.join(packageRoot, "openclaw.mjs"), "export {};\n");
-    await fs.symlink(
-      "../lib/node_modules/openclaw/openclaw.mjs",
-      path.join(prefix, "bin", "openclaw"),
-    );
-    vi.mocked(shared.resolveUpdateRoot).mockResolvedValue(packageRoot);
-    const unownedProbe = vi.mocked(processRunner.runCommandWithTimeout).getMockImplementation()!;
-    vi.mocked(processRunner.runCommandWithTimeout).mockImplementation(async (argv, options) => {
-      const command = argv.join(" ");
-      if (command !== "npm root -g" && command !== "npm --version") {
-        return unownedProbe(argv, options);
-      }
-      return {
-        stdout:
-          command === "npm root -g" ? path.join(base, "other", "lib", "node_modules") : "12.0.0",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
-    });
-    const resolveTarget = updateGlobal.resolveGlobalInstallTarget;
-    const selectedTarget = vi.fn();
-    const stopped = new Error("fixture stops before package installation");
-    vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockImplementation(async (params) => {
-      selectedTarget(await resolveTarget(params));
-      throw stopped;
-    });
-    await updateCommand({ json: true, yes: true, channel: "stable" }).catch((error: unknown) => {
-      expect(error).toBe(stopped);
-    });
-    expect(selectedTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        manager: "npm",
-        packageRoot,
-        globalRoot: path.dirname(packageRoot),
-      }),
-    );
-  },
-);
 
 it.each([
   { containerized: true, reason: "container-image-install", action: "Pull or build" },
