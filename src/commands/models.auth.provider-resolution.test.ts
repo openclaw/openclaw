@@ -236,6 +236,12 @@ describe("models auth login explicit credential selection", () => {
     "runtime-canonical-models",
     "config-rejected",
     "absent-default",
+    "consent-all",
+    "consent-keep",
+    "consent-legacy-all",
+    "consent-legacy-keep",
+    "consent-legacy-set-default-all",
+    "consent-legacy-set-default-keep",
   ])("uses fresh authentication for %s with the gateway stopped", async (selection) => {
     const mergedModels = selection === "concurrent-models" || selection === "stale-models";
     const modelConflict = selection === "conflicting-models";
@@ -363,6 +369,8 @@ describe("models auth login explicit credential selection", () => {
                     result.configPatch = { gateway: { port: -1 } };
                   } else if (${JSON.stringify(selection)} === "absent-default") {
                     result.configPatch = { agents: { defaults: { model: "authstore-proof/recommended" } } };
+                  } else if (${JSON.stringify(selection.startsWith("consent-"))}) {
+                    result.configPatch = { agents: { defaults: { modelPolicy: { allow: ["authstore-proof/*"] }, models: { "authstore-proof/recommended": {} } } } };
                   }
                   return result;
                 }
@@ -393,7 +401,14 @@ describe("models auth login explicit credential selection", () => {
                 defaults:
                   selection === "absent-default"
                     ? {}
-                    : { model: { primary: "other-proof/existing" } },
+                    : {
+                        model: { primary: "other-proof/existing" },
+                        ...(selection.startsWith("consent-")
+                          ? selection.includes("-legacy-")
+                            ? { models: { "existing-model": {} } }
+                            : { modelPolicy: { allow: ["other-proof/existing"] } }
+                          : {}),
+                      },
               }),
           list: [{ id: "main", workspace: state.workspaceDir }],
         },
@@ -456,6 +471,7 @@ describe("models auth login explicit credential selection", () => {
         throw new Error("Unexpected interactive prompt in explicit fixture login");
       };
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      let consentAsked = false;
       const login = runModelsAuthLoginFlowCore({
         provider,
         method: "token",
@@ -464,7 +480,7 @@ describe("models auth login explicit credential selection", () => {
           ? { force: true }
           : selection === "profile-id"
             ? { profileId: freshId }
-            : selection === "set-default"
+            : selection === "set-default" || selection.includes("-set-default-")
               ? { setDefault: true }
               : selection === "credential-only"
                 ? { credentialOnly: true }
@@ -485,7 +501,24 @@ describe("models auth login explicit credential selection", () => {
         ...(selection === "runtime-canonical-models" ? {} : { config }),
         runtime,
         prompter: createWizardPrompter({
-          select: unexpectedPrompt,
+          select: async (prompt) => {
+            if (!selection.startsWith("consent-")) {
+              return unexpectedPrompt();
+            }
+            expect(loadPersistedAuthProfileStore()?.profiles[freshId]).toEqual(fresh);
+            expect(prompt.options.map((option) => option.label)).toEqual([
+              "Show all Auth store proof models",
+              "Keep current restrictions",
+            ]);
+            const answer = prompt.options.find(
+              (option) => option.value === (selection.endsWith("all") ? "all" : "keep"),
+            );
+            if (!answer) {
+              throw new Error("Model access choice missing");
+            }
+            consentAsked = true;
+            return answer.value;
+          },
           text: unexpectedPrompt,
           confirm: unexpectedPrompt,
         }),
@@ -505,8 +538,24 @@ describe("models auth login explicit credential selection", () => {
       }
 
       const savedConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+      if (selection.startsWith("consent-")) {
+        expect(consentAsked).toBe(true);
+        if (selection.includes("-legacy-")) {
+          expect(savedConfig.agents.defaults.models).toEqual(
+            selection.endsWith("all")
+              ? { "existing-model": {}, "authstore-proof/*": {} }
+              : { "existing-model": {} },
+          );
+        } else {
+          expect(savedConfig.agents.defaults.modelPolicy.allow).toEqual(
+            selection === "consent-all"
+              ? ["other-proof/existing", "authstore-proof/*"]
+              : ["other-proof/existing"],
+          );
+        }
+      }
       expect(savedConfig.agents.defaults.model?.primary).toBe(
-        selection === "set-default"
+        selection === "set-default" || selection.includes("-set-default-")
           ? "authstore-proof/recommended"
           : selection === "absent-default" || selection === "source-models"
             ? undefined
