@@ -12,6 +12,7 @@ import {
   resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
+import { ensureSqliteLibrarySelected } from "../../src/infra/bun-sqlite-library.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -20,6 +21,11 @@ import { loadVitestPerformanceConfig } from "./vitest.performance-config.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
+
+if (process.versions.bun) {
+  // Removal: delete this Vitest bootstrap after oven-sh/bun#42349 ships in supported Bun.
+  ensureSqliteLibrarySelected();
+}
 
 export type { LocalVitestScheduling };
 
