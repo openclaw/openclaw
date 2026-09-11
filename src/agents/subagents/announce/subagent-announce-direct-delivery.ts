@@ -275,7 +275,10 @@ export async function sendSubagentAnnounceDirectly(params: {
       };
     }
     const tryTextCompletionDirectDelivery = (
-      contentKind: "completed_result" | "failed_notice" = "completed_result",
+      agentResult?: { payloads?: unknown },
+      contentKind: "completed_result" | "failed_notice" = hasFailedTrustedSubagentCompletion
+        ? "failed_notice"
+        : "completed_result",
     ) =>
       deliverCompletionDirect({
         cfg,
@@ -286,6 +289,7 @@ export async function sendSubagentAnnounceDirectly(params: {
         internalEvents: params.internalEvents,
         contentKind,
         signal: params.signal,
+        agentResult,
         onDeliveryResult: params.onDeliveryResult,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
@@ -471,7 +475,10 @@ export async function sendSubagentAnnounceDirectly(params: {
         isSubagentCompletion &&
         directCompletionFallbackKind
       ) {
-        const textDelivery = await tryTextCompletionDirectDelivery(directCompletionFallbackKind);
+        const textDelivery = await tryTextCompletionDirectDelivery(
+          undefined,
+          directCompletionFallbackKind,
+        );
         if (textDelivery) {
           return textDelivery;
         }
@@ -589,7 +596,10 @@ export async function sendSubagentAnnounceDirectly(params: {
       !hasVisibleNonSilentGatewayPayload &&
       !hasMessagingToolDelivery
     ) {
-      const textDelivery = await tryTextCompletionDirectDelivery(textCompletionDirectDeliveryKind);
+      const textDelivery = await tryTextCompletionDirectDelivery(
+        directAnnounceResult ?? undefined,
+        textCompletionDirectDeliveryKind,
+      );
       if (textDelivery) {
         return textDelivery;
       }
@@ -633,6 +643,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       }
       if (subagentDirectMessageCompletionRequiresMessageTool) {
         const textDelivery = await tryTextCompletionDirectDelivery(
+          directAnnounceResult ?? undefined,
           textCompletionDirectDeliveryKind,
         );
         if (textDelivery) {

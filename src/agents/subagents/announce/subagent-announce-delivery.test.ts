@@ -2050,6 +2050,150 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("stages structured completion media through the direct text fallback", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const attachment = {
+      type: "image" as const,
+      path: "/tmp/generated-daily.png",
+      name: "generated-daily.png",
+      mimeType: "image/png",
+      sizeBytes: 1234,
+    };
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        result: "Generated 1 image.",
+        mediaUrls: ["/tmp/generated-daily.png"],
+        attachments: [attachment],
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Generated 1 image.",
+        mediaUrls: ["/tmp/generated-daily.png"],
+      }),
+    );
+  });
+
+  it("delivers caption-less completion media through the direct text fallback", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        result: "",
+        mediaUrls: ["/tmp/generated-daily.png"],
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "",
+        mediaUrls: ["/tmp/generated-daily.png"],
+      }),
+    );
+  });
+
+  it("does not attach child media to a failed completion notice", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-media-child";
+    const callGateway = vi.fn(async () => {
+      throw new Error("provider rejected requester synthesis");
+    }) as unknown as typeof runtimeCallGateway;
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceSessionKey: childSessionKey,
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "failed-media-child-session-id",
+        status: "error",
+        statusLabel: "failed: all models failed",
+        result: "(no output)",
+        mediaUrls: ["/tmp/partial-daily.png"],
+      }),
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(mockCallArg(sendMessage, 0, 0)).not.toHaveProperty("mediaUrls");
+  });
+
+  it("reports a terminal partial failure when completion media fails after an identified send", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const onDeliveryResult = vi.fn();
+    const sendMessage = vi.fn(async (params: Parameters<typeof runtimeSendMessage>[0]) => {
+      await params.onDeliveryResult?.({ channel: "discord", messageId: "msg-1" });
+      throw new OutboundDeliveryError("second attachment failed", {
+        cause: new Error("platform rejected media"),
+        results: [{ channel: "discord", messageId: "msg-1" }],
+      });
+    }) as unknown as typeof runtimeSendMessage;
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      onDeliveryResult,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        result: "Generated 1 image.",
+        mediaUrls: ["/tmp/generated-daily.png"],
+      }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      terminal: true,
+      missingMediaUrls: ["/tmp/generated-daily.png"],
+    });
+    expect(onDeliveryResult).not.toHaveBeenCalled();
+  });
+
+  it("forwards announcement-reply media through the direct text fallback", async () => {
+    // Normal producer events carry no structured media (subagent-announce.ts);
+    // media owned only by the requester-agent reply must still reach send.
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "Image ready\nMEDIA:/tmp/directive.png",
+            mediaUrls: ["/tmp/structured.png", "/tmp/directive.png"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Image ready",
+        mediaUrls: ["/tmp/structured.png", "/tmp/directive.png"],
+      }),
+    );
+  });
+
   it("delivers a generic notice for failed subagent placeholder output", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();
