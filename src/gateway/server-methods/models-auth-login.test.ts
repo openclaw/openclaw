@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { prepareProviderModelAccess } from "../../commands/models/auth-model-policy.js";
 import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderAuthChoiceMetadata } from "../../plugins/provider-auth-choices.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
@@ -11,7 +13,16 @@ import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
 import type { GatewayRequestContext } from "./types.js";
 import { wizardHandlers } from "./wizard.js";
 
-const hooks = vi.hoisted(() => ({ login: vi.fn(), choice: vi.fn(), admission: vi.fn() }));
+const hooks = vi.hoisted(() => ({
+  login: vi.fn(),
+  choice: vi.fn(),
+  admission: vi.fn(),
+  writeConfig: vi.fn<typeof import("../../commands/models/shared.js").updateConfig>(),
+}));
+vi.mock("../../commands/models/shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/models/shared.js")>()),
+  updateConfig: hooks.writeConfig,
+}));
 vi.mock("../../commands/models/auth.js", () => ({ runModelsAuthLoginFlowCore: hooks.login }));
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
   resolveManifestDeclaredProviderAuthChoices: () => {
@@ -40,6 +51,24 @@ const result = {
   profiles: [{ profileId: "fixture:owner", provider: "fixture", mode: "oauth" }],
 };
 const sessions = new Set<ReturnType<typeof createWizardSessionTracker>>();
+const modelConfig: OpenClawConfig = {
+  agents: {
+    defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
+    entries: { main: {} },
+  },
+};
+function requestModelAccess(options: ModelsAuthLoginFlowOptions) {
+  const prepared = expectDefined(
+    prepareProviderModelAccess({
+      config: modelConfig,
+      agentId: "main",
+      provider: "fixture",
+      providerLabel: "Fixture",
+    }),
+    "model access request",
+  );
+  expectDefined(options.onModelAccessRequested, "deferred model access callback")(prepared);
+}
 
 function harness() {
   const tracker = createWizardSessionTracker();
@@ -81,6 +110,7 @@ describe("models.authLogin ownership", () => {
   beforeEach(() => {
     hooks.choice.mockReturnValue(choice);
     hooks.login.mockResolvedValue(result);
+    hooks.writeConfig.mockRejectedValue(new Error("Unexpected model policy write"));
     hooks.admission.mockImplementation(async (_stateDir: string, run: () => Promise<unknown>) =>
       run(),
     );
@@ -133,17 +163,46 @@ describe("models.authLogin ownership", () => {
     }
   });
 
-  it("denies peer reads, answers and cancellation while the owner can complete", async () => {
+  it.each(["all", "keep"])("keeps post-save %s input owner-bound", async (modelAccess) => {
     const h = harness();
-    let accepted = false;
+    let saved = modelConfig;
+    hooks.writeConfig.mockImplementationOnce(async (mutator, _refs, beforeCommit) => {
+      const next = await mutator(structuredClone(modelConfig), {
+        runtimeConfig: modelConfig,
+        restoreSourceEntry: (_from, _to, entry) => entry,
+      });
+      beforeCommit?.();
+      expect(await h.invoke("wizard.cancel", { sessionId: "login" })).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "running" }),
+        undefined,
+      );
+      saved = next;
+      return saved;
+    });
     hooks.login.mockImplementation(async (options: ModelsAuthLoginFlowOptions) => {
-      accepted = await options.prompter.confirm({ message: "Continue?" });
+      await expectDefined(options.beforePersistentEffect, "credential commit callback")();
+      requestModelAccess(options);
       return result;
     });
     await h.start();
     const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
     const prompt = await session.next();
-    const answer = { stepId: expectDefined(prompt.step, "confirmation").id, value: true };
+    const answer = { stepId: expectDefined(prompt.step, "model access").id, value: modelAccess };
+    expect(await h.invoke("wizard.next", { sessionId: "login" })).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        step: expect.objectContaining({
+          type: "select",
+          initialValue: "keep",
+          options: [
+            expect.objectContaining({ value: "all", label: "Show all Fixture models" }),
+            expect.objectContaining({ value: "keep", label: "Keep current restrictions" }),
+          ],
+        }),
+      }),
+      undefined,
+    );
     const peer = { ...h.client, connId: "peer" };
     for (const method of ["wizard.status", "wizard.next", "wizard.cancel"]) {
       const respond = await h.invoke(
@@ -166,7 +225,7 @@ describe("models.authLogin ownership", () => {
       undefined,
       expect.objectContaining({ details: { code: "WIZARD_NOT_FOUND" } }),
     );
-    expect(accepted).toBe(false);
+    expect(hooks.writeConfig).not.toHaveBeenCalled();
     expect(session.getStatus()).toBe("running");
     const completed = await h.invoke("wizard.next", { sessionId: "login", answer });
     expect(completed).toHaveBeenCalledWith(
@@ -174,8 +233,68 @@ describe("models.authLogin ownership", () => {
       expect.objectContaining({ done: true, status: "done" }),
       undefined,
     );
-    expect(accepted).toBe(true);
+    expect(hooks.writeConfig).toHaveBeenCalledTimes(modelAccess === "all" ? 1 : 0);
+    expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(
+      modelAccess === "all" ? ["other/current", "fixture/*"] : ["other/current"],
+    );
   });
+
+  it.each(["cancel", "expire"])(
+    "releases post-save consent on %s after protecting the write",
+    async (action) => {
+      vi.useFakeTimers();
+      const enteredWrite = createDeferred();
+      const finishWrite = createDeferred();
+      const h = harness();
+      hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
+        await expectDefined(options.beforePersistentEffect, "credential commit callback")();
+        enteredWrite.resolve();
+        await finishWrite.promise;
+        requestModelAccess(options);
+        return result;
+      });
+      await h.start();
+      const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
+      try {
+        await enteredWrite.promise;
+        expect(await h.invoke("wizard.cancel", { sessionId: "login" })).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "running" }),
+          undefined,
+        );
+        expect(session.signal.aborted).toBe(false);
+        finishWrite.resolve();
+        expect(await h.invoke("wizard.next", { sessionId: "login" })).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ step: expect.objectContaining({ type: "select" }) }),
+          undefined,
+        );
+        if (action === "expire") {
+          await vi.advanceTimersByTimeAsync(25 * 60_000);
+        } else {
+          expect(await h.invoke("wizard.cancel", { sessionId: "login" })).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ status: "cancelled" }),
+            undefined,
+          );
+        }
+        expect(session.getStatus()).toBe("cancelled");
+        expect(session.signal.aborted).toBe(true);
+        await whenAdmittedWizardSessionSettled(session);
+        expect(hooks.writeConfig).not.toHaveBeenCalled();
+        expect(await harness().start()).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ sessionId: "login", status: "running" }),
+          undefined,
+        );
+      } finally {
+        finishWrite.resolve();
+        session.close(new Error("Test cleanup"));
+        await whenAdmittedWizardSessionSettled(session);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps a cancelled login readable until repeated cancellation releases admission", async () => {
     const release = createDeferred();
@@ -267,35 +386,62 @@ describe("models.authLogin ownership", () => {
     },
   );
 
-  it("keeps the hosted browser capability live through credential persistence and closes afterward", async () => {
-    const withdraw = prepareTailscalePublishedOrigin({
-      origin: "https://gateway.example",
-      mode: "serve",
-    });
-    const h = harness();
-    h.client.browserOrigin = { origin: "https://gateway.example" };
-    const received = createDeferred<ModelsAuthLoginFlowOptions>();
-    hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
-      received.resolve(options);
-      await options.beforePersistentEffect?.();
-      expect(options.signal?.aborted).toBe(false);
-      expect(options.assertCurrent).not.toThrow();
-      return result;
-    });
-    try {
-      await h.start();
-      const options = await received.promise;
-      const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
-      await whenAdmittedWizardSessionSettled(session);
-      expect(session.getStatus()).toBe("done");
-      expect(options.signal?.aborted).toBe(true);
-      expect(options.assertCurrent).toThrow("closed");
-    } finally {
-      withdraw();
-    }
-  });
+  it.each(["keep", "cancel", "revoked"])(
+    "closes browser sign-in before post-save %s",
+    async (action) => {
+      const withdraw = prepareTailscalePublishedOrigin({
+        origin: "https://gateway.example",
+        mode: "serve",
+      });
+      const h = harness();
+      h.client.browserOrigin = { origin: "https://gateway.example" };
+      const received = createDeferred<ModelsAuthLoginFlowOptions>();
+      hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
+        received.resolve(options);
+        await options.beforePersistentEffect?.();
+        expect(options.signal?.aborted).toBe(false);
+        expect(options.assertCurrent).not.toThrow();
+        requestModelAccess(options);
+        return result;
+      });
+      try {
+        await h.start();
+        const options = await received.promise;
+        const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
+        const prompt = await session.next();
+        expect(prompt.step?.type).toBe("select");
+        expect(options.signal?.aborted).toBe(true);
+        expect(options.assertCurrent).toThrow("closed");
+        withdraw();
+        expect(session.signal.aborted).toBe(false);
+        if (action === "cancel") {
+          await h.invoke("wizard.cancel", { sessionId: "login" });
+        } else {
+          if (action === "revoked") {
+            h.client.connect.scopes = [];
+          }
+          await h.invoke("wizard.next", {
+            sessionId: "login",
+            answer: { stepId: expectDefined(prompt.step, "model access").id, value: "keep" },
+          });
+        }
+        await whenAdmittedWizardSessionSettled(session);
+        expect(session.getStatus()).toBe(
+          action === "keep" ? "done" : action === "cancel" ? "cancelled" : "error",
+        );
+        if (action === "revoked") {
+          expect(session.getError()).toContain(
+            "Credentials saved, but provider settings could not be applied",
+          );
+        }
+        expect(hooks.writeConfig).not.toHaveBeenCalled();
+      } finally {
+        withdraw();
+      }
+    },
+  );
 
-  it("releases admission on disconnect with a pending note after cancellation locks", async () => {
+  it("releases admission on disconnect with a post-save note", async () => {
     const h = harness();
     hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
       await expectDefined(options.beforePersistentEffect, "credential commit callback")();
@@ -311,12 +457,6 @@ describe("models.authLogin ownership", () => {
         expect.objectContaining({
           step: expect.objectContaining({ message: "Credentials saved." }),
         }),
-        undefined,
-      );
-      const cancelled = await h.invoke("wizard.cancel", { sessionId: "login" });
-      expect(cancelled).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "running" }),
         undefined,
       );
       h.controller.abort();
@@ -356,11 +496,6 @@ describe("models.authLogin ownership", () => {
     const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
     try {
       await h.invoke("wizard.next", { sessionId: "login" });
-      expect(await h.invoke("wizard.cancel", { sessionId: "login" })).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "running" }),
-        undefined,
-      );
       let responded = false;
       const closing = h.invoke("wizard.cancel", { sessionId: "login", closeInput: true });
       void closing.then(() => {

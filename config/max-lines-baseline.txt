@@ -291,7 +291,6 @@ src/agents/agent-tools.read.ts
 src/agents/agent-tools.schema.test.ts
 src/agents/agent-tools.ts
 src/agents/auth-profiles/oauth-manager.ts
-src/agents/auth-profiles/oauth.openai-codex-refresh-fallback.test.ts
 src/agents/auth-profiles/persisted.ts
 src/agents/auth-profiles/profiles.test.ts
 src/agents/auth-profiles/store.ts

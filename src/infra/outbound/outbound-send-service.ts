@@ -1,5 +1,6 @@
 // Outbound send service chooses plugin-handled message actions or the core
 // message/poll path while preserving media policy and transcript mirrors.
+import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -203,7 +204,9 @@ async function tryHandleWithPluginAction(params: {
   if (!handled) {
     return null;
   }
-  await params.onHandled?.();
+  if (projectPluginMessageDeliveryFact(handled)?.status !== "suppressed") {
+    await params.onHandled?.();
+  }
   return {
     handledBy: "plugin",
     payload: extractToolPayload(handled),

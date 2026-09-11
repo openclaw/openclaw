@@ -1306,8 +1306,8 @@ extension DashboardWindowController {
                     navigationType: navigationAction.navigationType,
                     buttonNumber: navigationAction.buttonNumber)
             }
-            // Mac tabs have no download destination UI. Preserve
-            // direct pointer-activated downloads by handing them to the default browser.
+            // Page-initiated downloads keep their external-browser behavior.
+            // The explicit toolbar action owns the native Save dialog.
             if navigationAction.shouldPerformDownload {
                 if Self.shouldOpenExternalDashboardNavigation(
                     url,

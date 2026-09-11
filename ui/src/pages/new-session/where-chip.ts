@@ -1,6 +1,7 @@
 import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
-import { html, nothing } from "lit";
+import { html, nothing, svg } from "lit";
 import { deviceIcons } from "../../components/icons-devices.ts";
+import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
 import { workerCapacityPresentation } from "../../components/worker-capacity.ts";
 import { t } from "../../i18n/index.ts";
@@ -26,6 +27,12 @@ import {
   type DraftMachineOption,
   type DraftOperatingSystem,
 } from "./discovery.ts";
+
+const shuffleIcon = strokeIcon(svg`<path d="m18 14 4 4-4 4" />
+  <path d="m18 2 4 4-4 4" />
+  <path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22" />
+  <path d="M2 6h1.972a4 4 0 0 1 3.6 2.2" />
+  <path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45" />`);
 
 type WhereChipState = Readonly<{
   kind: "local" | "device" | "auto-device" | "cloud";
@@ -198,7 +205,7 @@ export function renderWhereChip(params: {
       : params.state.kind === "local"
         ? icons.home
         : params.state.kind === "auto-device"
-          ? icons.shuffle
+          ? shuffleIcon
           : environmentDeviceIcon(
               params.state.devices.find((device) => device.deviceId === params.deviceId),
             );
@@ -432,7 +439,7 @@ export function renderWhereChip(params: {
                     ?disabled=${busy || (!params.autoDevice && Boolean(params.state.autoDeviceDisabledReason))}
                     @click=${() => params.onToggleAutoDevice(!params.autoDevice)}
                   >
-                    <span class="session-menu__icon" aria-hidden="true">${icons.shuffle}</span>
+                    <span class="session-menu__icon" aria-hidden="true">${shuffleIcon}</span>
                     <span class="session-menu__text">
                       ${t("newSession.autoDeviceChoose")}
                       <span class="session-menu__description"

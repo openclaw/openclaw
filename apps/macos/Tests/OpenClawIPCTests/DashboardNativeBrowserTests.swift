@@ -9,8 +9,8 @@ struct DashboardNativeBrowserContractTests {
         for address in ["https://example.test/article", "http://example.test/", "about:blank"] {
             let url = try #require(URL(string: address))
             #expect(try DashboardBrowserMessageHandler.decode([
-                "type": "open", "tabId": "mac-fixture", "url": address,
-            ]) == .open(tabId: "mac-fixture", url: url, activate: true))
+                "type": "open", "sessionKey": "", "tabId": "mac-fixture", "url": address,
+            ]) == .open(tabId: "mac-fixture", url: url, sessionKey: "", activate: true))
             #expect(try DashboardBrowserMessageHandler.decode([
                 "type": "navigate", "tabId": "mac-fixture", "url": address,
             ]) == .navigate(tabId: "mac-fixture", url: url))
@@ -28,19 +28,45 @@ struct DashboardNativeBrowserContractTests {
             for type in ["open", "navigate"] {
                 #expect(throws: (any Error).self) {
                     try DashboardBrowserMessageHandler.decode([
-                        "type": type, "tabId": "mac-fixture", "url": address,
+                        "type": type, "sessionKey": "", "tabId": "mac-fixture", "url": address,
                     ])
                 }
             }
         }
         let blankURL = try #require(URL(string: "about:blank"))
         #expect(try DashboardBrowserMessageHandler.decode([
+            "type": "open", "sessionKey": "", "tabId": "mac-background", "url": "about:blank", "activate": false,
+        ]) == .open(tabId: "mac-background", url: blankURL, sessionKey: "", activate: false))
+    }
+
+    @Test func `open requests preserve valid session identities and reject malformed values`() throws {
+        let url = try #require(URL(string: "about:blank"))
+        for sessionKey in ["", "agent:main:chat:session-a"] {
+            #expect(try DashboardBrowserMessageHandler.decode([
+                "type": "open", "tabId": "mac-fixture", "url": "about:blank", "sessionKey": sessionKey,
+            ]) == .open(tabId: "mac-fixture", url: url, sessionKey: sessionKey, activate: true))
+        }
+        for sessionKey: Any in [NSNull(), 42, " session-a", "session-a "] {
+            #expect(throws: (any Error).self) {
+                try DashboardBrowserMessageHandler.decode([
+                    "type": "open", "tabId": "mac-fixture", "url": "about:blank", "sessionKey": sessionKey,
+                ])
+            }
+        }
+    }
+
+    @Test func `released UI open requests without session identity retain the window scope`() throws {
+        let url = try #require(URL(string: "about:blank"))
+        #expect(try DashboardBrowserMessageHandler.decode([
+            "type": "open", "tabId": "mac-fixture", "url": "about:blank",
+        ]) == .open(tabId: "mac-fixture", url: url, sessionKey: nil, activate: true))
+        #expect(try DashboardBrowserMessageHandler.decode([
             "type": "open", "tabId": "mac-background", "url": "about:blank", "activate": false,
-        ]) == .open(tabId: "mac-background", url: blankURL, activate: false))
+        ]) == .open(tabId: "mac-background", url: url, sessionKey: nil, activate: false))
     }
 
     @Test func `requests preserve tab and presentation identities without coercion`() throws {
-        let actions: [DashboardBrowserAction] = [.back, .forward, .reload, .stop, .close, .snapshot]
+        let actions: [DashboardBrowserAction] = [.back, .forward, .reload, .stop, .close, .snapshot, .download]
         for action in actions {
             #expect(try DashboardBrowserMessageHandler.decode([
                 "type": action.rawValue, "tabId": "mac-fixture",
@@ -67,7 +93,8 @@ struct DashboardNativeBrowserContractTests {
         let malformed: [Any] = [
             NSNull(), "open", [String: Any](), ["type": "unknown"],
             ["type": "close"], ["type": "close", "tabId": ""], ["type": "close", "tabId": 42],
-            ["type": "open", "tabId": "mac-fixture", "url": "about:blank", "activate": 1],
+            ["type": "download"], ["type": "download", "tabId": " "],
+            ["type": "open", "sessionKey": "", "tabId": "mac-fixture", "url": "about:blank", "activate": 1],
             ["type": "release-scope", "scope": false],
             ["type": "inspect", "tabId": "mac-fixture", "x": -1, "y": 0],
             ["type": "inspect", "tabId": "mac-fixture", "x": 0, "y": Double.nan],
@@ -110,6 +137,7 @@ struct DashboardNativeBrowserContractTests {
         let state = DashboardBrowserState(revision: 7, tabs: [
             .init(
                 id: "mac-first",
+                sessionKey: "session-a",
                 url: "https://example.test/",
                 title: "A \"quoted\" page",
                 loading: false,
@@ -119,6 +147,7 @@ struct DashboardNativeBrowserContractTests {
                 openerTabId: nil),
             .init(
                 id: "mac-second",
+                sessionKey: "session-a",
                 url: "about:blank",
                 title: "",
                 loading: true,
@@ -134,6 +163,7 @@ struct DashboardNativeBrowserContractTests {
             "tabs": [
                 [
                     "id": "mac-first",
+                    "sessionKey": "session-a",
                     "url": "https://example.test/",
                     "title": "A \"quoted\" page",
                     "loading": false,
@@ -143,6 +173,7 @@ struct DashboardNativeBrowserContractTests {
                 ],
                 [
                     "id": "mac-second",
+                    "sessionKey": "session-a",
                     "url": "about:blank",
                     "title": "",
                     "loading": true,
@@ -154,6 +185,27 @@ struct DashboardNativeBrowserContractTests {
             ],
         ]
         #expect(actual == expected)
+    }
+
+    @Test func `legacy tab state omits session identity while shell tabs preserve the empty key`() throws {
+        for sessionKey: String? in [nil, ""] {
+            let state = DashboardBrowserState(revision: 1, tabs: [.init(
+                id: "mac-legacy",
+                sessionKey: sessionKey,
+                url: "about:blank",
+                title: "",
+                loading: false,
+                canGoBack: false,
+                canGoForward: false,
+                openedBy: "web",
+                openerTabId: nil)])
+            let encoded = try JSONEncoder().encode(state)
+            let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            let tabs = try #require(actual["tabs"] as? [[String: Any]])
+            let tab = try #require(tabs.first)
+            #expect(tab["sessionKey"] as? String == sessionKey)
+            #expect((tab["sessionKey"] == nil) == (sessionKey == nil))
+        }
     }
 
     @MainActor
@@ -239,8 +291,11 @@ struct DashboardNativeBrowserHostTests {
         let fixture = self.fixture()
         defer { fixture.host.dispose() }
         let url = try #require(URL(string: "about:blank"))
-        try fixture.host.open(tabId: "mac-first", url: url)
-        try fixture.host.open(tabId: "mac-second", url: #require(URL(string: "http://127.0.0.1:1/second")))
+        try fixture.host.open(tabId: "mac-first", url: url, sessionKey: "")
+        try fixture.host.open(
+            tabId: "mac-second",
+            url: #require(URL(string: "http://127.0.0.1:1/second")),
+            sessionKey: "")
         let first = try #require(fixture.host.webView(for: "mac-first"))
         let second = try #require(fixture.host.webView(for: "mac-second"))
         #expect(first.configuration.websiteDataStore === second.configuration.websiteDataStore)
@@ -270,7 +325,7 @@ struct DashboardNativeBrowserHostTests {
     @Test func `most recent scope wins and releasing it restores the surviving presentation`() throws {
         let fixture = self.fixture()
         defer { fixture.host.dispose() }
-        try fixture.host.open(tabId: "mac-first", url: #require(URL(string: "about:blank")))
+        try fixture.host.open(tabId: "mac-first", url: #require(URL(string: "about:blank")), sessionKey: "")
         let tab = try #require(fixture.host.webView(for: "mac-first"))
         let firstRect = DashboardBrowserRect(x: 10, y: 20, width: 200, height: 100)
         let secondRect = DashboardBrowserRect(x: 300, y: 50, width: 300, height: 250)
@@ -298,7 +353,7 @@ struct DashboardNativeBrowserHostTests {
         let fixture = self.fixture()
         defer { fixture.host.dispose() }
         let url = try #require(URL(string: "http://127.0.0.1:1/popup"))
-        try fixture.host.open(tabId: "mac-parent", url: url)
+        try fixture.host.open(tabId: "mac-parent", url: url, sessionKey: "")
         let opener = try #require(fixture.host.webView(for: "mac-parent"))
         fixture.host.openNewWindow(url, opener: opener)
         let tabs = fixture.host.state.tabs
@@ -317,31 +372,71 @@ struct DashboardNativeBrowserHostTests {
         defer { fixture.host.dispose() }
         let requested = try #require(URL(string: "http://127.0.0.1:1/short"))
         let redirected = try #require(URL(string: "http://127.0.0.1:1/final"))
-        #expect(try fixture.host.open(tabId: "mac-original", url: requested) == "mac-original")
+        #expect(try fixture.host.open(tabId: "mac-original", url: requested, sessionKey: "") == "mac-original")
         let original = try #require(fixture.host.webView(for: "mac-original"))
-        #expect(try fixture.host.open(tabId: "mac-same", url: requested) == "mac-original")
+        #expect(try fixture.host.open(tabId: "mac-same", url: requested, sessionKey: "") == "mac-original")
         fixture.host.navigationWillStart(redirected, in: original)
-        #expect(try fixture.host.open(tabId: "mac-alias", url: requested) == "mac-original")
-        #expect(try fixture.host.open(tabId: "mac-current", url: redirected) == "mac-original")
+        #expect(try fixture.host.open(tabId: "mac-alias", url: requested, sessionKey: "") == "mac-original")
+        #expect(try fixture.host.open(tabId: "mac-current", url: redirected, sessionKey: "") == "mac-original")
         #expect(fixture.host.state.tabs.map(\.id) == ["mac-original"])
         #expect(fixture.host.webView(for: "mac-original") === original)
 
         fixture.host.openNewWindow(requested, opener: original)
         let current = try #require(fixture.host.state.tabs.last)
         #expect(current.id != "mac-original")
-        #expect(try fixture.host.open(tabId: "mac-prefer-current", url: requested) == current.id)
+        #expect(try fixture.host.open(tabId: "mac-prefer-current", url: requested, sessionKey: "") == current.id)
         #expect(fixture.host.state.tabs.count == 2)
 
         try fixture.host.close(tabId: current.id)
         fixture.host.navigationDidFail(for: original)
-        #expect(try fixture.host.open(tabId: "mac-retry", url: requested) == "mac-retry")
+        #expect(try fixture.host.open(tabId: "mac-retry", url: requested, sessionKey: "") == "mac-retry")
         #expect(fixture.host.state.tabs.map(\.id) == ["mac-original", "mac-retry"])
 
         // The explicit new-tab action opens about:blank and must always get its own tab.
         let blank = try #require(URL(string: "about:blank"))
-        #expect(try fixture.host.open(tabId: "mac-blank-one", url: blank) == "mac-blank-one")
-        #expect(try fixture.host.open(tabId: "mac-blank-two", url: blank) == "mac-blank-two")
+        #expect(try fixture.host.open(tabId: "mac-blank-one", url: blank, sessionKey: "") == "mac-blank-one")
+        #expect(try fixture.host.open(tabId: "mac-blank-two", url: blank, sessionKey: "") == "mac-blank-two")
         #expect(fixture.host.state.tabs.map(\.id) == ["mac-original", "mac-retry", "mac-blank-one", "mac-blank-two"])
+    }
+
+    @Test func `reading links and their redirect aliases are reused only within their session`() throws {
+        let fixture = self.fixture()
+        defer { fixture.host.dispose() }
+        let requested = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let redirected = try #require(URL(string: "http://127.0.0.1:1/final"))
+        #expect(try fixture.host.open(tabId: "mac-first", url: requested, sessionKey: "session-a") == "mac-first")
+        let original = try #require(fixture.host.webView(for: "mac-first"))
+        fixture.host.navigationWillStart(redirected, in: original)
+        #expect(try fixture.host.open(tabId: "mac-alias", url: requested, sessionKey: "session-a") == "mac-first")
+        #expect(try fixture.host.open(tabId: "mac-current", url: redirected, sessionKey: "session-a") == "mac-first")
+        #expect(try fixture.host.open(tabId: "mac-second", url: requested, sessionKey: "session-b") == "mac-second")
+        #expect(try fixture.host.open(tabId: "mac-third", url: redirected, sessionKey: "session-b") == "mac-third")
+        #expect(fixture.host.state.tabs.map(\.sessionKey) == ["session-a", "session-b", "session-b"])
+        #expect(fixture.host.webView(for: "mac-first") === original)
+
+        fixture.host.openNewWindow(requested, opener: original)
+        let popup = try #require(fixture.host.state.tabs.last)
+        #expect(popup.sessionKey == "session-a")
+        #expect(popup.openerTabId == "mac-first")
+        #expect(try fixture.host.open(tabId: "mac-reuse-popup", url: requested, sessionKey: "session-a") == popup.id)
+        #expect(try fixture.host
+            .open(tabId: "mac-reuse-second", url: requested, sessionKey: "session-b") == "mac-second")
+    }
+
+    @Test func `legacy ownership survives reuse and popups without becoming the empty shell scope`() throws {
+        let fixture = self.fixture()
+        defer { fixture.host.dispose() }
+        let url = try #require(URL(string: "http://127.0.0.1:1/page"))
+        #expect(try fixture.host.open(tabId: "mac-legacy", url: url, sessionKey: nil) == "mac-legacy")
+        #expect(try fixture.host.open(tabId: "mac-reuse", url: url, sessionKey: nil) == "mac-legacy")
+        #expect(try fixture.host.open(tabId: "mac-shell", url: url, sessionKey: "") == "mac-shell")
+        #expect(try fixture.host.open(tabId: "mac-session", url: url, sessionKey: "session-a") == "mac-session")
+        let opener = try #require(fixture.host.webView(for: "mac-legacy"))
+        fixture.host.openNewWindow(url, opener: opener)
+        let popup = try #require(fixture.host.state.tabs.last)
+        #expect(popup.openerTabId == "mac-legacy")
+        #expect(popup.sessionKey == nil)
+        #expect(fixture.host.state.tabs.map(\.sessionKey) == [nil, "", "session-a", nil])
     }
 
     @Test func `requested alias survives the initial redirect chain and retires on later navigation`() throws {

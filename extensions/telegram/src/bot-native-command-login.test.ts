@@ -1,4 +1,3 @@
-// Tests Telegram native Codex login command behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -8,11 +7,12 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createLoginResult,
   createOwnerLoginConfig,
+  exerciseDeferredModelAccess,
   registerLoginCommand,
+  type TelegramLoginFlow,
 } from "./bot-native-command-login.test-support.js";
 import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
 import {
@@ -60,29 +60,29 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   };
 });
 
-type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLoginFlow"]>;
+function resetLoginCommandMocks() {
+  resetNativeCommandMenuMocks();
+  loginSessionMocks.loadSessionStore.mockReset().mockReturnValue({});
+  loginSessionMocks.getSessionEntry
+    .mockReset()
+    .mockImplementation(
+      ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
+        loginSessionMocks.loadSessionStore(storePath)[sessionKey],
+    );
+  loginSessionMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
+  loginSessionMocks.patchSessionEntry.mockReset().mockImplementation(async (params) => {
+    const current = loginSessionMocks.loadSessionStore(params.storePath)[params.sessionKey];
+    if (!current) {
+      return null;
+    }
+    const patch = await params.update({ ...current });
+    params.assertCommitAllowed?.();
+    return patch ? { ...current, ...patch } : current;
+  });
+}
 
 describe("registerTelegramNativeCommands /login", () => {
-  beforeEach(() => {
-    resetNativeCommandMenuMocks();
-    loginSessionMocks.loadSessionStore.mockReset().mockReturnValue({});
-    loginSessionMocks.getSessionEntry
-      .mockReset()
-      .mockImplementation(
-        ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
-          loginSessionMocks.loadSessionStore(storePath)[sessionKey],
-      );
-    loginSessionMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
-    loginSessionMocks.patchSessionEntry.mockReset().mockImplementation(async (params) => {
-      const current = loginSessionMocks.loadSessionStore(params.storePath)[params.sessionKey];
-      if (!current) {
-        return null;
-      }
-      const patch = await params.update({ ...current });
-      params.assertCommitAllowed?.();
-      return patch ? { ...current, ...patch } : current;
-    });
-  });
+  beforeEach(resetLoginCommandMocks);
 
   it("delivers the core provider menu and its method continuation without starting login", async () => {
     const loginFlow = vi.fn();
@@ -311,6 +311,15 @@ describe("registerTelegramNativeCommands /login", () => {
     );
   });
 
+  it.each(["all", "keep"] as const)(
+    "completes deferred %s consent through a fresh dispatcher",
+    exerciseDeferredModelAccess,
+  );
+
+  it("cancels saved-login consent and rejects its old choice", async () => {
+    await exerciseDeferredModelAccess("cancel");
+  });
+
   it("rejects group /login codex without sending the device code publicly", async () => {
     const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
       await params.prompter.note("URL: https://auth.openai.com/codex/device\nCode: SECRET");
@@ -422,8 +431,8 @@ describe("registerTelegramNativeCommands /login", () => {
     const command = (match: string, chatId = 100, userId = 200) =>
       handler(createPrivateCommandContext({ match, chatId, userId }));
     try {
-      await command("openrouter");
-      await command("openrouter", 101);
+      await command("openrouter/openrouter-oauth");
+      await command("openrouter/openrouter-oauth", 101);
       expect(signals).toHaveLength(2);
       await command("cancel", 100, 201);
       expect(signals.every((signal) => !signal.aborted)).toBe(true);

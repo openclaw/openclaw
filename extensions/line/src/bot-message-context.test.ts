@@ -15,6 +15,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
+import { resolveLineQuoteToken } from "./quote-tokens.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 const logVerboseMock = vi.hoisted(() => vi.fn());
@@ -166,6 +167,63 @@ describe("buildLineMessageContext", () => {
         ...sticker,
       },
     } as Partial<MessageEvent>);
+
+  it.each([
+    { kind: "a text message", overrides: {}, chatId: "user-1" },
+    {
+      kind: "a group message",
+      overrides: { source: { type: "group", groupId: "Cgroup-1", userId: "user-1" } },
+      chatId: "Cgroup-1",
+    },
+  ])("remembers the token that quotes $kind it hands the agent", async ({ overrides, chatId }) => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" }, {
+      message: { id: "m-quotable", type: "text", text: "hello", quoteToken: "token-quotable" },
+      ...overrides,
+    } as Partial<MessageEvent>);
+
+    await buildLineMessageContext({ event, allMedia: [], cfg, account, commandAuthorized: true });
+
+    expect(
+      resolveLineQuoteToken({ cfg, accountId: "default", chatId, messageId: "m-quotable" }),
+    ).toBe("token-quotable");
+  });
+
+  it("remembers nothing for a message kind LINE attaches no quote token to", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" }, {
+      message: { id: "m-audio", type: "audio", duration: 1, contentProvider: { type: "line" } },
+    } as Partial<MessageEvent>);
+
+    await buildLineMessageContext({
+      event,
+      allMedia: [{ path: "/tmp/line-audio.m4a", contentType: "audio/mp4" }],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(
+      resolveLineQuoteToken({ cfg, accountId: "default", chatId: "user-1", messageId: "m-audio" }),
+    ).toBeUndefined();
+  });
+
+  it("remembers nothing for a message that never reaches the agent", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" }, {
+      message: { id: "m-empty", type: "text", text: "", quoteToken: "token-empty" },
+    } as Partial<MessageEvent>);
+
+    expect(
+      await buildLineMessageContext({
+        event,
+        allMedia: [],
+        cfg,
+        account,
+        commandAuthorized: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveLineQuoteToken({ cfg, accountId: "default", chatId: "user-1", messageId: "m-empty" }),
+    ).toBeUndefined();
+  });
 
   it("describes a sticker with the keywords LINE sent for it", async () => {
     const context = await buildLineMessageContext({
@@ -433,6 +491,56 @@ describe("buildLineMessageContext", () => {
       path: undefined,
       kind: "image",
     });
+  });
+
+  it("tells the agent how much of a multi-image send never arrived", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
+      missingParts: 2,
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    // Without this the turn reads as the whole send and the agent answers
+    // confidently about images the sender can see are missing.
+    expect(context?.ctxPayload.BodyForAgent).toBe(
+      "[line: 2 more images in this send were not delivered]",
+    );
+  });
+
+  it("counts a single missing image in the singular", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
+      missingParts: 1,
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    // A media-only send has no other text, so this sentence is the whole body the
+    // model reads; it has to be a sentence.
+    expect(context?.ctxPayload.BodyForAgent).toBe(
+      "[line: 1 more image in this send was not delivered]",
+    );
   });
 
   it("keeps materialized media-only text empty and projects structured media facts", async () => {

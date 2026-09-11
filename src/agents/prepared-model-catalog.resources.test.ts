@@ -111,7 +111,7 @@ module.exports = {
           let replacement: typeof first;
           let projection: Promise<string[]> | undefined;
           try {
-            first = await acquireReadOnlyPreparedModelRuntime(input, undefined, "static");
+            first = await acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "static" });
             expect(connections).toHaveLength(1);
             const original = expectDefined(connections[0], "original provider registration");
             selectedSource.input = input;
@@ -145,7 +145,9 @@ module.exports = {
             if (!releaseBeforeCallback) {
               first.release();
             }
-            replacement = await acquireReadOnlyPreparedModelRuntime(input, undefined, "static");
+            replacement = await acquireReadOnlyPreparedModelRuntime(input, {
+              catalogMode: "static",
+            });
             expect(connections).toHaveLength(2);
             const successor = expectDefined(connections[1], "replacement provider registration");
             expect(original.database.isOpen).toBe(true);

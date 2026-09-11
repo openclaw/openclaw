@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
@@ -28,7 +29,10 @@ async function captureProviderProof(fileName: string, content: Locator): Promise
 }
 
 suite.define(() => {
-  it("connects provider credentials without changing the selected model", async () => {
+  it.each([
+    { value: "all", label: "Show all Example models" },
+    { value: "keep", label: "Keep current restrictions" },
+  ])("keeps the default after $value model access", async (modelAccess) => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -90,16 +94,18 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
         await expect.poll(() => modelPickerValue(primary)).toBe("example/existing");
-        await captureProviderProof("login-models-before.png", primary);
+        await captureProviderProof(`login-models-before-${modelAccess.value}.png`, primary);
         await page.locator("[data-models-connect]").click();
         const picker = page.locator("[data-models-login-choice]");
         await picker.waitFor();
         expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-        await captureProviderProof("login-before-choice.png", picker);
+        await captureProviderProof(`login-before-choice-${modelAccess.value}.png`, picker);
         await picker.selectOption("example-device");
         await page.locator("[data-models-login-start]").click();
         const login = await gateway.waitForRequest("models.authLogin");
-        expect(login.params).toEqual({
+        const loginParams = login.params;
+        assert(loginParams && typeof loginParams === "object" && "sessionId" in loginParams);
+        expect(loginParams).toEqual({
           sessionId: expect.any(String),
           authChoice: "example-device",
           agentId: "main",
@@ -109,7 +115,10 @@ suite.define(() => {
         expect(
           await dialog.getByRole("link", { name: "Open sign-in page" }).getAttribute("href"),
         ).toBe("https://example.invalid/device");
-        await captureProviderProof("login-device-code.png", dialog.getByText("TEST-1234"));
+        await captureProviderProof(
+          `login-device-code-${modelAccess.value}.png`,
+          dialog.getByText("TEST-1234"),
+        );
         const authReads = (await gateway.getRequests("models.authStatus")).length;
         await gateway.setMethodResponse("models.authStatus", {
           ts: now,
@@ -130,8 +139,37 @@ suite.define(() => {
             },
           ],
         });
+        await gateway.setMethodResponse("wizard.next", {
+          done: false,
+          status: "running",
+          step: {
+            id: "model-access",
+            type: "select",
+            message: "Credentials saved. Your current model restrictions may hide Example models.",
+            initialValue: "keep",
+            options: [
+              { value: "all", label: "Show all Example models" },
+              { value: "keep", label: "Keep current restrictions" },
+            ],
+          },
+        });
+        await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+        const keep = dialog.getByRole("radio", { name: "Keep current restrictions" });
+        await keep.waitFor();
+        expect(await keep.isChecked()).toBe(true);
+        await dialog.getByRole("radio", { name: modelAccess.label }).check();
+        await captureProviderProof(`login-model-access-${modelAccess.value}.png`, dialog);
         await gateway.setMethodResponse("wizard.next", { done: true, status: "done" });
         await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+        await expect
+          .poll(async () => {
+            const requests = await gateway.getRequests("wizard.next");
+            return requests.at(-1)?.params;
+          })
+          .toEqual({
+            sessionId: loginParams.sessionId,
+            answer: { stepId: "model-access", value: modelAccess.value },
+          });
         const saved = page.getByRole("status").filter({ hasText: "Provider credentials saved." });
         await saved.waitFor();
         await page.getByText("signed-in@example.invalid", { exact: true }).waitFor();
@@ -142,7 +180,7 @@ suite.define(() => {
         expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
-        await captureProviderProof("login-after-saved.png", saved);
+        await captureProviderProof(`login-after-saved-${modelAccess.value}.png`, saved);
       },
     );
   });

@@ -599,7 +599,7 @@ describe("cold dynamic-model effective inventory", () => {
       expect(fixture.connections).toHaveLength(1);
       const rootConnection = fixture.connections[0]!;
       const controller = new AbortController();
-      const first = acquireReadOnlyPreparedModelRuntime(input, controller.signal);
+      const first = acquireReadOnlyPreparedModelRuntime(input, { abortSignal: controller.signal });
       let replacement: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
       let pendingReplacement: ReturnType<typeof acquireReadOnlyPreparedModelRuntime> | undefined;
       try {

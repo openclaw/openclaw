@@ -46,6 +46,17 @@ export function estimateJsonPayloadTokenPressure(
   }
 }
 
+/** Count model-facing definitions; runtime output schemas and metadata never reach the provider. */
+export function estimateToolSchemaTokens(
+  tools: readonly { name: string; description: string; parameters: unknown }[] | undefined,
+): number {
+  return tools?.length
+    ? estimateJsonPayloadTokenPressure(
+        tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+      )
+    : 0;
+}
+
 function estimateIdentifierTokenPressure(
   value: unknown,
   charsPerToken = JSON_PAYLOAD_CHARS_PER_TOKEN,
@@ -209,15 +220,7 @@ export function estimateFreshLlmBoundaryTokenPressure(params: {
   prompt: string;
   imageCount?: number;
 }): number {
-  const toolTokens = params.tools?.length
-    ? estimateJsonPayloadTokenPressure(
-        params.tools.map(({ name, description, parameters }) => ({
-          name,
-          description,
-          parameters,
-        })),
-      )
-    : 0;
+  const toolTokens = estimateToolSchemaTokens(params.tools);
   return Math.ceil(
     (estimateRenderedPromptTokens(params) +
       toolTokens +

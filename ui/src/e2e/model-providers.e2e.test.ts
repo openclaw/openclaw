@@ -773,6 +773,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       if (recordVisuals) {
         await captureProviderProof("02-probed.png", page.locator('[data-provider-id="google"]'));
       }
+      await page.reload();
+      await expect.poll(() => modelPickerValue(primary)).toBe("anthropic/claude-sonnet-4-5");
     } finally {
       await context.close();
     }

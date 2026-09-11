@@ -1,10 +1,15 @@
+import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareProviderModelAccess } from "../commands/models/auth-model-policy.js";
 import type { ModelsAuthLoginFlowOptions } from "../commands/models/auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  answerProviderLoginModelAccess,
   buildProviderLoginChoicesReply,
   cancelProviderLoginFlow,
   createProviderLoginFlowRegistry,
+  offerProviderLoginModelAccess,
   decideProviderLoginSessionAdoption,
   prepareProviderChannelLogin,
   reserveProviderLoginFlow,
@@ -73,6 +78,75 @@ describe("provider channel login runtime", () => {
       reply: { text: "No provider login is active in this chat." },
     });
     cancelProviderLoginFlow({ flows, flowKey: "other" });
+  });
+
+  it.each([
+    [
+      "Show all Acme models",
+      ["other/current", "acme-cloud/*"],
+      "Application by the running Gateway is not confirmed.",
+    ],
+    ["Keep current restrictions", ["other/current"], "Current model restrictions kept."],
+  ])("applies an authorized %s answer through the policy owner", async (label, allow, outcome) => {
+    await withOpenClawTestState({ label: "channel-model-consent" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
+          entries: { main: { workspace: state.workspaceDir } },
+        },
+      };
+      await state.writeConfig(config);
+      const prepared = prepareProviderModelAccess({
+        config,
+        agentId: "main",
+        provider: "acme-cloud",
+        providerLabel: "Acme",
+      });
+      if (!prepared) {
+        throw new Error("Expected restricted-provider consent");
+      }
+      const flows = createProviderLoginFlowRegistry();
+      const reservation = reserveProviderLoginFlow({ flows, flowKey: "private-owner" });
+      if (reservation.status !== "reserved") {
+        throw new Error("Expected a new login");
+      }
+      const reply = offerProviderLoginModelAccess({
+        record: reservation.record,
+        prepared,
+        terminalMessage: "Credentials saved, but the Gateway could not apply the auth update.",
+      });
+      const button = reply.presentation?.blocks
+        .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
+        .find((entry) => entry.label === label);
+      if (button?.action?.type !== "command") {
+        throw new Error("Expected a model access command");
+      }
+      const request = {
+        flows,
+        flowKey: "private-owner",
+        command: button.action.command,
+        runtime: loginParams.runtime,
+      };
+      await expect(
+        answerProviderLoginModelAccess({
+          ...request,
+          assertCurrent: () => {
+            throw new Error("Owner revoked");
+          },
+        }),
+      ).rejects.toThrow("Owner revoked");
+      expect(await fs.readFile(state.configPath, "utf8")).not.toContain("acme-cloud/*");
+      const result = await answerProviderLoginModelAccess({ ...request, assertCurrent: () => {} });
+      expect(result?.text).toContain(outcome);
+      expect(result?.text).toContain("Gateway could not apply the auth update");
+      const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+      expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(allow);
+      expect(saved.agents?.defaults?.model).toBe("other/current");
+      expect(flows.size).toBe(0);
+      expect(
+        await answerProviderLoginModelAccess({ ...request, assertCurrent: () => {} }),
+      ).toBeUndefined();
+    });
   });
 
   it("uses the host config replaced before flow entry", async () => {

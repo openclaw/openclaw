@@ -1680,6 +1680,28 @@ describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () =
 });
 
 describe("handleToolExecutionEnd mutating failure recovery", () => {
+  it("keeps an earlier message error when the next delivery is intentionally suppressed", async () => {
+    const { ctx } = createTestContext();
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "message-failed",
+      args: { action: "send", channel: "telegram", target: "123", message: "failed" },
+      isError: true,
+      result: { details: { status: "error", error: "Telegram transport failed" } },
+    });
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "message-suppressed",
+      args: { action: "send", channel: "telegram", target: "123", message: "omitted" },
+      isError: false,
+      result: { details: { status: "suppressed", reason: "cancelled_by_message_sending_hook" } },
+    });
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "message",
+      error: "Telegram transport failed",
+    });
+  });
+
   it("marks middleware failures on the last tool error", async () => {
     const { ctx } = createTestContext();
 

@@ -16,6 +16,8 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -120,6 +122,22 @@ async function fixture(
       },
     ],
   };
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.providers.push({ pluginId: "openai", provider, source: "test" });
+  // Credential checks must use the same prepared provider as setup authentication.
+  // Otherwise the real resolver cold-loads unrelated bundled setup plugins.
+  const resolveAuth = (input: Parameters<typeof resolveApiKeyForProviderCore>[0]) =>
+    withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: metadata.bind({
+          config: input.cfg,
+          workspaceDir: input.workspaceDir,
+          env: process.env,
+        }),
+        pluginRegistry,
+      },
+      () => resolveApiKeyForProviderCore(input),
+    );
   const readProfile = () =>
     Object.entries(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles).find(
       ([, value]) => value.type === "api_key" && value.key === credential.key,
@@ -131,7 +149,7 @@ async function fixture(
     }
     const [profileId] = stored;
     expect(params.authProfileId).toBe(profileId);
-    const auth = await resolveApiKeyForProviderCore({
+    const auth = await resolveAuth({
       provider: "openai",
       cfg: params.config,
       agentDir: params.agentDir,
@@ -222,6 +240,7 @@ async function fixture(
     configPath,
     readProfile,
     reply,
+    resolveAuth,
     run,
     login,
     diagnostics,
@@ -412,7 +431,7 @@ describe("setup activation credentials and configuration", () => {
       if (!route) {
         throw new Error("The original configured route disappeared after replacement rejection");
       }
-      const auth = await resolveApiKeyForProviderCore({
+      const auth = await setup.resolveAuth({
         provider: route.provider,
         cfg: route.runConfig,
         agentDir: route.agentDir,

@@ -21,6 +21,7 @@ import {
 } from "../../config/config.js";
 import { restoreEnvVarRefs } from "../../config/env-preserve.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import {
   mergeAgentModelEntryForConfig,
@@ -28,6 +29,7 @@ import {
   toAgentModelListLike,
 } from "../../config/model-input.js";
 import { resolveIncludeRoots } from "../../config/paths.js";
+import { copyRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -90,11 +92,16 @@ export async function updateConfig(
     context: UpdateConfigContext,
   ) => readonly (ModelRef | undefined)[],
   beforeCommit?: () => void,
+  writeOptions?: ConfigWriteOptions,
 ): Promise<OpenClawConfig> {
   const explicitSetPaths: string[][] = [];
   const result = await transformConfigFile({
     base: "source",
-    writeOptions: { explicitSetPaths, beforeCommit },
+    writeOptions: copyRuntimeConfigWriteApplication(writeOptions, {
+      ...writeOptions,
+      explicitSetPaths,
+      beforeCommit,
+    }),
     transform: async (currentConfig, { snapshot }, { envSnapshotForRestore }) => {
       if (!snapshot.valid) {
         const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
