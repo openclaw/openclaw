@@ -327,7 +327,7 @@ describe("cron task run terminal records", () => {
           ownerKey: "",
           notifyPolicy: "silent",
           deliveryStatus: "not_applicable",
-          status: "failed",
+          status: "cancelled",
           startedAt,
           endedAt: startedAt,
           error,

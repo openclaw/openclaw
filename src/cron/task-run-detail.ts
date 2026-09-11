@@ -313,7 +313,7 @@ export function cronTaskRecordToScriptRunResult(
 /** Maps the cron outcome vocabulary onto generic task terminal states. */
 export function cronRunStatusToTaskStatus(
   entry: Pick<CronRunLogEntry, "status" | "error"> & Partial<CronRunLogEntry>,
-): Extract<TaskStatus, "succeeded" | "failed" | "timed_out"> {
+): Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled"> {
   if (entry.status === "ok") {
     const completionStatus =
       entry.completionStatus ??
@@ -323,6 +323,11 @@ export function cronRunStatusToTaskStatus(
         deliveryStatus: entry.deliveryStatus,
       });
     return completionStatus === "succeeded" ? "succeeded" : "failed";
+  }
+  if (entry.status === "skipped") {
+    // An intentional skip (for example an empty-heartbeat-file no-op) is not a
+    // failed run and must not surface under `tasks list --status failed`.
+    return "cancelled";
   }
   return entry.status === "error" && isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
 }

@@ -184,7 +184,7 @@ Configured intervals and stagger windows retain millisecond precision in human-r
 
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
 
-Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
+Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications. A skipped run is recorded as a `cancelled` task rather than a `failed` one, so intentional no-ops (for example an empty heartbeat file) do not inflate `openclaw tasks list --status failed`.
 
 A local configured model provider has a base URL on loopback, on a private network, or on `.local`. For isolated jobs that target such a provider, the scheduler runs a lightweight provider preflight before it starts the agent turn. The scheduler probes `api: "ollama"` providers at `/api/tags`. It probes other local OpenAI-compatible providers (`api: "openai-completions"`, for example vLLM, SGLang, and LM Studio) at `/models`. If the endpoint is unreachable, the scheduler records the run as `skipped` and retries it on a later schedule. It caches the reachability result per endpoint for 5 minutes, so many jobs against the same local server do not send repeated probes.
 
