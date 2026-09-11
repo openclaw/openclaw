@@ -53,7 +53,7 @@ import {
   messageMatchesSearchQuery,
   queuedSendThreadMessage,
   rawMessageTimestamp,
-  removeCanvasPreviewFromAssistantMessage,
+  reconcileCanvasDisplayCopies,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
@@ -72,7 +72,7 @@ import {
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
-import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
@@ -141,7 +141,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const persistedCanvasIdentities = new Set<string>();
-  const toolOwnedCanvasPreviews = new Map<string, CanvasToolPreview>();
+  const toolOwnedCanvasSources = new Map<
+    string,
+    NonNullable<ReturnType<typeof extractChatMessagePreview>>
+  >();
   const normalizedHistory = history.map(safeNormalizeMessage);
   const historyItems = buildMessageItems(history);
   let canvasTurn: {
@@ -151,8 +154,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     previews: [],
     lastMatchingAssistantIndex: -1,
   };
-  // Rows in one turn share these facts so a tool result can see the assistant
-  // projection that follows it, without consuming a view from another turn.
+  // Search keeps its existing assistant-centric projection. Non-search display
+  // copies are reconciled only after all live/history rows have been placed.
   const canvasTurns = historyItems.map((item, index) => {
     const message = normalizedHistory[index];
     const role = message && normalizeRoleForGrouping(message.role);
@@ -238,25 +241,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         persistedCanvasSource.text,
       );
     }
-    if (persistedCanvasSource && !searchFiltering) {
-      for (const { preview, item: assistantItem } of canvasTurns[i]!.previews) {
-        if (!canvasPreviewsMatch(preview, persistedCanvasSource.preview)) {
-          continue;
-        }
-        persistedCanvasSource.preview = { ...persistedCanvasSource.preview, ...preview };
-        assistantItem.message = removeCanvasPreviewFromAssistantMessage(
-          assistantItem.message,
-          preview,
-        );
-      }
-    }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
       (!matchingCanvas || !searchFiltering) &&
       (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
       const key = canvasAssistantItemKey(msg, persistedCanvasSource, itemKey);
-      toolOwnedCanvasPreviews.set(key, persistedCanvasSource.preview);
+      toolOwnedCanvasSources.set(key, persistedCanvasSource);
       items.push({
         kind: "message",
         key,
@@ -427,22 +418,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       }
       continue;
     }
-    for (let index = canvasMinimumIndex; index < canvasMaximumIndex; index += 1) {
-      const item = items[index];
-      if (item?.kind !== "message" || toolOwnedCanvasPreviews.has(item.key)) {
-        continue;
-      }
-      const normalized = safeNormalizeMessage(item.message);
-      if (normalized?.role !== "assistant") {
-        continue;
-      }
-      for (const block of normalized.content) {
-        if (block.type === "canvas" && canvasPreviewsMatch(block.preview, preview.preview)) {
-          preview.preview = { ...preview.preview, ...block.preview };
-          item.message = removeCanvasPreviewFromAssistantMessage(item.message, block.preview);
-        }
-      }
-    }
     // The tool owns the preview's position. Attaching it to a nearby assistant
     // collapses intervening live commentary and moves widgets again at final.
     const canvas: ChatProjection = {
@@ -453,7 +428,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       },
       bounds: canvasBounds ?? undefined,
     };
-    toolOwnedCanvasPreviews.set(canvas.item.key, preview.preview);
+    toolOwnedCanvasSources.set(canvas.item.key, preview);
     canvasProjections.push({ canvas, tool: projection });
     projections.push(canvas);
   }
@@ -698,46 +673,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     appendQueuedSend(queued);
   }
 
-  const grouped = groupMessages(coalesceToolActivityMessages(items));
+  const coalesced = coalesceToolActivityMessages(items);
+  const grouped = groupMessages(coalesced);
   if (searchFiltering) {
     return grouped;
   }
-  // Grouping owns projected and forwarded turn boundaries as well as user
-  // messages. Keep replay deduplication inside those established boundaries.
-  let turnPreviews: CanvasToolPreview[] = [];
-  const duplicateCanvasMessages = new Set<unknown>();
-  for (const item of grouped) {
-    if (item.kind !== "group") {
-      if (chatItemStartsUserTurn(item) || item.kind === "divider") {
-        turnPreviews = [];
-      }
-      continue;
-    }
-    for (const entry of item.messages) {
-      // A forwarded input can share a same-role group with earlier output.
-      // Apply the canonical boundary predicate at the exact message position.
-      if (chatItemStartsUserTurn({ ...item, messages: [entry] })) {
-        turnPreviews = [];
-      }
-      const preview = toolOwnedCanvasPreviews.get(entry.key);
-      if (!preview) {
-        continue;
-      }
-      if (turnPreviews.some((existing) => canvasPreviewsMatch(existing, preview))) {
-        duplicateCanvasMessages.add(entry.message);
-      } else {
-        turnPreviews.push(preview);
-      }
-    }
-  }
-  if (duplicateCanvasMessages.size === 0) {
-    return grouped;
-  }
-  // Rebuild only when a replay was removed so group keys and visible-content
-  // classification still describe the surviving messages.
-  return groupMessages(
-    coalesceToolActivityMessages(
-      items.filter((item) => item.kind !== "message" || !duplicateCanvasMessages.has(item.message)),
-    ),
-  );
+  const reconciled = reconcileCanvasDisplayCopies(coalesced, grouped, toolOwnedCanvasSources);
+  // Rebuild only changed projections so group keys and content facts stay current.
+  return reconciled === coalesced ? grouped : groupMessages(reconciled);
 }

@@ -17,6 +17,132 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
+  it.each(["forwarded", "projected", "mixed"] as const)(
+    "preserves %s assistant embeds through history reload",
+    async (representation) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 1000 }, colorScheme: "light", locale: "en-US" },
+        async ({ page }) => {
+          const startedAt = Date.now();
+          const result = {
+            role: "toolResult",
+            toolName: "show_widget",
+            toolCallId: "review-widget-one",
+            timestamp: startedAt + 10,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  kind: "canvas",
+                  view: {
+                    backend: "canvas",
+                    id: "cv_review_one",
+                    title: "Widget one",
+                    url: "/__openclaw__/canvas/documents/cv_review_one/index.html",
+                  },
+                  presentation: { target: "assistant_message" },
+                }),
+              },
+            ],
+          };
+          const siblingId = representation === "mixed" ? "cv_review_two" : "cv_review_one";
+          const siblingTitle = representation === "mixed" ? "Widget two" : "Widget one";
+          const historyMessages = [
+            { role: "user", content: "Show the report.", timestamp: startedAt },
+            result,
+            ...(representation === "mixed"
+              ? []
+              : [
+                  {
+                    role: "assistant",
+                    content: "Another turn: show that report again.",
+                    timestamp: startedAt + 20,
+                    ...(representation === "forwarded"
+                      ? { provenance: { kind: "inter_session", sourceTool: "sessions_send" } }
+                      : { __openclaw: { id: "review-new-turn", turnBoundary: true } }),
+                  },
+                ]),
+            {
+              role: "assistant",
+              timestamp: startedAt + 30,
+              content: [
+                ...(representation === "mixed"
+                  ? [
+                      {
+                        type: "text",
+                        text: '[embed ref="cv_review_one" /][embed ref="cv_review_two" /]',
+                      },
+                    ]
+                  : []),
+                {
+                  type: "canvas",
+                  preview: {
+                    kind: "canvas",
+                    surface: "assistant_message",
+                    render: "url",
+                    viewId: siblingId,
+                    title: siblingTitle,
+                    url: `/__openclaw__/canvas/documents/${siblingId}/index.html`,
+                    sandbox: "scripts",
+                  },
+                },
+              ],
+            },
+          ];
+          await installMockGateway(page, {
+            historyMessages,
+            methodResponses: {
+              "canvas.document.view": {
+                cases: ["one", "two"].map((suffix) => ({
+                  match: { docId: `cv_review_${suffix}` },
+                  response: canvasView(
+                    buildWidgetDocument(
+                      `Widget ${suffix}`,
+                      `<section style="padding:16px"><h2>Widget ${suffix}</h2><p>Report contents preserved.</p></section>`,
+                    ),
+                  ),
+                })),
+              },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          for (const stage of ["history", "reload"]) {
+            if (stage === "reload") {
+              await page.reload();
+            }
+            const widgets = page.locator(".chat-tool-card__preview-frame");
+            await expect.poll(() => widgets.count()).toBe(2);
+            expect(
+              await widgets.evaluateAll((frames) =>
+                frames.map((frame) => frame.getAttribute("title")),
+              ),
+            ).toEqual(["Widget one", siblingTitle]);
+            for (let index = 0; index < 2; index++) {
+              await widgets
+                .nth(index)
+                .contentFrame()
+                .frameLocator("iframe")
+                .getByRole("heading", { name: index === 0 ? "Widget one" : siblingTitle })
+                .waitFor();
+            }
+            if (representation !== "mixed") {
+              const boundary = await page
+                .getByText("Another turn: show that report again.", { exact: true })
+                .boundingBox();
+              const first = await widgets.nth(0).boundingBox();
+              const second = await widgets.nth(1).boundingBox();
+              expect(first!.y).toBeLessThan(boundary!.y);
+              expect(boundary!.y).toBeLessThan(second!.y);
+            }
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `${representation}-${stage}.png`),
+            });
+          }
+        },
+      );
+    },
+  );
+
   it("keeps progress and widgets in order through final and history reload", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 1100 }, colorScheme: "light", locale: "en-US" },

@@ -139,6 +139,138 @@ describe("interleaved widget transcript order", () => {
     ]);
   });
 
+  it("removes a display copy from a coalesced assistant tool invocation", () => {
+    // The canonical activity row owns the replayed call. Coalescing leaves a
+    // new assistant object for its earlier prose and Canvas display copy.
+    const result = widgetResult(1);
+    const mixed = appendChatCanvasBlocksToMessage(
+      {
+        role: "assistant",
+        timestamp: 3_000,
+        content: [
+          { type: "text", text: "Keep going" },
+          { type: "toolCall", id: "call-read", name: "read", arguments: { path: "report.txt" } },
+        ],
+      },
+      [result].flatMap((value) => extractChatToolResultCanvasPreview(value) ?? []),
+    );
+    expect(
+      visibleOrder({
+        showToolCalls: true,
+        messages: [
+          { role: "user", content: "Show the widget", timestamp: 500 },
+          result,
+          mixed,
+          {
+            role: "assistant",
+            timestamp: 3_500,
+            __openclaw: {
+              transcriptPosition: {
+                source: "test-history",
+                rawSeq: 4,
+                activity: { afterRawSeq: 3, scopeId: runId, startOrder: 0 },
+              },
+            },
+            content: [
+              {
+                type: "toolCall",
+                id: "call-read",
+                name: "read",
+                arguments: { path: "report.txt" },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual(["Widget one", "Keep going"]);
+  });
+
+  describe.each(["history", "live"] as const)("%s display-copy ownership", (source) => {
+    it.each([
+      { provenance: { kind: "inter_session", sourceTool: "sessions_send" } },
+      { __openclaw: { id: "projected-embed-turn", turnBoundary: true } },
+    ])("preserves a later turn's embed without another tool result: %j", (metadata) => {
+      const result = widgetResult(1);
+      const messages = [
+        { role: "user", content: "Show the widget", timestamp: 500 },
+        ...(source === "history" ? [result] : []),
+        { role: "assistant", content: "Another turn", timestamp: 3_000, ...metadata },
+        {
+          role: "assistant",
+          content: '[embed ref="cv_interleaved_1" title="Widget one" /]',
+          timestamp: 4_000,
+        },
+      ];
+      const original = structuredClone(messages);
+      expect(visibleOrder({ messages, toolMessages: source === "live" ? [result] : [] })).toEqual([
+        "Widget one",
+        "Another turn",
+        "Widget one",
+      ]);
+      expect(messages).toEqual(original);
+    });
+
+    it("does not materialize an unrelated shortcode over its structured sibling", () => {
+      const result = widgetResult(1);
+      const sibling = {
+        type: "canvas",
+        preview: {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_interleaved_2",
+          title: "Widget two",
+          url: "/__openclaw__/canvas/documents/cv_interleaved_2/index.html",
+          sandbox: "scripts",
+          preferredHeight: 480,
+        },
+      };
+      const messages = [
+        { role: "user", content: "Show the widget", timestamp: 500 },
+        ...(source === "history" ? [result] : []),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: '[embed ref="cv_interleaved_1" /][embed ref="cv_interleaved_2" /]',
+            },
+            sibling,
+          ],
+          timestamp: 3_000,
+        },
+      ];
+      const original = structuredClone(messages);
+      expect(visibleOrder({ messages, toolMessages: source === "live" ? [result] : [] })).toEqual([
+        "Widget one",
+        "Widget two",
+      ]);
+      const items = buildCachedChatItems({
+        paneId: "mixed-embed-metadata",
+        sessionKey: "main",
+        messages,
+        toolMessages: source === "live" ? [result] : [],
+        streamSegments: [],
+        stream: null,
+        streamStartedAt: null,
+        showToolCalls: false,
+      });
+      const previews = items.flatMap((item) =>
+        item.kind === "group"
+          ? item.messages.flatMap(({ message }) =>
+              normalizeMessage(message).content.flatMap((block) =>
+                block.type === "canvas" && block.preview.viewId === sibling.preview.viewId
+                  ? [block.preview]
+                  : [],
+              ),
+            )
+          : [],
+      );
+      expect(previews).toEqual([sibling.preview]);
+      expect(messages).toEqual(original);
+    });
+  });
+
   it.each(["streaming", "terminal", "terminal-with-widgets", "history"] as const)(
     "keeps each widget between its surrounding progress messages at %s",
     (stage) => {
